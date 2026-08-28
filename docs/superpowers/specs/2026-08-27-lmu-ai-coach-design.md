@@ -157,13 +157,28 @@ all of it:
   binding per-stint constraint can be fuel (liters) OR energy (MJ), whichever forces
   the pit first. Compute both plans and take the binding one. The stint energy
   budget comes from BoP tables / user config, not telemetry.
-- **Adjustable fuel↔energy ratio (strategy lever — coupling TBD with user).** LMU
-  exposes an adjustable fuel-to-energy ratio, so fuel and energy are NOT fully
-  independent: shifting the ratio trades one against the other, and both are topped
-  up at a stop. `binding_stint` currently treats them as independent resources (the
-  conservative view — take the worse constraint). Modeling the ratio as an
-  optimizable lever (pick the ratio that minimizes stops / stint time) needs the
-  exact LMU mechanic confirmed live with the user; deferred, not guessed.
+- **Adjustable fuel↔energy ratio (mechanic researched 2026-08-28; confidence
+  likely).** LMU's fuel-to-energy ratio splits the stint's Virtual Energy (NRG)
+  budget between physical fuel and battery share (Hypercar; e.g. 0.96 ⇒ ~4% from
+  battery, track-dependent). GT3 has no hybrid, so the setting instead sets liters
+  of fuel per requested NRG%. NRG resets to 100% at every pit stop; draining NRG to
+  0% mid-stint triggers an instant stop-and-go penalty. **The tuning goal is
+  fuel-laps-remaining ≈ NRG-laps-remaining** — neither should run out first. This
+  VALIDATES `binding_stint`: the binding resource is whichever depletes first, and
+  the ratio's job is to equalize them. Units seen as %/kWh in-game (no confirmed MJ).
+  Source: docs/superpowers/research/2026-08-28-lmu-energy-mechanics.md (community
+  sources; official S397 manual was unreachable — treat as likely, confirm live).
+- **NRG is universal.** Both GT3 and Hypercar carry a Virtual Energy allowance
+  (GT3's is fuel-only, no battery term) — energy is not a Hypercar special case.
+- **Lift-and-coast / fuel-save advisor (NEW capability — open ground).** LMU has NO
+  automated lift-point HUD; lift-and-coast is purely manual, and the game only shows
+  per-lap "laps remaining" for fuel and NRG separately. So a coach advisor that
+  computes the per-lap saving needed and *where* to lift is genuine added value. It
+  is deterministic (target use/lap vs actual → save %; ratio-balance direction from
+  the two laps-remaining figures). Buildable now for the strategy math; the "where to
+  lift" cue wants live throttle/consumption traces.
+- **New telemetry lead:** `GET http://localhost:6397/rest/strategy/usage` returns
+  Virtual Energy history — add to the feasibility spike / REST client.
 - **Energy telemetry channels (seam).** Capture state-of-charge, energy deployed,
   energy regenerated where LMU exposes them (exact struct/REST fields pending live
   validation). `energy_per_lap` is derived like `fuel_per_lap` (channel delta).

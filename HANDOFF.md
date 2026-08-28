@@ -57,19 +57,22 @@ the merged v0.1 core + both spike docs). Merge is the USER'S call at lunch.
 is USER-GATED: live-rig validation, app wiring, regen-braking coaching model, and the
 adjustable fuel<->energy RATIO coupling — see [LUNCH]. Nothing autonomous remains.
 
-## Next Exact Action  ===  RESEARCH IN FLIGHT  ===
-research-energy subagent is researching (web) the LMU fuel-to-energy ratio mechanic
-and the fuel-saving/lift-and-coast indicator (user 07:12 — user doesn't use the ratio
-himself, wants it understood). Findings -> docs/superpowers/research/2026-08-28-lmu-
-energy-mechanics.md. When it returns: read findings, update the spec's energy section
-with confirmed mechanics, and decide whether a LIFT-AND-COAST ADVISOR is a buildable
-module now (deterministic: per-lap fuel/energy target -> where to lift) or needs live
-data. Then back to HOLD.
+## Next Exact Action  ===  DISPATCH K-1, THEN T-H  ===
+Research DONE (commit d289178, folded into spec). Now:
+1. DISPATCH K-1 knowledge base (brief: scratchpad/overnight/k1-brief.md) — user's
+   explicit ask. (research-energy has committed, so the index is free.)
+2. After K-1: T-H energy-strategy advisor (below), grounded in the research.
 
-## Candidate feature (pending research): LIFT-AND-COAST / fuel-saving advisor
-Tells the driver when to lift to hit a fuel/energy target. Likely deterministic
-(target use/lap vs actual -> lift point), fits the coach. Build after research
-clarifies the LMU mechanic + whether a target/HUD cue is exposed to telemetry/REST.
+## Queued: T-H energy-strategy / lift-and-coast advisor (research-grounded)
+Deterministic module on fuel.py. LMU shows fuel-laps-remaining AND nrg-laps-remaining
+separately; no auto lift cue (open ground). Build:
+- laps_remaining(amount, use_per_lap).
+- save_target(binding_laps_remaining, laps_to_go) -> per-lap save % needed to make
+  the stint (0 if already OK). binding = min(fuel_laps, nrg_laps).
+- ratio_balance(fuel_laps, nrg_laps) -> direction advice: if nrg runs out first,
+  shift ratio toward energy / lift to save NRG (and vice versa); goal fuel≈nrg laps.
+Robust DIRECTION + magnitude math (uncertain exact LMU units flagged). The "where to
+lift" per-corner cue needs live throttle/consumption traces -> [LUNCH]/later.
 
 ## Queued: K-1 knowledge base (user 07:13 — "begin building track+car KB")
 Brief: scratchpad/overnight/k1-brief.md. Scaffold + LMU roster + exemplar Spa corner
