@@ -57,8 +57,21 @@ the merged v0.1 core + both spike docs). Merge is the USER'S call at lunch.
 is USER-GATED: live-rig validation, app wiring, regen-braking coaching model, and the
 adjustable fuel<->energy RATIO coupling — see [LUNCH]. Nothing autonomous remains.
 
-## Next Exact Action  ===  HOLD  ===
-No autonomous next step. All remaining work needs the user and/or running LMU.
+## Next Exact Action  ===  RESEARCH IN FLIGHT  ===
+research-energy subagent is researching (web) the LMU fuel-to-energy ratio mechanic
+and the fuel-saving/lift-and-coast indicator (user 07:12 — user doesn't use the ratio
+himself, wants it understood). Findings -> docs/superpowers/research/2026-08-28-lmu-
+energy-mechanics.md. When it returns: read findings, update the spec's energy section
+with confirmed mechanics, and decide whether a LIFT-AND-COAST ADVISOR is a buildable
+module now (deterministic: per-lap fuel/energy target -> where to lift) or needs live
+data. Then back to HOLD.
+
+## Candidate feature (pending research): LIFT-AND-COAST / fuel-saving advisor
+Tells the driver when to lift to hit a fuel/energy target. Likely deterministic
+(target use/lap vs actual -> lift point), fits the coach. Build after research
+clarifies the LMU mechanic + whether a target/HUD cue is exposed to telemetry/REST.
+
+## (was HOLD)  No autonomous step remains once research lands + is folded in.
 IF YOU ARE A RECOVERY FIRE: verify `git status` clean + suite green
 (.venv/Scripts/python.exe -m pytest -q => 76 passed), reply that the build is
 complete and awaiting the user at lunch, and STOP. Do NOT: start new features
