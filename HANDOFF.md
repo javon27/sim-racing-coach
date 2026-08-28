@@ -78,7 +78,12 @@ separately; no auto lift cue (open ground). Build:
 Robust DIRECTION + magnitude math (uncertain exact LMU units flagged). The "where to
 lift" per-corner cue needs live throttle/consumption traces -> [LUNCH]/later.
 
-## Queued: K-1 knowledge base (user 07:13 — "begin building track+car KB")
+## K-1 DONE (commit f0a2bbb, 76 passed): KB scaffold + roster + Spa map + GT3 note.
+  README, lmu-roster (14 tracks + cars), simcoach/tracks/spa.json (10 corners,
+  distances=estimates), simcoach/knowledge/ferrari_296_gt3.md. Extend: live-calibrate
+  spa distances; more tracks/cars; refine car notes from R-2 + user sources.
+
+## (done) K-1 knowledge base (user 07:13 — "begin building track+car KB")
 Brief: scratchpad/overnight/k1-brief.md. Scaffold + LMU roster + exemplar Spa corner
 map + exemplar GT3 note. Corner names/dirs = facts (research); lap-distances =
 flagged ESTIMATES pending live calibration; car tuning = template + researched
