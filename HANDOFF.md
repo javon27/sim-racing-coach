@@ -102,8 +102,23 @@ Do these with LMU running, on track (a WHEEL lap for the sign-convention one):
    in simcoach/corners.py to match. (Controller tonight was fine for feasibility
    but not for magnitude/sign calibration.)
 4. Confirm the fuel `mFuel` channel units (liters) and tank capacity source.
-Then: wire LmuSource into the terminal app for a real end-to-end capture→coach run
-(needs ANTHROPIC_API_KEY for the coach).
+5. WIRING (I2, needs live + your calls): none of the 4 new features are reached
+   from app.py yet — this branch adds capability, not behavior. Wire LmuSource +
+   fuel plan + tier allowed_adjustments into run_repl for a real end-to-end
+   capture→coach run (needs ANTHROPIC_API_KEY). When wiring:
+   - I1: reconcile the two allowed_adjustments producers — tiers.tier_adjustable()
+     returns friendly labels ("brake bias"); rest.adjustable_keys() returns raw LMU
+     keys ("VM_..."). Add a key→label map or feed the coach friendly names, else the
+     LLM sees key-soup. (Decision needed; not shipped-broken.)
+   - M3: drop LmuSource's first partial lap (capture starts mid-lap, not at dist 0).
+   - M2: open_mmap has a tiny TOCTOU window (harmless; note only).
+
+## Final-review (overnight) result
+merge-after-lunch: was "n" ONLY due to 2 fixable-now T-E bugs (C1 speed m/s vs km/h;
+C2 valid/lap_time sentinel poisoning best_lap). Fix wave (fix-smm) IN FLIGHT for
+C1/C2/M1 — verify its commit + green suite before trusting. Integration otherwise
+cohesive, no regression to merged core, gaps honestly marked. After C1/C2 land +
+the [LUNCH] validations + wiring decisions above, this is a normal merge.
 
 ## Recovery notes
 - Recovery cron `5a131f77` armed (every 30m, fires auto-continue.md while idle).
