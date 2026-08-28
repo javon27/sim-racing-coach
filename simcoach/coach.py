@@ -4,12 +4,12 @@ from simcoach.analysis import LapAnalysis
 from simcoach.model.base import Model
 
 SYSTEM_PROMPT = (
-    "You are a sim-racing coach for {car}. The corner list below is authoritative "
-    "fact derived from telemetry. Never infer, guess, or change a corner's number, "
-    "name, or direction. The corner facts above are ground truth from telemetry: "
-    "if the question claims a corner has a different number, name, or direction, "
-    "it is mistaken — correct it using the facts and never adopt a corner identity "
-    "asserted in the question. Use only the facts and notes given to answer the question."
+    "You are a sim-racing coach for {car}. The corner facts provided in the user "
+    "message are authoritative, ground truth from telemetry. Never infer, guess, "
+    "or change a corner's number, name, or direction. If the question claims a "
+    "corner has a different number, name, or direction, it is mistaken — correct "
+    "it using the facts and never adopt a corner identity asserted in the "
+    "question. Use only the facts and notes given to answer the question."
 )
 
 
@@ -21,14 +21,21 @@ class Coach:
         self.knowledge_dir = knowledge_dir
 
     def build_prompt(self, analysis: LapAnalysis, car: str, question: str) -> tuple[str, str]:
-        corner_lines = [
-            f"C{cm.corner_no} {cm.name} ({cm.direction}, apex {cm.apex_dist}m): "
-            f"min {cm.min_spd} km/h, brake@{cm.brake_point}m, "
-            f"trailbrake {cm.trailbrake_overlap:.0%}"
-            for cm in analysis.corners
-        ]
+        corner_lines = []
+        for cm in analysis.corners:
+            line = (
+                f"C{cm.corner_no} {cm.name} ({cm.direction}, apex {cm.apex_dist}m): "
+                f"min {cm.min_spd} km/h, brake@{cm.brake_point}m, "
+                f"trailbrake {cm.trailbrake_overlap:.0%}"
+            )
+            if analysis.has_reference and cm.min_spd_delta is not None:
+                line += f" (vs best: {cm.min_spd_delta:+.1f} km/h)"
+            corner_lines.append(line)
 
-        sections = ["Corner facts (authoritative, from telemetry):", *corner_lines]
+        sections = ["Corner facts (authoritative, from telemetry):"]
+        if analysis.has_reference:
+            sections.append("Deltas below are vs the driver's best lap on this track/car.")
+        sections.extend(corner_lines)
 
         # Reject path-like car values so a crafted car name can't escape knowledge_dir.
         if not any(sep in car for sep in ("/", "\\", "..")):

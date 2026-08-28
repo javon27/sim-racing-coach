@@ -3,7 +3,7 @@ from typing import Optional
 import numpy as np
 
 from simcoach.model_types import LapRecord
-from simcoach.corners import Corner, CornerMap
+from simcoach.corners import Corner, CornerMap, compute_direction
 
 
 @dataclass
@@ -77,8 +77,9 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
             trailbrake_overlap=0.0,
         )
 
-    entry_spd = float(win_speed[0])
-    exit_spd = float(win_speed[-1])
+    valid_i = np.where(~np.isnan(win_speed))[0]
+    entry_spd = float(win_speed[valid_i[0]])
+    exit_spd = float(win_speed[valid_i[-1]])
     min_i = int(np.nanargmin(win_speed))
     min_spd = float(np.nanmin(win_speed))
 
@@ -95,10 +96,15 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
 
     trailbrake_overlap = float(np.mean((win_brake > 0.1) & (np.abs(win_steering) > 0.1)))
 
+    try:
+        direction = compute_direction(record, corner.start_dist, corner.end_dist)
+    except ValueError:
+        direction = corner.direction
+
     return CornerMetrics(
         corner_no=corner.number,
         name=corner.name,
-        direction=corner.direction,
+        direction=direction,
         apex_dist=corner.apex_dist,
         entry_spd=entry_spd,
         apex_spd=apex_spd,

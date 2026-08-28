@@ -11,11 +11,12 @@ def run_repl(source: TelemetrySource, store: LapStore, cmap: CornerMap, coach: C
     """Background thread captures laps from `source` into `store` (silently, no
     per-lap print). Foreground loop answers questions about the latest captured
     lap, using the stored best lap as reference."""
-    latest = {"record": None}
+    latest = {"record": None, "lap_id": None}
 
     def capture():
         for lap in source.laps():
-            store.save(lap)
+            lap_id = store.save(lap)
+            latest["lap_id"] = lap_id
             latest["record"] = lap
 
     threading.Thread(target=capture, daemon=True).start()
@@ -34,6 +35,6 @@ def run_repl(source: TelemetrySource, store: LapStore, cmap: CornerMap, coach: C
             print("No laps captured yet — drive a lap first (or seed the replay store).")
             continue
 
-        reference = store.best_lap(record.track, car)
+        reference = store.best_lap(record.track, car, exclude_lap_id=latest["lap_id"])
         analysis = analyze_lap(record, cmap, reference=reference)
         print(coach.ask(analysis, car, question))

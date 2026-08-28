@@ -63,6 +63,24 @@ def test_load_missing_lap_raises_keyerror(tmp_path):
         s.load(99999)
 
 
+def test_best_lap_excludes_given_lap_id(tmp_path, synthetic_lap):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path/"c.sqlite"), str(tmp_path/"data"))
+    fastest_id = s.save(synthetic_lap)  # lap_time 92.5, the fastest
+    slower = LapRecord(**{**synthetic_lap.__dict__, "lap_time": 99.0})
+    s.save(slower)
+
+    # Excluding the fastest lap should return the next-fastest instead.
+    ref = s.best_lap("test_track", "test_car", exclude_lap_id=fastest_id)
+    assert ref is not None
+    assert ref.lap_time == 99.0
+
+    # Excluding the only lap present leaves no reference.
+    only = LapStore(str(tmp_path/"only.sqlite"), str(tmp_path/"only_data"))
+    only_id = only.save(synthetic_lap)
+    assert only.best_lap("test_track", "test_car", exclude_lap_id=only_id) is None
+
+
 def test_concurrent_save_and_read_is_safe(tmp_path, synthetic_lap):
     """A background writer looping save() and a foreground reader looping
     best_lap()/load() on the same LapStore must never crash. Without the

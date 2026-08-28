@@ -65,3 +65,45 @@ def test_coach_missing_knowledge_file_still_builds_prompt(synthetic_lap):
     _, user_content = c.build_prompt(a, "no_such_car", "where am I losing time?")
     assert "Left Hairpin" in user_content
     assert "Knowledge notes" not in user_content
+
+
+def test_coach_shows_delta_with_reference(synthetic_lap):
+    """With a reference lap, the prompt surfaces the min_spd delta vs best."""
+    from simcoach.model.fake import FakeModel
+    from simcoach.coach import Coach
+    from simcoach.corners import CornerMap
+    from simcoach.analysis import analyze_lap
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    a = analyze_lap(synthetic_lap, cmap, reference=synthetic_lap)
+    c = Coach(FakeModel(reply="ok"), "simcoach/knowledge")
+    _, user_content = c.build_prompt(a, "test_car", "where am I losing time?")
+    assert "vs best" in user_content
+    assert "+0.0 km/h" in user_content or "-0.0 km/h" in user_content
+
+
+def test_coach_no_delta_without_reference(synthetic_lap):
+    """Without a reference lap, no delta text is shown."""
+    from simcoach.model.fake import FakeModel
+    from simcoach.coach import Coach
+    from simcoach.corners import CornerMap
+    from simcoach.analysis import analyze_lap
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    a = analyze_lap(synthetic_lap, cmap)
+    c = Coach(FakeModel(reply="ok"), "simcoach/knowledge")
+    _, user_content = c.build_prompt(a, "test_car", "where am I losing time?")
+    assert "vs best" not in user_content
+
+
+def test_coach_skips_delta_text_when_delta_is_none(synthetic_lap):
+    """A corner with min_spd_delta=None (degenerate) shows no delta text and doesn't crash."""
+    from simcoach.model.fake import FakeModel
+    from simcoach.coach import Coach
+    from simcoach.corners import CornerMap
+    from simcoach.analysis import analyze_lap
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    a = analyze_lap(synthetic_lap, cmap, reference=synthetic_lap)
+    a.corners[0].min_spd_delta = None
+    c = Coach(FakeModel(reply="ok"), "simcoach/knowledge")
+    _, user_content = c.build_prompt(a, "test_car", "where am I losing time?")
+    c1_line = [l for l in user_content.splitlines() if l.startswith("C1 ")][0]
+    assert "vs best" not in c1_line

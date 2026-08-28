@@ -108,13 +108,15 @@ class LapStore:
                 channels = {k: npz[k] for k in npz.files}
             return LapRecord(sim, track, car, lap_time, bool(valid), ts, channels)
 
-    def best_lap(self, track: str, car: str) -> LapRecord | None:
+    def best_lap(self, track: str, car: str, exclude_lap_id: int | None = None) -> LapRecord | None:
         with self._lock:
-            row = self.conn.execute(
-                "SELECT id FROM laps WHERE track = ? AND car = ? AND valid = 1 "
-                "ORDER BY lap_time ASC LIMIT 1",
-                (track, car),
-            ).fetchone()
+            query = "SELECT id FROM laps WHERE track = ? AND car = ? AND valid = 1"
+            params: list = [track, car]
+            if exclude_lap_id is not None:
+                query += " AND id != ?"
+                params.append(exclude_lap_id)
+            query += " ORDER BY lap_time ASC LIMIT 1"
+            row = self.conn.execute(query, params).fetchone()
             if row is None:
                 return None
             return self.load(row[0])

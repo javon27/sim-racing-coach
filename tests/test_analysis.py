@@ -86,6 +86,25 @@ def test_analyze_lap_delta_is_none_when_min_spd_is_nan(synthetic_lap):
     assert a.corners[0].min_spd_delta is None
 
 
+def test_analyze_lap_direction_is_computed_not_read_from_map(synthetic_lap):
+    """Live analysis must COMPUTE direction from telemetry, not just echo the map's
+    stated direction. Use a map with a deliberately WRONG direction and assert the
+    analysis reports the telemetry-computed direction instead."""
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap, Corner
+
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    # Corner 1 is actually "left" per telemetry; flip the map to say "right".
+    cmap.corners[0] = Corner(
+        number=1, name="Left Hairpin", direction="right",
+        start_dist=800, apex_dist=1000, end_dist=1200,
+    )
+
+    a = analyze_lap(synthetic_lap, cmap)
+    assert a.corners[0].direction == "left"  # telemetry-computed, not the map's "right"
+    assert a.corners[1].direction == "right"
+
+
 def test_analyze_lap_rejects_reference_from_different_track(synthetic_lap):
     import dataclasses
     import pytest
