@@ -39,22 +39,22 @@ the merged v0.1 core + both spike docs). Merge is the USER'S call at lunch.
       PASS-WITH-NOTES pack-consistent). rf2structs.py (ctypes _pack_=4), smm.py
       (reader + LmuSource, begin==end reads), self-consistent tests. KNOWN GAP:
       rF2ScoringInfo tail is a placeholder — complete it live at lunch (item 2).
+- [ ] T-F Energy-as-BoP (user 2026-08-28) — resource-agnostic stint planner
+      (fuel OR energy MJ) + binding_stint in simcoach/fuel.py; energy channel is a
+      [LUNCH] seam; regen-braking coaching deferred to lunch. Brief: tf-brief.md.
 
-## Current Status  ===  AUTONOMOUS WORK COMPLETE, RESTING STATE  ===
-All 5 modules built + per-module reviewed + whole-branch reviewed + 2 Critical
-integration bugs fixed. Branch overnight-followups, 68 tests passing, tree clean.
-Everything remaining is USER-GATED (live-rig validation + wiring/product
-decisions) — see [LUNCH]. Nothing autonomous remains.
+## Current Status
+5 modules done + reviewed + 2 Critical fixes. NEW (user 07:00): T-F energy-as-BoP.
+LMU limits Hypercars by ENERGY (MJ/stint) + hybrid regen affects braking. Building
+the safe part now: resource-agnostic stint planner (fuel OR energy) + binding
+constraint. Regen-braking coaching model DEFERRED to lunch (needs user + live data).
+Branch overnight-followups; suite was 68 passing before T-F.
 
-## Next Exact Action  ===  HOLD  ===
-There is NO autonomous next step. All remaining work needs the user and/or a
-running LMU (the [LUNCH] section).
-IF YOU ARE A RECOVERY FIRE: verify `git status` is clean and the suite is green
-(.venv/Scripts/python.exe -m pytest -q => 68 passed), then reply that the overnight
-build is complete and awaiting the user at lunch, and STOP. Do NOT: start new
-features (scope discipline — the user must shape further work); attempt any [LUNCH]
-item (needs the rig/user; LMU isn't running); or cancel recovery cron 5a131f77 (the
-user armed it — they decide at lunch).
+## Next Exact Action
+Execute T-F per scratchpad/overnight/tf-brief.md: generalize simcoach/fuel.py to
+plan_stint (resource-agnostic) + binding_stint, keep plan_race back-compat, tests
+incl. an energy example. Run tests/test_fuel.py + full suite, commit, then REVIEW,
+tick T-F. After T-F: back to resting/HOLD (remaining work user-gated — see [LUNCH]).
 
 ## Files Changed (this branch)
 - T-A: simcoach/fuel.py, tests/test_fuel.py, tests/conftest.py(+fuel)

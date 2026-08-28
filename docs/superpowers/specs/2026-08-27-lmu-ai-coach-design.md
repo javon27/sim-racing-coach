@@ -142,6 +142,26 @@ Architectural affordance this requires (and how v0.1 already allows it):
 - Constraint for v0.1 code: nothing may hardcode "one lap in isolation" — the store already keys laps by sim/track/car and supports history, which is what phase-aware analysis will build on.
 - Each phase reuses the SAME core (feature extractor, coach, fuel calc); phases differ in which laps feed in and which output is emphasized, not in new pipelines.
 
+## Energy as BoP + hybrid regen (added 2026-08-28, user)
+
+LMU balances performance partly via ENERGY, not just fuel volume. Hypercars (LMH/
+LMDh) have a per-stint ENERGY allocation (MJ) and a hybrid system that regenerates
+under braking and deploys on power; regen blends with friction braking and shifts
+brake behavior. GT3s are closer to straight fuel-limited. The tool must accommodate
+all of it:
+
+- **Resource-agnostic stint planning.** The fuel calculator generalizes so the
+  binding per-stint constraint can be fuel (liters) OR energy (MJ), whichever forces
+  the pit first. For a Hypercar, compute both plans and take the binding one. The
+  stint energy budget comes from BoP tables / user config, not telemetry.
+- **Energy telemetry channels (seam).** Capture state-of-charge, energy deployed,
+  energy regenerated where LMU exposes them (exact struct/REST fields pending live
+  validation). `energy_per_lap` is derived like `fuel_per_lap` (channel delta).
+- **Regen-braking coaching (deferred, needs domain input + live data).** For
+  Hypercars the coach's braking advice must account for regen blending (brake
+  balance, lift-and-coast for energy, deployment strategy). Modeled later with the
+  user; knowledge-base + coach-context concern, not a deterministic calc.
+
 ## First steps: two spikes (before implementation, parallelizable)
 
 1. **Feasibility spike (technical).** Whole design rests on reading LMU live
