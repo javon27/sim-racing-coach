@@ -59,17 +59,14 @@ channels, T-H energy-strategy advisor; +2 Critical integration fixes; energy res
 R-2 827cb5c setup-guide/classes/sources). Remaining is USER-GATED: live-rig validation,
 app wiring, regen-braking coaching, fuel↔energy RATIO coupling, KB gaps — see [LUNCH].
 
-## Next Exact Action  ===  retrieve-sources IN FLIGHT, THEN T-I  ===
-retrieve-sources subagent is retrieving the 6 videos (captions API -> yt-dlp+faster-
-whisper) + Reddit (chrome-devtools browser), mining ONLY verified content into
-docs/superpowers/knowledge/ (a prior interrupted agent's UNSOURCED edits were
-discarded — do not resurrect them). After it commits:
-1. T-I shared-memory compatibility/health check (brief: scratchpad/overnight/ti-brief.md)
-   — multi-candidate MMF + version/sanity validation + anti-cheat read-only rule.
-2. Then T-I review, then back to HOLD.
-Built to date: T-A..T-H + K-1 + R-2 + energy research, 83 passing. KB gaps (R-2): no
-LMP2 source; per-class Bronze aids unconfirmed; Hypercar brake-migration (S7). Spa
-distances need live calibration.
+## Next Exact Action  ===  T-I IN FLIGHT  ===
+retrieve-sources DONE (ec90237): 7/7 hard sources mined (6 videos via captions API,
+Reddit via browser) — brake-migration gap filled, LMGT3 ABS dial added. T-I
+shared-memory compatibility/health check dispatched (brief scratchpad/overnight/
+ti-brief.md): fetches CrewChief changelog for canonical MMF names, multi-candidate +
+version/sanity validation, anti-cheat read-only rule. After T-I commits: review, HOLD.
+Built to date: T-A..T-H + K-1 + R-2 + retrieval + energy research, 83 passing.
+Remaining KB gap: no LMP2 source (all else filled).
 
 ## Queued: T-H energy-strategy / lift-and-coast advisor (research-grounded)
 Deterministic module on fuel.py. LMU shows fuel-laps-remaining AND nrg-laps-remaining
