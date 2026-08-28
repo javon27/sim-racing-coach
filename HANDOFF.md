@@ -27,11 +27,8 @@ the merged v0.1 core + both spike docs). Merge is the USER'S call at lunch.
 ## Remaining Checklist (ordered; do top-down)
 - [x] T-A Fuel calculator — DONE (commit 1450560, 42 passed). simcoach/fuel.py,
       fuel channel in conftest, tests/test_fuel.py.
-- [ ] T-B Tier model + tier-aware coach — `simcoach/tiers.py` (Bronze/Silver/Gold
-      allowed-adjustment sets; also an `isFreeSetting`-driven "allowed keys"
-      path per the spike). Wire a `tier`/allowed-set into `Coach.build_prompt`
-      so setup advice is constrained; driving advice unconstrained. Tests extend
-      `tests/test_coach.py`.
+- [x] T-B Tier-aware coach — DONE (commit 260de08, 47 passed). simcoach/tiers.py
+      (Bronze/Gold confirmed, Silver=GUESS), coach allowed_adjustments param.
 - [ ] T-C Session/phase model — additive: `phase` (practice|qualifying|race) +
       `session_id` columns on `laps` (schema user_version 1→2, migrate in place),
       `LapStore.save(..., phase=?, session_id=?)`, query helpers. Preserve all
@@ -49,18 +46,21 @@ the merged v0.1 core + both spike docs). Merge is the USER'S call at lunch.
       confirm RIGHT_IS_POSITIVE sign convention (needs a WHEEL lap).
 
 ## Current Status
-T-A done (fuel calc, commit 1450560, 42 passed). Next: T-B (tier-aware coach).
-Brief ready at scratchpad/overnight/tb-brief.md.
+T-A (fuel, 1450560) + T-B (tiers, 260de08) done, 47 passed. Next: T-C
+(session/phase schema migration). Brief at scratchpad/overnight/tc-brief.md.
+T-C is a schema migration — REVIEW it after (dispatch a reviewer subagent).
 
 ## Next Exact Action
-Dispatch/execute T-B per scratchpad/overnight/tb-brief.md: create simcoach/tiers.py
-+ tests/test_tiers.py, add optional `allowed_adjustments` to Coach.build_prompt/ask
-so setup advice is tier-constrained, add coach tests. Run tests/test_tiers.py +
-tests/test_coach.py + full suite, commit "feat: tier-aware setup constraints in
-coach", tick T-B.
+Dispatch/execute T-C per scratchpad/overnight/tc-brief.md: add phase+session_id
+to LapRecord, migrate store schema v1->v2 (fresh-create with cols + ALTER for
+existing v1), persist/restore metadata, add session_lap_ids + best_lap phase
+filter, tests incl. a migration test. Run tests/test_store.py + full suite,
+commit "feat: session/phase lap metadata with in-place schema migration (v2)",
+then REVIEW the diff (schema migration), tick T-C.
 
 ## Files Changed (this branch)
-- simcoach/fuel.py (new), tests/test_fuel.py (new), tests/conftest.py (+fuel channel)
+- T-A: simcoach/fuel.py, tests/test_fuel.py, tests/conftest.py(+fuel)
+- T-B: simcoach/tiers.py, tests/test_tiers.py, simcoach/coach.py, tests/test_coach.py
 
 ## Decisions / educated guesses (for lunch review)
 - Working on a feature branch in the main checkout (not a worktree) for recovery
