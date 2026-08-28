@@ -11,6 +11,7 @@ class CornerMetrics:
     corner_no: int
     name: str
     direction: str
+    apex_dist: float
     entry_spd: float
     apex_spd: float
     min_spd: float
@@ -44,6 +45,7 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
             corner_no=corner.number,
             name=corner.name,
             direction=corner.direction,
+            apex_dist=corner.apex_dist,
             entry_spd=float("nan"),
             apex_spd=float("nan"),
             min_spd=float("nan"),
@@ -65,6 +67,7 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
             corner_no=corner.number,
             name=corner.name,
             direction=corner.direction,
+            apex_dist=corner.apex_dist,
             entry_spd=float("nan"),
             apex_spd=float("nan"),
             min_spd=float("nan"),
@@ -96,6 +99,7 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
         corner_no=corner.number,
         name=corner.name,
         direction=corner.direction,
+        apex_dist=corner.apex_dist,
         entry_spd=entry_spd,
         apex_spd=apex_spd,
         min_spd=min_spd,

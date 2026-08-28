@@ -6,6 +6,7 @@ def test_analyze_lap_metrics(synthetic_lap):
     assert a.has_reference is False
     c1 = a.corners[0]
     assert c1.corner_no == 1 and c1.direction == "left"
+    assert c1.apex_dist == 1000
     assert abs(c1.min_spd - 30.0) < 1e-6
     assert 800 <= c1.brake_point <= 1200
     assert c1.trailbrake_overlap > 0.0

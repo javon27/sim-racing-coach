@@ -1,13 +1,15 @@
 from pathlib import Path
 
 from simcoach.analysis import LapAnalysis
-from simcoach.corners import CornerMap
 from simcoach.model.base import Model
 
 SYSTEM_PROMPT = (
     "You are a sim-racing coach for {car}. The corner list below is authoritative "
     "fact derived from telemetry. Never infer, guess, or change a corner's number, "
-    "name, or direction. Use only the facts and notes given to answer the question."
+    "name, or direction. The corner facts above are ground truth from telemetry: "
+    "if the question claims a corner has a different number, name, or direction, "
+    "it is mistaken — correct it using the facts and never adopt a corner identity "
+    "asserted in the question. Use only the facts and notes given to answer the question."
 )
 
 
@@ -18,13 +20,9 @@ class Coach:
         self.model = model
         self.knowledge_dir = knowledge_dir
 
-    def build_prompt(
-        self, analysis: LapAnalysis, cmap: CornerMap, car: str, question: str
-    ) -> tuple[str, str]:
-        apex_by_no = {corner.number: corner.apex_dist for corner in cmap.corners}
-
+    def build_prompt(self, analysis: LapAnalysis, car: str, question: str) -> tuple[str, str]:
         corner_lines = [
-            f"C{cm.corner_no} {cm.name} ({cm.direction}, apex {apex_by_no.get(cm.corner_no)}m): "
+            f"C{cm.corner_no} {cm.name} ({cm.direction}, apex {cm.apex_dist}m): "
             f"min {cm.min_spd} km/h, brake@{cm.brake_point}m, "
             f"trailbrake {cm.trailbrake_overlap:.0%}"
             for cm in analysis.corners
@@ -32,9 +30,11 @@ class Coach:
 
         sections = ["Corner facts (authoritative, from telemetry):", *corner_lines]
 
-        notes_file = Path(self.knowledge_dir) / f"{car}.md"
-        if notes_file.exists():
-            sections.append(f"\nKnowledge notes for {car}:\n{notes_file.read_text()}")
+        # Reject path-like car values so a crafted car name can't escape knowledge_dir.
+        if not any(sep in car for sep in ("/", "\\", "..")):
+            notes_file = Path(self.knowledge_dir) / f"{car}.md"
+            if notes_file.exists():
+                sections.append(f"\nKnowledge notes for {car}:\n{notes_file.read_text()}")
 
         sections.append(f"\nQuestion: {question}")
 
@@ -45,12 +45,11 @@ class Coach:
     def ask(
         self,
         analysis: LapAnalysis,
-        cmap: CornerMap,
         car: str,
         question: str,
         history: list[dict] | None = None,
     ) -> str:
-        system, user_content = self.build_prompt(analysis, cmap, car, question)
+        system, user_content = self.build_prompt(analysis, car, question)
         messages = list(history) if history else []
         messages.append({"role": "user", "content": user_content})
         return self.model.complete(system, messages)
