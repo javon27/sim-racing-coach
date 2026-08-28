@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import json
 from typing import Optional
+import numpy as np
 from simcoach.model_types import LapRecord
 
 
@@ -35,7 +36,7 @@ class CornerMap:
         return cls(corners)
 
     def corner_at(self, dist: float) -> Optional[Corner]:
-        """Return the first corner whose [start_dist, end_dist] contains dist."""
+        """Return the first corner whose [start_dist, end_dist] contains dist (inclusive boundaries)."""
         for corner in self.corners:
             if corner.start_dist <= dist <= corner.end_dist:
                 return corner
@@ -48,12 +49,22 @@ def compute_direction(record: LapRecord, start: float, end: float) -> str:
 
     Returns "left" or "right" based on mean steering over [start, end] distance range.
     Sign convention controlled by RIGHT_IS_POSITIVE constant.
+
+    Raises ValueError if the window contains no telemetry or all NaN steering samples.
     """
     lap_distance = record.channels["lap_distance"]
     steering = record.channels["steering"]
 
     mask = (lap_distance >= start) & (lap_distance <= end)
-    mean_steering = steering[mask].mean()
+
+    if not np.any(mask):
+        raise ValueError(f"no telemetry in window [{start}, {end}]")
+
+    # Use nanmean to skip NaN samples; result is nan if all samples are NaN
+    mean_steering = np.nanmean(steering[mask])
+
+    if np.isnan(mean_steering):
+        raise ValueError(f"no telemetry in window [{start}, {end}]")
 
     if mean_steering > 0:
         return "right" if RIGHT_IS_POSITIVE else "left"
@@ -65,12 +76,17 @@ def verify_map_directions(record: LapRecord, cmap: CornerMap) -> list[tuple[int,
     """
     Verify that map directions match computed directions from telemetry.
 
-    Returns list of (corner_no, declared, computed) for any mismatches.
-    Empty list means all directions are consistent.
+    Returns list of (corner_no, declared, computed) for any mismatches or undetermined corners.
+    Empty list means all directions are consistent and verifiable.
     """
     mismatches = []
     for corner in cmap.corners:
-        computed = compute_direction(record, corner.start_dist, corner.end_dist)
+        try:
+            computed = compute_direction(record, corner.start_dist, corner.end_dist)
+        except ValueError:
+            # Out-of-range or no telemetry window
+            computed = "undetermined"
+
         if corner.direction != computed:
             mismatches.append((corner.number, corner.direction, computed))
     return mismatches
