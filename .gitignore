@@ -19,6 +19,7 @@ data/
 
 # Operational scratch (SDD/review packages, agent coordination)
 .superpowers/
+scratchpad/
 
 # OS / editor
 .DS_Store

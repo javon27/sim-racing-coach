@@ -45,20 +45,22 @@ the merged v0.1 core + both spike docs). Merge is the USER'S call at lunch.
       fields — mVirtualEnergy (c_float, Hypercar BoP energy), mSoC (c_float),
       mBatteryChargeFraction (c_double). -> T-G maps them. Regen-braking coaching
       still [LUNCH]/user-gated.
-- [ ] T-G Energy channel mapping — add virtual_energy/soc/battery_charge channels
-      to smm.sample_from_telem using the confirmed-existing struct fields; note
-      energy_per_lap uses fuel.use_per_lap_from_channel. Offsets still [LUNCH]-validated.
+- [x] T-G Energy channel mapping — DONE (commit 0f094ec, 76 passed).
+      virtual_energy/soc/battery_charge mapped in smm.sample_from_telem (no unit
+      conversion — assumed fraction-scale, flagged in docstring). Offsets + scale
+      still [LUNCH]-validated. energy_per_lap uses fuel.use_per_lap_from_channel.
 
 ## Current Status  ===  AUTONOMOUS WORK COMPLETE, RESTING STATE  ===
-6 modules done (T-A..T-F) + reviewed + 2 Critical fixes. Branch overnight-followups,
-75 tests passing, tree clean. T-F (energy-as-BoP resource-agnostic stint planner)
-added per user 07:00. Everything remaining is USER-GATED (live-rig validation +
-wiring + the regen-braking coaching model) — see [LUNCH]. Nothing autonomous remains.
+7 modules done (T-A..T-G) + reviewed + 2 Critical fixes. Branch overnight-followups,
+76 tests passing, tree clean. Energy-as-BoP fully accommodated on the buildable side
+(T-F planner resource-agnostic; T-G maps virtual_energy/soc/battery_charge). Remaining
+is USER-GATED: live-rig validation, app wiring, regen-braking coaching model, and the
+adjustable fuel<->energy RATIO coupling — see [LUNCH]. Nothing autonomous remains.
 
 ## Next Exact Action  ===  HOLD  ===
 No autonomous next step. All remaining work needs the user and/or running LMU.
 IF YOU ARE A RECOVERY FIRE: verify `git status` clean + suite green
-(.venv/Scripts/python.exe -m pytest -q => 75 passed), reply that the build is
+(.venv/Scripts/python.exe -m pytest -q => 76 passed), reply that the build is
 complete and awaiting the user at lunch, and STOP. Do NOT: start new features
 (user must shape further work); attempt [LUNCH] items (need rig/user); cancel
 recovery cron 5a131f77 (user's call).
