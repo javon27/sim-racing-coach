@@ -109,6 +109,20 @@ Feature extractor gets real unit tests against a recorded-lap fixture,
 including an assert that computed corner direction matches known geometry.
 Capture and coach stay thin.
 
+## Online racing context + tier model (added post-approval)
+
+The user races LMU **online**: sign up for a daily race, practice on servers until it starts. Daily races come in tiers, which constrain what the coach may advise and imply a fuel strategy:
+
+| Tier | Setup freedom | Duration | Pit |
+|------|---------------|----------|-----|
+| Bronze | FIXED setup — only TC, brake bias, ABS (where applicable) adjustable | ~20 min | none |
+| Silver | Partial customization (more than Bronze, less than open) | ~30 min | usually none |
+| Gold | Fully open setup | ~40 min | ≥1 pitstop for refueling typical |
+
+Design implications:
+- **Coach must be tier-aware (correctness, not polish).** Suggesting an illegal adjustment (e.g. springs in Bronze) is wrong advice. The coach takes a `tier` (or explicit allowed-adjustments set) and constrains setup suggestions to what that tier permits; driving advice is unconstrained. Folded into the coach (Task 9) since it is not yet built.
+- **Fuel calculator (new, early feature).** Deterministic module (no LLM): from the telemetry fuel channel compute `fuel_per_lap` (lap-over-lap consumption), estimate race laps ≈ race_duration ÷ representative_lap_time, output total fuel needed (+ margin), whether a pitstop is required, and fuel-to-add. Requires adding a `fuel` channel to `LapRecord` + the fixture. Standalone; independent of the coaching pipeline. YAGNI: no tire-wear/weather modelling — just fuel-per-lap × laps + margin, with a calibration margin knob.
+
 ## First steps: two spikes (before implementation, parallelizable)
 
 1. **Feasibility spike (technical).** Whole design rests on reading LMU live
