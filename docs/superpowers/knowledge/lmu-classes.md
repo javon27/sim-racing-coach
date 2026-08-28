@@ -28,6 +28,12 @@ in `lmu-setup-guide.md`: **[broadly agreed]** vs **[single-source]**.
 - Driver-category (Bronze/Silver/etc.) legal aid restrictions for Hypercar
   were **not found** in this research pass — do not assume Hypercar allows
   or disallows any specific aid without checking LMU's current rules.
+- R-3 pass (S3–S7, four independent Hypercar-focused creators, one series of
+  four) corroborates and details the mechanical/electronic levers above with
+  worked track examples (BMW M Hybrid V8, Porsche 963, Ferrari 499P) — see
+  `lmu-setup-guide.md` for the full per-lever cause→effect detail (ARB,
+  springs, ride height/packers, preload, TC/TC-slip/TC-cut, brake bias +
+  migration). Not re-derived here to avoid duplication.
 
 ## LMGT3
 
@@ -47,11 +53,26 @@ in `lmu-setup-guide.md`: **[broadly agreed]** vs **[single-source]**.
 - Energy/fuel: no hybrid system; standard fuel-load setup considerations
   only (weight, brake-bias/pack trim as fuel burns). No LMGT3-specific fuel
   strategy notes found in this pass.
+- ABS mechanics, mined this pass **[single-source, community-sourced,
+  unverified against official patch notes]** (S1): the 0–9 ABS dial is not
+  a simple "more ABS = safer" scale — it combines activation timing with a
+  front/rear slip-tolerance bias. 1–3 lets the rear slip more before ABS
+  cuts in (oversteer-leaning), 4–6 is balanced front/rear, 7–9 lets the
+  front slip more (understeer-leaning); the sub-value within each band
+  controls how early ABS activates. See `lmu-setup-guide.md` (ABS section)
+  for the full breakdown and `simcoach/knowledge/ferrari_296_gt3.md` for the
+  car-note version of this same detail.
 - Bronze-legal aid subset (which of TC/brake-bias-range/ABS a Bronze-rated
   driver is specifically permitted to run): **not confirmed** by this
   research pass — the existing Ferrari 296 car note already flags this same
   gap. Verify against LMU's current driver-category rules before coaching on
-  it.
+  it. One concrete, directly-observed data point (not a general rule — it's
+  one specific bronze daily race's fixed setup, not evidence of the
+  Bronze-category rule in general): the McLaren 720S GT3 fixed setup in the
+  Logitech McLaren G Challenge bronze daily race left TC, TC power cut, TC
+  slip angle, ABS strength, brake bias, fuel ratio/virtual energy, and max
+  pedal force all driver-adjustable, with everything else locked.
+  **[single-source]** (S2)
 
 ## LMP2
 

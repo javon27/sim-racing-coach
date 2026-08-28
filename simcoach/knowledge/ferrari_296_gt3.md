@@ -26,6 +26,17 @@ common across GT3 sims (iRacing/ACC/LMU), [LMU] = specific to this game,
 ## Driver aids (LMGT3 in LMU)
 - [LMU] LMGT3 is the only LMU class with native ABS. ABS has two axes:
   intervention level and front/rear intervention distribution.
+- [LMU] [needs-refinement, community-sourced from a Reddit discussion, not
+  verified against official patch notes] The two axes above collapse into a
+  single 0-9 in-game dial: 1-3 lets the rear slip more than the front before
+  ABS activates ("oversteer" settings), 4-6 is front/rear-balanced, 7-9 lets
+  the front slip more ("understeer" settings); the specific value within
+  each band (e.g. 1 vs. 3) sets how early ABS activates, not a second
+  balance axis. Community reports: pairing a rearward brake bias with a low
+  ABS value (1-3) makes the car very easy to spin under braking; one driver
+  found ABS 8 noticeably stabilized a Porsche GT3 under braking. Source:
+  r/LeMansUltimateWEC, "New ABS system" thread (see sources.md S1 in
+  `docs/superpowers/knowledge/`).
 - [LMU] Traction control has three facets in LMU: TC, TC power cut, TC slip
   angle — adjustable on the fly via MFD. Higher settings suit cold tires.
 - [LMU] Rearward brake bias + aggressive ABS can help rotate the car under
@@ -41,3 +52,4 @@ common across GT3 sims (iRacing/ACC/LMU), [LMU] = specific to this game,
 - Coach Dave Academy, "The ACC Ferrari 296 Drivers Guide & Setups": https://coachdaveacademy.com/tutorials/tips-and-tricks-to-driving-the-ferrari-296-gt3/
 - OverTake.gg, "LMGT3 ABS in Le Mans Ultimate Explained": https://www.overtake.gg/news/guide-to-le-mans-ultimate-abs-in-lmgt3.3535/
 - Steam Community discussions on LMGT3 setup (general, not car-specific): https://steamcommunity.com/app/2399420/discussions/0/694251179408083282/
+- Reddit r/LeMansUltimateWEC, "New ABS system": https://www.reddit.com/r/LeMansUltimateWEC/comments/1l9ud8z/new_abs_system/
