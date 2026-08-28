@@ -51,20 +51,24 @@ the merged v0.1 core + both spike docs). Merge is the USER'S call at lunch.
       still [LUNCH]-validated. energy_per_lap uses fuel.use_per_lap_from_channel.
 
 ## Current Status  ===  AUTONOMOUS WORK COMPLETE, RESTING STATE  ===
-7 modules done (T-A..T-G) + reviewed + 2 Critical fixes. Branch overnight-followups,
-76 tests passing, tree clean. Energy-as-BoP fully accommodated on the buildable side
-(T-F planner resource-agnostic; T-G maps virtual_energy/soc/battery_charge). Remaining
-is USER-GATED: live-rig validation, app wiring, regen-braking coaching model, and the
-adjustable fuel<->energy RATIO coupling — see [LUNCH]. Nothing autonomous remains.
+Branch overnight-followups, 83 tests passing, tree clean, 34 commits. Built overnight:
+T-A fuel calc, T-B tier-aware coach, T-C session/phase migration, T-D REST client,
+T-E shared-memory reader, T-F resource-agnostic (fuel/energy) planner, T-G energy
+channels, T-H energy-strategy advisor; +2 Critical integration fixes; energy research
+(d289178) folded into spec; knowledge base begun (K-1 f0a2bbb scaffold/roster/Spa/GT3,
+R-2 827cb5c setup-guide/classes/sources). Remaining is USER-GATED: live-rig validation,
+app wiring, regen-braking coaching, fuel↔energy RATIO coupling, KB gaps — see [LUNCH].
 
-## Next Exact Action  ===  T-H IN FLIGHT (last queued build)  ===
-K-1 (f0a2bbb) + R-2 (827cb5c) done. T-H energy-strategy advisor dispatched
-(brief scratchpad/overnight/th-brief.md). After T-H commits + verify: back to HOLD.
-KB knowledge gaps to fill at lunch/later (from R-2): Reddit thread (S1) was blocked;
-the 6 YouTube setup videos are video-only (user could summarize, or we revisit); no
-LMP2 source found; per-class Bronze-legal driver-aid subset unconfirmed; Hypercar
-brake-migration detail unconfirmed (S7 is the lead). Spa corner distances need live
-calibration; add more tracks/cars as prioritized.
+## Next Exact Action  ===  HOLD (queue cleared)  ===
+K-1 (f0a2bbb) + R-2 (827cb5c) + T-H (c15fe21) all done. 83 tests passing, tree clean.
+No autonomous step remains. IF YOU ARE A RECOVERY FIRE: verify git clean + suite green
+(.venv/Scripts/python.exe -m pytest -q => 83 passed), reply build is complete and
+awaiting the user at lunch, STOP. Do NOT start new features / attempt [LUNCH] items /
+cancel cron 5a131f77.
+KB gaps to fill at lunch/later (from R-2): Reddit thread (S1) blocked; 6 YouTube
+setup videos video-only (user could summarize); no LMP2 source; per-class Bronze
+driver-aid subset unconfirmed; Hypercar brake-migration (S7 lead). Spa distances need
+live calibration; add tracks/cars as prioritized.
 
 ## Queued: T-H energy-strategy / lift-and-coast advisor (research-grounded)
 Deterministic module on fuel.py. LMU shows fuel-laps-remaining AND nrg-laps-remaining
