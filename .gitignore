@@ -17,6 +17,9 @@ data/
 *.sqlite
 *.sqlite3
 
+# Operational scratch (SDD/review packages, agent coordination)
+.superpowers/
+
 # OS / editor
 .DS_Store
 Thumbs.db
