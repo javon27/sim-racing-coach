@@ -4,7 +4,10 @@ from simcoach.fuel import (
     fuel_per_lap_from_channel,
     mean_fuel_per_lap,
     plan_race,
+    plan_stint,
+    binding_stint,
     FuelPlan,
+    StintPlan,
 )
 
 
@@ -54,3 +57,64 @@ def test_laps_override():
     plan = plan_race(2.0, 1200, 92.5, 100.0, laps_override=10)
     assert plan.race_laps == 10
     assert abs(plan.total_needed - 2.0 * 10 * 1.05) < 1e-6
+
+
+def test_plan_stint_matches_plan_race():
+    # plan_stint(resource="fuel") must reproduce plan_race's exact numbers.
+    fp = plan_race(fuel_per_lap=3.5, race_duration_s=40 * 60, lap_time_s=92.5, tank_capacity=60.0)
+    sp = plan_stint(use_per_lap=3.5, capacity=60.0, race_duration_s=40 * 60, lap_time_s=92.5,
+                     resource="fuel")
+    assert isinstance(sp, StintPlan)
+    assert sp.resource == "fuel"
+    assert sp.race_laps == fp.race_laps
+    assert abs(sp.total_needed - fp.total_needed) < 1e-6
+    assert sp.stops_required == fp.stops_required
+    assert abs(sp.start_amount - fp.start_fuel) < 1e-6
+
+
+def test_plan_stint_energy():
+    # Hypercar stint: 900 MJ budget, 40 MJ/lap, 40 min race, 92.5s laps.
+    sp = plan_stint(use_per_lap=40.0, capacity=900.0, race_duration_s=40 * 60, lap_time_s=92.5,
+                     resource="energy")
+    assert sp.resource == "energy"
+    assert sp.race_laps == 27
+    assert abs(sp.total_needed - 40.0 * 27 * 1.05) < 1e-6
+    assert sp.stops_required == 1
+
+
+def test_plan_stint_raises_on_bad_lap_time():
+    with pytest.raises(ValueError):
+        plan_stint(use_per_lap=2.0, capacity=100.0, race_duration_s=1200, lap_time_s=0)
+
+
+def test_binding_stint_energy_more_constraining():
+    # Same race: fuel needs 0 stops, energy needs 1 stop -> energy binds.
+    fuel_plan = plan_stint(use_per_lap=2.6, capacity=100.0, race_duration_s=40 * 60,
+                            lap_time_s=92.5, resource="fuel")
+    energy_plan = plan_stint(use_per_lap=40.0, capacity=900.0, race_duration_s=40 * 60,
+                              lap_time_s=92.5, resource="energy")
+    assert fuel_plan.stops_required == 0
+    assert energy_plan.stops_required == 1
+    assert binding_stint(fuel_plan, energy_plan) is energy_plan
+
+
+def test_binding_stint_fuel_more_constraining():
+    # Fuel needs 2 stops, energy needs 0 -> fuel binds.
+    fuel_plan = plan_stint(use_per_lap=5.0, capacity=30.0, race_duration_s=40 * 60,
+                            lap_time_s=92.5, resource="fuel")
+    energy_plan = plan_stint(use_per_lap=10.0, capacity=900.0, race_duration_s=40 * 60,
+                              lap_time_s=92.5, resource="energy")
+    assert fuel_plan.stops_required >= 2
+    assert energy_plan.stops_required == 0
+    assert binding_stint(fuel_plan, energy_plan) is fuel_plan
+
+
+def test_binding_stint_requires_plans():
+    with pytest.raises(ValueError):
+        binding_stint()
+
+
+def test_plan_race_still_returns_fuel_plan():
+    plan = plan_race(fuel_per_lap=2.6, race_duration_s=20 * 60, lap_time_s=92.5, tank_capacity=100.0)
+    assert isinstance(plan, FuelPlan)
+    assert not isinstance(plan, StintPlan)
