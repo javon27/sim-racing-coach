@@ -71,7 +71,14 @@ Tells the driver when to lift to hit a fuel/energy target. Likely deterministic
 (target use/lap vs actual -> lift point), fits the coach. Build after research
 clarifies the LMU mechanic + whether a target/HUD cue is exposed to telemetry/REST.
 
-## (was HOLD)  No autonomous step remains once research lands + is folded in.
+## Queued: K-1 knowledge base (user 07:13 — "begin building track+car KB")
+Brief: scratchpad/overnight/k1-brief.md. Scaffold + LMU roster + exemplar Spa corner
+map + exemplar GT3 note. Corner names/dirs = facts (research); lap-distances =
+flagged ESTIMATES pending live calibration; car tuning = template + researched
+baseline, user refines from their Gemini notebook. DISPATCH AFTER research-energy
+COMMITS (avoid two subagents committing to the same index concurrently — that race
+bit us at the start; see Incident 1 pattern). Educated guess: exemplar track = Spa
+(~7km + GT3 matches the spike session); user confirms priority tracks/cars at lunch.
 IF YOU ARE A RECOVERY FIRE: verify `git status` clean + suite green
 (.venv/Scripts/python.exe -m pytest -q => 76 passed), reply that the build is
 complete and awaiting the user at lunch, and STOP. Do NOT: start new features
