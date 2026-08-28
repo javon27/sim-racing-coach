@@ -41,9 +41,13 @@ the merged v0.1 core + both spike docs). Merge is the USER'S call at lunch.
       rF2ScoringInfo tail is a placeholder — complete it live at lunch (item 2).
 - [x] T-F Energy-as-BoP — DONE (commit bcbd270, 75 passed, diff-reviewed clean).
       plan_stint (resource-agnostic) + binding_stint; plan_race delegates, stays
-      FuelPlan (back-compat). Energy CHANNEL mapping + regen-braking coaching still
-      [LUNCH]/user-gated. (impl-energy: rf2structs has no obvious battery/energy
-      field — energy channel source is a live-validation item.)
+      FuelPlan (back-compat). CORRECTION: rf2structs TelemInfoV01 DOES have energy
+      fields — mVirtualEnergy (c_float, Hypercar BoP energy), mSoC (c_float),
+      mBatteryChargeFraction (c_double). -> T-G maps them. Regen-braking coaching
+      still [LUNCH]/user-gated.
+- [ ] T-G Energy channel mapping — add virtual_energy/soc/battery_charge channels
+      to smm.sample_from_telem using the confirmed-existing struct fields; note
+      energy_per_lap uses fuel.use_per_lap_from_channel. Offsets still [LUNCH]-validated.
 
 ## Current Status  ===  AUTONOMOUS WORK COMPLETE, RESTING STATE  ===
 6 modules done (T-A..T-F) + reviewed + 2 Critical fixes. Branch overnight-followups,
