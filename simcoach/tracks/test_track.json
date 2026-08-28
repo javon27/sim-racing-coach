@@ -1,0 +1,4 @@
+{"track": "test_track", "corners": [
+  {"number": 1, "name": "Left Hairpin", "direction": "left",  "start_dist": 800,  "apex_dist": 1000, "end_dist": 1200},
+  {"number": 2, "name": "Right Sweeper", "direction": "right", "start_dist": 2000, "apex_dist": 2200, "end_dist": 2400}
+]}
