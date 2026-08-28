@@ -39,22 +39,25 @@ the merged v0.1 core + both spike docs). Merge is the USER'S call at lunch.
       PASS-WITH-NOTES pack-consistent). rf2structs.py (ctypes _pack_=4), smm.py
       (reader + LmuSource, begin==end reads), self-consistent tests. KNOWN GAP:
       rF2ScoringInfo tail is a placeholder — complete it live at lunch (item 2).
-- [ ] T-F Energy-as-BoP (user 2026-08-28) — resource-agnostic stint planner
-      (fuel OR energy MJ) + binding_stint in simcoach/fuel.py; energy channel is a
-      [LUNCH] seam; regen-braking coaching deferred to lunch. Brief: tf-brief.md.
+- [x] T-F Energy-as-BoP — DONE (commit bcbd270, 75 passed, diff-reviewed clean).
+      plan_stint (resource-agnostic) + binding_stint; plan_race delegates, stays
+      FuelPlan (back-compat). Energy CHANNEL mapping + regen-braking coaching still
+      [LUNCH]/user-gated. (impl-energy: rf2structs has no obvious battery/energy
+      field — energy channel source is a live-validation item.)
 
-## Current Status
-5 modules done + reviewed + 2 Critical fixes. NEW (user 07:00): T-F energy-as-BoP.
-LMU limits Hypercars by ENERGY (MJ/stint) + hybrid regen affects braking. Building
-the safe part now: resource-agnostic stint planner (fuel OR energy) + binding
-constraint. Regen-braking coaching model DEFERRED to lunch (needs user + live data).
-Branch overnight-followups; suite was 68 passing before T-F.
+## Current Status  ===  AUTONOMOUS WORK COMPLETE, RESTING STATE  ===
+6 modules done (T-A..T-F) + reviewed + 2 Critical fixes. Branch overnight-followups,
+75 tests passing, tree clean. T-F (energy-as-BoP resource-agnostic stint planner)
+added per user 07:00. Everything remaining is USER-GATED (live-rig validation +
+wiring + the regen-braking coaching model) — see [LUNCH]. Nothing autonomous remains.
 
-## Next Exact Action
-Execute T-F per scratchpad/overnight/tf-brief.md: generalize simcoach/fuel.py to
-plan_stint (resource-agnostic) + binding_stint, keep plan_race back-compat, tests
-incl. an energy example. Run tests/test_fuel.py + full suite, commit, then REVIEW,
-tick T-F. After T-F: back to resting/HOLD (remaining work user-gated — see [LUNCH]).
+## Next Exact Action  ===  HOLD  ===
+No autonomous next step. All remaining work needs the user and/or running LMU.
+IF YOU ARE A RECOVERY FIRE: verify `git status` clean + suite green
+(.venv/Scripts/python.exe -m pytest -q => 75 passed), reply that the build is
+complete and awaiting the user at lunch, and STOP. Do NOT: start new features
+(user must shape further work); attempt [LUNCH] items (need rig/user); cancel
+recovery cron 5a131f77 (user's call).
 
 ## Files Changed (this branch)
 - T-A: simcoach/fuel.py, tests/test_fuel.py, tests/conftest.py(+fuel)
@@ -63,6 +66,7 @@ tick T-F. After T-F: back to resting/HOLD (remaining work user-gated — see [LU
 - T-D: simcoach/lmu/__init__.py, simcoach/lmu/rest.py, tests/test_lmu_rest.py
 - T-E: simcoach/lmu/rf2structs.py, simcoach/lmu/smm.py, tests/test_lmu_smm.py
 - fix (final-review C1/C2/M1): simcoach/lmu/smm.py, simcoach/lmu/rest.py, tests/test_lmu_smm.py
+- T-F: simcoach/fuel.py, tests/test_fuel.py (+ spec energy section)
 - chore: .gitignore (+.superpowers/)
 
 ## Decisions / educated guesses (for lunch review)
@@ -102,6 +106,14 @@ Do these with LMU running, on track (a WHEEL lap for the sign-convention one):
    in simcoach/corners.py to match. (Controller tonight was fine for feasibility
    but not for magnitude/sign calibration.)
 4. Confirm the fuel `mFuel` channel units (liters) and tank capacity source.
+4b. ENERGY-as-BoP (T-F): the resource-agnostic planner is built (plan_stint /
+   binding_stint handle fuel OR energy MJ). LIVE items: find LMU's energy/state-of-
+   charge/deploy/regen fields (rf2structs had none obvious — check the LMU-native
+   TelemInfoV01 or REST), and provide the per-stint MJ budget (from BoP tables).
+   Then map an `energy`/`soc` channel and feed binding_stint. DEFERRED w/ you:
+   the regen-braking coaching model (how hybrid regen blends with friction braking,
+   brake-balance shift, lift-and-coast deployment strategy) — needs your domain
+   input + live data; it's a coach/knowledge concern, not a deterministic calc.
 5. WIRING (I2, needs live + your calls): none of the 4 new features are reached
    from app.py yet — this branch adds capability, not behavior. Wire LmuSource +
    fuel plan + tier allowed_adjustments into run_repl for a real end-to-end
