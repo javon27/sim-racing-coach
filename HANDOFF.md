@@ -118,6 +118,13 @@ Do these with LMU running, on track (a WHEEL lap for the sign-convention one):
    the regen-braking coaching model (how hybrid regen blends with friction braking,
    brake-balance shift, lift-and-coast deployment strategy) — needs your domain
    input + live data; it's a coach/knowledge concern, not a deterministic calc.
+4c. ENERGY IS UNIVERSAL (user 07:09): GT3s use energy too, replenished at stops with
+   fuel. The planner (T-F) + energy channels (T-G) already apply to all cars — good.
+   NEW to model WITH YOU at lunch: the ADJUSTABLE FUEL<->ENERGY RATIO. It couples
+   fuel and energy (trade one for the other; both topped up at a stop). binding_stint
+   currently treats them INDEPENDENTLY (conservative). Building the ratio as an
+   optimizable lever needs the exact LMU mechanic (does it split pit time? trade
+   budget? affect regen?) — confirm live, then extend the planner. NOT guessed.
 5. WIRING (I2, needs live + your calls): none of the 4 new features are reached
    from app.py yet — this branch adds capability, not behavior. Wire LmuSource +
    fuel plan + tier allowed_adjustments into run_repl for a real end-to-end

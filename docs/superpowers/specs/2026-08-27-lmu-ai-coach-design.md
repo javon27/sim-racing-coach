@@ -150,10 +150,20 @@ under braking and deploys on power; regen blends with friction braking and shift
 brake behavior. GT3s are closer to straight fuel-limited. The tool must accommodate
 all of it:
 
+- **Energy is universal.** ALL cars (GT3 included, not just Hypercars) consume an
+  energy allowance, replenished at pit stops together with fuel. So the energy model
+  is not a Hypercar special case — it applies across the board.
 - **Resource-agnostic stint planning.** The fuel calculator generalizes so the
   binding per-stint constraint can be fuel (liters) OR energy (MJ), whichever forces
-  the pit first. For a Hypercar, compute both plans and take the binding one. The
-  stint energy budget comes from BoP tables / user config, not telemetry.
+  the pit first. Compute both plans and take the binding one. The stint energy
+  budget comes from BoP tables / user config, not telemetry.
+- **Adjustable fuel↔energy ratio (strategy lever — coupling TBD with user).** LMU
+  exposes an adjustable fuel-to-energy ratio, so fuel and energy are NOT fully
+  independent: shifting the ratio trades one against the other, and both are topped
+  up at a stop. `binding_stint` currently treats them as independent resources (the
+  conservative view — take the worse constraint). Modeling the ratio as an
+  optimizable lever (pick the ratio that minimizes stops / stint time) needs the
+  exact LMU mechanic confirmed live with the user; deferred, not guessed.
 - **Energy telemetry channels (seam).** Capture state-of-charge, energy deployed,
   energy regenerated where LMU exposes them (exact struct/REST fields pending live
   validation). `energy_per_lap` is derived like `fuel_per_lap` (channel delta).
