@@ -46,7 +46,10 @@ class LapStore:
     def __init__(self, db_path: str, data_dir: str):
         self.data_dir = data_dir
         os.makedirs(self.data_dir, exist_ok=True)
-        self.conn = sqlite3.connect(db_path)
+        # check_same_thread=False: run_repl's background capture thread and
+        # foreground REPL thread share this connection; sqlite3 serializes
+        # access internally so this is safe for our single-writer usage.
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
         current_version = self.conn.execute("PRAGMA user_version").fetchone()[0]
         if current_version == 0:
             self.conn.executescript(_SCHEMA)
