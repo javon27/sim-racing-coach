@@ -80,6 +80,24 @@ HANDOFF; leave branch for user to review/merge. Consider a final full-suite revi
   expiry). Confirm LMU's timed-race end rule matches (leader finishes current lap
   after clock hits 0). Fuel margin default 5% — adjust to taste.
 
+## [LUNCH] — needs you + the rig (live validation overnight couldn't do)
+Do these with LMU running, on track (a WHEEL lap for the sign-convention one):
+1. T-D live smoke: with LMU running, `LmuRest().get_player_standing()` /
+   `.fuel_fraction()` / `.adjustable_keys()` against localhost:6397 — confirm the
+   recorded shapes still match live.
+2. T-E live validation (the big one): run the shared-memory reader against the
+   live `$rFactor2SMMP_Telemetry$` / `$rFactor2SMMP_Scoring$` buffers. Confirm the
+   ctypes struct OFFSETS are right (values sane: throttle/brake 0..1, speed matches
+   HUD, gear correct). Fix any offset drift (see te-report.md for the fields the
+   implementer was unsure about).
+3. Sign convention (do on a WHEEL lap, in a known left+right corner): confirm the
+   sign of `mUnfilteredSteering` and `mLocalAccel.x`, and set `RIGHT_IS_POSITIVE`
+   in simcoach/corners.py to match. (Controller tonight was fine for feasibility
+   but not for magnitude/sign calibration.)
+4. Confirm the fuel `mFuel` channel units (liters) and tank capacity source.
+Then: wire LmuSource into the terminal app for a real end-to-end capture→coach run
+(needs ANTHROPIC_API_KEY for the coach).
+
 ## Recovery notes
 - Recovery cron `5a131f77` armed (every 30m, fires auto-continue.md while idle).
 - auto-continue reconciles THIS file against `git status`; git wins. Keep
