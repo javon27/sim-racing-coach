@@ -57,15 +57,14 @@ the merged v0.1 core + both spike docs). Merge is the USER'S call at lunch.
 is USER-GATED: live-rig validation, app wiring, regen-braking coaching model, and the
 adjustable fuel<->energy RATIO coupling — see [LUNCH]. Nothing autonomous remains.
 
-## Next Exact Action  ===  K-1 IN FLIGHT; THEN R-2, THEN T-H  ===
-K-1 knowledge base (impl-kb) dispatched. Then:
-1. R-2 (brief: scratchpad/overnight/r2-brief.md): mine the user's setup sources
-   (07:21) into docs/superpowers/knowledge/ (setup-guide, classes, sources index).
-   Sources durably listed in the R-2 brief (Reddit + 6 YouTube + LMU LMP3 guide +
-   Coach Dave ultimate LMU setup guide). Dispatch AFTER K-1 commits (both write to
-   knowledge/; one committer at a time).
-2. T-H energy-strategy/lift advisor (see below).
-User's own words: "do more research yourself" — go beyond the 9 links too.
+## Next Exact Action  ===  T-H IN FLIGHT (last queued build)  ===
+K-1 (f0a2bbb) + R-2 (827cb5c) done. T-H energy-strategy advisor dispatched
+(brief scratchpad/overnight/th-brief.md). After T-H commits + verify: back to HOLD.
+KB knowledge gaps to fill at lunch/later (from R-2): Reddit thread (S1) was blocked;
+the 6 YouTube setup videos are video-only (user could summarize, or we revisit); no
+LMP2 source found; per-class Bronze-legal driver-aid subset unconfirmed; Hypercar
+brake-migration detail unconfirmed (S7 is the lead). Spa corner distances need live
+calibration; add more tracks/cars as prioritized.
 
 ## Queued: T-H energy-strategy / lift-and-coast advisor (research-grounded)
 Deterministic module on fuel.py. LMU shows fuel-laps-remaining AND nrg-laps-remaining
