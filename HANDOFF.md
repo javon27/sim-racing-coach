@@ -43,8 +43,9 @@ the merged v0.1 core + both spike docs). Merge is the USER'S call at lunch.
       confirm RIGHT_IS_POSITIVE sign convention (needs a WHEEL lap).
 
 ## Current Status
-T-A/T-B/T-C/T-D done (58 passed). Next: T-E (LMU shared-memory reader) — LAST
-module. Brief at scratchpad/overnight/te-brief.md. T-E is front-loaded code
+T-A/T-B/T-C/T-D done (58 passed). T-E IN PROGRESS (retry: first attempt failed on
+account session-limit ~00:22, reset 3:50am; re-dispatched impl-smm2 ~04:05, clean
+tree, nothing to clean up). Next: T-E (LMU shared-memory reader) — LAST module. Brief at scratchpad/overnight/te-brief.md. T-E is front-loaded code
 transcribed from the on-disk header; struct offsets + sign convention + live
 loop are [LUNCH]-validated (LMU not running overnight). REVIEW T-E after.
 
