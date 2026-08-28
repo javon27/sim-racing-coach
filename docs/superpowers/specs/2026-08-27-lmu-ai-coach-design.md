@@ -170,13 +170,16 @@ all of it:
   sources; official S397 manual was unreachable — treat as likely, confirm live).
 - **NRG is universal.** Both GT3 and Hypercar carry a Virtual Energy allowance
   (GT3's is fuel-only, no battery term) — energy is not a Hypercar special case.
-- **Lift-and-coast / fuel-save advisor (NEW capability — open ground).** LMU has NO
-  automated lift-point HUD; lift-and-coast is purely manual, and the game only shows
-  per-lap "laps remaining" for fuel and NRG separately. So a coach advisor that
-  computes the per-lap saving needed and *where* to lift is genuine added value. It
-  is deterministic (target use/lap vs actual → save %; ratio-balance direction from
-  the two laps-remaining figures). Buildable now for the strategy math; the "where to
-  lift" cue wants live throttle/consumption traces.
+- **Lift-and-coast / fuel-save advisor (corrected 2026-08-28 by user).** LMU DOES
+  have a real-life-style fuel-save system: you set a target ("how many laps to save
+  for") in the **MFD**, and the game then drives the **in-car fuel-save lights** that
+  cue you when to lift — no track-position HUD marker, but a genuine target-driven
+  indicator. So the coach's role is not to replace the lights but to set the STRATEGY:
+  `stint_save_advice` computes the per-lap save % / the target the driver punches into
+  the MFD, and `ratio_balance` says which of fuel/NRG is short. Deterministic, built
+  (T-H). Open questions (live): is the fuel-save light state and/or the MFD target
+  exposed via telemetry (shared memory) or REST? If so, the coach can read whether the
+  driver is on target and coach the lift directly. Add to the spike.
 - **New telemetry lead:** `GET http://localhost:6397/rest/strategy/usage` returns
   Virtual Energy history — add to the feasibility spike / REST client.
 - **Energy telemetry channels (seam).** Capture state-of-charge, energy deployed,

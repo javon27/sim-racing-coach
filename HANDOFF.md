@@ -147,6 +147,11 @@ Do these with LMU running, on track (a WHEEL lap for the sign-convention one):
    in simcoach/corners.py to match. (Controller tonight was fine for feasibility
    but not for magnitude/sign calibration.)
 4. Confirm the fuel `mFuel` channel units (liters) and tank capacity source.
+4d. FUEL-SAVE LIGHTS (user 09:26): LMU has an MFD "laps to save for" target that drives
+   in-car fuel-save lights (real-life style) — NOT a track HUD marker. Coach role: set
+   the target (T-H stint_save_advice output) + strategy, not replace the lights. LIVE Q:
+   is the fuel-save light state / MFD target exposed via shared memory or REST? If yes,
+   read it and coach the lift directly. (Corrected the spec's earlier "no HUD" note.)
 4b. ENERGY-as-BoP (T-F): the resource-agnostic planner is built (plan_stint /
    binding_stint handle fuel OR energy MJ). LIVE items: find LMU's energy/state-of-
    charge/deploy/regen fields (rf2structs had none obvious — check the LMU-native
