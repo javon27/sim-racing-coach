@@ -35,17 +35,17 @@ the merged v0.1 core + both spike docs). Merge is the USER'S call at lunch.
 - [x] T-D LMU REST client — DONE (commit 6fc0b91, 58 passed). simcoach/lmu/rest.py
       (stdlib urllib, injectable fetch), unit-tested with recorded spike JSON.
       [LUNCH] live smoke vs localhost:6397 pending.
-- [ ] T-E LMU shared-memory reader — `simcoach/lmu/smm.py` + `LmuSource`
-      (implements TelemetrySource): vendor rF2 ctypes structs (rF2Telemetry /
-      rF2Scoring; MMF `$rFactor2SMMP_Telemetry$` / `$rFactor2SMMP_Scoring$`),
-      map fields → LapRecord channels. begin==end version check for torn-free
-      reads. Unit-test parsing against synthetic buffers. `[LUNCH]` live smoke +
-      confirm RIGHT_IS_POSITIVE sign convention (needs a WHEEL lap).
+- [x] T-E LMU shared-memory reader — DONE (commit 1267b45, 64 passed, review
+      PASS-WITH-NOTES pack-consistent). rf2structs.py (ctypes _pack_=4), smm.py
+      (reader + LmuSource, begin==end reads), self-consistent tests. KNOWN GAP:
+      rF2ScoringInfo tail is a placeholder — complete it live at lunch (item 2).
 
 ## Current Status
-T-A/T-B/T-C/T-D done (58 passed). T-E IN PROGRESS (retry: first attempt failed on
-account session-limit ~00:22, reset 3:50am; re-dispatched impl-smm2 ~04:05, clean
-tree, nothing to clean up). Next: T-E (LMU shared-memory reader) — LAST module. Brief at scratchpad/overnight/te-brief.md. T-E is front-loaded code
+ALL 5 MODULES DONE (T-A..T-E), 64 tests passing on branch overnight-followups.
+Overnight build complete. Running a final whole-branch review as capstone, then
+resting state for user's lunch review + the [LUNCH] live-validation items.
+(T-E first attempt died on account session-limit ~00:22 (reset 3:50am); retried
+clean.) Brief at scratchpad/overnight/te-brief.md. T-E is front-loaded code
 transcribed from the on-disk header; struct offsets + sign convention + live
 loop are [LUNCH]-validated (LMU not running overnight). REVIEW T-E after.
 
@@ -62,6 +62,7 @@ HANDOFF; leave branch for user to review/merge. Consider a final full-suite revi
 - T-B: simcoach/tiers.py, tests/test_tiers.py, simcoach/coach.py, tests/test_coach.py
 - T-C: simcoach/store.py, simcoach/model_types.py, tests/test_store.py
 - T-D: simcoach/lmu/__init__.py, simcoach/lmu/rest.py, tests/test_lmu_rest.py
+- T-E: simcoach/lmu/rf2structs.py, simcoach/lmu/smm.py, tests/test_lmu_smm.py
 - chore: .gitignore (+.superpowers/)
 
 ## Decisions / educated guesses (for lunch review)
@@ -89,8 +90,13 @@ Do these with LMU running, on track (a WHEEL lap for the sign-convention one):
 2. T-E live validation (the big one): run the shared-memory reader against the
    live `$rFactor2SMMP_Telemetry$` / `$rFactor2SMMP_Scoring$` buffers. Confirm the
    ctypes struct OFFSETS are right (values sane: throttle/brake 0..1, speed matches
-   HUD, gear correct). Fix any offset drift (see te-report.md for the fields the
-   implementer was unsure about).
+   HUD, gear correct). Structs use `_pack_ = 4` (header is #pragma pack(push,4)).
+   KNOWN GAP (te-report.md): the rF2ScoringInfo wrapper struct is an incomplete
+   0-byte PLACEHOLDER (no Iron Wolf header was on disk, only LMU's engine header),
+   so SCORING vehicle lookups (player mLapDist / mIsPlayer / mLastLapTime) read the
+   WRONG offset until completed. FIX FIRST: complete rF2ScoringInfo from the
+   pyRfactor2SharedMemory rF2data.py layout (or dump the live buffer and locate
+   mVehicles). Telemetry buffer (inputs/speed/tires) is the confident part.
 3. Sign convention (do on a WHEEL lap, in a known left+right corner): confirm the
    sign of `mUnfilteredSteering` and `mLocalAccel.x`, and set `RIGHT_IS_POSITIVE`
    in simcoach/corners.py to match. (Controller tonight was fine for feasibility
