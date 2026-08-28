@@ -59,16 +59,17 @@ channels, T-H energy-strategy advisor; +2 Critical integration fixes; energy res
 R-2 827cb5c setup-guide/classes/sources). Remaining is USER-GATED: live-rig validation,
 app wiring, regen-braking coaching, fuel↔energy RATIO coupling, KB gaps — see [LUNCH].
 
-## Next Exact Action  ===  HOLD (queue cleared)  ===
-K-1 (f0a2bbb) + R-2 (827cb5c) + T-H (c15fe21) all done. 83 tests passing, tree clean.
-No autonomous step remains. IF YOU ARE A RECOVERY FIRE: verify git clean + suite green
-(.venv/Scripts/python.exe -m pytest -q => 83 passed), reply build is complete and
-awaiting the user at lunch, STOP. Do NOT start new features / attempt [LUNCH] items /
-cancel cron 5a131f77.
-KB gaps to fill at lunch/later (from R-2): Reddit thread (S1) blocked; 6 YouTube
-setup videos video-only (user could summarize); no LMP2 source; per-class Bronze
-driver-aid subset unconfirmed; Hypercar brake-migration (S7 lead). Spa distances need
-live calibration; add tracks/cars as prioritized.
+## Next Exact Action  ===  retrieve-sources IN FLIGHT, THEN T-I  ===
+retrieve-sources subagent is retrieving the 6 videos (captions API -> yt-dlp+faster-
+whisper) + Reddit (chrome-devtools browser), mining ONLY verified content into
+docs/superpowers/knowledge/ (a prior interrupted agent's UNSOURCED edits were
+discarded — do not resurrect them). After it commits:
+1. T-I shared-memory compatibility/health check (brief: scratchpad/overnight/ti-brief.md)
+   — multi-candidate MMF + version/sanity validation + anti-cheat read-only rule.
+2. Then T-I review, then back to HOLD.
+Built to date: T-A..T-H + K-1 + R-2 + energy research, 83 passing. KB gaps (R-2): no
+LMP2 source; per-class Bronze aids unconfirmed; Hypercar brake-migration (S7). Spa
+distances need live calibration.
 
 ## Queued: T-H energy-strategy / lift-and-coast advisor (research-grounded)
 Deterministic module on fuel.py. LMU shows fuel-laps-remaining AND nrg-laps-remaining

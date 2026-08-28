@@ -190,6 +190,33 @@ all of it:
   balance, lift-and-coast for energy, deployment strategy). Modeled later with the
   user; knowledge-base + coach-context concern, not a deterministic calc.
 
+## Capture robustness: game updates + anti-cheat (added 2026-08-28, user)
+
+LMU updates can rename/reshape the shared-memory files (CrewChief has flagged such
+renames), and anti-cheat changes could affect external access. The capture layer
+must survive both:
+
+- **Multi-candidate, version-checked MMF reader.** Do NOT hardcode a single MMF name.
+  Keep a config-driven ordered list of known names ($rFactor2SMMP_Telemetry$ /
+  $rFactor2SMMP_Scoring$, native LMU_Data, and future ones), probe each, and use the
+  first that opens. On open, VALIDATE: expected struct version field + a plausibility
+  sanity check (e.g. numVehicles in range, inputs within [0,1]). On mismatch or none
+  found, raise a clear "shared-memory interface changed — update MMF names/struct
+  (see CrewChief for canonical names)" error — never silently misread.
+- **Compatibility/health check on startup** (and a periodic re-check): confirm a live,
+  consistent, sane frame before trusting capture; surface interface drift to the user.
+- **Anti-cheat stance (hard rule).** Use ONLY the sanctioned, plugin-published shared
+  memory (and the local REST API), READ-ONLY. NEVER inject into or ReadProcessMemory
+  the game process — that is what trips kernel anti-cheat. This is the same footprint
+  as CrewChief / SimHub, which coexist with LMU's AC. Monitor CrewChief/community for
+  AC-related breakage; degrade gracefully (clear message) if the interface stops
+  responding rather than escalating access.
+- **Monitoring source (canonical).** CrewChief's auto-update changelog tracks LMU
+  shared-memory + anti-cheat changes:
+  https://thecrewchief.org/downloads/change_log_for_auto_updated.html — check it for
+  MMF renames / struct changes when capture breaks or before a compatibility bump;
+  keep the MMF-candidate list aligned with what CrewChief uses.
+
 ## First steps: two spikes (before implementation, parallelizable)
 
 1. **Feasibility spike (technical).** Whole design rests on reading LMU live
