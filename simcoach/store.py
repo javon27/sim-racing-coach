@@ -47,37 +47,45 @@ class LapStore:
         self.data_dir = data_dir
         os.makedirs(self.data_dir, exist_ok=True)
         self.conn = sqlite3.connect(db_path)
-        self.conn.executescript(_SCHEMA)
-        self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-        self.conn.commit()
+        current_version = self.conn.execute("PRAGMA user_version").fetchone()[0]
+        if current_version == 0:
+            self.conn.executescript(_SCHEMA)
+            self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            self.conn.commit()
 
     def save(self, record: LapRecord, metrics: list | None = None) -> int:
-        cur = self.conn.execute(
-            "INSERT INTO laps (ts, sim, track, car, lap_time, valid, telemetry_path) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (record.timestamp, record.sim, record.track, record.car,
-             record.lap_time, int(record.valid), None),
-        )
-        lap_id = cur.lastrowid
-        telemetry_path = os.path.join(self.data_dir, f"{lap_id}.npz")
-        np.savez_compressed(telemetry_path, **record.channels)
-        self.conn.execute(
-            "UPDATE laps SET telemetry_path = ? WHERE id = ?",
-            (telemetry_path, lap_id),
-        )
-        if metrics:
-            self.conn.executemany(
-                "INSERT INTO corner_metrics (lap_id, corner_no, entry_spd, apex_spd, "
-                "min_spd, exit_spd, brake_point, throttle_point, trailbrake_overlap) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [
-                    (lap_id, m.corner_no, m.entry_spd, m.apex_spd, m.min_spd,
-                     m.exit_spd, m.brake_point, m.throttle_point, m.trailbrake_overlap)
-                    for m in metrics
-                ],
-            )
-        self.conn.commit()
-        return lap_id
+        telemetry_path = None
+        try:
+            with self.conn:
+                cur = self.conn.execute(
+                    "INSERT INTO laps (ts, sim, track, car, lap_time, valid, telemetry_path) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (record.timestamp, record.sim, record.track, record.car,
+                     record.lap_time, int(record.valid), None),
+                )
+                lap_id = cur.lastrowid
+                telemetry_path = os.path.join(self.data_dir, f"{lap_id}.npz")
+                np.savez_compressed(telemetry_path, **record.channels)
+                self.conn.execute(
+                    "UPDATE laps SET telemetry_path = ? WHERE id = ?",
+                    (telemetry_path, lap_id),
+                )
+                if metrics:
+                    self.conn.executemany(
+                        "INSERT INTO corner_metrics (lap_id, corner_no, entry_spd, apex_spd, "
+                        "min_spd, exit_spd, brake_point, throttle_point, trailbrake_overlap) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        [
+                            (lap_id, m.corner_no, m.entry_spd, m.apex_spd, m.min_spd,
+                             m.exit_spd, m.brake_point, m.throttle_point, m.trailbrake_overlap)
+                            for m in metrics
+                        ],
+                    )
+            return lap_id
+        except Exception:
+            if telemetry_path and os.path.exists(telemetry_path):
+                os.remove(telemetry_path)
+            raise
 
     def load(self, lap_id: int) -> LapRecord:
         row = self.conn.execute(
@@ -85,6 +93,8 @@ class LapStore:
             "FROM laps WHERE id = ?",
             (lap_id,),
         ).fetchone()
+        if row is None:
+            raise KeyError(f"no lap with id {lap_id}")
         ts, sim, track, car, lap_time, valid, telemetry_path = row
         with np.load(telemetry_path) as npz:
             channels = {k: npz[k] for k in npz.files}
