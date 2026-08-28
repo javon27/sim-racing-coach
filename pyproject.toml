@@ -1,0 +1,14 @@
+[project]
+name = "simcoach"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.26", "anthropic>=0.40"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100

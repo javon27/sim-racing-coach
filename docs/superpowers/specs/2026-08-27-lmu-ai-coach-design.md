@@ -109,6 +109,39 @@ Feature extractor gets real unit tests against a recorded-lap fixture,
 including an assert that computed corner direction matches known geometry.
 Capture and coach stay thin.
 
+## Online racing context + tier model (added post-approval)
+
+The user races LMU **online**: sign up for a daily race, practice on servers until it starts. Daily races come in tiers, which constrain what the coach may advise and imply a fuel strategy:
+
+| Tier | Setup freedom | Duration | Pit |
+|------|---------------|----------|-----|
+| Bronze | FIXED setup — only TC, brake bias, ABS (where applicable) adjustable | ~20 min | none |
+| Silver | Partial customization (more than Bronze, less than open) | ~30 min | usually none |
+| Gold | Fully open setup | ~40 min | ≥1 pitstop for refueling typical |
+
+Design implications:
+- **Coach must be tier-aware (correctness, not polish).** Suggesting an illegal adjustment (e.g. springs in Bronze) is wrong advice. The coach takes a `tier` (or explicit allowed-adjustments set) and constrains setup suggestions to what that tier permits; driving advice is unconstrained. Folded into the coach (Task 9) since it is not yet built.
+- **Fuel calculator (new, early feature).** Deterministic module (no LLM): from the telemetry fuel channel compute `fuel_per_lap` (lap-over-lap consumption), estimate race laps ≈ race_duration ÷ representative_lap_time, output total fuel needed (+ margin), whether a pitstop is required, and fuel-to-add. Requires adding a `fuel` channel to `LapRecord` + the fixture. Standalone; independent of the coaching pipeline. YAGNI: no tire-wear/weather modelling — just fuel-per-lap × laps + margin, with a calibration margin knob.
+
+## v1.0 vision: race-weekend workflow (roadmap, not v0.1)
+
+The tool walks a race weekend, carrying data forward between phases:
+
+1. **Practice** — offer a baseline setup for the car/track combo to tweak.
+2. **Qualifying** — monitor; estimate qualy fuel level.
+3. **Race** — final setup + driving-guide tweaks; fuel calculated from practice+qualy data (see fuel calculator).
+4. **Post-race** — analyze what to improve for the NEXT race (daily races run on a timed cycle: 3 per tier, you finish in time to rejoin the same tier).
+5. **Post-v1.0** — lap-by-lap in-ear guidance.
+
+Post-v1.0 backlog:
+- **Lap-by-lap in-ear guidance** (real-time spotter).
+- **Incident detection + causal analysis.** From telemetry, detect spin-outs (yaw-rate/lateral-G spike + speed drop + wheel slip) and race contact (sudden longitudinal deceleration; damage flags if LMU exposes them). Then the harder, valuable layer: causal interpretation — e.g. "you spun because you lifted mid-corner when you should have stayed on the brake," or whether a crash was the user's fault / avoidable. Same deterministic-features -> LLM-interpretation pattern as the coach, applied to incident windows. Feasibility: detection is straightforward from existing channels; causal attribution is the research-worthy part.
+
+Architectural affordance this requires (and how v0.1 already allows it):
+- A **session/phase model** (practice/qualy/race grouping; fuel + baseline carried across phases) sits ABOVE the core. It is a future `session_id` / `phase` tag on stored laps — additive, and the `laps` schema is already versioned (`user_version`), so it evolves without orphaning data. No v0.1 change needed.
+- Constraint for v0.1 code: nothing may hardcode "one lap in isolation" — the store already keys laps by sim/track/car and supports history, which is what phase-aware analysis will build on.
+- Each phase reuses the SAME core (feature extractor, coach, fuel calc); phases differ in which laps feed in and which output is emphasized, not in new pipelines.
+
 ## First steps: two spikes (before implementation, parallelizable)
 
 1. **Feasibility spike (technical).** Whole design rests on reading LMU live
