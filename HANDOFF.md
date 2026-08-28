@@ -63,13 +63,13 @@ R-2 827cb5c setup-guide/classes/sources). Remaining is USER-GATED: live-rig vali
 app wiring, regen-braking coaching, fuel↔energy RATIO coupling, KB gaps — see [LUNCH].
 
 ## Next Exact Action  ===  HOLD (queue cleared)  ===
-T-I DONE (6cc7415, 93 passed): multi-candidate MMF + version/sanity validation +
-compatibility_check() + anti-cheat read-only rule. No autonomous step remains.
-IF YOU ARE A RECOVERY FIRE: verify git clean + suite green
-(.venv/Scripts/python.exe -m pytest -q => 93 passed), reply build complete/awaiting
+T-J DONE (b5003f2, 100 passed): driver profile personalization. No autonomous step
+remains. IF YOU ARE A RECOVERY FIRE: verify git clean + suite green
+(.venv/Scripts/python.exe -m pytest -q => 100 passed), reply build complete/awaiting
 user, STOP. Do NOT start new features / attempt [LUNCH] items / cancel cron 5a131f77.
-Remaining KB gap: no LMP2 source (all else filled). Live MMF-name-mode check added
-to [LUNCH] item 1b.
+Remaining KB gap: no LMP2 source. Lunch: refine driver-profile field schema; the
+[LUNCH] live list (MMF name mode, struct offsets, sign convention, energy fields,
+strategy/usage endpoint, fuel-save-light exposure) is unchanged.
 
 ## Queued: T-H energy-strategy / lift-and-coast advisor (research-grounded)
 Deterministic module on fuel.py. LMU shows fuel-laps-remaining AND nrg-laps-remaining
@@ -127,6 +127,40 @@ recovery cron 5a131f77 (user's call).
 - T-A: race_laps = ceil(duration/lap) + 1 (the +1 for lap-in-progress at time
   expiry). Confirm LMU's timed-race end rule matches (leader finishes current lap
   after clock hits 0). Fuel margin default 5% — adjust to taste.
+
+## T-J DONE (b5003f2, 100 passed): driver profile personalization
+simcoach/driver.py: DriverProfile (braking_style/balance_preference/risk_tolerance/
+notes + learned dict, JSON load/save, to_prompt_block) + observed_style(laps) seam;
+coach.build_prompt/ask take optional driver_profile -> appended to SYSTEM prompt as
+personalization + a tailoring instruction. FIELD SCHEMA is an educated guess — USER TO
+REFINE at lunch (what preference dimensions matter: braking, balance, risk, kerbs,
+tire management, qualifying-vs-race goal, etc.). Auto-updating `learned` from live laps
+over time is a later increment (observed_style is the seam).
+
+## ABS clarification (user 09:43): KB is CURRENT, not stale
+I mis-inferred that the KB's 0-9 ABS content was outdated and nearly flagged it — the
+user corrected: the Reddit "New ABS system" thread describes the CURRENT system (0-9
+dial organized into oversteer/balanced/understeer groupings). The OLD system was a plain
+0-9 "higher=more". KB reflects current correctly; NO staleness flag applied. The ABS
+rework is cited in the spec's freshness section as an EXAMPLE of mechanic drift.
+
+## KB update MECHANISM (user 09:45) — DESIGN DECISION for lunch
+User: "we'll need a mechanism to update the knowledgebase over time — whether that's
+here with an agent, or built into the engine." Captured in spec ("Knowledge-base UPDATE
+MECHANISM"): A) agent/maintenance-time refresh workflow (recommended backbone —
+formalize the ad-hoc research runs into a documented refresh skill+checklist), B) in-
+engine (i staleness detection [build early], ii on-demand research hook via coach's
+Model+web, iii KB-pack fetch if shipping to others), C) continuous personal learning
+(driver profile/laps — already seeded). Decide with user: in-engine vs agent split;
+single-user vs distributed. NOT built yet — needs the user's call on approach.
+
+## Recurring maintenance (user 09:41): physics/tire-model updates
+Every LMU update can change physics/tire/BoP and invalidate KB advice. Process (in
+spec "Knowledge freshness"): tag KB notes with the validated LMU build (gameVersion,
+readable from shared memory ~14130/14237); on each update research patch notes for
+physics/tire/BoP/aero changes, update affected knowledge, flag re-validation; a
+staleness warning (live gameVersion != KB's validated build) is a buildable seam once
+live capture is wired. Watch: official LMU notes + CrewChief changelog + community.
 
 ## [LUNCH] — needs you + the rig (live validation overnight couldn't do)
 Do these with LMU running, on track (a WHEEL lap for the sign-convention one):

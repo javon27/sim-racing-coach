@@ -190,6 +190,60 @@ all of it:
   balance, lift-and-coast for energy, deployment strategy). Modeled later with the
   user; knowledge-base + coach-context concern, not a deterministic calc.
 
+## Knowledge freshness: physics/tire-model updates (added 2026-08-28, user)
+
+LMU is in active development; each update can change the physics / tire model / BoP,
+which can invalidate setup and driving advice in the knowledge base (e.g. a tire-model
+change shifts optimal pressures; a BoP change alters energy/fuel). Concrete example:
+the LMGT3 **ABS control was reworked** — originally a plain 0–9 "higher = more" scale,
+later changed to the current system (a 0–9 dial organized into oversteer / balanced /
+understeer groupings, per the community "New ABS system" thread now in the KB). Advice
+written for the old scale would be wrong; the KB currently reflects the CURRENT system,
+but this is exactly the kind of mechanic that silently changes under an update. So the
+knowledge base is VERSIONED against a game build and re-validated on updates:
+
+- **Tag knowledge with the LMU build it was validated against.** We can read the live
+  game version from shared memory (`gameVersion`, seen as 14130/14237 in the spike).
+  Store the build each track/car note + setup guide was validated against.
+- **On every game update, research the patch notes** for physics / tire-model / BoP /
+  aero changes (official LMU notes + CrewChief changelog + community), update the
+  affected knowledge, and flag advice that needs re-validation. This is a recurring
+  maintenance task, not one-time.
+- **Staleness warning (seam).** If the live `gameVersion` differs from the build the
+  loaded knowledge was validated against, the coach should note that its setup/tire
+  advice may be out of date for the current build — degrade to lower confidence rather
+  than assert stale numbers. (Deterministic check; buildable when we wire live capture.)
+- **Sources to watch:** official LMU patch notes/roadmap, the CrewChief changelog
+  (already tracked), and the community — same monitoring cadence as the MMF-rename check.
+
+### Knowledge-base UPDATE MECHANISM (design — decide with user)
+
+The KB must stay current over time. Two poles (user framing) + a recommended hybrid:
+
+- **A. Agent/maintenance-time refresh (recommended primary).** A repeatable
+  "knowledge refresh" workflow — a research agent (the pattern already used here:
+  ingest patch notes + curated sources → update versioned KB files → reviewed commit),
+  run per game update. Keeps curation quality high (sourced, human-reviewable, shipped
+  to all users). Formalize the ad-hoc research runs into a documented procedure / skill
+  with a checklist (what to re-check on an update: tire model, BoP, aids like ABS/TC,
+  aero, MMF names). This is the backbone.
+- **B. In-engine runtime updates.** The app itself: (i) STALENESS DETECTION (live
+  gameVersion vs KB's validated build → warn / lower confidence) — cheap, build early;
+  (ii) ON-DEMAND RESEARCH HOOK — when knowledge is missing/stale for the current build,
+  the coach asks the Model (with web tools) to look up that specific mechanic live, and
+  optionally caches the answer for review; (iii) KB PACK FETCH — pull updated,
+  version-matched KB bundles from a remote the maintenance workflow publishes.
+- **C. Continuous personal learning (already seeded).** Driver profile + observed_style
+  + the user's own lap history update at RUNTIME from driving — distinct from curated
+  knowledge; always on, no game-update gate.
+
+Recommended: **A as the backbone** (versioned file KB + a refresh skill/checklist),
+**B(i) staleness detection early**, **B(ii) on-demand research as a strong enhancement**
+(fits the coach's Model+web capability), B(iii) only if distributing to other users.
+Keep curated knowledge (A/B) separate from personal/learned data (C) in storage and in
+the prompt. DECISION for the user: how much lives in-engine vs. maintained by an agent,
+and whether this ships to just the user or to others (affects B(iii)).
+
 ## Capture robustness: game updates + anti-cheat (added 2026-08-28, user)
 
 LMU updates can rename/reshape the shared-memory files (CrewChief has flagged such
