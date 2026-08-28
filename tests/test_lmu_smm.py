@@ -7,8 +7,22 @@ a real LMU process. Live offset/sign validation is a separate [LUNCH] task.
 """
 import ctypes as C
 
-from simcoach.lmu.rf2structs import TelemInfoV01, TelemWheelV01, VehicleScoringInfoV01
-from simcoach.lmu.smm import build_lap_record, sample_from_telem
+import pytest
+
+from simcoach.lmu.rf2structs import (
+    TelemInfoV01,
+    TelemWheelV01,
+    VehicleScoringInfoV01,
+    rF2Telemetry,
+)
+from simcoach.lmu.smm import (
+    build_lap_record,
+    compatibility_check,
+    open_first_available,
+    sample_from_telem,
+    telemetry_is_sane,
+    version_ok,
+)
 
 
 def make_telem(**overrides) -> TelemInfoV01:
@@ -148,3 +162,119 @@ def test_build_lap_record_clean_lap_is_valid():
     )
     assert record is not None
     assert record.valid is True
+
+
+def make_wrapper(num_vehicles: int = 1, **vehicle_overrides) -> rF2Telemetry:
+    """Build an rF2Telemetry wrapper around make_telem(), the way a real MMF
+    frame holds mNumVehicles + mVehicles[]."""
+    wrapper = rF2Telemetry()
+    wrapper.mVersionUpdateBegin = 1
+    wrapper.mVersionUpdateEnd = 1
+    wrapper.mNumVehicles = num_vehicles
+    if num_vehicles > 0:
+        wrapper.mVehicles[0] = make_telem(**vehicle_overrides)
+    return wrapper
+
+
+# -- open_first_available -----------------------------------------------
+
+def test_open_first_available_returns_first_that_opens():
+    calls = []
+
+    def opener(name, size):
+        calls.append(name)
+        return f"handle-for-{name}"
+
+    name, handle = open_first_available(["a", "b"], size=8, opener=opener)
+    assert name == "a"
+    assert handle == "handle-for-a"
+    assert calls == ["a"]
+
+
+def test_open_first_available_falls_back_to_second():
+    def opener(name, size):
+        if name == "a":
+            raise OSError("does not exist")
+        return f"handle-for-{name}"
+
+    name, handle = open_first_available(["a", "b"], size=8, opener=opener)
+    assert name == "b"
+    assert handle == "handle-for-b"
+
+
+def test_open_first_available_raises_when_all_fail():
+    def opener(name, size):
+        raise OSError(f"missing {name}")
+
+    with pytest.raises(RuntimeError, match="a.*b|missing"):
+        open_first_available(["a", "b"], size=8, opener=opener)
+
+
+# -- telemetry_is_sane / version_ok --------------------------------------
+
+def test_telemetry_is_sane_good_frame():
+    ok, reasons = telemetry_is_sane(make_wrapper())
+    assert ok is True
+    assert reasons == []
+
+
+def test_telemetry_is_sane_rejects_bad_num_vehicles():
+    ok, reasons = telemetry_is_sane(make_wrapper(num_vehicles=999))
+    assert ok is False
+    assert reasons
+
+
+def test_telemetry_is_sane_rejects_out_of_range_throttle():
+    ok, reasons = telemetry_is_sane(make_wrapper(mUnfilteredThrottle=5.0))
+    assert ok is False
+    assert reasons
+
+
+def test_version_ok_true_when_begin_equals_end():
+    wrapper = make_wrapper()
+    wrapper.mVersionUpdateBegin = 3
+    wrapper.mVersionUpdateEnd = 3
+    assert version_ok(wrapper) is True
+
+
+def test_version_ok_false_when_torn():
+    wrapper = make_wrapper()
+    wrapper.mVersionUpdateBegin = 3
+    wrapper.mVersionUpdateEnd = 4
+    assert version_ok(wrapper) is False
+
+
+# -- compatibility_check ---------------------------------------------------
+
+class _FakeHandle:
+    def __init__(self, buf: bytes):
+        self._buf = buf
+
+    def read(self, n):
+        return self._buf[:n]
+
+    def close(self):
+        pass
+
+
+def test_compatibility_check_ok_with_good_frame():
+    good = bytes(make_wrapper())
+
+    def opener(name, size):
+        return _FakeHandle(good)
+
+    status = compatibility_check(opener=opener)
+    assert status.ok is True
+    assert status.telemetry_mmf == "$rFactor2SMMP_Telemetry$"
+    assert status.scoring_mmf == "$rFactor2SMMP_Scoring$"
+    assert status.issues == []
+
+
+def test_compatibility_check_not_ok_when_nothing_opens():
+    def opener(name, size):
+        raise OSError(f"missing {name}")
+
+    status = compatibility_check(opener=opener)
+    assert status.ok is False
+    assert status.telemetry_mmf is None
+    assert status.issues

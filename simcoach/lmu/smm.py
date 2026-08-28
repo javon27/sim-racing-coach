@@ -6,10 +6,17 @@ running while this was written, so none of it has been checked against a
 live sim. See rf2structs.py for exactly which parts are verified vs. guessed.
 Treat any lap/channel data this module produces as PENDING LIVE VALIDATION
 until confirmed at [LUNCH].
+
+ANTI-CHEAT: this module only ever OPENS the sanctioned plugin-published MMFs
+read-only (OpenFileMappingW + mmap read access). It must never OpenProcess or
+ReadProcessMemory the game -- same footprint as CrewChief/SimHub, which
+coexist with LMU anti-cheat.
 """
 import ctypes as C
+import math
 import mmap
 import time
+from dataclasses import dataclass, field
 from typing import Iterator
 
 import numpy as np
@@ -23,8 +30,18 @@ from simcoach.lmu.rf2structs import (
 )
 from simcoach.model_types import LapRecord
 
-TELEMETRY = "$rFactor2SMMP_Telemetry$"
-SCORING = "$rFactor2SMMP_Scoring$"
+# Candidate MMF names, tried in order -- extensible so a future LMU/plugin
+# update that renames the interface is a config change here, not a code
+# change. Current names are Iron Wolf's rF2SMMP convention (confirmed via
+# CrewChief's changelog: as of 4.19.4.0 CrewChief ships renamed *plugin DLLs*
+# -- RF2.3.8.SharedMemoryMapPlugin.dll / LMU.3.8.SharedMemoryMapPlugin.dll --
+# with a "use legacy shared memory filenames" toggle, implying the MMF names
+# themselves may vary by plugin version; the changelog did not name a new MMF
+# string, so no name is added here without a confirmed source).
+# Native "LMU_Data" is a different layout entirely -- future candidate, needs
+# its own struct, not mixed in here.
+TELEMETRY_CANDIDATES = ["$rFactor2SMMP_Telemetry$"]
+SCORING_CANDIDATES = ["$rFactor2SMMP_Scoring$"]
 
 _kernel32 = C.WinDLL("kernel32", use_last_error=True)
 _FILE_MAP_READ = 0x0004
@@ -46,16 +63,38 @@ def open_mmap(name: str, size: int) -> mmap.mmap:
     return mmap.mmap(-1, size, tagname=name, access=mmap.ACCESS_READ)
 
 
+def open_first_available(candidates: list[str], size: int, opener=open_mmap):
+    """Try each candidate MMF name in order; return (name, handle) for the
+    first that opens. `opener` is injectable for tests. Raises a clear
+    RuntimeError listing every name tried if none open -- the signal that
+    the shared-memory interface was renamed/reshaped (e.g. an LMU update)."""
+    errors = []
+    for name in candidates:
+        try:
+            return name, opener(name, size)
+        except OSError as exc:
+            errors.append(f"{name}: {exc}")
+    raise RuntimeError(
+        "no candidate shared-memory mapping opened (tried: " + "; ".join(errors) + ")"
+    )
+
+
+def _struct_from_handle(handle, ctype):
+    """Copy sizeof(ctype) bytes from an already-open handle (mmap.mmap or
+    equivalent) into a filled instance."""
+    buf = handle.read(C.sizeof(ctype))
+    inst = ctype()
+    C.memmove(C.addressof(inst), buf, C.sizeof(ctype))
+    return inst
+
+
 def read_struct(name: str, ctype):
     """Open `name`, copy sizeof(ctype) bytes, and return a filled instance."""
     mm = open_mmap(name, C.sizeof(ctype))
     try:
-        buf = mm.read(C.sizeof(ctype))
+        return _struct_from_handle(mm, ctype)
     finally:
         mm.close()
-    inst = ctype()
-    C.memmove(C.addressof(inst), buf, C.sizeof(ctype))
-    return inst
 
 
 def read_consistent(name: str, ctype, retries: int = 6):
@@ -64,10 +103,103 @@ def read_consistent(name: str, ctype, retries: int = 6):
     if it never settles within `retries` attempts."""
     inst = read_struct(name, ctype)
     for _ in range(retries):
-        if inst.mVersionUpdateBegin == inst.mVersionUpdateEnd:
+        if version_ok(inst):
             return inst
         inst = read_struct(name, ctype)
     return inst
+
+
+def version_ok(tele) -> bool:
+    """Named predicate for the torn-read check: True if the wrapper's
+    versioning preamble is settled (not mid-write)."""
+    return tele.mVersionUpdateBegin == tele.mVersionUpdateEnd
+
+
+_THROTTLE_BRAKE_RANGE = (-0.01, 1.01)
+_MAX_SANE_SPEED_MS = 200.0
+
+
+def telemetry_is_sane(tele: rF2Telemetry) -> tuple[bool, list[str]]:
+    """Pure sanity check on one telemetry frame -- no MMF access. Catches an
+    MMF that opened fine but no longer matches our struct layout (garbage
+    offsets read back as physically impossible values), which a successful
+    OpenFileMappingW alone would not catch."""
+    reasons = []
+    n = tele.mNumVehicles
+    if not (0 <= n <= MAX_MAPPED_VEHICLES):
+        reasons.append(f"mNumVehicles out of range: {n}")
+        return False, reasons
+
+    if n > 0:
+        v = tele.mVehicles[0]
+        lo, hi = _THROTTLE_BRAKE_RANGE
+        for field_name, value in (
+            ("mUnfilteredThrottle", v.mUnfilteredThrottle),
+            ("mUnfilteredBrake", v.mUnfilteredBrake),
+            ("mUnfilteredSteering", v.mUnfilteredSteering),
+        ):
+            if not math.isfinite(value):
+                reasons.append(f"{field_name} is not finite: {value}")
+        if not (lo <= v.mUnfilteredThrottle <= hi):
+            reasons.append(f"mUnfilteredThrottle out of range: {v.mUnfilteredThrottle}")
+        if not (lo <= v.mUnfilteredBrake <= hi):
+            reasons.append(f"mUnfilteredBrake out of range: {v.mUnfilteredBrake}")
+        speed = v.mLocalVel.magnitude()
+        if not math.isfinite(speed) or speed >= _MAX_SANE_SPEED_MS:
+            reasons.append(f"implausible speed: {speed} m/s")
+
+    return len(reasons) == 0, reasons
+
+
+@dataclass
+class CompatStatus:
+    ok: bool
+    telemetry_mmf: str | None = None
+    scoring_mmf: str | None = None
+    issues: list[str] = field(default_factory=list)
+
+
+def compatibility_check(opener=open_mmap) -> CompatStatus:
+    """Health probe, does NOT raise: open the first available telemetry (and
+    scoring) MMF, read one frame, run version_ok + telemetry_is_sane. Reports
+    drift (renamed/reshaped shared-memory interface) instead of silently
+    misreading it."""
+    issues: list[str] = []
+    telemetry_mmf: str | None = None
+    scoring_mmf: str | None = None
+
+    try:
+        telemetry_mmf, handle = open_first_available(
+            TELEMETRY_CANDIDATES, C.sizeof(rF2Telemetry), opener=opener
+        )
+    except RuntimeError as exc:
+        issues.append(f"telemetry: {exc}")
+    else:
+        try:
+            telem = _struct_from_handle(handle, rF2Telemetry)
+        finally:
+            handle.close()
+        if not version_ok(telem):
+            issues.append("telemetry frame is torn (version begin != end)")
+        sane, reasons = telemetry_is_sane(telem)
+        if not sane:
+            issues.append(
+                "shared-memory interface changed or not sane -- check MMF "
+                "names/struct (compare against CrewChief): " + "; ".join(reasons)
+            )
+
+    try:
+        scoring_mmf, handle = open_first_available(
+            SCORING_CANDIDATES, C.sizeof(rF2Scoring), opener=opener
+        )
+    except RuntimeError as exc:
+        issues.append(f"scoring: {exc}")
+    else:
+        handle.close()
+
+    return CompatStatus(
+        ok=not issues, telemetry_mmf=telemetry_mmf, scoring_mmf=scoring_mmf, issues=issues
+    )
 
 
 def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
@@ -166,12 +298,18 @@ class LmuSource:
 
     def laps(self) -> Iterator[LapRecord]:
         try:
-            read_struct(TELEMETRY, rF2Telemetry)
-        except OSError as exc:
+            telemetry_name, handle = open_first_available(
+                TELEMETRY_CANDIDATES, C.sizeof(rF2Telemetry)
+            )
+            handle.close()
+            scoring_name, handle = open_first_available(
+                SCORING_CANDIDATES, C.sizeof(rF2Scoring)
+            )
+            handle.close()
+        except RuntimeError as exc:
             raise RuntimeError(
-                "Could not open LMU telemetry shared memory "
-                f"('{TELEMETRY}'). Is Le Mans Ultimate running with the "
-                "Iron Wolf rF2SharedMemoryMapPlugin enabled?"
+                "LMU shared memory not found (is LMU running? did an update "
+                f"rename the interface?): {exc}"
             ) from exc
 
         period = 1.0 / self.poll_hz
@@ -179,8 +317,8 @@ class LmuSource:
         current_lap_number: int | None = None
 
         while True:
-            telem = read_consistent(TELEMETRY, rF2Telemetry)
-            scoring = read_consistent(SCORING, rF2Scoring)
+            telem = read_consistent(telemetry_name, rF2Telemetry)
+            scoring = read_consistent(scoring_name, rF2Scoring)
 
             player = _find_player(scoring)
             vt = _find_telem_by_id(telem, player.mID) if player is not None else None
