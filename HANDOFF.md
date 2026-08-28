@@ -63,13 +63,13 @@ R-2 827cb5c setup-guide/classes/sources). Remaining is USER-GATED: live-rig vali
 app wiring, regen-braking coaching, fuel↔energy RATIO coupling, KB gaps — see [LUNCH].
 
 ## Next Exact Action  ===  HOLD (queue cleared)  ===
-T-J DONE (b5003f2, 100 passed): driver profile personalization. No autonomous step
-remains. IF YOU ARE A RECOVERY FIRE: verify git clean + suite green
-(.venv/Scripts/python.exe -m pytest -q => 100 passed), reply build complete/awaiting
-user, STOP. Do NOT start new features / attempt [LUNCH] items / cancel cron 5a131f77.
-Remaining KB gap: no LMP2 source. Lunch: refine driver-profile field schema; the
-[LUNCH] live list (MMF name mode, struct offsets, sign convention, energy fields,
-strategy/usage endpoint, fuel-save-light exposure) is unchanged.
+T-K DONE (56a1204, 105 passed): model provider selector. No autonomous step remains.
+IF YOU ARE A RECOVERY FIRE: verify git clean + suite green
+(.venv/Scripts/python.exe -m pytest -q => 105 passed), reply build complete/awaiting
+user at lunch, STOP. Do NOT start new features / attempt [LUNCH] items / cancel cron
+5a131f77. Lunch brings: ANTHROPIC_API_KEY + LMU running at the rig (wheel lap for sign).
+Design decisions for user: KB update mechanism, driver-profile schema, provider split.
+Small follow-ups: wire app/__main__ to make_model; no LMP2 KB source.
 
 ## Queued: T-H energy-strategy / lift-and-coast advisor (research-grounded)
 Deterministic module on fuel.py. LMU shows fuel-laps-remaining AND nrg-laps-remaining
@@ -144,13 +144,12 @@ dial organized into oversteer/balanced/understeer groupings). The OLD system was
 0-9 "higher=more". KB reflects current correctly; NO staleness flag applied. The ABS
 rework is cited in the spec's freshness section as an EXAMPLE of mechanic drift.
 
-## T-K IN FLIGHT (user 09:47): model provider selector
-Multi-provider requirement: Model interface already provider-agnostic; v1.0=Anthropic,
-support other online providers + local via the same seam. T-K = make_model factory
-(brief scratchpad/overnight/tk-brief.md): anthropic+fake now, openai/gemini/local as
-clear extension points (NOT implemented — need keys/SDKs). Spec "Model providers"
-section added. After T-K commits + verify: back to HOLD. User left for work ~09:48,
-back ~lunch for LIVE TESTING.
+## T-K DONE (56a1204, 105 passed): model provider selector
+make_model factory (simcoach/model/factory.py): anthropic+fake now; openai/gemini/local
+raise clear NotImplementedError extension points; provider from SIMCOACH_MODEL_PROVIDER
+env or default anthropic; anthropic import stays isolated (lazy). FOLLOW-UP: wire
+app/__main__ to use make_model instead of constructing ClaudeModel directly (small,
+not done). User left for work ~09:48, back ~lunch for LIVE TESTING.
 
 ## KB update MECHANISM (user 09:45) — DESIGN DECISION for lunch
 User: "we'll need a mechanism to update the knowledgebase over time — whether that's
