@@ -32,11 +32,9 @@ the merged v0.1 core + both spike docs). Merge is the USER'S call at lunch.
 - [x] T-C Session/phase model — DONE (commit 4f22aac, 52 passed, migration
       review PASS 0 issues). LapRecord +phase/session_id, schema v1->v2 migrate,
       session_lap_ids, best_lap phase filter.
-- [ ] T-D LMU REST client — `simcoach/lmu/rest.py`: read setup
-      (getPlayerGarageData: 172 keys, isFreeSetting), standings/timing + fuel
-      (watch/standings: lapDistance, fuelFraction, sector, lapStartET, etc.).
-      Unit-test against RECORDED JSON fixtures captured in the spike (see
-      Decisions for shapes). `[LUNCH]` live smoke against localhost:6397.
+- [x] T-D LMU REST client — DONE (commit 6fc0b91, 58 passed). simcoach/lmu/rest.py
+      (stdlib urllib, injectable fetch), unit-tested with recorded spike JSON.
+      [LUNCH] live smoke vs localhost:6397 pending.
 - [ ] T-E LMU shared-memory reader — `simcoach/lmu/smm.py` + `LmuSource`
       (implements TelemetrySource): vendor rF2 ctypes structs (rF2Telemetry /
       rF2Scoring; MMF `$rFactor2SMMP_Telemetry$` / `$rFactor2SMMP_Scoring$`),
@@ -45,20 +43,24 @@ the merged v0.1 core + both spike docs). Merge is the USER'S call at lunch.
       confirm RIGHT_IS_POSITIVE sign convention (needs a WHEEL lap).
 
 ## Current Status
-T-A/T-B/T-C done (52 passed). Next: T-D (LMU REST client). Brief at
-scratchpad/overnight/td-brief.md. Then T-E (shared-memory reader) is last.
+T-A/T-B/T-C/T-D done (58 passed). Next: T-E (LMU shared-memory reader) — LAST
+module. Brief at scratchpad/overnight/te-brief.md. T-E is front-loaded code
+transcribed from the on-disk header; struct offsets + sign convention + live
+loop are [LUNCH]-validated (LMU not running overnight). REVIEW T-E after.
 
 ## Next Exact Action
-Dispatch/execute T-D per scratchpad/overnight/td-brief.md: create
-simcoach/lmu/__init__.py + simcoach/lmu/rest.py (stdlib urllib, injectable
-fetch) + tests/test_lmu_rest.py (recorded spike fixtures). Run tests/test_lmu_rest.py
-+ full suite, commit "feat: LMU REST client (setup/timing/fuel)", tick T-D.
-[LUNCH] live smoke vs localhost:6397 deferred (needs LMU running).
+Dispatch/execute T-E per scratchpad/overnight/te-brief.md: simcoach/lmu/rf2structs.py
+(ctypes from InternalsPlugin.hpp), simcoach/lmu/smm.py (reader + LmuSource over
+$rFactor2SMMP_*$ buffers, begin==end reads), tests/test_lmu_smm.py (self-consistent
+synthetic-buffer parsing tests). Run + full suite + commit + REVIEW, tick T-E.
+After T-E: overnight build complete — write final summary + [LUNCH] checklist in
+HANDOFF; leave branch for user to review/merge. Consider a final full-suite review.
 
 ## Files Changed (this branch)
 - T-A: simcoach/fuel.py, tests/test_fuel.py, tests/conftest.py(+fuel)
 - T-B: simcoach/tiers.py, tests/test_tiers.py, simcoach/coach.py, tests/test_coach.py
 - T-C: simcoach/store.py, simcoach/model_types.py, tests/test_store.py
+- T-D: simcoach/lmu/__init__.py, simcoach/lmu/rest.py, tests/test_lmu_rest.py
 - chore: .gitignore (+.superpowers/)
 
 ## Decisions / educated guesses (for lunch review)
