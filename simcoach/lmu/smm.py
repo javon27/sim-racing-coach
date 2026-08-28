@@ -81,6 +81,10 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
         analysis.py, fixtures) is km/h-scale.
       lat_g = mLocalAccel.x / 9.80665 (x is lateral in local vehicle coords)
       tire temps: mTemperature[1] (center) Kelvin -> Celsius
+      virtual_energy / soc / battery_charge: read as-is, no unit conversion --
+        all three are already fractions/percent-scale per the struct fields
+        (mVirtualEnergy, mSoC, mBatteryChargeFraction), unlike fuel (liters)
+        or tire temp (Kelvin) which need conversion.
     """
     wheels = telem.mWheel
     return {
@@ -91,6 +95,9 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
         "lat_g": telem.mLocalAccel.x / 9.80665,
         "lap_distance": lap_dist,
         "fuel": telem.mFuel,
+        "virtual_energy": telem.mVirtualEnergy,
+        "soc": telem.mSoC,
+        "battery_charge": telem.mBatteryChargeFraction,
         "tire_temp_fl": wheels[0].mTemperature[1] - 273.15,
         "tire_temp_fr": wheels[1].mTemperature[1] - 273.15,
         "tire_temp_rl": wheels[2].mTemperature[1] - 273.15,

@@ -63,6 +63,15 @@ def test_sample_from_telem_maps_channels():
     assert abs(sample["tire_temp_rr"] - 80.0) < 1e-9
 
 
+def test_sample_from_telem_maps_energy_channels():
+    t = roundtrip(make_telem(mVirtualEnergy=0.75, mSoC=0.6, mBatteryChargeFraction=0.42))
+    sample = sample_from_telem(t, lap_dist=0.0)
+
+    assert abs(sample["virtual_energy"] - 0.75) < 1e-6
+    assert abs(sample["soc"] - 0.6) < 1e-6
+    assert abs(sample["battery_charge"] - 0.42) < 1e-9
+
+
 def test_sample_from_telem_speed_is_vector_magnitude():
     t = roundtrip(make_telem())
     t.mLocalVel.x, t.mLocalVel.y, t.mLocalVel.z = 3.0, 4.0, 0.0
