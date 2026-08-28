@@ -25,10 +25,8 @@ the merged v0.1 core + both spike docs). Merge is the USER'S call at lunch.
   Everything below is already in that spec's roadmap.
 
 ## Remaining Checklist (ordered; do top-down)
-- [ ] T-A Fuel calculator — `simcoach/fuel.py` + `fuel` channel on LapRecord +
-      fixture. Deterministic: fuel_per_lap (lap-over-lap) × race_laps
-      (race_duration ÷ representative_lap_time) + margin → total needed, stops
-      required, fuel-to-add. Tests in `tests/test_fuel.py`.
+- [x] T-A Fuel calculator — DONE (commit 1450560, 42 passed). simcoach/fuel.py,
+      fuel channel in conftest, tests/test_fuel.py.
 - [ ] T-B Tier model + tier-aware coach — `simcoach/tiers.py` (Bronze/Silver/Gold
       allowed-adjustment sets; also an `isFreeSetting`-driven "allowed keys"
       path per the spike). Wire a `tier`/allowed-set into `Coach.build_prompt`
@@ -51,25 +49,35 @@ the merged v0.1 core + both spike docs). Merge is the USER'S call at lunch.
       confirm RIGHT_IS_POSITIVE sign convention (needs a WHEEL lap).
 
 ## Current Status
-Branch created, HANDOFF written. No feature code yet. Next: T-A.
+T-A done (fuel calc, commit 1450560, 42 passed). Next: T-B (tier-aware coach).
+Brief ready at scratchpad/overnight/tb-brief.md.
 
 ## Next Exact Action
-Start T-A: write `tests/test_fuel.py` (failing) for fuel_per_lap + race fuel
-calc, add `fuel` channel to the synthetic_lap fixture, implement
-`simcoach/fuel.py`, run `tests/test_fuel.py`, commit, tick T-A.
+Dispatch/execute T-B per scratchpad/overnight/tb-brief.md: create simcoach/tiers.py
++ tests/test_tiers.py, add optional `allowed_adjustments` to Coach.build_prompt/ask
+so setup advice is tier-constrained, add coach tests. Run tests/test_tiers.py +
+tests/test_coach.py + full suite, commit "feat: tier-aware setup constraints in
+coach", tick T-B.
 
 ## Files Changed (this branch)
-(none yet)
+- simcoach/fuel.py (new), tests/test_fuel.py (new), tests/conftest.py (+fuel channel)
 
 ## Decisions / educated guesses (for lunch review)
 - Working on a feature branch in the main checkout (not a worktree) for recovery
   simplicity; merge is user's call. Reverse: `git branch -D overnight-followups`.
-- Direct TDD implementation (not SDD subagent orchestration) for unattended
-  robustness — fewer stall points. Quality guarded by thorough tests + a
-  self-review pass per module.
+- Use SUBAGENTS for implementation (user directive 00:01) — keeps controller
+  context lean so compaction is rare overnight. I write the failing test +
+  brief, dispatch an implementer (sonnet) that implements/tests/commits and
+  returns only a short status, then a quick reviewer or self-review of the diff.
+  Briefs/reports in scratchpad/overnight/. Recovery still keys off HANDOFF+git.
 
 ## Questions for lunch (accumulate; do NOT ping overnight)
-- (none yet)
+- T-B: SILVER tier's exact adjustable set is a GUESS (Bronze + tire pressures,
+  ARBs, diff, wing). Bronze (TC/brake-bias/ABS) and Gold (open) are known. Please
+  confirm Silver's real allowances, or we just rely on live `isFreeSetting`.
+- T-A: race_laps = ceil(duration/lap) + 1 (the +1 for lap-in-progress at time
+  expiry). Confirm LMU's timed-race end rule matches (leader finishes current lap
+  after clock hits 0). Fuel margin default 5% — adjust to taste.
 
 ## Recovery notes
 - Recovery cron `5a131f77` armed (every 30m, fires auto-continue.md while idle).
