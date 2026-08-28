@@ -29,10 +29,9 @@ the merged v0.1 core + both spike docs). Merge is the USER'S call at lunch.
       fuel channel in conftest, tests/test_fuel.py.
 - [x] T-B Tier-aware coach — DONE (commit 260de08, 47 passed). simcoach/tiers.py
       (Bronze/Gold confirmed, Silver=GUESS), coach allowed_adjustments param.
-- [ ] T-C Session/phase model — additive: `phase` (practice|qualifying|race) +
-      `session_id` columns on `laps` (schema user_version 1→2, migrate in place),
-      `LapStore.save(..., phase=?, session_id=?)`, query helpers. Preserve all
-      existing behavior. Tests extend `tests/test_store.py`.
+- [x] T-C Session/phase model — DONE (commit 4f22aac, 52 passed, migration
+      review PASS 0 issues). LapRecord +phase/session_id, schema v1->v2 migrate,
+      session_lap_ids, best_lap phase filter.
 - [ ] T-D LMU REST client — `simcoach/lmu/rest.py`: read setup
       (getPlayerGarageData: 172 keys, isFreeSetting), standings/timing + fuel
       (watch/standings: lapDistance, fuelFraction, sector, lapStartET, etc.).
@@ -46,21 +45,21 @@ the merged v0.1 core + both spike docs). Merge is the USER'S call at lunch.
       confirm RIGHT_IS_POSITIVE sign convention (needs a WHEEL lap).
 
 ## Current Status
-T-A (fuel, 1450560) + T-B (tiers, 260de08) done, 47 passed. Next: T-C
-(session/phase schema migration). Brief at scratchpad/overnight/tc-brief.md.
-T-C is a schema migration — REVIEW it after (dispatch a reviewer subagent).
+T-A/T-B/T-C done (52 passed). Next: T-D (LMU REST client). Brief at
+scratchpad/overnight/td-brief.md. Then T-E (shared-memory reader) is last.
 
 ## Next Exact Action
-Dispatch/execute T-C per scratchpad/overnight/tc-brief.md: add phase+session_id
-to LapRecord, migrate store schema v1->v2 (fresh-create with cols + ALTER for
-existing v1), persist/restore metadata, add session_lap_ids + best_lap phase
-filter, tests incl. a migration test. Run tests/test_store.py + full suite,
-commit "feat: session/phase lap metadata with in-place schema migration (v2)",
-then REVIEW the diff (schema migration), tick T-C.
+Dispatch/execute T-D per scratchpad/overnight/td-brief.md: create
+simcoach/lmu/__init__.py + simcoach/lmu/rest.py (stdlib urllib, injectable
+fetch) + tests/test_lmu_rest.py (recorded spike fixtures). Run tests/test_lmu_rest.py
++ full suite, commit "feat: LMU REST client (setup/timing/fuel)", tick T-D.
+[LUNCH] live smoke vs localhost:6397 deferred (needs LMU running).
 
 ## Files Changed (this branch)
 - T-A: simcoach/fuel.py, tests/test_fuel.py, tests/conftest.py(+fuel)
 - T-B: simcoach/tiers.py, tests/test_tiers.py, simcoach/coach.py, tests/test_coach.py
+- T-C: simcoach/store.py, simcoach/model_types.py, tests/test_store.py
+- chore: .gitignore (+.superpowers/)
 
 ## Decisions / educated guesses (for lunch review)
 - Working on a feature branch in the main checkout (not a worktree) for recovery
