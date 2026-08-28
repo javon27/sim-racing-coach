@@ -57,11 +57,15 @@ the merged v0.1 core + both spike docs). Merge is the USER'S call at lunch.
 is USER-GATED: live-rig validation, app wiring, regen-braking coaching model, and the
 adjustable fuel<->energy RATIO coupling — see [LUNCH]. Nothing autonomous remains.
 
-## Next Exact Action  ===  DISPATCH K-1, THEN T-H  ===
-Research DONE (commit d289178, folded into spec). Now:
-1. DISPATCH K-1 knowledge base (brief: scratchpad/overnight/k1-brief.md) — user's
-   explicit ask. (research-energy has committed, so the index is free.)
-2. After K-1: T-H energy-strategy advisor (below), grounded in the research.
+## Next Exact Action  ===  K-1 IN FLIGHT; THEN R-2, THEN T-H  ===
+K-1 knowledge base (impl-kb) dispatched. Then:
+1. R-2 (brief: scratchpad/overnight/r2-brief.md): mine the user's setup sources
+   (07:21) into docs/superpowers/knowledge/ (setup-guide, classes, sources index).
+   Sources durably listed in the R-2 brief (Reddit + 6 YouTube + LMU LMP3 guide +
+   Coach Dave ultimate LMU setup guide). Dispatch AFTER K-1 commits (both write to
+   knowledge/; one committer at a time).
+2. T-H energy-strategy/lift advisor (see below).
+User's own words: "do more research yourself" — go beyond the 9 links too.
 
 ## Queued: T-H energy-strategy / lift-and-coast advisor (research-grounded)
 Deterministic module on fuel.py. LMU shows fuel-laps-remaining AND nrg-laps-remaining
