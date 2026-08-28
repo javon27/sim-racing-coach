@@ -76,13 +76,15 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
     what tests/test_lmu_smm.py exercises directly on synthetic structs.
 
     Sign/unit conventions per rf2structs.py docstring, PENDING LIVE VALIDATION:
-      speed [m/s] = |mLocalVel| (z is longitudinal per the header's coordinate note)
+      speed [km/h] = |mLocalVel| (m/s, z is longitudinal per the header's
+        coordinate note) * 3.6 -- the rest of the pipeline (coach prompt,
+        analysis.py, fixtures) is km/h-scale.
       lat_g = mLocalAccel.x / 9.80665 (x is lateral in local vehicle coords)
       tire temps: mTemperature[1] (center) Kelvin -> Celsius
     """
     wheels = telem.mWheel
     return {
-        "speed": telem.mLocalVel.magnitude(),
+        "speed": telem.mLocalVel.magnitude() * 3.6,
         "throttle": telem.mUnfilteredThrottle,
         "brake": telem.mUnfilteredBrake,
         "steering": telem.mUnfilteredSteering,
@@ -94,6 +96,36 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
         "tire_temp_rl": wheels[2].mTemperature[1] - 273.15,
         "tire_temp_rr": wheels[3].mTemperature[1] - 273.15,
     }
+
+
+def build_lap_record(
+    sim: str,
+    track: str,
+    car: str,
+    lap_time: float,
+    invalidated: bool,
+    timestamp: float,
+    channels: dict[str, list[float]],
+) -> LapRecord | None:
+    """Pure decision: turn a completed lap's raw fields into a LapRecord, or
+    None if the lap shouldn't be stored.
+
+    lap_time <= 0 is LMU's sentinel for "no real lap time" (e.g. -1) -- never
+    yield those, or store.best_lap()'s ORDER BY lap_time ASC would treat the
+    sentinel as the permanent fastest lap and poison every delta. validity is
+    the inverse of mLapInvalidated (cut track / off-track).
+    """
+    if lap_time <= 0:
+        return None
+    return LapRecord(
+        sim=sim,
+        track=track,
+        car=car,
+        lap_time=lap_time,
+        valid=not invalidated,
+        timestamp=timestamp,
+        channels={k: np.array(v) for k, v in channels.items()},
+    )
 
 
 def _find_player(scoring: rF2Scoring) -> VehicleScoringInfoV01 | None:
@@ -154,15 +186,17 @@ class LmuSource:
 
             if vt.mLapNumber != current_lap_number:
                 if channels:
-                    yield LapRecord(
+                    record = build_lap_record(
                         sim="lmu",
                         track=vt.mTrackName.decode(errors="replace"),
                         car=vt.mVehicleName.decode(errors="replace"),
                         lap_time=player.mLastLapTime,
-                        valid=True,
+                        invalidated=vt.mLapInvalidated,
                         timestamp=time.time(),
-                        channels={k: np.array(v) for k, v in channels.items()},
+                        channels=channels,
                     )
+                    if record is not None:
+                        yield record
                 channels = {}
                 current_lap_number = vt.mLapNumber
 

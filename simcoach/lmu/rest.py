@@ -2,6 +2,8 @@ from __future__ import annotations
 import json
 import urllib.request
 
+from simcoach.tiers import adjustable_from_setup
+
 
 class LmuRest:
     """Thin reader over LMU's local REST API (default http://localhost:6397).
@@ -34,7 +36,6 @@ class LmuRest:
 
     # --- convenience ---
     def adjustable_keys(self) -> list[str]:
-        from simcoach.tiers import adjustable_from_setup
         return adjustable_from_setup(self.get_setup())
 
     def fuel_fraction(self) -> float | None:

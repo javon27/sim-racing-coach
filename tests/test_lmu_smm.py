@@ -8,7 +8,7 @@ a real LMU process. Live offset/sign validation is a separate [LUNCH] task.
 import ctypes as C
 
 from simcoach.lmu.rf2structs import TelemInfoV01, TelemWheelV01, VehicleScoringInfoV01
-from simcoach.lmu.smm import sample_from_telem
+from simcoach.lmu.smm import build_lap_record, sample_from_telem
 
 
 def make_telem(**overrides) -> TelemInfoV01:
@@ -52,7 +52,7 @@ def test_sample_from_telem_maps_channels():
     t = roundtrip(make_telem())
     sample = sample_from_telem(t, lap_dist=123.4)
 
-    assert sample["speed"] == 55.0  # |(-55 in z)|
+    assert sample["speed"] == 198.0  # |(-55 in z)| m/s * 3.6 -> km/h
     assert sample["throttle"] == 0.5
     assert sample["brake"] == 0.25
     assert sample["steering"] == -0.3
@@ -67,7 +67,15 @@ def test_sample_from_telem_speed_is_vector_magnitude():
     t = roundtrip(make_telem())
     t.mLocalVel.x, t.mLocalVel.y, t.mLocalVel.z = 3.0, 4.0, 0.0
     sample = sample_from_telem(t, lap_dist=0.0)
-    assert sample["speed"] == 5.0  # 3-4-5 triangle
+    assert sample["speed"] == 18.0  # 3-4-5 triangle (5 m/s) * 3.6 -> km/h
+
+
+def test_sample_from_telem_speed_is_km_h_not_m_s():
+    t = roundtrip(make_telem())
+    t.mLocalVel.x, t.mLocalVel.y, t.mLocalVel.z = 0.0, 0.0, -30.0  # 30 m/s
+    sample = sample_from_telem(t, lap_dist=0.0)
+    assert abs(sample["speed"] - 108.0) < 1e-9
+    assert abs(sample["speed"] - 30.0) > 1.0  # not left as raw m/s
 
 
 def test_vehicle_scoring_survives_byte_roundtrip():
@@ -101,3 +109,33 @@ def test_pack4_changes_telem_size_vs_natural_alignment():
         _fields_ = TelemInfoV01._fields_
 
     assert C.sizeof(TelemInfoV01) != C.sizeof(NaturallyAligned)
+
+
+def _channels():
+    return {"speed": [100.0, 110.0]}
+
+
+def test_build_lap_record_skips_sentinel_lap_time():
+    record = build_lap_record(
+        "lmu", "track", "car",
+        lap_time=-1, invalidated=0, timestamp=0.0, channels=_channels(),
+    )
+    assert record is None
+
+
+def test_build_lap_record_invalidated_lap_is_not_valid():
+    record = build_lap_record(
+        "lmu", "track", "car",
+        lap_time=92.5, invalidated=1, timestamp=0.0, channels=_channels(),
+    )
+    assert record is not None
+    assert record.valid is False
+
+
+def test_build_lap_record_clean_lap_is_valid():
+    record = build_lap_record(
+        "lmu", "track", "car",
+        lap_time=92.5, invalidated=0, timestamp=0.0, channels=_channels(),
+    )
+    assert record is not None
+    assert record.valid is True
