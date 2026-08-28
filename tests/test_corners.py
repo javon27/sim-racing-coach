@@ -149,6 +149,40 @@ def test_corner_at_returns_none_for_gap():
     assert corner is None
 
 
+def _write_track_json(tmp_path, corners):
+    path = tmp_path / "bad_track.json"
+    path.write_text(json.dumps({"track": "bad_track", "corners": corners}))
+    return str(path)
+
+
+def test_load_rejects_apex_outside_window(tmp_path):
+    """CornerMap.load raises ValueError when apex_dist is outside [start_dist, end_dist]."""
+    from simcoach.corners import CornerMap
+
+    corners = [
+        {"number": 1, "name": "Bad Apex", "direction": "left",
+         "start_dist": 800, "apex_dist": 1300, "end_dist": 1200},
+    ]
+    path = _write_track_json(tmp_path, corners)
+
+    with pytest.raises(ValueError, match="apex_dist"):
+        CornerMap.load(path)
+
+
+def test_load_rejects_start_ge_end(tmp_path):
+    """CornerMap.load raises ValueError when start_dist >= end_dist (wrapped/degenerate window)."""
+    from simcoach.corners import CornerMap
+
+    corners = [
+        {"number": 1, "name": "Wrapped", "direction": "left",
+         "start_dist": 1200, "apex_dist": 1000, "end_dist": 800},
+    ]
+    path = _write_track_json(tmp_path, corners)
+
+    with pytest.raises(ValueError, match="start_dist"):
+        CornerMap.load(path)
+
+
 def test_verify_map_directions_flags_undetermined_corner(synthetic_lap):
     """verify_map_directions marks out-of-range corners as undetermined."""
     from simcoach.corners import CornerMap, verify_map_directions, Corner

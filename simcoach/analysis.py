@@ -59,10 +59,25 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
     win_throttle = throttle[idx]
     win_steering = steering[idx]
 
+    if np.isnan(win_speed).all():
+        # Degenerate: no valid speed samples to anchor any speed-derived metric.
+        return CornerMetrics(
+            corner_no=corner.number,
+            name=corner.name,
+            direction=corner.direction,
+            entry_spd=float("nan"),
+            apex_spd=float("nan"),
+            min_spd=float("nan"),
+            exit_spd=float("nan"),
+            brake_point=corner.end_dist,
+            throttle_point=corner.end_dist,
+            trailbrake_overlap=0.0,
+        )
+
     entry_spd = float(win_speed[0])
     exit_spd = float(win_speed[-1])
-    min_i = int(np.argmin(win_speed))
-    min_spd = float(win_speed[min_i])
+    min_i = int(np.nanargmin(win_speed))
+    min_spd = float(np.nanmin(win_speed))
 
     apex_i = int(np.argmin(np.abs(win_dist - corner.apex_dist)))
     apex_spd = float(win_speed[apex_i])
@@ -94,6 +109,9 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
 def analyze_lap(
     record: LapRecord, cmap: CornerMap, reference: Optional[LapRecord] = None
 ) -> LapAnalysis:
+    if reference is not None and reference.track != record.track:
+        raise ValueError(f"reference lap track {reference.track!r} != {record.track!r}")
+
     corners = [_metrics_for_corner(record, corner) for corner in cmap.corners]
 
     has_reference = reference is not None
@@ -101,7 +119,9 @@ def analyze_lap(
         ref_metrics = {c.number: _metrics_for_corner(reference, c) for c in cmap.corners}
         for cm in corners:
             ref = ref_metrics.get(cm.corner_no)
-            if ref is not None:
+            if ref is not None and not np.isnan(cm.min_spd) and not np.isnan(ref.min_spd):
                 cm.min_spd_delta = cm.min_spd - ref.min_spd
+            else:
+                cm.min_spd_delta = None
 
     return LapAnalysis(lap_time=record.lap_time, corners=corners, has_reference=has_reference)

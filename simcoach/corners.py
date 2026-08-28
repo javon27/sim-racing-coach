@@ -29,10 +29,25 @@ class CornerMap:
 
     @classmethod
     def load(cls, path: str) -> "CornerMap":
-        """Load corner map from JSON file."""
+        """Load corner map from JSON file.
+
+        Raises ValueError if a corner's window is degenerate/wrapped
+        (start_dist >= end_dist) or its apex_dist falls outside
+        [start_dist, end_dist].
+        """
         with open(path) as f:
             data = json.load(f)
         corners = [Corner(**c) for c in data["corners"]]
+        for c in corners:
+            if not (c.start_dist < c.end_dist):
+                raise ValueError(
+                    f"corner {c.number}: start_dist ({c.start_dist}) must be < end_dist ({c.end_dist})"
+                )
+            if not (c.start_dist <= c.apex_dist <= c.end_dist):
+                raise ValueError(
+                    f"corner {c.number}: apex_dist ({c.apex_dist}) must be within "
+                    f"[start_dist, end_dist] ({c.start_dist}, {c.end_dist})"
+                )
         return cls(corners)
 
     def corner_at(self, dist: float) -> Optional[Corner]:
