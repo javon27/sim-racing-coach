@@ -85,6 +85,57 @@ def binding_stint(*plans: StintPlan) -> StintPlan:
     return max(plans, key=lambda p: (p.stops_required, p.total_needed / p.capacity if p.capacity > 0 else float("inf")))
 
 
+@dataclass
+class SaveAdvice:
+    binding_resource: str        # "fuel" | "energy" — whichever runs out first
+    binding_laps_remaining: float
+    laps_to_go: float
+    save_per_lap_fraction: float  # 0.0 if you'll make it; else fraction to cut/lap
+    make_it: bool                 # binding_laps_remaining >= laps_to_go
+
+
+@dataclass
+class RatioAdvice:
+    # goal: fuel_laps ~= nrg_laps. Which side is short = what you'll run out of.
+    shift_toward: str            # "energy" | "fuel" | "balanced"
+    fuel_laps: float
+    energy_laps: float
+    gap_laps: float              # abs(fuel_laps - energy_laps)
+
+
+def laps_remaining(amount: float, use_per_lap: float) -> float:
+    """How many laps `amount` of a resource lasts."""
+    if use_per_lap <= 0:
+        raise ValueError("use_per_lap must be positive")
+    return amount / use_per_lap
+
+
+def stint_save_advice(fuel_laps_remaining: float, energy_laps_remaining: float,
+                       laps_to_go: float) -> SaveAdvice:
+    """binding = the resource with fewer laps remaining. If binding >= laps_to_go,
+    make_it=True, save_per_lap_fraction=0. Else stretch binding over laps_to_go."""
+    if fuel_laps_remaining <= energy_laps_remaining:
+        binding_resource, binding = "fuel", fuel_laps_remaining
+    else:
+        binding_resource, binding = "energy", energy_laps_remaining
+    make_it = binding >= laps_to_go
+    save_per_lap_fraction = 0.0 if make_it else min(max(1 - binding / laps_to_go, 0.0), 1.0)
+    return SaveAdvice(binding_resource, binding, laps_to_go, save_per_lap_fraction, make_it)
+
+
+def ratio_balance(fuel_laps: float, energy_laps: float, tolerance: float = 0.5) -> RatioAdvice:
+    """If fuel_laps and energy_laps differ by more than `tolerance` laps, shift
+    toward the shorter (binding) resource. Within tolerance -> 'balanced'."""
+    gap = abs(fuel_laps - energy_laps)
+    if gap <= tolerance:
+        shift_toward = "balanced"
+    elif fuel_laps < energy_laps:
+        shift_toward = "fuel"
+    else:
+        shift_toward = "energy"
+    return RatioAdvice(shift_toward, fuel_laps, energy_laps, gap)
+
+
 def plan_race(fuel_per_lap: float, race_duration_s: float, lap_time_s: float,
               tank_capacity: float, margin: float = 0.05,
               laps_override: int | None = None) -> FuelPlan:

@@ -6,8 +6,13 @@ from simcoach.fuel import (
     plan_race,
     plan_stint,
     binding_stint,
+    laps_remaining,
+    stint_save_advice,
+    ratio_balance,
     FuelPlan,
     StintPlan,
+    SaveAdvice,
+    RatioAdvice,
 )
 
 
@@ -118,3 +123,50 @@ def test_plan_race_still_returns_fuel_plan():
     plan = plan_race(fuel_per_lap=2.6, race_duration_s=20 * 60, lap_time_s=92.5, tank_capacity=100.0)
     assert isinstance(plan, FuelPlan)
     assert not isinstance(plan, StintPlan)
+
+
+def test_laps_remaining():
+    assert laps_remaining(50, 2.5) == 20
+
+
+def test_laps_remaining_raises_on_zero_use():
+    with pytest.raises(ValueError):
+        laps_remaining(50, 0)
+
+
+def test_stint_save_advice_fuel_binds_and_must_save():
+    advice = stint_save_advice(fuel_laps_remaining=10, energy_laps_remaining=15, laps_to_go=12)
+    assert isinstance(advice, SaveAdvice)
+    assert advice.binding_resource == "fuel"
+    assert advice.binding_laps_remaining == 10
+    assert advice.laps_to_go == 12
+    assert advice.make_it is False
+    assert abs(advice.save_per_lap_fraction - (1 - 10 / 12)) < 1e-6
+
+
+def test_stint_save_advice_energy_binds_but_makes_it():
+    advice = stint_save_advice(fuel_laps_remaining=20, energy_laps_remaining=18, laps_to_go=12)
+    assert advice.binding_resource == "energy"
+    assert advice.binding_laps_remaining == 18
+    assert advice.make_it is True
+    assert advice.save_per_lap_fraction == 0.0
+
+
+def test_ratio_balance_energy_shorter():
+    advice = ratio_balance(fuel_laps=20, energy_laps=12)
+    assert isinstance(advice, RatioAdvice)
+    assert advice.shift_toward == "energy"
+    assert advice.fuel_laps == 20
+    assert advice.energy_laps == 12
+    assert advice.gap_laps == 8
+
+
+def test_ratio_balance_fuel_shorter():
+    advice = ratio_balance(fuel_laps=12, energy_laps=20)
+    assert advice.shift_toward == "fuel"
+    assert advice.gap_laps == 8
+
+
+def test_ratio_balance_within_tolerance():
+    advice = ratio_balance(fuel_laps=15, energy_laps=15.2)
+    assert advice.shift_toward == "balanced"
