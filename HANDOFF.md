@@ -40,22 +40,21 @@ the merged v0.1 core + both spike docs). Merge is the USER'S call at lunch.
       (reader + LmuSource, begin==end reads), self-consistent tests. KNOWN GAP:
       rF2ScoringInfo tail is a placeholder — complete it live at lunch (item 2).
 
-## Current Status
-ALL 5 MODULES DONE (T-A..T-E), 64 tests passing on branch overnight-followups.
-Overnight build complete. Running a final whole-branch review as capstone, then
-resting state for user's lunch review + the [LUNCH] live-validation items.
-(T-E first attempt died on account session-limit ~00:22 (reset 3:50am); retried
-clean.) Brief at scratchpad/overnight/te-brief.md. T-E is front-loaded code
-transcribed from the on-disk header; struct offsets + sign convention + live
-loop are [LUNCH]-validated (LMU not running overnight). REVIEW T-E after.
+## Current Status  ===  AUTONOMOUS WORK COMPLETE, RESTING STATE  ===
+All 5 modules built + per-module reviewed + whole-branch reviewed + 2 Critical
+integration bugs fixed. Branch overnight-followups, 68 tests passing, tree clean.
+Everything remaining is USER-GATED (live-rig validation + wiring/product
+decisions) — see [LUNCH]. Nothing autonomous remains.
 
-## Next Exact Action
-Dispatch/execute T-E per scratchpad/overnight/te-brief.md: simcoach/lmu/rf2structs.py
-(ctypes from InternalsPlugin.hpp), simcoach/lmu/smm.py (reader + LmuSource over
-$rFactor2SMMP_*$ buffers, begin==end reads), tests/test_lmu_smm.py (self-consistent
-synthetic-buffer parsing tests). Run + full suite + commit + REVIEW, tick T-E.
-After T-E: overnight build complete — write final summary + [LUNCH] checklist in
-HANDOFF; leave branch for user to review/merge. Consider a final full-suite review.
+## Next Exact Action  ===  HOLD  ===
+There is NO autonomous next step. All remaining work needs the user and/or a
+running LMU (the [LUNCH] section).
+IF YOU ARE A RECOVERY FIRE: verify `git status` is clean and the suite is green
+(.venv/Scripts/python.exe -m pytest -q => 68 passed), then reply that the overnight
+build is complete and awaiting the user at lunch, and STOP. Do NOT: start new
+features (scope discipline — the user must shape further work); attempt any [LUNCH]
+item (needs the rig/user; LMU isn't running); or cancel recovery cron 5a131f77 (the
+user armed it — they decide at lunch).
 
 ## Files Changed (this branch)
 - T-A: simcoach/fuel.py, tests/test_fuel.py, tests/conftest.py(+fuel)
@@ -63,6 +62,7 @@ HANDOFF; leave branch for user to review/merge. Consider a final full-suite revi
 - T-C: simcoach/store.py, simcoach/model_types.py, tests/test_store.py
 - T-D: simcoach/lmu/__init__.py, simcoach/lmu/rest.py, tests/test_lmu_rest.py
 - T-E: simcoach/lmu/rf2structs.py, simcoach/lmu/smm.py, tests/test_lmu_smm.py
+- fix (final-review C1/C2/M1): simcoach/lmu/smm.py, simcoach/lmu/rest.py, tests/test_lmu_smm.py
 - chore: .gitignore (+.superpowers/)
 
 ## Decisions / educated guesses (for lunch review)
@@ -115,10 +115,13 @@ Do these with LMU running, on track (a WHEEL lap for the sign-convention one):
 
 ## Final-review (overnight) result
 merge-after-lunch: was "n" ONLY due to 2 fixable-now T-E bugs (C1 speed m/s vs km/h;
-C2 valid/lap_time sentinel poisoning best_lap). Fix wave (fix-smm) IN FLIGHT for
-C1/C2/M1 — verify its commit + green suite before trusting. Integration otherwise
-cohesive, no regression to merged core, gaps honestly marked. After C1/C2 land +
-the [LUNCH] validations + wiring decisions above, this is a normal merge.
+C2 valid/lap_time sentinel poisoning best_lap). BOTH FIXED — commit eaf50d3, 68
+passed (build_lap_record() helper: skips lap_time<=0, valid=not mLapInvalidated;
+speed now *3.6 km/h; rest.py import to top). Integration otherwise cohesive, no
+regression to merged core, gaps honestly marked. After the [LUNCH] validations +
+wiring decisions above, this is a normal merge.
+- fix-smm flagged for lunch: WHEN mLapInvalidated resets relative to the lap-number
+  rollover is unverified (live). Confirm the end-of-lap validity read is correct live.
 
 ## Recovery notes
 - Recovery cron `5a131f77` armed (every 30m, fires auto-continue.md while idle).
