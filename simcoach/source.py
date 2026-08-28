@@ -21,9 +21,5 @@ class ReplaySource:
         self.car = car
 
     def laps(self) -> Iterator[LapRecord]:
-        rows = self.store.conn.execute(
-            "SELECT id FROM laps WHERE track = ? AND car = ?",
-            (self.track, self.car),
-        ).fetchall()
-        for (lap_id,) in rows:
+        for lap_id in self.store.list_lap_ids(self.track, self.car):
             yield self.store.load(lap_id)

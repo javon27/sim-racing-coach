@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import threading
 
 import numpy as np
 
@@ -46,10 +47,13 @@ class LapStore:
     def __init__(self, db_path: str, data_dir: str):
         self.data_dir = data_dir
         os.makedirs(self.data_dir, exist_ok=True)
-        # check_same_thread=False: run_repl's background capture thread and
-        # foreground REPL thread share this connection; sqlite3 serializes
-        # access internally so this is safe for our single-writer usage.
+        # check_same_thread=False + self._lock: the background capture thread
+        # and foreground REPL thread share this connection; self._lock (RLock,
+        # reentrant because best_lap() calls self.load() internally) serializes
+        # access since sqlite3 itself does not guard against interleaved reads
+        # mid-write (e.g. reading a laps row while telemetry_path is still NULL).
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self._lock = threading.RLock()
         current_version = self.conn.execute("PRAGMA user_version").fetchone()[0]
         if current_version == 0:
             self.conn.executescript(_SCHEMA)
@@ -59,7 +63,7 @@ class LapStore:
     def save(self, record: LapRecord, metrics: list | None = None) -> int:
         telemetry_path = None
         try:
-            with self.conn:
+            with self._lock, self.conn:
                 cur = self.conn.execute(
                     "INSERT INTO laps (ts, sim, track, car, lap_time, valid, telemetry_path) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -91,24 +95,34 @@ class LapStore:
             raise
 
     def load(self, lap_id: int) -> LapRecord:
-        row = self.conn.execute(
-            "SELECT ts, sim, track, car, lap_time, valid, telemetry_path "
-            "FROM laps WHERE id = ?",
-            (lap_id,),
-        ).fetchone()
-        if row is None:
-            raise KeyError(f"no lap with id {lap_id}")
-        ts, sim, track, car, lap_time, valid, telemetry_path = row
-        with np.load(telemetry_path) as npz:
-            channels = {k: npz[k] for k in npz.files}
-        return LapRecord(sim, track, car, lap_time, bool(valid), ts, channels)
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT ts, sim, track, car, lap_time, valid, telemetry_path "
+                "FROM laps WHERE id = ?",
+                (lap_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"no lap with id {lap_id}")
+            ts, sim, track, car, lap_time, valid, telemetry_path = row
+            with np.load(telemetry_path) as npz:
+                channels = {k: npz[k] for k in npz.files}
+            return LapRecord(sim, track, car, lap_time, bool(valid), ts, channels)
 
     def best_lap(self, track: str, car: str) -> LapRecord | None:
-        row = self.conn.execute(
-            "SELECT id FROM laps WHERE track = ? AND car = ? AND valid = 1 "
-            "ORDER BY lap_time ASC LIMIT 1",
-            (track, car),
-        ).fetchone()
-        if row is None:
-            return None
-        return self.load(row[0])
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT id FROM laps WHERE track = ? AND car = ? AND valid = 1 "
+                "ORDER BY lap_time ASC LIMIT 1",
+                (track, car),
+            ).fetchone()
+            if row is None:
+                return None
+            return self.load(row[0])
+
+    def list_lap_ids(self, track: str, car: str) -> list[int]:
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT id FROM laps WHERE track = ? AND car = ?",
+                (track, car),
+            ).fetchall()
+            return [r[0] for r in rows]
