@@ -51,7 +51,10 @@ the merged v0.1 core + both spike docs). Merge is the USER'S call at lunch.
       still [LUNCH]-validated. energy_per_lap uses fuel.use_per_lap_from_channel.
 
 ## Current Status  ===  AUTONOMOUS WORK COMPLETE, RESTING STATE  ===
-Branch overnight-followups, 83 tests passing, tree clean, 34 commits. Built overnight:
+Branch overnight-followups, 93 tests passing, tree clean, 40 commits. Also built this
+morning: knowledge base (K-1 scaffold/roster/Spa/GT3, R-2 + retrieval: 7/7 sources
+mined incl. all videos + Reddit), energy research folded to spec, T-H strategy advisor,
+T-I shared-memory compat/health check (multi-candidate MMF + anti-cheat rule). Overnight:
 T-A fuel calc, T-B tier-aware coach, T-C session/phase migration, T-D REST client,
 T-E shared-memory reader, T-F resource-agnostic (fuel/energy) planner, T-G energy
 channels, T-H energy-strategy advisor; +2 Critical integration fixes; energy research
@@ -59,14 +62,14 @@ channels, T-H energy-strategy advisor; +2 Critical integration fixes; energy res
 R-2 827cb5c setup-guide/classes/sources). Remaining is USER-GATED: live-rig validation,
 app wiring, regen-braking coaching, fuel↔energy RATIO coupling, KB gaps — see [LUNCH].
 
-## Next Exact Action  ===  T-I IN FLIGHT  ===
-retrieve-sources DONE (ec90237): 7/7 hard sources mined (6 videos via captions API,
-Reddit via browser) — brake-migration gap filled, LMGT3 ABS dial added. T-I
-shared-memory compatibility/health check dispatched (brief scratchpad/overnight/
-ti-brief.md): fetches CrewChief changelog for canonical MMF names, multi-candidate +
-version/sanity validation, anti-cheat read-only rule. After T-I commits: review, HOLD.
-Built to date: T-A..T-H + K-1 + R-2 + retrieval + energy research, 83 passing.
-Remaining KB gap: no LMP2 source (all else filled).
+## Next Exact Action  ===  HOLD (queue cleared)  ===
+T-I DONE (6cc7415, 93 passed): multi-candidate MMF + version/sanity validation +
+compatibility_check() + anti-cheat read-only rule. No autonomous step remains.
+IF YOU ARE A RECOVERY FIRE: verify git clean + suite green
+(.venv/Scripts/python.exe -m pytest -q => 93 passed), reply build complete/awaiting
+user, STOP. Do NOT start new features / attempt [LUNCH] items / cancel cron 5a131f77.
+Remaining KB gap: no LMP2 source (all else filled). Live MMF-name-mode check added
+to [LUNCH] item 1b.
 
 ## Queued: T-H energy-strategy / lift-and-coast advisor (research-grounded)
 Deterministic module on fuel.py. LMU shows fuel-laps-remaining AND nrg-laps-remaining
@@ -130,6 +133,14 @@ Do these with LMU running, on track (a WHEEL lap for the sign-convention one):
 1. T-D live smoke: with LMU running, `LmuRest().get_player_standing()` /
    `.fuel_fraction()` / `.adjustable_keys()` against localhost:6397 — confirm the
    recorded shapes still match live.
+1b. MMF NAME MODE (from T-I / CrewChief changelog): CrewChief v4.19.4.0 added a
+   "legacy shared memory filenames" toggle + renamed its plugin DLLs — so a NEWER
+   plugin build may publish the MMFs under DIFFERENT names than the legacy
+   $rFactor2SMMP_Telemetry$/$rFactor2SMMP_Scoring$ we have. LIVE: run
+   smm.compatibility_check() against the live game; if it can't find the MMF, check
+   which filename mode the installed plugin uses and add the current name(s) to the
+   candidate lists in smm.py. (The spike confirmed the legacy names worked on the
+   user's box yesterday, so likely fine — but verify after any plugin update.)
 2. T-E live validation (the big one): run the shared-memory reader against the
    live `$rFactor2SMMP_Telemetry$` / `$rFactor2SMMP_Scoring$` buffers. Confirm the
    ctypes struct OFFSETS are right (values sane: throttle/brake 0..1, speed matches
