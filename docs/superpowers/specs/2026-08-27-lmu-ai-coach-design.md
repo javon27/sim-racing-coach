@@ -133,6 +133,10 @@ The tool walks a race weekend, carrying data forward between phases:
 4. **Post-race** — analyze what to improve for the NEXT race (daily races run on a timed cycle: 3 per tier, you finish in time to rejoin the same tier).
 5. **Post-v1.0** — lap-by-lap in-ear guidance.
 
+Post-v1.0 backlog:
+- **Lap-by-lap in-ear guidance** (real-time spotter).
+- **Incident detection + causal analysis.** From telemetry, detect spin-outs (yaw-rate/lateral-G spike + speed drop + wheel slip) and race contact (sudden longitudinal deceleration; damage flags if LMU exposes them). Then the harder, valuable layer: causal interpretation — e.g. "you spun because you lifted mid-corner when you should have stayed on the brake," or whether a crash was the user's fault / avoidable. Same deterministic-features -> LLM-interpretation pattern as the coach, applied to incident windows. Feasibility: detection is straightforward from existing channels; causal attribution is the research-worthy part.
+
 Architectural affordance this requires (and how v0.1 already allows it):
 - A **session/phase model** (practice/qualy/race grouping; fuel + baseline carried across phases) sits ABOVE the core. It is a future `session_id` / `phase` tag on stored laps — additive, and the `laps` schema is already versioned (`user_version`), so it evolves without orphaning data. No v0.1 change needed.
 - Constraint for v0.1 code: nothing may hardcode "one lap in isolation" — the store already keys laps by sim/track/car and supports history, which is what phase-aware analysis will build on.
