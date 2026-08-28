@@ -20,7 +20,13 @@ class Coach:
         self.model = model
         self.knowledge_dir = knowledge_dir
 
-    def build_prompt(self, analysis: LapAnalysis, car: str, question: str) -> tuple[str, str]:
+    def build_prompt(
+        self,
+        analysis: LapAnalysis,
+        car: str,
+        question: str,
+        allowed_adjustments: list[str] | None = None,
+    ) -> tuple[str, str]:
         corner_lines = []
         for cm in analysis.corners:
             line = (
@@ -46,6 +52,17 @@ class Coach:
         sections.append(f"\nQuestion: {question}")
 
         system = SYSTEM_PROMPT.format(car=car)
+        if allowed_adjustments is not None:
+            allowed_str = ", ".join(allowed_adjustments)
+            system += (
+                f" SETUP CONSTRAINT: in this race only these adjustments are "
+                f"legal — {allowed_str}. Only suggest setup changes to these; "
+                f"if a helpful change is outside them, say it's locked this "
+                f"tier and give a driving-based alternative. Driving advice "
+                f"is unconstrained."
+            )
+            sections.append(f"\nLegal setup adjustments: {allowed_str}")
+
         user_content = "\n".join(sections)
         return system, user_content
 
@@ -55,8 +72,9 @@ class Coach:
         car: str,
         question: str,
         history: list[dict] | None = None,
+        allowed_adjustments: list[str] | None = None,
     ) -> str:
-        system, user_content = self.build_prompt(analysis, car, question)
+        system, user_content = self.build_prompt(analysis, car, question, allowed_adjustments)
         messages = list(history) if history else []
         messages.append({"role": "user", "content": user_content})
         return self.model.complete(system, messages)
