@@ -103,6 +103,24 @@ default) becomes a `SELECT min(lap_time)` on `laps`. Schema is versioned
 - **Stack** = Python on Windows. Terminal chat client.
 - **Model** = Claude API behind a `Model` interface; local impl deferred.
 
+## Model providers (multi-provider, added 2026-08-28, user)
+
+The `Model` protocol (`complete(system, messages) -> str`) is already provider-agnostic
+— the same seam left for local models supports other ONLINE providers too. v1.0 ships
+Anthropic (`ClaudeModel`), but the design supports OpenAI, Google Gemini, others, and a
+local model, each as a `Model` implementation with no change to the coach/pipeline.
+
+- **Provider selector.** A `make_model(provider, model, api_key)` factory picks the
+  implementation from config/env, so switching providers is configuration, not code.
+  v1.0: "anthropic" (built) + "fake" (tests); "openai"/"gemini"/"local" are clear
+  extension points (implement the protocol + read that provider's key). Keep the
+  message format provider-neutral (system + role/content messages — already so).
+- **Keys.** Each provider reads its own key from env (ANTHROPIC_API_KEY now; others as
+  added). The user needs to procure an Anthropic API key for real coaching (the coach
+  path has only run against FakeModel so far — see [LUNCH]).
+- Do NOT scatter SDK calls: a provider's SDK is imported ONLY inside its own
+  `simcoach/model/<provider>.py` (as `anthropic` is confined to `model/claude.py`).
+
 ## Testing
 
 Feature extractor gets real unit tests against a recorded-lap fixture,

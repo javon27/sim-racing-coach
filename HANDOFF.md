@@ -144,6 +144,14 @@ dial organized into oversteer/balanced/understeer groupings). The OLD system was
 0-9 "higher=more". KB reflects current correctly; NO staleness flag applied. The ABS
 rework is cited in the spec's freshness section as an EXAMPLE of mechanic drift.
 
+## T-K IN FLIGHT (user 09:47): model provider selector
+Multi-provider requirement: Model interface already provider-agnostic; v1.0=Anthropic,
+support other online providers + local via the same seam. T-K = make_model factory
+(brief scratchpad/overnight/tk-brief.md): anthropic+fake now, openai/gemini/local as
+clear extension points (NOT implemented — need keys/SDKs). Spec "Model providers"
+section added. After T-K commits + verify: back to HOLD. User left for work ~09:48,
+back ~lunch for LIVE TESTING.
+
 ## KB update MECHANISM (user 09:45) — DESIGN DECISION for lunch
 User: "we'll need a mechanism to update the knowledgebase over time — whether that's
 here with an agent, or built into the engine." Captured in spec ("Knowledge-base UPDATE
