@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from simcoach.analysis import LapAnalysis
+from simcoach.driver import DriverProfile
 from simcoach.model.base import Model
 
 SYSTEM_PROMPT = (
@@ -26,6 +27,7 @@ class Coach:
         car: str,
         question: str,
         allowed_adjustments: list[str] | None = None,
+        driver_profile: DriverProfile | None = None,
     ) -> tuple[str, str]:
         corner_lines = []
         for cm in analysis.corners:
@@ -63,6 +65,11 @@ class Coach:
             )
             sections.append(f"\nLegal setup adjustments: {allowed_str}")
 
+        if driver_profile is not None:
+            profile_text = driver_profile.to_prompt_text()
+            if profile_text:
+                system += f" {profile_text}"
+
         user_content = "\n".join(sections)
         return system, user_content
 
@@ -73,8 +80,11 @@ class Coach:
         question: str,
         history: list[dict] | None = None,
         allowed_adjustments: list[str] | None = None,
+        driver_profile: DriverProfile | None = None,
     ) -> str:
-        system, user_content = self.build_prompt(analysis, car, question, allowed_adjustments)
+        system, user_content = self.build_prompt(
+            analysis, car, question, allowed_adjustments, driver_profile
+        )
         messages = list(history) if history else []
         messages.append({"role": "user", "content": user_content})
         return self.model.complete(system, messages)
