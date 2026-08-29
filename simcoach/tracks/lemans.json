@@ -1,0 +1,18 @@
+{
+  "track": "Le Mans (Circuit de la Sarthe)",
+  "length_m": 13626,
+  "_distances_note": "Corner names/order/direction from public references; direction is also computed live from telemetry (map value is the declared/verify value). start/apex/end distances are ESTIMATES over 13626 m EXCEPT the two Mulsanne chicanes, roughly calibrated from a live lap (2026-08-28): braking into the 2nd Mulsanne chicane observed ~6030 m, exiting the 1st ~4200 m. Refine all ranges from a captured lap's steering/lat_g trace.",
+  "corners": [
+    {"number": 1, "name": "Dunlop Curve", "direction": "right", "start_dist": 350, "apex_dist": 600, "end_dist": 850},
+    {"number": 2, "name": "Dunlop Chicane", "direction": "left", "start_dist": 900, "apex_dist": 1050, "end_dist": 1250},
+    {"number": 3, "name": "Esses de la Foret", "direction": "right", "start_dist": 1350, "apex_dist": 1550, "end_dist": 1800},
+    {"number": 4, "name": "Tertre Rouge", "direction": "right", "start_dist": 1900, "apex_dist": 2050, "end_dist": 2300},
+    {"number": 5, "name": "Mulsanne Chicane 1", "direction": "right", "start_dist": 3950, "apex_dist": 4100, "end_dist": 4300},
+    {"number": 6, "name": "Mulsanne Chicane 2", "direction": "right", "start_dist": 5950, "apex_dist": 6060, "end_dist": 6300},
+    {"number": 7, "name": "Mulsanne Corner", "direction": "right", "start_dist": 8450, "apex_dist": 8650, "end_dist": 8900},
+    {"number": 8, "name": "Indianapolis", "direction": "right", "start_dist": 9700, "apex_dist": 9900, "end_dist": 10150},
+    {"number": 9, "name": "Arnage", "direction": "right", "start_dist": 10300, "apex_dist": 10480, "end_dist": 10700},
+    {"number": 10, "name": "Porsche Curves", "direction": "right", "start_dist": 11000, "apex_dist": 11400, "end_dist": 12000},
+    {"number": 11, "name": "Ford Chicane", "direction": "right", "start_dist": 13050, "apex_dist": 13250, "end_dist": 13500}
+  ]
+}

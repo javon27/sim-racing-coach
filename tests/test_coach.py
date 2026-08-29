@@ -94,6 +94,83 @@ def test_coach_no_delta_without_reference(synthetic_lap):
     assert "vs best" not in user_content
 
 
+def test_coach_with_allowed_adjustments_adds_constraint(synthetic_lap):
+    """When allowed_adjustments is given, the prompt names the legal items and a constraint phrase."""
+    from simcoach.model.fake import FakeModel
+    from simcoach.coach import Coach
+    from simcoach.corners import CornerMap
+    from simcoach.analysis import analyze_lap
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    a = analyze_lap(synthetic_lap, cmap)
+    c = Coach(FakeModel(reply="ok"), "simcoach/knowledge")
+    system, user_content = c.build_prompt(
+        a, "test_car", "should I change the anti-roll bars?",
+        allowed_adjustments=["brake bias", "ABS"],
+    )
+    combined = system + user_content
+    assert "brake bias" in combined
+    assert "only" in combined.lower() or "legal" in combined.lower()
+
+
+def test_coach_without_allowed_adjustments_has_no_constraint(synthetic_lap):
+    """Regression: allowed_adjustments=None leaves the prompt unconstrained (current behavior)."""
+    from simcoach.model.fake import FakeModel
+    from simcoach.coach import Coach
+    from simcoach.corners import CornerMap
+    from simcoach.analysis import analyze_lap
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    a = analyze_lap(synthetic_lap, cmap)
+    c = Coach(FakeModel(reply="ok"), "simcoach/knowledge")
+    system, user_content = c.build_prompt(a, "test_car", "where am I losing time?")
+    combined = (system + user_content).lower()
+    assert "legal setup adjustments" not in combined
+    assert "setup constraint" not in combined
+
+
+def test_coach_with_driver_profile_adds_personalization(synthetic_lap):
+    """driver_profile facts show up in the system prompt to personalize advice."""
+    from simcoach.model.fake import FakeModel
+    from simcoach.coach import Coach
+    from simcoach.corners import CornerMap
+    from simcoach.analysis import analyze_lap
+    from simcoach.driver import DriverProfile
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    a = analyze_lap(synthetic_lap, cmap)
+    c = Coach(FakeModel(reply="ok"), "simcoach/knowledge")
+    profile = DriverProfile(risk_tolerance="conservative")
+    system, _ = c.build_prompt(a, "test_car", "where am I losing time?", driver_profile=profile)
+    assert "conservative" in system
+
+
+def test_coach_without_driver_profile_has_no_personalization_text(synthetic_lap):
+    """Regression: driver_profile=None leaves the system prompt unchanged (current behavior)."""
+    from simcoach.model.fake import FakeModel
+    from simcoach.coach import Coach
+    from simcoach.corners import CornerMap
+    from simcoach.analysis import analyze_lap
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    a = analyze_lap(synthetic_lap, cmap)
+    c = Coach(FakeModel(reply="ok"), "simcoach/knowledge")
+    system, _ = c.build_prompt(a, "test_car", "where am I losing time?")
+    assert "driver profile" not in system.lower()
+
+
+def test_coach_ask_passes_driver_profile(synthetic_lap):
+    """ask() forwards driver_profile through to the model call."""
+    from simcoach.model.fake import FakeModel
+    from simcoach.coach import Coach
+    from simcoach.corners import CornerMap
+    from simcoach.analysis import analyze_lap
+    from simcoach.driver import DriverProfile
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    a = analyze_lap(synthetic_lap, cmap)
+    m = FakeModel(reply="ok")
+    c = Coach(m, "simcoach/knowledge")
+    profile = DriverProfile(braking_style="late")
+    c.ask(a, "test_car", "where am I losing time?", driver_profile=profile)
+    assert "late" in m.last_system
+
+
 def test_coach_skips_delta_text_when_delta_is_none(synthetic_lap):
     """A corner with min_spd_delta=None (degenerate) shows no delta text and doesn't crash."""
     from simcoach.model.fake import FakeModel

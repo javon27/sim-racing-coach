@@ -17,8 +17,15 @@ data/
 *.sqlite
 *.sqlite3
 
+# Operational scratch (SDD/review packages, agent coordination)
+.superpowers/
+scratchpad/
+
 # OS / editor
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+
+# Live-validation probe scripts (throwaway)
+scratchpad_live/

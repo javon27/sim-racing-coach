@@ -103,11 +103,48 @@ default) becomes a `SELECT min(lap_time)` on `laps`. Schema is versioned
 - **Stack** = Python on Windows. Terminal chat client.
 - **Model** = Claude API behind a `Model` interface; local impl deferred.
 
+## Model providers (multi-provider, added 2026-08-28, user)
+
+The `Model` protocol (`complete(system, messages) -> str`) is already provider-agnostic
+— the same seam left for local models supports other ONLINE providers too. v1.0 ships
+Anthropic (`ClaudeModel`), but the design supports OpenAI, Google Gemini, others, and a
+local model, each as a `Model` implementation with no change to the coach/pipeline.
+
+- **Provider selector.** A `make_model(provider, model, api_key)` factory picks the
+  implementation from config/env, so switching providers is configuration, not code.
+  v1.0: "anthropic" (built) + "fake" (tests); "openai"/"gemini"/"local" are clear
+  extension points (implement the protocol + read that provider's key). Keep the
+  message format provider-neutral (system + role/content messages — already so).
+- **Keys.** Each provider reads its own key from env (ANTHROPIC_API_KEY now; others as
+  added). The user needs to procure an Anthropic API key for real coaching (the coach
+  path has only run against FakeModel so far — see [LUNCH]).
+- Do NOT scatter SDK calls: a provider's SDK is imported ONLY inside its own
+  `simcoach/model/<provider>.py` (as `anthropic` is confined to `model/claude.py`).
+
 ## Testing
 
 Feature extractor gets real unit tests against a recorded-lap fixture,
 including an assert that computed corner direction matches known geometry.
 Capture and coach stay thin.
+
+## Tier auto-detection + session state (added 2026-08-28, user + live findings)
+
+- **Tier is auto-detectable — don't ask the user.** The online-race PRACTICE servers
+  carry the SAME setup restrictions as the race, and LMU exposes per-setting
+  `isFreeSetting` (confirmed live: 27 free keys in a practice session incl. ABS, brake
+  balance/migration/pressure, electric motor map, tyre compound, fuel). So the coach
+  can INFER the tier / restriction level from the free-key set rather than the user
+  selecting Bronze/Silver/Gold. Build `detect_restriction(setup)` -> a summary (free
+  keys + a tier guess); calibrate the Bronze/Silver/Gold free-key signatures
+  empirically by sampling actual races of each tier (a data-collection task).
+- **Session state matters (transitions).** REST endpoint availability depends on
+  session state — `/rest/garage/getPlayerGarageData` returns 404 when BETWEEN sessions
+  (no active garage), and telemetry `mNumVehicles` is 0 until on track. The tool should
+  DETECT session/on-track transitions (in-menu -> in-garage -> on-track -> driving)
+  rather than assume a live session, and the REST client must degrade gracefully
+  (return None/empty on 404) instead of raising. Sources for state: REST availability,
+  scoring `mGamePhase`/`mInRealtime`, telemetry vehicle count, the SME_* events in the
+  native SDK. (Robustness follow-up; ties to the capture-robustness section.)
 
 ## Online racing context + tier model (added post-approval)
 
@@ -141,6 +178,184 @@ Architectural affordance this requires (and how v0.1 already allows it):
 - A **session/phase model** (practice/qualy/race grouping; fuel + baseline carried across phases) sits ABOVE the core. It is a future `session_id` / `phase` tag on stored laps — additive, and the `laps` schema is already versioned (`user_version`), so it evolves without orphaning data. No v0.1 change needed.
 - Constraint for v0.1 code: nothing may hardcode "one lap in isolation" — the store already keys laps by sim/track/car and supports history, which is what phase-aware analysis will build on.
 - Each phase reuses the SAME core (feature extractor, coach, fuel calc); phases differ in which laps feed in and which output is emphasized, not in new pipelines.
+
+## Energy as BoP + hybrid regen (added 2026-08-28, user)
+
+LMU balances performance partly via ENERGY, not just fuel volume. Hypercars (LMH/
+LMDh) have a per-stint ENERGY allocation (MJ) and a hybrid system that regenerates
+under braking and deploys on power; regen blends with friction braking and shifts
+brake behavior. GT3s are closer to straight fuel-limited. The tool must accommodate
+all of it:
+
+- **Energy is universal.** ALL cars (GT3 included, not just Hypercars) consume an
+  energy allowance, replenished at pit stops together with fuel. So the energy model
+  is not a Hypercar special case — it applies across the board.
+- **Resource-agnostic stint planning.** The fuel calculator generalizes so the
+  binding per-stint constraint can be fuel (liters) OR energy (MJ), whichever forces
+  the pit first. Compute both plans and take the binding one. The stint energy
+  budget comes from BoP tables / user config, not telemetry.
+- **Adjustable fuel↔energy ratio (mechanic researched 2026-08-28; confidence
+  likely).** LMU's fuel-to-energy ratio splits the stint's Virtual Energy (NRG)
+  budget between physical fuel and battery share (Hypercar; e.g. 0.96 ⇒ ~4% from
+  battery, track-dependent). GT3 has no hybrid, so the setting instead sets liters
+  of fuel per requested NRG%. NRG resets to 100% at every pit stop; draining NRG to
+  0% mid-stint triggers an instant stop-and-go penalty. **The tuning goal is
+  fuel-laps-remaining ≈ NRG-laps-remaining** — neither should run out first. This
+  VALIDATES `binding_stint`: the binding resource is whichever depletes first, and
+  the ratio's job is to equalize them. Units seen as %/kWh in-game (no confirmed MJ).
+  Source: docs/superpowers/research/2026-08-28-lmu-energy-mechanics.md (community
+  sources; official S397 manual was unreachable — treat as likely, confirm live).
+- **NRG is universal.** Both GT3 and Hypercar carry a Virtual Energy allowance
+  (GT3's is fuel-only, no battery term) — energy is not a Hypercar special case.
+- **Lift-and-coast / fuel-save advisor (corrected 2026-08-28 by user).** LMU DOES
+  have a real-life-style fuel-save system: you set a target ("how many laps to save
+  for") in the **MFD**, and the game then drives the **in-car fuel-save lights** that
+  cue you when to lift — no track-position HUD marker, but a genuine target-driven
+  indicator. So the coach's role is not to replace the lights but to set the STRATEGY:
+  `stint_save_advice` computes the per-lap save % / the target the driver punches into
+  the MFD, and `ratio_balance` says which of fuel/NRG is short. Deterministic, built
+  (T-H). Open questions (live): is the fuel-save light state and/or the MFD target
+  exposed via telemetry (shared memory) or REST? If so, the coach can read whether the
+  driver is on target and coach the lift directly. Add to the spike.
+- **New telemetry lead:** `GET http://localhost:6397/rest/strategy/usage` returns
+  Virtual Energy history — add to the feasibility spike / REST client.
+- **Energy telemetry channels (seam).** Capture state-of-charge, energy deployed,
+  energy regenerated where LMU exposes them (exact struct/REST fields pending live
+  validation). `energy_per_lap` is derived like `fuel_per_lap` (channel delta).
+- **Regen-braking coaching (deferred, needs domain input + live data).** For
+  Hypercars the coach's braking advice must account for regen blending (brake
+  balance, lift-and-coast for energy, deployment strategy). Modeled later with the
+  user; knowledge-base + coach-context concern, not a deterministic calc.
+
+## Knowledge freshness: physics/tire-model updates (added 2026-08-28, user)
+
+LMU is in active development; each update can change the physics / tire model / BoP,
+which can invalidate setup and driving advice in the knowledge base (e.g. a tire-model
+change shifts optimal pressures; a BoP change alters energy/fuel). Concrete example:
+the LMGT3 **ABS control was reworked** — originally a plain 0–9 "higher = more" scale,
+later changed to the current system (a 0–9 dial organized into oversteer / balanced /
+understeer groupings, per the community "New ABS system" thread now in the KB). Advice
+written for the old scale would be wrong; the KB currently reflects the CURRENT system,
+but this is exactly the kind of mechanic that silently changes under an update. So the
+knowledge base is VERSIONED against a game build and re-validated on updates:
+
+- **Tag knowledge with the LMU build it was validated against.** We can read the live
+  game version from shared memory (`gameVersion`, seen as 14130/14237 in the spike).
+  Store the build each track/car note + setup guide was validated against.
+- **On every game update, research the patch notes** for physics / tire-model / BoP /
+  aero changes (official LMU notes + CrewChief changelog + community), update the
+  affected knowledge, and flag advice that needs re-validation. This is a recurring
+  maintenance task, not one-time.
+- **Staleness warning (seam).** If the live `gameVersion` differs from the build the
+  loaded knowledge was validated against, the coach should note that its setup/tire
+  advice may be out of date for the current build — degrade to lower confidence rather
+  than assert stale numbers. (Deterministic check; buildable when we wire live capture.)
+- **Sources to watch:** official LMU patch notes/roadmap, the CrewChief changelog
+  (already tracked), and the community — same monitoring cadence as the MMF-rename check.
+
+### Knowledge-base UPDATE MECHANISM (design — decide with user)
+
+The KB must stay current over time. Two poles (user framing) + a recommended hybrid:
+
+- **A. Agent/maintenance-time refresh (recommended primary).** A repeatable
+  "knowledge refresh" workflow — a research agent (the pattern already used here:
+  ingest patch notes + curated sources → update versioned KB files → reviewed commit),
+  run per game update. Keeps curation quality high (sourced, human-reviewable, shipped
+  to all users). Formalize the ad-hoc research runs into a documented procedure / skill
+  with a checklist (what to re-check on an update: tire model, BoP, aids like ABS/TC,
+  aero, MMF names). This is the backbone.
+- **B. In-engine runtime updates.** The app itself: (i) STALENESS DETECTION (live
+  gameVersion vs KB's validated build → warn / lower confidence) — cheap, build early;
+  (ii) ON-DEMAND RESEARCH HOOK — when knowledge is missing/stale for the current build,
+  the coach asks the Model (with web tools) to look up that specific mechanic live, and
+  optionally caches the answer for review; (iii) KB PACK FETCH — pull updated,
+  version-matched KB bundles from a remote the maintenance workflow publishes.
+- **C. Continuous personal learning (already seeded).** Driver profile + observed_style
+  + the user's own lap history update at RUNTIME from driving — distinct from curated
+  knowledge; always on, no game-update gate.
+
+Recommended: **A as the backbone** (versioned file KB + a refresh skill/checklist),
+**B(i) staleness detection early**, **B(ii) on-demand research as a strong enhancement**
+(fits the coach's Model+web capability), B(iii) only if distributing to other users.
+Keep curated knowledge (A/B) separate from personal/learned data (C) in storage and in
+the prompt. DECISION for the user: how much lives in-engine vs. maintained by an agent,
+and whether this ships to just the user or to others (affects B(iii)).
+
+## Capture robustness: game updates + anti-cheat (added 2026-08-28, user)
+
+LMU updates can rename/reshape the shared-memory files (CrewChief has flagged such
+renames), and anti-cheat changes could affect external access. The capture layer
+must survive both:
+
+- **Multi-candidate, version-checked MMF reader.** Do NOT hardcode a single MMF name.
+  Keep a config-driven ordered list of known names ($rFactor2SMMP_Telemetry$ /
+  $rFactor2SMMP_Scoring$, native LMU_Data, and future ones), probe each, and use the
+  first that opens. On open, VALIDATE: expected struct version field + a plausibility
+  sanity check (e.g. numVehicles in range, inputs within [0,1]). On mismatch or none
+  found, raise a clear "shared-memory interface changed — update MMF names/struct
+  (see CrewChief for canonical names)" error — never silently misread.
+- **Compatibility/health check on startup** (and a periodic re-check): confirm a live,
+  consistent, sane frame before trusting capture; surface interface drift to the user.
+- **Anti-cheat stance (hard rule).** Use ONLY the sanctioned, plugin-published shared
+  memory (and the local REST API), READ-ONLY. NEVER inject into or ReadProcessMemory
+  the game process — that is what trips kernel anti-cheat. This is the same footprint
+  as CrewChief / SimHub, which coexist with LMU's AC. Monitor CrewChief/community for
+  AC-related breakage; degrade gracefully (clear message) if the interface stops
+  responding rather than escalating access.
+- **Monitoring source (canonical).** CrewChief's auto-update changelog tracks LMU
+  shared-memory + anti-cheat changes:
+  https://thecrewchief.org/downloads/change_log_for_auto_updated.html — check it for
+  MMF renames / struct changes when capture breaks or before a compatibility bump;
+  keep the MMF-candidate list aligned with what CrewChief uses.
+
+## Future feature: in-game chat read/send (user 2026-08-28)
+
+Idea: let the coach read/post to LMU's in-game chat. Likely a SANCTIONED path exists:
+`ChatTransceiver.dll` is present in LMU's `Plugins/` folder (seen in the feasibility
+spike) — it is the plugin CrewChief uses to inject chat messages into rF2/LMU, so
+SENDING is probably writing to its shared-memory/message interface (research its API).
+READING chat may come via the rF2 messages/scoring stream. Keyboard emulation (Enter →
+type → Enter) is the crude fallback. Research spike later; keep it read/send behind a
+small interface. (Anti-cheat: prefer the plugin interface over synthetic input.)
+
+## Coach context, history & memory (added 2026-08-28, user + live findings)
+
+The coach needs to remember — within a session and across sessions. Three layers,
+plus how caching and the knowledge base fit:
+
+- **L1 — session chat history (short-term).** `Coach.ask()` already accepts `history`
+  and threads it, but nothing MAINTAINS it (each question is independent — the deferred
+  final-review minor). Build a `CoachSession` that holds the car/track/tier/profile and
+  accumulates (question, answer) turns, threading them into each `ask()`. The terminal
+  and a future web UI both use it. Wire this FIRST (small, clear value).
+- **L2 — structured persistent state.** Driver profile (stated prefs + `learned`
+  tendencies), lap history + per-corner metrics (SQLite), session/phase grouping. Mostly
+  exists; the profile's `learned` and observed_style are the seam.
+- **L3 — long-term coaching memory (the new piece the user wants).** Durable, cross-
+  session memory of: advice given, setup changes TRIED and their OUTCOME (lap-time delta
+  after the change), recurring weaknesses, and driver progression. Injected into future
+  coaching so the coach never repeats advice, closes the loop on changes ("last session
+  we softened the front — did it help?"), and tracks improvement. Storage: a
+  `coach_memory` store (SQLite table or per-driver/car/track markdown), UPDATED by
+  distilling each session into memory entries (a summarization pass, or the Anthropic
+  memory tool `memory_20250818` if we let Claude manage it). Design decision for the
+  user: how much is auto-distilled vs. explicitly logged; markdown vs. SQLite; whether
+  to use the memory tool.
+- **Prompt caching (ties in).** Once L2/L3 + the knowledge base form a SUBSTANTIAL,
+  STABLE prefix (setup guide + car notes + driver memory), put it in a cached `system`
+  block (`cache_control: {type: "ephemeral"}`). NOT worth it yet — the current system
+  prompt is ~100 tokens, below the 512–4096 min cacheable prefix, so it silently won't
+  cache. Add caching when the stable prefix is large (verify with
+  `usage.cache_read_input_tokens`).
+- **Wire the knowledge base into the coach.** Today `Coach` only loads
+  `{knowledge_dir}/{car}.md`; the mined setup guide + per-class notes (docs/.../knowledge)
+  are NOT injected. Route the relevant knowledge (class notes, setup guide, car note)
+  into the coach's context — this is also what makes the cached prefix worth caching.
+- **Incident/contact detection (from the live contact-with-Silva check).** Detecting
+  contact from speed drops is weak (braking looks similar). The RIGHT source is rF2's
+  impact telemetry — add `mLastImpactET` / `mLastImpactMagnitude` to TelemInfoV01 (not
+  mapped yet) for reliable contact detection. Foundation for the post-v1.0 incident
+  analysis feature.
 
 ## First steps: two spikes (before implementation, parallelizable)
 

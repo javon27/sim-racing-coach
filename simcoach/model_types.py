@@ -11,3 +11,5 @@ class LapRecord:
     valid: bool
     timestamp: float
     channels: dict[str, np.ndarray]
+    phase: str | None = None
+    session_id: str | None = None

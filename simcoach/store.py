@@ -8,7 +8,7 @@ import numpy as np
 
 from simcoach.model_types import LapRecord
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS laps (
@@ -19,7 +19,9 @@ CREATE TABLE IF NOT EXISTS laps (
     car TEXT,
     lap_time REAL,
     valid INTEGER,
-    telemetry_path TEXT
+    telemetry_path TEXT,
+    phase TEXT,
+    session_id TEXT
 );
 CREATE TABLE IF NOT EXISTS setups (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,16 +61,23 @@ class LapStore:
             self.conn.executescript(_SCHEMA)
             self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             self.conn.commit()
+        elif current_version == 1:
+            # v1 -> v2: add nullable session/phase metadata columns in place.
+            self.conn.execute("ALTER TABLE laps ADD COLUMN phase TEXT")
+            self.conn.execute("ALTER TABLE laps ADD COLUMN session_id TEXT")
+            self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            self.conn.commit()
 
     def save(self, record: LapRecord, metrics: list | None = None) -> int:
         telemetry_path = None
         try:
             with self._lock, self.conn:
                 cur = self.conn.execute(
-                    "INSERT INTO laps (ts, sim, track, car, lap_time, valid, telemetry_path) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO laps (ts, sim, track, car, lap_time, valid, telemetry_path, "
+                    "phase, session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (record.timestamp, record.sim, record.track, record.car,
-                     record.lap_time, int(record.valid), None),
+                     record.lap_time, int(record.valid), None,
+                     record.phase, record.session_id),
                 )
                 lap_id = cur.lastrowid
                 telemetry_path = os.path.join(self.data_dir, f"{lap_id}.npz")
@@ -97,24 +106,28 @@ class LapStore:
     def load(self, lap_id: int) -> LapRecord:
         with self._lock:
             row = self.conn.execute(
-                "SELECT ts, sim, track, car, lap_time, valid, telemetry_path "
+                "SELECT ts, sim, track, car, lap_time, valid, telemetry_path, phase, session_id "
                 "FROM laps WHERE id = ?",
                 (lap_id,),
             ).fetchone()
             if row is None:
                 raise KeyError(f"no lap with id {lap_id}")
-            ts, sim, track, car, lap_time, valid, telemetry_path = row
+            ts, sim, track, car, lap_time, valid, telemetry_path, phase, session_id = row
             with np.load(telemetry_path) as npz:
                 channels = {k: npz[k] for k in npz.files}
-            return LapRecord(sim, track, car, lap_time, bool(valid), ts, channels)
+            return LapRecord(sim, track, car, lap_time, bool(valid), ts, channels, phase, session_id)
 
-    def best_lap(self, track: str, car: str, exclude_lap_id: int | None = None) -> LapRecord | None:
+    def best_lap(self, track: str, car: str, exclude_lap_id: int | None = None,
+                 phase: str | None = None) -> LapRecord | None:
         with self._lock:
             query = "SELECT id FROM laps WHERE track = ? AND car = ? AND valid = 1"
             params: list = [track, car]
             if exclude_lap_id is not None:
                 query += " AND id != ?"
                 params.append(exclude_lap_id)
+            if phase is not None:
+                query += " AND phase = ?"
+                params.append(phase)
             query += " ORDER BY lap_time ASC LIMIT 1"
             row = self.conn.execute(query, params).fetchone()
             if row is None:
@@ -126,5 +139,13 @@ class LapStore:
             rows = self.conn.execute(
                 "SELECT id FROM laps WHERE track = ? AND car = ?",
                 (track, car),
+            ).fetchall()
+            return [r[0] for r in rows]
+
+    def session_lap_ids(self, session_id: str) -> list[int]:
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT id FROM laps WHERE session_id = ? ORDER BY id ASC",
+                (session_id,),
             ).fetchall()
             return [r[0] for r in rows]

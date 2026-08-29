@@ -81,6 +81,81 @@ def test_best_lap_excludes_given_lap_id(tmp_path, synthetic_lap):
     assert only.best_lap("test_track", "test_car", exclude_lap_id=only_id) is None
 
 
+def test_save_load_roundtrips_phase_and_session_id(tmp_path, synthetic_lap):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path/"c.sqlite"), str(tmp_path/"data"))
+    lap = LapRecord(**{**synthetic_lap.__dict__, "phase": "qualifying", "session_id": "s1"})
+    lid = s.save(lap)
+    back = s.load(lid)
+    assert back.phase == "qualifying"
+    assert back.session_id == "s1"
+
+
+def test_save_without_phase_defaults_to_none(tmp_path, synthetic_lap):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path/"c.sqlite"), str(tmp_path/"data"))
+    lid = s.save(synthetic_lap)
+    back = s.load(lid)
+    assert back.phase is None
+    assert back.session_id is None
+
+
+def test_session_lap_ids(tmp_path, synthetic_lap):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path/"c.sqlite"), str(tmp_path/"data"))
+    lap_s1a = LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1"})
+    lap_s1b = LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1"})
+    lap_s2 = LapRecord(**{**synthetic_lap.__dict__, "session_id": "s2"})
+    id_a = s.save(lap_s1a)
+    id_b = s.save(lap_s1b)
+    s.save(lap_s2)
+    assert s.session_lap_ids("s1") == [id_a, id_b]
+
+
+def test_best_lap_phase_filter(tmp_path, synthetic_lap):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path/"c.sqlite"), str(tmp_path/"data"))
+    practice = LapRecord(**{**synthetic_lap.__dict__, "lap_time": 90.0, "phase": "practice"})
+    race = LapRecord(**{**synthetic_lap.__dict__, "lap_time": 95.0, "phase": "race"})
+    s.save(practice)
+    s.save(race)
+    best_race = s.best_lap("test_track", "test_car", phase="race")
+    assert best_race.lap_time == 95.0
+    assert s.best_lap("test_track", "test_car").lap_time == 90.0
+
+
+def test_v1_schema_migrates_in_place_to_v2(tmp_path, synthetic_lap):
+    from simcoach.store import LapStore
+    db_path = str(tmp_path/"c.sqlite")
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE laps (id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, sim TEXT, "
+        "track TEXT, car TEXT, lap_time REAL, valid INTEGER, telemetry_path TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO laps (ts,sim,track,car,lap_time,valid,telemetry_path) "
+        "VALUES (0,'lmu','t','c',90.0,1,'x.npz')"
+    )
+    conn.execute("PRAGMA user_version = 1")
+    conn.commit()
+    conn.close()
+
+    s = LapStore(db_path, str(tmp_path/"data"))
+
+    version = s.conn.execute("PRAGMA user_version").fetchone()[0]
+    assert version == 2
+
+    # old row still queryable via the new query helpers
+    old_row = s.conn.execute("SELECT id FROM laps WHERE track = 't' AND car = 'c'").fetchone()
+    assert old_row is not None
+
+    # a new save() with phase works against the migrated schema
+    lap = LapRecord(**{**synthetic_lap.__dict__, "phase": "race", "session_id": "s1"})
+    lid = s.save(lap)
+    assert s.load(lid).phase == "race"
+    assert s.session_lap_ids("s1") == [lid]
+
+
 def test_concurrent_save_and_read_is_safe(tmp_path, synthetic_lap):
     """A background writer looping save() and a foreground reader looping
     best_lap()/load() on the same LapStore must never crash. Without the
