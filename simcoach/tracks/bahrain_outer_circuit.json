@@ -1,0 +1,56 @@
+{
+  "track": "bahrain_outer_circuit",
+  "_config_note": "Bahrain Outer layout. Detection-ordered Turn N.",
+  "_distances_note": "GEOMETRY from telemetry (steering-peak detection, 1 lap, 2026-08-29); apex distances + directions are real data, verify_map_directions passes. Fast/flat corners missed on a single lap; refine with more laps.",
+  "length_m": 3543,
+  "corners": [
+    {
+      "number": 1,
+      "name": "Turn 1",
+      "direction": "right",
+      "start_dist": 678,
+      "apex_dist": 733,
+      "end_dist": 788
+    },
+    {
+      "number": 2,
+      "name": "Turn 2",
+      "direction": "right",
+      "start_dist": 1473,
+      "apex_dist": 1528,
+      "end_dist": 1583
+    },
+    {
+      "number": 3,
+      "name": "Turn 3",
+      "direction": "left",
+      "start_dist": 1596,
+      "apex_dist": 1651,
+      "end_dist": 1706
+    },
+    {
+      "number": 4,
+      "name": "Turn 4",
+      "direction": "right",
+      "start_dist": 1828,
+      "apex_dist": 1883,
+      "end_dist": 1938
+    },
+    {
+      "number": 5,
+      "name": "Turn 5",
+      "direction": "right",
+      "start_dist": 2025,
+      "apex_dist": 2080,
+      "end_dist": 2135
+    },
+    {
+      "number": 6,
+      "name": "Turn 6",
+      "direction": "right",
+      "start_dist": 3009,
+      "apex_dist": 3064,
+      "end_dist": 3119
+    }
+  ]
+}

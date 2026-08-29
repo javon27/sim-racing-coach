@@ -1,0 +1,22 @@
+{
+  "track": "algarve_international_circuit",
+  "_config_note": "Algarve International Circuit (Portimao) — flowing, elevation-heavy 15-turn layout.",
+  "_distances_note": "GEOMETRY CALIBRATED from telemetry (steering-peak detection, 1 lap, 2026-08-29): apex distances + directions are from real data (RIGHT_IS_POSITIVE=True) and verify_map_directions passes. NAMING is mixed by design — Portimao (like most tracks) numbers most corners and names only a few; unnamed corners keep 'Turn N', which IS their real designation. Only the two positionally-unmistakable named corners are applied (T1 Primeira Curva; final fast right = Galp). Other named corners the wiki lists (Lagos/Tore Vip/Samsung/Craig Jones/Portimao Curve/Sagres) could be mapped with driver confirmation or more laps — see knowledge/algarve_international_circuit.md. 14 of ~15 corners resolved on this lap.",
+  "length_m": 4653,
+  "corners": [
+    {"number": 1, "name": "Primeira Curva", "direction": "right", "start_dist": 385, "apex_dist": 442, "end_dist": 510},
+    {"number": 2, "name": "Turn 2 (hairpin)", "direction": "right", "start_dist": 680, "apex_dist": 737, "end_dist": 800},
+    {"number": 3, "name": "Turn 3", "direction": "left", "start_dist": 1395, "apex_dist": 1451, "end_dist": 1510},
+    {"number": 4, "name": "Turn 4", "direction": "left", "start_dist": 1585, "apex_dist": 1639, "end_dist": 1700},
+    {"number": 5, "name": "Turn 5", "direction": "right", "start_dist": 1870, "apex_dist": 1928, "end_dist": 1990},
+    {"number": 6, "name": "Turn 6", "direction": "right", "start_dist": 2020, "apex_dist": 2074, "end_dist": 2130},
+    {"number": 7, "name": "Turn 7", "direction": "right", "start_dist": 2190, "apex_dist": 2248, "end_dist": 2310},
+    {"number": 8, "name": "Turn 8", "direction": "left", "start_dist": 2330, "apex_dist": 2386, "end_dist": 2450},
+    {"number": 9, "name": "Turn 9", "direction": "right", "start_dist": 2680, "apex_dist": 2741, "end_dist": 2800},
+    {"number": 10, "name": "Turn 10", "direction": "left", "start_dist": 2950, "apex_dist": 3007, "end_dist": 3070},
+    {"number": 11, "name": "Turn 11", "direction": "left", "start_dist": 3145, "apex_dist": 3201, "end_dist": 3260},
+    {"number": 12, "name": "Turn 12", "direction": "right", "start_dist": 3350, "apex_dist": 3413, "end_dist": 3480},
+    {"number": 13, "name": "Turn 13", "direction": "right", "start_dist": 3730, "apex_dist": 3795, "end_dist": 3860},
+    {"number": 14, "name": "Galp", "direction": "right", "start_dist": 4010, "apex_dist": 4077, "end_dist": 4150}
+  ]
+}

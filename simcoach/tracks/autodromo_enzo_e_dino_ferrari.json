@@ -1,0 +1,96 @@
+{
+  "track": "autodromo_enzo_e_dino_ferrari",
+  "_config_note": "Imola. Detection-ordered Turn N placeholders \u2014 Imola's famous names (Tamburello/Villeneuve/Tosa/Piratella/Acque Minerali/Variante Alta/Rivazza) need driver confirmation to map; see knowledge note.",
+  "_distances_note": "GEOMETRY from telemetry (steering-peak detection, 1 lap, 2026-08-29); apex distances + directions are real data, verify_map_directions passes. Fast/flat corners missed on a single lap; refine with more laps.",
+  "length_m": 4909,
+  "corners": [
+    {
+      "number": 1,
+      "name": "Turn 1",
+      "direction": "left",
+      "start_dist": 628,
+      "apex_dist": 683,
+      "end_dist": 738
+    },
+    {
+      "number": 2,
+      "name": "Turn 2",
+      "direction": "left",
+      "start_dist": 796,
+      "apex_dist": 851,
+      "end_dist": 906
+    },
+    {
+      "number": 3,
+      "name": "Turn 3",
+      "direction": "right",
+      "start_dist": 1359,
+      "apex_dist": 1414,
+      "end_dist": 1469
+    },
+    {
+      "number": 4,
+      "name": "Turn 4",
+      "direction": "left",
+      "start_dist": 1654,
+      "apex_dist": 1709,
+      "end_dist": 1764
+    },
+    {
+      "number": 5,
+      "name": "Turn 5",
+      "direction": "left",
+      "start_dist": 2283,
+      "apex_dist": 2338,
+      "end_dist": 2393
+    },
+    {
+      "number": 6,
+      "name": "Turn 6",
+      "direction": "left",
+      "start_dist": 2460,
+      "apex_dist": 2515,
+      "end_dist": 2570
+    },
+    {
+      "number": 7,
+      "name": "Turn 7",
+      "direction": "right",
+      "start_dist": 2779,
+      "apex_dist": 2834,
+      "end_dist": 2889
+    },
+    {
+      "number": 8,
+      "name": "Turn 8",
+      "direction": "left",
+      "start_dist": 3318,
+      "apex_dist": 3373,
+      "end_dist": 3428
+    },
+    {
+      "number": 9,
+      "name": "Turn 9",
+      "direction": "left",
+      "start_dist": 3489,
+      "apex_dist": 3544,
+      "end_dist": 3599
+    },
+    {
+      "number": 10,
+      "name": "Turn 10",
+      "direction": "right",
+      "start_dist": 3843,
+      "apex_dist": 3898,
+      "end_dist": 3953
+    },
+    {
+      "number": 11,
+      "name": "Turn 11",
+      "direction": "left",
+      "start_dist": 4087,
+      "apex_dist": 4142,
+      "end_dist": 4197
+    }
+  ]
+}

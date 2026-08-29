@@ -285,6 +285,24 @@ def _find_telem_by_id(telem: rF2Telemetry, vehicle_id: int) -> TelemInfoV01 | No
     return None
 
 
+def read_session_track_car() -> tuple[str, str] | None:
+    """Peek the current player's (track, car) from live shared memory, or None if
+    LMU isn't running / no player on track. Used at startup to pick the corner map."""
+    try:
+        telem = read_consistent(TELEMETRY_CANDIDATES[0], rF2Telemetry)
+        scoring = read_consistent(SCORING_CANDIDATES[0], rF2Scoring)
+    except Exception:
+        return None
+    player = _find_player(scoring)
+    vt = _find_telem_by_id(telem, player.mID) if player is not None else None
+    if vt is None:
+        return None
+    return (
+        vt.mTrackName.decode(errors="replace").strip(),
+        vt.mVehicleName.decode(errors="replace").strip(),
+    )
+
+
 class LmuSource:
     """TelemetrySource backed by LMU's live shared memory.
 

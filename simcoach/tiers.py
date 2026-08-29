@@ -28,3 +28,15 @@ def adjustable_from_setup(setup: dict) -> list[str]:
     use; the TIER_ADJUSTABLE map is the offline/explainer fallback."""
     return [key for key, val in setup.items()
             if isinstance(val, dict) and val.get("isFreeSetting") is True]
+
+
+def legal_adjustments(setup: dict) -> list[str] | None:
+    """Tier-legal setup adjustments as prettified labels, for the coach's
+    allowed_adjustments constraint. Returns None when the session is UNRESTRICTED
+    (every param adjustable) — an open setup needs no constraint, and passing all
+    ~170 keys would just bloat the prompt."""
+    params = [k for k, v in setup.items() if isinstance(v, dict) and "stringValue" in v]
+    free = adjustable_from_setup(setup)
+    if not free or len(free) >= len(params):
+        return None
+    return [(k[3:] if k.startswith("VM_") else k).replace("_", " ").title() for k in free]

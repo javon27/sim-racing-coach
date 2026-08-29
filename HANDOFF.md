@@ -62,14 +62,237 @@ channels, T-H energy-strategy advisor; +2 Critical integration fixes; energy res
 R-2 827cb5c setup-guide/classes/sources). Remaining is USER-GATED: live-rig validation,
 app wiring, regen-braking coaching, fuel↔energy RATIO coupling, KB gaps — see [LUNCH].
 
-## Next Exact Action  ===  HOLD (queue cleared)  ===
-T-K DONE (56a1204, 105 passed): model provider selector. No autonomous step remains.
-IF YOU ARE A RECOVERY FIRE: verify git clean + suite green
-(.venv/Scripts/python.exe -m pytest -q => 105 passed), reply build complete/awaiting
-user at lunch, STOP. Do NOT start new features / attempt [LUNCH] items / cancel cron
-5a131f77. Lunch brings: ANTHROPIC_API_KEY + LMU running at the rig (wheel lap for sign).
-Design decisions for user: KB update mechanism, driver-profile schema, provider split.
-Small follow-ups: wire app/__main__ to make_model; no LMP2 KB source.
+## Current Status  ===  RECOVERY GOAL COMPLETE — MERGED TO MAIN  ===
+Overnight-followups branch is MERGED to main (e7915fb) + live-validation hardening
+(scoring struct 02dabc1, ClaudeModel 6f8bc34, REST strategy_usage bc24120) + CoachSession
+session history / L1 memory (2532a81). Tree clean on main. The overnight recovery goal
+(build follow-ups → user review+merge at lunch) is DONE. User is now in an ATTENDED
+interactive session, actively racing and directing new work — this is no longer the
+unattended overnight scenario the recovery cron was armed for.
+
+## TONIGHT (2026-08-28→29) — overnight multi-track capture + wiki seed  [UPDATED 00:05]
+- Night capture DONE + STOPPED (game closed ~23:xx; task bmkp9g226 stopped per user
+  directive at 00:05). Banked laps in scratchpad_live/night/<slug>_lap_<n>.npz across 9
+  track/layouts: algarve_international_circuit(1), autodromo_jos_carlos_pace/Interlagos(1),
+  autodromo_enzo_e_dino_ferrari/Imola(1), autodromo_nazionale_monza(1),
+  monza_curva_grande_circuit(1), bahrain_international_circuit(1), bahrain_outer_circuit(2),
+  bahrain_paddock_circuit(3), circuit_de_barcelona(1). Mostly 1 lap each — enough to seed a
+  rough calibration; more laps later = better median. These slugs = the map filenames to build.
+- Wiki-scrape subagent #1 FAILED (midnight 429). #2 (00:05) mis-concluded "wiki nearly
+  empty / only Bahrain" — WRONG: it used the game's track names + a hallucination-prone
+  WebFetch summarizer. TRUTH (verified via API + raw wikitext 00:12): wiki has 13 Track
+  Guide pages incl. Portimao(=Algarve), Interlagos, Imola, Monza, Bahrain, Spa, Fuji,
+  Sebring, Qatar, COTA, Paul Ricard, Circuit de la Sarthe(=Le Mans), Silverstone. NO
+  Barcelona. GOTCHA: wiki uses its own names (Algarve="Portimao"). Fetch via action=raw.
+  Subagent #3 RE-DISPATCHED 00:12 with the exact 13 titles + wiki→telemetry-slug mapping +
+  raw-wikitext method. Await its notification; do NOT duplicate. (memory lmu-wiki-track-source.md updated.)
+- WIKI IS STALE/INCOMPLETE (user 23:46): lags the game (LMGT3 page missing Corvette Z06
+  GT3.R). Roster = the GAME (garage/telemetry), not the wiki. Saved to memory
+  lmu-wiki-track-source.md. Expect new cars/tracks absent from the wiki.
+
+### WIKI SEED RESULT (subagent #3, verified 00:25) — all load via CornerMap.load
+NEW seed maps (distances=ESTIMATES, partial corner coverage where wiki omitted direction):
+- simcoach/tracks/algarve_international_circuit.json — 10/15 corners (Portimao)
+- simcoach/tracks/autodromo_jos_carlos_pace.json — 13/15 (Interlagos)
+- simcoach/tracks/autodromo_nazionale_monza.json — 8/11 (Monza WEC chicane layout)
+NEW knowledge notes (12): algarve, interlagos, monza, imola(autodromo_enzo_e_dino_ferrari),
+fuji_speedway, sebring_international_raceway, lusail(Qatar), circuit_of_the_americas,
+circuit_paul_ricard, spa, circuit_de_la_sarthe(Le Mans), silverstone. (+ bahrain from
+earlier pass, + existing ferrari_296_gt3). Porsche 911 GT3 R note DONE (00:35,
+simcoach/knowledge/porsche_911_gt3_r.md) — wiki page is a stub (specs only), so note is
+specs [LMU-wiki] + general rear-engine baseline [general-sim]/[needs-refinement], flagged
+for telemetry refinement. Reinforces: wiki car pages are stubs, game/telemetry is truth.
+NO map for: Imola (wiki prose lacks directions for ~2/3 corners), Bahrain (same), Barcelona
+(no wiki guide) — build these from telemetry. All new files UNTRACKED, not committed
+(await user review in the morning).
+
+### CALIBRATION DONE (2026-08-29 ~10:50) — from telemetry alone, no user-at-wheel needed
+Proved the user's point: with wiki seed (names/order) + telemetry (geometry), maps calibrate
+from data. Method = steering-peak corner detection (scratchpad_live/calibrate_track.py) +
+verify_map_directions gate. Results (all directions VERIFIED against the captured lap):
+- autodromo_jos_carlos_pace.json (Interlagos) — 10 corners, NAMED (I know the track);
+  telemetry CORRECTED a wiki error (Curva do Sol = left, not right).
+- autodromo_nazionale_monza.json — 7 corners, NAMED landmarks (Rettifilo/Curva Grande/
+  Roggia x2/Lesmo/Ascari/Parabolica).
+- algarve_international_circuit.json — 14 corners, geometry+directions VERIFIED but NAMES are
+  "Turn N" placeholders (I don't know Portimao's corner names; wiki names were rough). The
+  ONLY gap is naming an unfamiliar track — needs driver knowledge or more laps, NOT the wheel.
+111 tests pass. All 3 UNTRACKED/uncommitted.
+STILL NO MAP (no seed): Imola, Bahrain (3 layouts), Barcelona — build numbered-geometry maps
+from their night laps the same way (scratchpad_live/night/*.npz); names from wiki knowledge
+notes where possible. monza_curva_grande_circuit layout also uncaptured-into-map.
+
+### NO-SEED MAPS DONE (2026-08-29 ~11:00) — all direction-verified, 111 tests pass
+Built numbered-geometry maps (scratchpad_live/build_noseed_maps.py) from telemetry:
+autodromo_enzo_e_dino_ferrari(Imola,11), bahrain_international_circuit(9),
+bahrain_outer_circuit(6), bahrain_paddock_circuit(6), circuit_de_barcelona(12),
+monza_curva_grande_circuit(6, NAMED landmarks). "Turn N" = detection-ordered placeholders
+(NOT official turn numbers where detection<official count); Imola/Barcelona famous names
+pending driver confirm. Map library now ~13 track/layouts. All new tracks UNTRACKED.
+
+### PICK-UP POINT (2026-08-29 ~18:51, committed; user hit weekly token limit)
+Everything committed to main. 137 tests pass. Resume here when tokens reset:
+- v0.1 is code-complete + live-validated (detection/resolution/setup all confirmed vs running LMU);
+  only the interactive coach shakedown (drive->ask->confirm, spends API) remains for v0.1 sign-off.
+- v1.0 UI: DESIGN PHASE. Interactive prototype at docs/design/v1-ui-prototype.html (also artifact
+  https://claude.ai/code/artifact/b2b69ed8-cc3c-4fc7-9c37-e5446f56af76). Stack decided: Tauri +
+  web frontend (framework-agnostic; perf-first, likely Svelte) + Python core behind local FastAPI/
+  websocket. Spec: docs/superpowers/specs/2026-08-29-v1-standalone-ui-design.md (needs updating to
+  match the prototype's final IA).
+- PROTOTYPE IA (locked with user): nav rail (Coach / Sessions / Pit Wall + global theme toggle +
+  Settings). COACH = session bar, resizable laps rail with collapsible per-lap sector deltas
+  (Show all/Hide all) + sector color bars, Corners/Setup tabs, markdown chat hero w/ streaming +
+  controller-aware + "…coaching…" state. SESSIONS = Game/Track/Car dropdowns (All everywhere; Car
+  grouped by class, class selectable), best-lap trend chart (multi-line when >1 car, placeholders
+  until game+track chosen), stat cards, session list linking to that session's chat. PIT WALL
+  (design-only, game-agnostic from standings/telemetry; LMU's own pit wall an optional embed) =
+  track map w/ sector arcs + corner names + S/F marker + direction arrow + class-colored car dots
+  (Hyper=red LMP2=blue LMP3=purple GT3=green GTE=orange), timing tower, race flags (yellow sectors,
+  class-aware blue). Themed scrollbars throughout.
+- NEXT when resumed: finalize the v1.0 spec against the prototype, then build phase 1 (FastAPI
+  server over the core, testable without a frontend). Then streaming Model.stream_complete, then
+  Tauri shell. Open follow-ups still tracked below (fast-corner map merge, carClass from scoring,
+  Le Mans layout variants, contact detection, fuel/energy advisor wiring).
+
+### v1.0 DIRECTION: STANDALONE UI (2026-08-29 ~15:40)
+User chose a full standalone desktop UI (NOT web-only, NOT MCP — MCP parked as fallback).
+Stack: Tauri shell + React web frontend + Python core behind a local FastAPI/websocket
+server (streaming coach replies). Spec: docs/superpowers/specs/2026-08-29-v1-standalone-ui-
+design.md. First-cut views: coach chat (streamed), session bar, lap list->corner breakdown,
+setup panel; replay overlay deferred. 6 build phases (phase 1 = FastAPI server over the core).
+OPEN DECISIONS awaiting user: React vs Svelte (defaulted React); live-telemetry view in v1.0
+(defaulted deferred). Also done this session: tier auto-detect wired (tiers.legal_adjustments
+-> coach allowed_adjustments in run_repl; 137 tests). Live-intelligence remaining: fuel/energy
+strategy advisor (fuel.py cores exist, unwired), contact detection (impact fields in struct).
+NEXT: user reviews UI spec + confirms open decisions, then build phase 1.
+
+### LIVE SHAKEDOWN FEEDBACK + FIXES (2026-08-29 ~13:00) — 134 tests pass
+User ran the coach live (Corvette @ Le Mans no-chicane). Content was GOOD; issues fixed:
+- TONE too harsh + WALL of text -> coach SYSTEM_PROMPT: constructive tone (note what's working),
+  terminal format (headline + <=3 short points, "radio call not report").
+- CONTROLLER: user on a controller; coach hammered near-zero trail-brake (a controller artifact).
+  Added input_device (build_prompt/ask/run_repl; env SIMCOACH_INPUT_DEVICE=controller) -> coach
+  told not to read pad artifacts (near-zero trailbrake/stepped steering) as technique errors.
+- TERMINAL UX: run_repl now prints you ▸ / coach ▸ with rule separators + "…coaching…" indicator.
+- SETUP BLOAT (170 params) -> coach._setup_lines() keyword-filter + drop N/A -> ~81.
+- WRONG LAYOUT (the big correctness bug): coach caught that C5/C6/C11 chicanes don't exist on the
+  no-chicane config. FIXED: built simcoach/tracks/circuit_de_la_sarthe_mulsanne.json (17 corners,
+  13556m, from the stored lap via mapbuild) + track_lookup LAYOUT_RULES so 'Mulsanne' -> that map,
+  plain 'Circuit de la Sarthe' -> lemans (variant slugs excluded from generic scorer).
+NEXT (user, after): STREAMING the reply (Model-interface change: streaming complete()) so it types
+out instead of appearing at once. Token budget flagged ~84% at 13:01, ~2h to reset.
+
+### LIVE VALIDATION of the wiring (2026-08-29 ~12:35, game UP) — 132 tests pass
+Ran the detection/resolution chain against live LMU (TF #34 Corvette @ "Circuit de la Sarthe
+Mulsanne"). WORKS end-to-end: read_session_track_car OK; resolve_track_map -> lemans (sarthe
+alias); resolve_car -> "Chevrolet Corvette Z06 GT3.R" (alias CONFIRMED correct); get_setup()
+-> 170 params. FIXES/FINDINGS:
+- SETUP BLOAT: 170 params too many for the prompt -> coach._setup_lines() filters to
+  coaching-relevant keywords + drops N/A/Non-adjustable -> 81 params. test updated.
+- carClass came back None live (garage data) -> class fallback weak for unknown entries;
+  alias table carried it. Consider reading class from scoring (mVehicleClass) instead of REST.
+- LAYOUT CAVEAT (user's concern, live example): "Circuit de la Sarthe Mulsanne" resolved to
+  generic lemans.json — Mulsanne is a Le Mans VARIANT, layout may not match. Track resolver +
+  maps don't yet distinguish Le Mans sub-layouts. Telemetry fingerprint would catch it.
+- Pre-lap Q&A + crash-resilience also added this session (see below). Also: added track-note
+  loading to coach, wait-for-session at startup.
+STILL PENDING: full interactive shakedown (drive lap -> ask -> confirm advice; uses API).
+
+### SETUP-IN-PROMPT + CAR MATCHING DONE (2026-08-29 ~12:20) — 130 tests pass
+- Coach now SENDS CURRENT SETUP: coach.build_prompt/ask take setup=None; formats VM_* params
+  (value + [locked this tier] for non-isFreeSetting) as "Current car setup" section. app.run_repl
+  gets rest= param, fetches rest.get_setup() per question (silent-degrade on failure). Enables
+  specific setup tweaks ("wing 6->8").
+- CAR MATCHING: simcoach/car_lookup.py resolve_car(vehicle, class) via user-maintained
+  CAR_ALIASES (entry substring -> model; starters: iron dames->Porsche 911 GT3 R, by tf/racing
+  team turkey->Corvette Z06 GT3.R); falls back to "<class> car". LIMIT: game exposes only class
+  + team entry, NOT model, so new entries need a CAR_ALIASES line. coach.build_prompt now loads
+  car note by SLUG of car name ("Porsche 911 GT3 R"->porsche_911_gt3_r.md).
+- __main__: resolves car, passes rest to run_repl; run_repl best_lap uses record.car (raw stored),
+  coach uses resolved model. tests: test_car_lookup, test_coach_setup.
+
+### MAP-BUILDER SCRIPT DONE (2026-08-29 ~12:10) — 125 tests pass
+simcoach/mapbuild.py: LLM-free corner-map builder. `python -m simcoach.mapbuild <npz>
+[--slug X] [--length M]` detects corners (steering-peak, fast+slow), directions+distances
+from telemetry, writes numbered-geometry map, self-verifies. detect_corners()/build_map()
+importable. tests/test_mapbuild.py (synthetic lap). Replaces the hardcoded scratch builder.
+Geometry fully automated; real NAMES still need wiki/diagram/driver enrichment.
+NEXT (offered): auto-build a map in __main__ when resolve_track_map()==None (build from
+first captured lap) so the coach never blocks on a missing track. Also: track-map-IMAGE
+seed source (user idea) for complete named corner lists — must match exact LMU layout,
+validate vs telemetry fingerprint (see memory lmu-wiki-track-source.md).
+
+### v0.1 WIRING DONE (2026-08-29 ~11:15) — 123 tests pass
+__main__.py now LIVE-wired: read_session_track_car() peeks track+car from shared memory ->
+resolve_track_map() (new simcoach/track_lookup.py: token-overlap + alias table, handles
+'Silverstone...ELMS'->silverstone, accented Interlagos, 'Circuit de la Sarthe'->lemans) ->
+loads corner map -> Coach(make_model(),knowledge) -> LmuSource -> run_repl. Graceful
+"no game" message verified (game closed). New: simcoach/track_lookup.py + tests/test_track_lookup.py
+(12 cases). smm.read_session_track_car() added.
+REMAINING to call v0.1 usable:
+1. LIVE SHAKEDOWN (needs rig + ANTHROPIC_API_KEY): `python -m simcoach` while on track ->
+   drive laps -> ask "where am I losing time?" -> confirm advice flows. THE last validation.
+2. Car-model resolution: mVehicleName is a TEAM/entry name ("Iron Dames 2025 #85:ELMS",
+   "Racing Team Turkey by TF 2026 #34:WEC"), NOT the car model — so the porsche_911_gt3_r.md
+   note won't auto-load (coach degrades gracefully). Resolve via REST getPlayerGarageData or a
+   team->model map. v0.1.1.
+3. MAP COMPLETENESS (user 11:07): telemetry-only rebuild DROPPED fast corners the wiki seed had
+   (Interlagos 13->10, Monza 8->7). FIX: merge — keep wiki corner NAMES+ORDER (all corners incl.
+   fast), but derive ALL DIRECTIONS from telemetry. KEY FINDING (11:35): the wiki knowledge
+   notes' directions are UNRELIABLE — Interlagos note calls Curva do Sol a "right" but it's a
+   LEFT (telemetry + reality); 2nd wiki-direction error after Silverstone's Farm. So the merge
+   must NOT import wiki directions — names/order only, directions from telemetry (compute
+   steering sign at each corner's position, incl. fast corners that didn't peak-detect). Single
+   lap gives noisy direction reads for fast/flat corners -> ideally 2-3 laps/track first. Held
+   for a deliberate pass (not an idle-tick rush) to avoid mislabeling corners (the invariant).
+   Note: seed maps were OVERWRITTEN by the telemetry rebuild; reconstruct full corner lists from
+   simcoach/knowledge/<track>.md (they carry the wiki corner-by-corner list).
+
+### THE GAP TO A USABLE PRODUCT (assessed 2026-08-29, verified against app.py/__main__.py)
+Core is BUILT + validated in pieces: run_repl (app.py) already ties capture→store→analyze→
+coach.ask in a background-capture + foreground-Q&A loop. Coach gave real advice end-to-end.
+GAP = __main__.py is still a TEST harness (TRACK/CAR hardcoded to test_track/test_car,
+uses ReplaySource + ClaudeModel() directly). To be usable v0.1, wire __main__ for LIVE:
+  1. Swap ReplaySource -> LmuSource (live capture).
+  2. Auto-detect current track+car from telemetry (mTrackName/mVehicleName) and load the
+     matching corner map + knowledge — INCLUDING slug normalization (e.g. game's
+     'aut_dromo_jos_carlos_pace' vs map 'autodromo_jos_carlos_pace'; accents).
+  3. Use make_model factory (ANTHROPIC_API_KEY is in the user's env) instead of ClaudeModel().
+  4. Load the track knowledge note into the coach prompt (currently only {car}.md).
+Then ONE live shakedown (drive laps -> ask -> confirm advice). ~a focused session. Everything
+else (voice, web UI, energy-ratio, contact detection, tier auto-detect) is deferred post-v0.1.
+
+### (obsolete) NEXT: no-seed tracks — DONE above
+For each of the 9 slugs: once its seed JSON exists (from the subagent) OR from scratch,
+calibrate apex distances via the median-speed-minima method (scratchpad_live/calibrate_
+silverstone.py pattern, pointed at scratchpad_live/night/<slug>_lap_*.npz) and verify
+directions with simcoach.corners.verify_map_directions against a clean lap. Bahrain has 3
+layouts (paddock has most laps=3). Porsche 911 GT3 R car note still pending (subagent task).
+
+### RECOVERY WAKE PROTOCOL (user directive 22:13) — game-running check [capture already stopped]
+Capture task bmkp9g226 is STOPPED (game closed). If a NEW capture is started later, re-apply:
+each wake, check MMF/game-up; if game closed for a sustained stretch, TaskStop the capture.
+
+## Next Exact Action  ===  HOLD — attended session, awaiting user decision  ===
+SILVERSTONE MAP CALIBRATED + VERIFIED (simcoach/tracks/silverstone.json, untracked).
+Captured 15 laps (Porsche 911 GT3 R, Iron Dames #85, "Silverstone Grand Prix Circuit -
+ELMS"). KEY: this config's S/F is between Woodcote and Copse, so lap STARTS at Copse
+(T1) — user confirmed. Rebuilt map in Copse-first driving order (15 named corners);
+7 apexes MEASURED from 12-lap median speed-minima (Copse/Becketts/Stowe/Club/Abbey/
+The Loop/Luffield), other 8 interpolated. verify_map_directions vs stint_lap_2 =>
+ALL 15 directions match telemetry (fixed esses windows + flipped Farm to LEFT — later
+cross-validated by the LMU wiki, which also lists Farm as left & same corner order).
+111 tests pass. Built scratchpad_live/capture_race.py (full-race capture: keeps launch/
+formation/in-out/all laps, unlike capture_wait.py which drops invalid laps + opening
+partial). SOURCING RESEARCH done: LMU wiki (lemansultimate.wiki.gg) = primary for corner
+names+setup+tips; telemetry = distances+directions (ground truth); CrewChief (GitLab
+gitlab.com/mr_belowski/CrewChiefV4, MIT license, rF2+LMU, trackLandmarks.json compatible
+but auto-gen names/no direction) = fallback. Wiki content is CC-BY-SA => summarize+attribute.
+AWAITING USER: offered to build simcoach/knowledge/silverstone.md (from wiki, summarized)
++ fetch wiki Porsche 911 GT3 R guide for the missing car note. Also still open from
+earlier: full-race capture wiring, contact/impact fields (mLastImpactET/Magnitude).
+IF YOU ARE A RECOVERY FIRE: verify git; HOLD (user is present, directing). Do not commit
+silverstone.json unprompted. Recovery cron 5a131f77 cancellation is the USER'S call.
 
 ## Queued: T-H energy-strategy / lift-and-coast advisor (research-grounded)
 Deterministic module on fuel.py. LMU shows fuel-laps-remaining AND nrg-laps-remaining

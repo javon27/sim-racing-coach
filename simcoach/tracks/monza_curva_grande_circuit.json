@@ -1,0 +1,56 @@
+{
+  "track": "monza_curva_grande_circuit",
+  "_config_note": "Monza 'Curva Grande' layout (first chicane removed). Named landmarks \u2014 confident.",
+  "_distances_note": "GEOMETRY from telemetry (steering-peak detection, 1 lap, 2026-08-29); apex distances + directions are real data, verify_map_directions passes. Fast/flat corners missed on a single lap; refine with more laps.",
+  "length_m": 5793,
+  "corners": [
+    {
+      "number": 1,
+      "name": "Curva Grande",
+      "direction": "right",
+      "start_dist": 1378,
+      "apex_dist": 1433,
+      "end_dist": 1488
+    },
+    {
+      "number": 2,
+      "name": "Variante della Roggia (1st apex)",
+      "direction": "left",
+      "start_dist": 2049,
+      "apex_dist": 2104,
+      "end_dist": 2159
+    },
+    {
+      "number": 3,
+      "name": "Variante della Roggia (2nd apex)",
+      "direction": "right",
+      "start_dist": 2448,
+      "apex_dist": 2503,
+      "end_dist": 2558
+    },
+    {
+      "number": 4,
+      "name": "Lesmo",
+      "direction": "right",
+      "start_dist": 2787,
+      "apex_dist": 2842,
+      "end_dist": 2897
+    },
+    {
+      "number": 5,
+      "name": "Variante Ascari",
+      "direction": "left",
+      "start_dist": 3861,
+      "apex_dist": 3916,
+      "end_dist": 3971
+    },
+    {
+      "number": 6,
+      "name": "Parabolica",
+      "direction": "right",
+      "start_dist": 5075,
+      "apex_dist": 5130,
+      "end_dist": 5185
+    }
+  ]
+}

@@ -1,0 +1,80 @@
+{
+  "track": "bahrain_international_circuit",
+  "_config_note": "Bahrain GP. Detection-ordered Turn N (9 of ~15 corners resolved) \u2014 NOT official turn numbers; align to official numbering with more laps.",
+  "_distances_note": "GEOMETRY from telemetry (steering-peak detection, 1 lap, 2026-08-29); apex distances + directions are real data, verify_map_directions passes. Fast/flat corners missed on a single lap; refine with more laps.",
+  "length_m": 5412,
+  "corners": [
+    {
+      "number": 1,
+      "name": "Turn 1",
+      "direction": "right",
+      "start_dist": 693,
+      "apex_dist": 748,
+      "end_dist": 803
+    },
+    {
+      "number": 2,
+      "name": "Turn 2",
+      "direction": "right",
+      "start_dist": 1483,
+      "apex_dist": 1538,
+      "end_dist": 1593
+    },
+    {
+      "number": 3,
+      "name": "Turn 3",
+      "direction": "right",
+      "start_dist": 1876,
+      "apex_dist": 1931,
+      "end_dist": 1986
+    },
+    {
+      "number": 4,
+      "name": "Turn 4",
+      "direction": "right",
+      "start_dist": 2207,
+      "apex_dist": 2262,
+      "end_dist": 2317
+    },
+    {
+      "number": 5,
+      "name": "Turn 5",
+      "direction": "left",
+      "start_dist": 2670,
+      "apex_dist": 2725,
+      "end_dist": 2780
+    },
+    {
+      "number": 6,
+      "name": "Turn 6",
+      "direction": "left",
+      "start_dist": 3414,
+      "apex_dist": 3469,
+      "end_dist": 3524
+    },
+    {
+      "number": 7,
+      "name": "Turn 7",
+      "direction": "right",
+      "start_dist": 3848,
+      "apex_dist": 3903,
+      "end_dist": 3958
+    },
+    {
+      "number": 8,
+      "name": "Turn 8",
+      "direction": "right",
+      "start_dist": 4068,
+      "apex_dist": 4123,
+      "end_dist": 4178
+    },
+    {
+      "number": 9,
+      "name": "Turn 9",
+      "direction": "right",
+      "start_dist": 4858,
+      "apex_dist": 4913,
+      "end_dist": 4968
+    }
+  ]
+}

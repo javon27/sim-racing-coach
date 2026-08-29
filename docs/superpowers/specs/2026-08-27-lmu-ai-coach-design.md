@@ -90,6 +90,21 @@ access pattern:
   distance, not time). Recording this fidelity now is what keeps that feature
   possible later; nothing in v0.1 consumes it yet.
 
+**Corner map vs. replay data — do not conflate (clarified 2026-08-29).** The
+corner map is a *sparse* layer the **coach** uses: a handful of apex windows
+(name, direction, distance) that bucket a lap into per-corner metrics. Replay /
+side-by-side overlay does NOT use the corner map — it uses the *full* continuous
+channel stream keyed on the lap-distance axis (above), aligning two laps by
+resampling onto a common distance grid. The two are orthogonal: the replay
+substrate is captured in full regardless of how many corners the map names, and
+the map merely *enriches* an overlay optionally (corner labels, jump-to-corner,
+per-corner deltas). Corollary: a corner map should include **fast/flat corners**
+too, so the coach can advise on commitment/line there — the map's job is corner
+identity for coaching, not to mark only braking zones. Seed the full corner list
+from the knowledge source (wiki), then use telemetry to calibrate distances and
+verify directions; do not let telemetry-only detection *drop* corners it didn't
+trip on.
+
 The feature extractor writes `corner_metrics` as a side effect of analyzing a
 lap, so history accumulates automatically. "Best stored lap" (the reference
 default) becomes a `SELECT min(lap_time)` on `laps`. Schema is versioned

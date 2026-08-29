@@ -1,0 +1,144 @@
+{
+  "track": "circuit_de_la_sarthe_mulsanne",
+  "_config_note": "Auto-built from one captured lap by simcoach.mapbuild.",
+  "_distances_note": "GEOMETRY from telemetry (steering-peak detection): distances + directions are real data (RIGHT_IS_POSITIVE=True). 'Turn N' names are detection order, NOT official numbers/names \u2014 enrich from wiki/diagram/driver. Fast/flat corners may be missed on a single lap; more laps help.",
+  "length_m": 13556,
+  "corners": [
+    {
+      "number": 1,
+      "name": "Turn 1",
+      "direction": "right",
+      "start_dist": 630.3,
+      "apex_dist": 685.3,
+      "end_dist": 740.3
+    },
+    {
+      "number": 2,
+      "name": "Turn 2",
+      "direction": "left",
+      "start_dist": 781.3,
+      "apex_dist": 836.3,
+      "end_dist": 891.3
+    },
+    {
+      "number": 3,
+      "name": "Turn 3",
+      "direction": "right",
+      "start_dist": 1123.5,
+      "apex_dist": 1178.5,
+      "end_dist": 1233.5
+    },
+    {
+      "number": 4,
+      "name": "Turn 4",
+      "direction": "left",
+      "start_dist": 1406.4,
+      "apex_dist": 1461.4,
+      "end_dist": 1516.4
+    },
+    {
+      "number": 5,
+      "name": "Turn 5",
+      "direction": "right",
+      "start_dist": 1549.6,
+      "apex_dist": 1604.6,
+      "end_dist": 1659.6
+    },
+    {
+      "number": 6,
+      "name": "Turn 6",
+      "direction": "right",
+      "start_dist": 1901.1,
+      "apex_dist": 1956.1,
+      "end_dist": 2011.1
+    },
+    {
+      "number": 7,
+      "name": "Turn 7",
+      "direction": "right",
+      "start_dist": 7616.1,
+      "apex_dist": 7671.1,
+      "end_dist": 7726.1
+    },
+    {
+      "number": 8,
+      "name": "Turn 8",
+      "direction": "right",
+      "start_dist": 9523.2,
+      "apex_dist": 9578.2,
+      "end_dist": 9633.2
+    },
+    {
+      "number": 9,
+      "name": "Turn 9",
+      "direction": "left",
+      "start_dist": 9706.3,
+      "apex_dist": 9761.3,
+      "end_dist": 9816.3
+    },
+    {
+      "number": 10,
+      "name": "Turn 10",
+      "direction": "right",
+      "start_dist": 10042.6,
+      "apex_dist": 10097.6,
+      "end_dist": 10152.6
+    },
+    {
+      "number": 11,
+      "name": "Turn 11",
+      "direction": "right",
+      "start_dist": 11341.0,
+      "apex_dist": 11396.0,
+      "end_dist": 11451.0
+    },
+    {
+      "number": 12,
+      "name": "Turn 12",
+      "direction": "left",
+      "start_dist": 11694.8,
+      "apex_dist": 11749.8,
+      "end_dist": 11804.8
+    },
+    {
+      "number": 13,
+      "name": "Turn 13",
+      "direction": "left",
+      "start_dist": 11879.3,
+      "apex_dist": 11934.3,
+      "end_dist": 11989.3
+    },
+    {
+      "number": 14,
+      "name": "Turn 14",
+      "direction": "right",
+      "start_dist": 12099.9,
+      "apex_dist": 12154.9,
+      "end_dist": 12209.9
+    },
+    {
+      "number": 15,
+      "name": "Turn 15",
+      "direction": "left",
+      "start_dist": 12363.3,
+      "apex_dist": 12418.3,
+      "end_dist": 12473.3
+    },
+    {
+      "number": 16,
+      "name": "Turn 16",
+      "direction": "left",
+      "start_dist": 12699.3,
+      "apex_dist": 12754.3,
+      "end_dist": 12809.3
+    },
+    {
+      "number": 17,
+      "name": "Turn 17",
+      "direction": "right",
+      "start_dist": 13331.3,
+      "apex_dist": 13386.3,
+      "end_dist": 13441.3
+    }
+  ]
+}
