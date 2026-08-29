@@ -249,3 +249,14 @@ wiring decisions above, this is a normal merge.
   "Next Exact Action" + checklist accurate after every step.
 - No HANDOFF drift: update Current Status + Next Exact Action + Files Changed
   after each commit.
+
+## LIVE VALIDATION COMPLETE (2026-08-28 20:13, at Le Mans, GT3 #34)
+Full capture pipeline validated end-to-end on a live lap (Mulsanne straight + chicane):
+- Telemetry struct offsets: CORRECT. Scoring wrapper: FIXED (commit 02dabc1).
+- All channels correct live: speed 66-277km/h, throttle/brake 0-1, steering +/-, gear
+  1-6, lap_distance advancing (alignment axis), lat_g +/-1.3, fuel burning (liters),
+  virtual_energy 0.97, tire temps 38-66C, soc/battery 0 (GT3 no hybrid - correct).
+- Sample rate 48.6 Hz (~50 target). Sign convention RIGHT_IS_POSITIVE=True confirmed.
+- REST fully validated + strategy_usage (per-lap fuel/ve/tyres) added (bc24120).
+STILL TODO: full lap-boundary capture (needs a completed lap; logic unit-tested);
+coach end-to-end (needs ANTHROPIC_API_KEY); Le Mans corner map; tier auto-detect build.
