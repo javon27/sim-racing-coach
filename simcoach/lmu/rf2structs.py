@@ -263,10 +263,15 @@ rF2VehicleScoring = VehicleScoringInfoV01
 
 
 class rF2ScoringInfo(C.Structure):
-    """UNVERIFIED, minimal (see module docstring). Only the prefix through
-    mNumVehicles is transcribed; `_tail_unvalidated` is a 0-byte placeholder
-    for the unknown remainder of the real struct before mVehicles[] starts.
-    [LUNCH]: this is the single riskiest offset in this module."""
+    """Prefix through mNumVehicles is transcribed (and confirmed live: mNumVehicles
+    reads the right count). `_tail` is the remainder of the real struct before
+    mVehicles[] starts. Its size (440 bytes) was determined EMPIRICALLY against the
+    live $rFactor2SMMP_Scoring$ buffer 2026-08-28: mVehicles[] aligns at buffer
+    offset 560 (== 12-byte rF2Scoring preamble + sizeof(rF2ScoringInfo)=548), giving
+    a 28/28 vehicle-mID match to telemetry with exactly one mIsPlayer. The tail's
+    internal field layout is still not broken out (we only need the correct total
+    size so the vehicle array aligns); breaking it out (weather, session flags, etc.)
+    is future work."""
 
     _pack_ = 4
     _fields_ = [
@@ -278,7 +283,9 @@ class rF2ScoringInfo(C.Structure):
         ("mLapDist", C.c_double),
         ("_mResultsStream_ptr_or_pad", C.c_uint64),  # UNSURE: header has char*
         ("mNumVehicles", C.c_long),
-        ("_tail_unvalidated", C.c_ubyte * 0),  # UNSURE: see docstring, [LUNCH]
+        # 440-byte tail: empirically sized so mVehicles[] lands at the right offset
+        # (see docstring). Not yet broken into named fields.
+        ("_tail", C.c_ubyte * 440),
     ]
 
 
