@@ -318,6 +318,45 @@ READING chat may come via the rF2 messages/scoring stream. Keyboard emulation (E
 type → Enter) is the crude fallback. Research spike later; keep it read/send behind a
 small interface. (Anti-cheat: prefer the plugin interface over synthetic input.)
 
+## Coach context, history & memory (added 2026-08-28, user + live findings)
+
+The coach needs to remember — within a session and across sessions. Three layers,
+plus how caching and the knowledge base fit:
+
+- **L1 — session chat history (short-term).** `Coach.ask()` already accepts `history`
+  and threads it, but nothing MAINTAINS it (each question is independent — the deferred
+  final-review minor). Build a `CoachSession` that holds the car/track/tier/profile and
+  accumulates (question, answer) turns, threading them into each `ask()`. The terminal
+  and a future web UI both use it. Wire this FIRST (small, clear value).
+- **L2 — structured persistent state.** Driver profile (stated prefs + `learned`
+  tendencies), lap history + per-corner metrics (SQLite), session/phase grouping. Mostly
+  exists; the profile's `learned` and observed_style are the seam.
+- **L3 — long-term coaching memory (the new piece the user wants).** Durable, cross-
+  session memory of: advice given, setup changes TRIED and their OUTCOME (lap-time delta
+  after the change), recurring weaknesses, and driver progression. Injected into future
+  coaching so the coach never repeats advice, closes the loop on changes ("last session
+  we softened the front — did it help?"), and tracks improvement. Storage: a
+  `coach_memory` store (SQLite table or per-driver/car/track markdown), UPDATED by
+  distilling each session into memory entries (a summarization pass, or the Anthropic
+  memory tool `memory_20250818` if we let Claude manage it). Design decision for the
+  user: how much is auto-distilled vs. explicitly logged; markdown vs. SQLite; whether
+  to use the memory tool.
+- **Prompt caching (ties in).** Once L2/L3 + the knowledge base form a SUBSTANTIAL,
+  STABLE prefix (setup guide + car notes + driver memory), put it in a cached `system`
+  block (`cache_control: {type: "ephemeral"}`). NOT worth it yet — the current system
+  prompt is ~100 tokens, below the 512–4096 min cacheable prefix, so it silently won't
+  cache. Add caching when the stable prefix is large (verify with
+  `usage.cache_read_input_tokens`).
+- **Wire the knowledge base into the coach.** Today `Coach` only loads
+  `{knowledge_dir}/{car}.md`; the mined setup guide + per-class notes (docs/.../knowledge)
+  are NOT injected. Route the relevant knowledge (class notes, setup guide, car note)
+  into the coach's context — this is also what makes the cached prefix worth caching.
+- **Incident/contact detection (from the live contact-with-Silva check).** Detecting
+  contact from speed drops is weak (braking looks similar). The RIGHT source is rF2's
+  impact telemetry — add `mLastImpactET` / `mLastImpactMagnitude` to TelemInfoV01 (not
+  mapped yet) for reliable contact detection. Foundation for the post-v1.0 incident
+  analysis feature.
+
 ## First steps: two spikes (before implementation, parallelizable)
 
 1. **Feasibility spike (technical).** Whole design rests on reading LMU live
