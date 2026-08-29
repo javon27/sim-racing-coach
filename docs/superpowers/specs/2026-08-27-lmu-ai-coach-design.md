@@ -127,6 +127,25 @@ Feature extractor gets real unit tests against a recorded-lap fixture,
 including an assert that computed corner direction matches known geometry.
 Capture and coach stay thin.
 
+## Tier auto-detection + session state (added 2026-08-28, user + live findings)
+
+- **Tier is auto-detectable — don't ask the user.** The online-race PRACTICE servers
+  carry the SAME setup restrictions as the race, and LMU exposes per-setting
+  `isFreeSetting` (confirmed live: 27 free keys in a practice session incl. ABS, brake
+  balance/migration/pressure, electric motor map, tyre compound, fuel). So the coach
+  can INFER the tier / restriction level from the free-key set rather than the user
+  selecting Bronze/Silver/Gold. Build `detect_restriction(setup)` -> a summary (free
+  keys + a tier guess); calibrate the Bronze/Silver/Gold free-key signatures
+  empirically by sampling actual races of each tier (a data-collection task).
+- **Session state matters (transitions).** REST endpoint availability depends on
+  session state — `/rest/garage/getPlayerGarageData` returns 404 when BETWEEN sessions
+  (no active garage), and telemetry `mNumVehicles` is 0 until on track. The tool should
+  DETECT session/on-track transitions (in-menu -> in-garage -> on-track -> driving)
+  rather than assume a live session, and the REST client must degrade gracefully
+  (return None/empty on 404) instead of raising. Sources for state: REST availability,
+  scoring `mGamePhase`/`mInRealtime`, telemetry vehicle count, the SME_* events in the
+  native SDK. (Robustness follow-up; ties to the capture-robustness section.)
+
 ## Online racing context + tier model (added post-approval)
 
 The user races LMU **online**: sign up for a daily race, practice on servers until it starts. Daily races come in tiers, which constrain what the coach may advise and imply a fuel strategy:
