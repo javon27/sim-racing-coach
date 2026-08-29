@@ -182,7 +182,12 @@ Do these with LMU running, on track (a WHEEL lap for the sign-convention one):
    which filename mode the installed plugin uses and add the current name(s) to the
    candidate lists in smm.py. (The spike confirmed the legacy names worked on the
    user's box yesterday, so likely fine — but verify after any plugin update.)
-2. T-E live validation (the big one): run the shared-memory reader against the
+2. ✅ DONE 2026-08-28 19:xx — T-E live validation: telemetry offsets CORRECT as-is;
+   scoring rF2ScoringInfo wrapper was 440 bytes short -> FIXED (mVehicles offset 560,
+   commit 02dabc1), 28/28 mID match, player + lap_distance read correctly at Fuji.
+   Suite still 105. STILL PENDING: steering sign convention (RIGHT_IS_POSITIVE) —
+   needs live left/right input; and live-driving channel stream (was stationary).
+2old. T-E live validation (the big one): run the shared-memory reader against the
    live `$rFactor2SMMP_Telemetry$` / `$rFactor2SMMP_Scoring$` buffers. Confirm the
    ctypes struct OFFSETS are right (values sane: throttle/brake 0..1, speed matches
    HUD, gear correct). Structs use `_pack_ = 4` (header is #pragma pack(push,4)).

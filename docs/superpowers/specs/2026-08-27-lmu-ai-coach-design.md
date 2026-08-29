@@ -289,6 +289,16 @@ must survive both:
   MMF renames / struct changes when capture breaks or before a compatibility bump;
   keep the MMF-candidate list aligned with what CrewChief uses.
 
+## Future feature: in-game chat read/send (user 2026-08-28)
+
+Idea: let the coach read/post to LMU's in-game chat. Likely a SANCTIONED path exists:
+`ChatTransceiver.dll` is present in LMU's `Plugins/` folder (seen in the feasibility
+spike) — it is the plugin CrewChief uses to inject chat messages into rF2/LMU, so
+SENDING is probably writing to its shared-memory/message interface (research its API).
+READING chat may come via the rF2 messages/scoring stream. Keyboard emulation (Enter →
+type → Enter) is the crude fallback. Research spike later; keep it read/send behind a
+small interface. (Anti-cheat: prefer the plugin interface over synthetic input.)
+
 ## First steps: two spikes (before implementation, parallelizable)
 
 1. **Feasibility spike (technical).** Whole design rests on reading LMU live
