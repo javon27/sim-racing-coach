@@ -47,3 +47,19 @@ class LmuRest:
         keys = ("lapDistance", "timeIntoLap", "lapStartET", "sector",
                 "lapsCompleted", "lastLapTime", "bestLapTime", "estimatedLapTime")
         return {k: s.get(k) for k in keys}
+
+    def strategy_usage(self) -> dict:
+        """GET /rest/strategy/usage -> {driverName: [{lap, pit, stint, ve}, ...]}.
+        `ve` is the virtual-energy fraction (0..1) remaining at each lap. Confirmed
+        live 2026-08-28: this is the per-lap energy history for the fuel/energy planner."""
+        return self._fetch("/rest/strategy/usage")
+
+    def player_energy_usage(self) -> list[dict]:
+        """The player's own per-lap virtual-energy history, keyed by their driverName
+        in standings. Empty list if unavailable."""
+        s = self.get_player_standing()
+        name = s.get("driverName") if s else None
+        if not name:
+            return []
+        usage = self.strategy_usage()
+        return usage.get(name, []) if isinstance(usage, dict) else []

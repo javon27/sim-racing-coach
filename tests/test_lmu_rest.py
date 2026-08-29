@@ -24,9 +24,23 @@ def make(fetch_map):
     return LmuRest(fetch=lambda path: fetch_map[path])
 
 
+# Real shape observed live 2026-08-28 on /rest/strategy/usage. The PLAYER's own
+# entries carry the full per-lap history (fuel fraction, ve=virtual energy, tyres
+# [4 per-corner condition], pit); opponents expose only {lap,pit,stint,ve}.
+STRATEGY = {
+    "Jayson G": [
+        {"lap": 0, "pit": False, "stint": 1, "ve": 1.0, "fuel": 0.18,
+         "tyres": [99.6, 99.6, 99.2, 99.2]},
+        {"lap": 1, "pit": False, "stint": 1, "ve": 0.92, "fuel": 0.16,
+         "tyres": [99.0, 99.0, 98.5, 98.5]},
+    ],
+    "Other Driver": [{"lap": 0, "pit": False, "stint": 1, "ve": 1.0}],
+}
+
 FMAP = {
     "/rest/watch/standings": STANDINGS,
     "/rest/garage/getPlayerGarageData": SETUP,
+    "/rest/strategy/usage": STRATEGY,
 }
 
 
@@ -62,3 +76,19 @@ def test_empty_standings_returns_none():
     r = LmuRest(fetch=lambda p: [])
     assert r.get_player_standing() is None
     assert r.fuel_fraction() is None
+
+
+def test_strategy_usage():
+    u = make(FMAP).strategy_usage()
+    assert u["Jayson G"][1]["ve"] == 0.92
+
+
+def test_player_energy_usage_picks_player_by_name():
+    # standings identifies the player as "Jayson G" -> their ve history
+    hist = make(FMAP).player_energy_usage()
+    assert len(hist) == 2 and hist[0]["ve"] == 1.0
+
+
+def test_player_energy_usage_empty_when_no_standing():
+    r = LmuRest(fetch=lambda p: [] if "standings" in p else {})
+    assert r.player_energy_usage() == []
