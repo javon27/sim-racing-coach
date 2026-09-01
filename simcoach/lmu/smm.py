@@ -211,30 +211,47 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
       speed [km/h] = |mLocalVel| (m/s, z is longitudinal per the header's
         coordinate note) * 3.6 -- the rest of the pipeline (coach prompt,
         analysis.py, fixtures) is km/h-scale.
-      lat_g = mLocalAccel.x / 9.80665 (x is lateral in local vehicle coords)
-      tire temps: mTemperature[1] (center) Kelvin -> Celsius
+      lat_g = mLocalAccel.x / 9.80665 (x is lateral in local vehicle coords);
+        long_g = mLocalAccel.z / 9.80665 (z is longitudinal; braking/accel).
+      tire/brake temps: Kelvin -> Celsius (-273.15).
+      per-wheel [fl,fr,rl,rr]: wheel_rot (mRotation, rad/s -- lockup ~ 0 while
+        moving), brake_temp, brake_press (mBrakePressure), grip (mGripFract,
+        0..1), tire_load (mTireLoad, N), tire_press (mPressure, kPa), tire_wear
+        (mWear, 0..1). gear/rpm/abs_active/tc_active read as-is.
       virtual_energy / soc / battery_charge: read as-is, no unit conversion --
         all three are already fractions/percent-scale per the struct fields
         (mVirtualEnergy, mSoC, mBatteryChargeFraction), unlike fuel (liters)
-        or tire temp (Kelvin) which need conversion.
+        or temps (Kelvin) which need conversion.
     """
     wheels = telem.mWheel
-    return {
+    sample = {
         "speed": telem.mLocalVel.magnitude() * 3.6,
         "throttle": telem.mUnfilteredThrottle,
         "brake": telem.mUnfilteredBrake,
         "steering": telem.mUnfilteredSteering,
         "lat_g": telem.mLocalAccel.x / 9.80665,
+        "long_g": telem.mLocalAccel.z / 9.80665,
         "lap_distance": lap_dist,
+        "gear": float(telem.mGear),
+        "rpm": telem.mEngineRPM,
+        "abs_active": 1.0 if telem.mABSActive else 0.0,
+        "tc_active": 1.0 if telem.mTCActive else 0.0,
         "fuel": telem.mFuel,
         "virtual_energy": telem.mVirtualEnergy,
         "soc": telem.mSoC,
         "battery_charge": telem.mBatteryChargeFraction,
-        "tire_temp_fl": wheels[0].mTemperature[1] - 273.15,
-        "tire_temp_fr": wheels[1].mTemperature[1] - 273.15,
-        "tire_temp_rl": wheels[2].mTemperature[1] - 273.15,
-        "tire_temp_rr": wheels[3].mTemperature[1] - 273.15,
     }
+    for name, i in (("fl", 0), ("fr", 1), ("rl", 2), ("rr", 3)):
+        w = wheels[i]
+        sample[f"tire_temp_{name}"] = w.mTemperature[1] - 273.15
+        sample[f"tire_press_{name}"] = w.mPressure
+        sample[f"tire_load_{name}"] = w.mTireLoad
+        sample[f"tire_wear_{name}"] = w.mWear
+        sample[f"grip_{name}"] = w.mGripFract
+        sample[f"wheel_rot_{name}"] = w.mRotation
+        sample[f"brake_temp_{name}"] = w.mBrakeTemp - 273.15
+        sample[f"brake_press_{name}"] = w.mBrakePressure
+    return sample
 
 
 def session_phase(m_session: int) -> str:

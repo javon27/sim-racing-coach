@@ -33,10 +33,18 @@ def make_telem(**overrides) -> TelemInfoV01:
     t.mUnfilteredBrake = 0.25
     t.mUnfilteredSteering = -0.3
     t.mGear = 4
+    t.mEngineRPM = 7500.0
     t.mFuel = 42.0
     t.mLapNumber = 1
+    t.mABSActive = True
     for i in range(4):
         t.mWheel[i].mTemperature[1] = 273.15 + 80.0  # 80C center temp
+        t.mWheel[i].mBrakeTemp = 273.15 + 350.0       # 350C brake temp
+        t.mWheel[i].mPressure = 165.0                 # kPa
+        t.mWheel[i].mRotation = -40.0                 # rad/s (rolling)
+        t.mWheel[i].mGripFract = 0.95
+        t.mWheel[i].mTireLoad = 3000.0
+        t.mWheel[i].mWear = 0.98
     for field, value in overrides.items():
         setattr(t, field, value)
     return t
@@ -75,6 +83,23 @@ def test_sample_from_telem_maps_channels():
     assert sample["fuel"] == 42.0
     assert abs(sample["tire_temp_fl"] - 80.0) < 1e-9
     assert abs(sample["tire_temp_rr"] - 80.0) < 1e-9
+
+
+def test_sample_from_telem_maps_extended_channels():
+    t = roundtrip(make_telem())
+    s = sample_from_telem(t, lap_dist=0.0)
+    # chassis/inputs
+    assert s["gear"] == 4.0
+    assert s["rpm"] == 7500.0
+    assert s["abs_active"] == 1.0 and s["tc_active"] == 0.0
+    assert abs(s["long_g"]) < 1e-9              # z accel is 0 in make_telem
+    # per-wheel: brake temp K->C, pressure, rotation, grip, load, wear
+    assert abs(s["brake_temp_fl"] - 350.0) < 1e-9
+    assert s["tire_press_rr"] == 165.0
+    assert s["wheel_rot_fl"] == -40.0
+    assert s["grip_fr"] == 0.95
+    assert s["tire_load_rl"] == 3000.0
+    assert s["tire_wear_fr"] == 0.98
 
 
 def test_sample_from_telem_maps_energy_channels():
