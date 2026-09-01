@@ -1,6 +1,8 @@
 import threading
 import time
 
+import numpy as np
+
 from simcoach.coach import Coach
 from simcoach.coach_tools import CoachContext
 from simcoach.corners import CornerMap
@@ -43,18 +45,23 @@ def run_repl(source: TelemetrySource, store: LapStore, cmap: CornerMap, coach: C
                     lap_id = store.save(lap)
                     latest["lap_id"] = lap_id
                     latest["record"] = lap
-                    # One concise confirmation per stored lap: sample count is the
-                    # health signal — a clean ~50 Hz lap has thousands of samples;
-                    # a sparse count means the capture loop is starved (diagnostic).
-                    n = len(lap.channels.get("lap_distance", []))
+                    # Per-lap health line so a bad capture is visible immediately.
+                    # A clean lap: thousands of samples, ~45-50 Hz, full-track span,
+                    # 0 teleports. A junk lap (out-lap/teleport): few samples and/or
+                    # teleport(s) = a >500 m backward jump in lap distance.
+                    d = lap.channels.get("lap_distance")
+                    n = len(d) if d is not None else 0
+                    teleports = int(np.sum(np.diff(d) < -500)) if n > 1 else 0
+                    span = f"{float(d.min()):.0f}-{float(d.max()):.0f}m" if n else "?"
                     hz = n / lap.lap_time if lap.lap_time else 0
-                    print(f"\n  [lap {lap_id} stored: {n} samples, ~{hz:.0f} Hz]", flush=True)
+                    print(f"\n  [lap {lap_id}: {n} samples ~{hz:.0f}Hz, {span}, "
+                          f"{teleports} teleport(s)]", flush=True)
             except Exception as e:
-                # LMU likely closed / shared memory vanished — wait for it to
-                # come back, then re-open and resume. (daemon thread; loops forever)
-                # Surface it (was silently swallowed) so a real capture fault is
-                # visible instead of manifesting as missing/degraded laps.
-                print(f"\n  [capture paused: {type(e).__name__}: {e} — retrying in 3s]", flush=True)
+                # LMU likely closed / shared memory vanished — wait for it to come
+                # back, then re-open and resume. Surface it (was silently swallowed)
+                # so a real capture fault is visible, not just missing laps.
+                print(f"\n  [capture paused: {type(e).__name__}: {e} — retrying in 3s]",
+                      flush=True)
                 time.sleep(3)
 
     threading.Thread(target=capture, daemon=True).start()

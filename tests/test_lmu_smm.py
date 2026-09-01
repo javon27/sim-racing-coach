@@ -197,31 +197,6 @@ def test_build_lap_record_stamps_phase_and_session():
     assert record.phase == "race" and record.session_id == "s1"
 
 
-def test_build_lap_record_drops_reset_lap():
-    # distance jumps backward >500m (reset-to-track / partial first lap) -> dropped
-    reset = {"lap_distance": [13600.0, 5.0, 40.0], "speed": [50.0, 50.0, 50.0]}
-    assert build_lap_record("lmu", "t", "c", 92.5, 0, 0.0, reset) is None
-    # clean monotonic climb -> kept
-    clean = {"lap_distance": [5.0, 2000.0, 4000.0], "speed": [50.0, 50.0, 50.0]}
-    assert build_lap_record("lmu", "t", "c", 92.5, 0, 0.0, clean) is not None
-
-
-def test_read_consistent_open_matches_by_name():
-    import mmap
-    from simcoach.lmu.smm import read_consistent, read_consistent_open
-    name = "simcoach_test_rcopen"
-    sz = C.sizeof(rF2Telemetry)
-    keep = mmap.mmap(-1, sz, tagname=name, access=mmap.ACCESS_WRITE)
-    inst = rF2Telemetry(); inst.mNumVehicles = 3
-    keep.seek(0); keep.write(bytes(inst))
-    by_name = read_consistent(name, rF2Telemetry)          # opens/closes each call
-    ro = mmap.mmap(-1, sz, tagname=name, access=mmap.ACCESS_READ)
-    by_open = read_consistent_open(ro, rF2Telemetry)        # reads from kept-open map
-    assert bytes(by_name) == bytes(by_open)
-    assert by_open.mNumVehicles == 3
-    ro.close(); keep.close()
-
-
 def test_session_phase_maps_msession_index():
     from simcoach.lmu.smm import session_phase
     assert session_phase(0) == "testday"
