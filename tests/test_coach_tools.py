@@ -33,6 +33,12 @@ def test_get_lap_summary_and_tires(tmp_path, synthetic_lap):
     assert "Tire temps" in ctx.get_tire_report()
 
 
+def test_get_wheel_report(tmp_path, synthetic_lap):
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    rep = ctx.dispatch("get_wheel_report", {})
+    assert "Brake temps" in rep and "wear" in rep.lower()
+
+
 def test_session_status_and_recent_laps(tmp_path, synthetic_lap):
     ctx, store, lap_id = _ctx(tmp_path, synthetic_lap)
     status = ctx.get_session_status()

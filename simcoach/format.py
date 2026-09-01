@@ -35,9 +35,34 @@ def format_corner_line(cm, units: str = "metric") -> str:
         f"{spd(cm.entry_spd):.0f}→min {spd(cm.min_spd):.0f}→{spd(cm.exit_spd):.0f} {spd_u}, "
         f"{brake_txt}{thr_txt}, trail {cm.trailbrake_overlap:.0%}, peak {cm.peak_lat_g:.1f}g"
     )
+    if not math.isnan(cm.min_grip):
+        line += f", min grip {cm.min_grip:.2f}"   # 1.0 = full grip; low = sliding/locking
     if cm.min_spd_delta is not None:
         line += f" (min vs best: {spd(cm.min_spd_delta):+.1f} {spd_u})"
     return line
+
+
+def format_wheel_report(analysis, units: str = "metric") -> str | None:
+    """Lap-level brake temps, hot pressures, and tire wear per wheel — or None if
+    the lap predates the extended capture."""
+    w = analysis.wheels
+    if not w:
+        return None
+    _, temp, _, temp_u = unit_fns(units)
+    bt_m, bt_p = w["brake_temp_mean"], w["brake_temp_peak"]
+    lines = [
+        f"Brake temps {temp_u} (mean/peak): "
+        + " / ".join(f"{k.upper()} {temp(bt_m[k]):.0f}/{temp(bt_p[k]):.0f}" for k in ("fl", "fr", "rl", "rr"))
+    ]
+    if "tire_press_mean" in w:
+        p = w["tire_press_mean"]
+        lines.append("Tire pressures kPa (mean): "
+                     + " / ".join(f"{k.upper()} {p[k]:.0f}" for k in ("fl", "fr", "rl", "rr")))
+    if "tire_wear_end" in w:
+        wr = w["tire_wear_end"]
+        lines.append("Tire wear remaining: "
+                     + " / ".join(f"{k.upper()} {wr[k]:.0%}" for k in ("fl", "fr", "rl", "rr")))
+    return "\n".join(lines)
 
 
 def format_tire_report(analysis, units: str = "metric") -> str | None:

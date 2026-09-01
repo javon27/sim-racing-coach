@@ -31,5 +31,8 @@ def synthetic_lap():
     for t in ("fl", "fr", "rl", "rr"):
         ch[f"tire_temp_{t}"] = 80 + 5 * (brake > 0)
         ch[f"tire_press_{t}"] = np.full(n, 27.5)
+        ch[f"brake_temp_{t}"] = 200 + 150 * (brake > 0)   # hotter under braking
+        ch[f"grip_{t}"] = np.where(brake > 0, 0.9, 1.0)    # grip dips in the corners
+        ch[f"tire_wear_{t}"] = np.linspace(1.0, 0.97, n)   # slight wear over the lap
     ch["fuel"] = np.linspace(80.0, 77.4, n)   # liters; 2.6 L consumed over the lap
     return LapRecord("lmu", "test_track", "test_car", 92.5, True, 0.0, ch)

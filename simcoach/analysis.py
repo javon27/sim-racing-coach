@@ -21,6 +21,7 @@ class CornerMetrics:
     trailbrake_overlap: float
     peak_brake: float = 0.0          # max brake input in the corner (0..1)
     peak_lat_g: float = 0.0          # max |lateral g| — how hard the car was loaded
+    min_grip: float = float("nan")   # lowest grip fraction any tire saw (near 0 = sliding)
     min_spd_delta: Optional[float] = None
 
 
@@ -33,9 +34,33 @@ class LapAnalysis:
     # tire temps are deferred until the replay overlay actually consumes them.
     tire_means: Optional[dict[str, float]] = None      # {'fl','fr','rl','rr'}: °C mean over lap
     tire_warmup: Optional[tuple[float, float]] = None  # (early °C, late °C), all-wheel mean
+    wheels: Optional[dict] = None  # lap-level brake/pressure/wear from extended capture
 
 
 _TIRE_KEYS = ("tire_temp_fl", "tire_temp_fr", "tire_temp_rl", "tire_temp_rr")
+_WHEELS = ("fl", "fr", "rl", "rr")
+
+
+def _wheel_summary(record: LapRecord):
+    """Lap-level brake temp / pressure / wear per wheel from the extended capture.
+    Returns None for laps captured before those channels existed."""
+    ch = record.channels
+    if not all(f"brake_temp_{w}" in ch for w in _WHEELS):
+        return None
+
+    def per_wheel(prefix, fn):
+        return {w: float(fn(ch[f"{prefix}_{w}"])) for w in _WHEELS}
+
+    out = {
+        "brake_temp_mean": per_wheel("brake_temp", np.nanmean),
+        "brake_temp_peak": per_wheel("brake_temp", np.nanmax),
+    }
+    if all(f"tire_press_{w}" in ch for w in _WHEELS):
+        out["tire_press_mean"] = per_wheel("tire_press", np.nanmean)
+    if all(f"tire_wear_{w}" in ch for w in _WHEELS):
+        # wear is a remaining fraction (1.0 = new); report end-of-lap value.
+        out["tire_wear_end"] = {w: float(ch[f"tire_wear_{w}"][-1]) for w in _WHEELS}
+    return out
 
 
 def _tire_summary(record: LapRecord):
@@ -122,6 +147,11 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
     peak_lat_g = (
         float(np.nanmax(np.abs(win_lat_g[idx]))) if win_lat_g is not None and idx.size else 0.0
     )
+    # Lowest grip fraction any tire saw through the corner (near 0 = at/over the
+    # limit — sliding or locking). nan when the extended capture isn't present.
+    grip_ch = [record.channels[f"grip_{w}"][idx] for w in ("fl", "fr", "rl", "rr")
+               if f"grip_{w}" in record.channels]
+    min_grip = float(np.nanmin(np.vstack(grip_ch))) if grip_ch else float("nan")
 
     try:
         direction = compute_direction(record, corner.start_dist, corner.end_dist)
@@ -142,6 +172,7 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
         trailbrake_overlap=trailbrake_overlap,
         peak_brake=peak_brake,
         peak_lat_g=peak_lat_g,
+        min_grip=min_grip,
     )
 
 
@@ -166,5 +197,5 @@ def analyze_lap(
     tire_means, tire_warmup = _tire_summary(record)
     return LapAnalysis(
         lap_time=record.lap_time, corners=corners, has_reference=has_reference,
-        tire_means=tire_means, tire_warmup=tire_warmup,
+        tire_means=tire_means, tire_warmup=tire_warmup, wheels=_wheel_summary(record),
     )

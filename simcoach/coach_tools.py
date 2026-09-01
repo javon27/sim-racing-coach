@@ -11,7 +11,13 @@ from __future__ import annotations
 
 from simcoach.analysis import analyze_lap
 from simcoach.coach import _setup_lines
-from simcoach.format import find_corner, format_corner_line, format_lap_facts, format_tire_report
+from simcoach.format import (
+    find_corner,
+    format_corner_line,
+    format_lap_facts,
+    format_tire_report,
+    format_wheel_report,
+)
 
 # Tool specs advertised to the model (Anthropic tool-use format).
 TOOLS = [
@@ -59,6 +65,13 @@ TOOLS = [
         "name": "get_tire_report",
         "description": "Per-wheel mean tire temps (front/rear, left/right imbalance) and the "
                        "early→late warm-up trend for the latest lap.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_wheel_report",
+        "description": "Brake temperatures, hot tire pressures, and tire wear per wheel for the "
+                       "latest lap — for brake fade, cold/overheating brakes, pressure balance, "
+                       "or tire-wear/degradation questions.",
         "input_schema": {"type": "object", "properties": {}},
     },
     {
@@ -188,6 +201,13 @@ class CoachContext:
         report = format_tire_report(analysis, self.units)
         return report or "No tire-temperature data was captured for this lap."
 
+    def get_wheel_report(self):
+        analysis = self._latest_analysis()
+        if analysis is None:
+            return "No lap captured yet (or no corner map for this track)."
+        report = format_wheel_report(analysis, self.units)
+        return report or "No brake/wear data was captured for this lap (older capture)."
+
     def get_setup(self):
         if not self.setup:
             return "No setup data available (REST unavailable or open setup)."
@@ -209,6 +229,7 @@ class CoachContext:
             "get_lap_summary": lambda: self.get_lap_summary(args.get("which", "latest")),
             "get_corner": lambda: self.get_corner(args.get("corner", "")),
             "get_tire_report": lambda: self.get_tire_report(),
+            "get_wheel_report": lambda: self.get_wheel_report(),
             "get_setup": lambda: self.get_setup(),
         }.get(name)
         if handler is None:
