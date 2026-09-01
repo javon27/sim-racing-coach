@@ -17,7 +17,19 @@
    list_recent_laps, lap_summary, corner, tire_report, wheel_report,
    energy_report, setup.
 
+**CAPTURE DEGRADATION FIX (2026-09-01 ~11:10, commit after e148505 chain):**
+Live capture decayed 48→2 Hz over a run → sparse laps, every corner "no telemetry".
+Ruled out (offline-verified): the extended-capture code, a HANDLE leak, the read
+path. Best-supported cause = per-read mmap map/unmap churn. FIX: laps() keeps each
+buffer mapped once (read_consistent_open); build_lap_record drops reset/partial laps
+(lap_distance backward jump >500m); capture thread now prints each lap's sample
+count/Hz + surfaces errors. **VERIFY NEXT LIVE RUN:** drive a couple clean laps and
+watch the `[lap N stored: M samples, ~H Hz]` line — H should stay ~45-50 Hz across
+laps (not decay). If it still decays, the mmap-reuse wasn't the cause; the Hz line
++ the now-visible capture error will point at the real one.
+
 **NEEDS LIVE LMU (blocked offline — do NOT fake):**
+- Confirm the capture-rate fix holds across a full run (see above).
 - Feel-test the agentic coach + merge the branch (user's call).
 - Validate PENDING items on a real session: mSession→phase mapping, the extended
   channel signs/units/scales, long_g sign.
