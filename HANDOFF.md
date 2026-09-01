@@ -1,3 +1,41 @@
+# CURRENT STATE (2026-09-01, overnight) — READ THIS FIRST
+
+**Branch:** `feat/agentic-tool-coach` (NOT merged — user feel-tests + merges).
+`main` has the earlier "usable coaching" + live-session-context bugfix.
+**Tests:** `.venv/Scripts/python.exe -m pytest -q` → 166 passing, tree clean.
+
+**What this branch adds (all committed, TDD):**
+1. Agentic tool-call coach — the model fetches data on demand via tools instead
+   of every prompt dumping the whole lap. Live-validated (real API, Algarve laps).
+2. Tool-call logging (coach_chat v4) — which tools each answer used is persisted.
+3. Session/phase stamping at capture (Gap 1) — laps grouped per stint; status +
+   reference are session-scoped, not all-time.
+4. Extended telemetry capture — long_g, gear, rpm, abs/tc, and per-wheel
+   rotation/brake-temp/brake-press/grip/load/pressure/wear (33 channels).
+5. New coach signals: per-corner min_grip; get_wheel_report (brakes/press/wear);
+   get_energy_report (fuel + virtual energy). Tools now: session_status,
+   list_recent_laps, lap_summary, corner, tire_report, wheel_report,
+   energy_report, setup.
+
+**NEEDS LIVE LMU (blocked offline — do NOT fake):**
+- Feel-test the agentic coach + merge the branch (user's call).
+- Validate PENDING items on a real session: mSession→phase mapping, the extended
+  channel signs/units/scales, long_g sign.
+- Track conditions (Gap 2): no REST weather endpoint exists in rest.py; the
+  ScoringInfo weather tail needs the live buffer to break out. Real wheel-lock
+  detection needs mRotation validated (only grip is surfaced now; model infers).
+- Traffic (Gap 4): gated on the same struct-tail work.
+
+**Queued (offline-doable next):** surface long_g as per-corner braking g; drop the
+legacy build_prompt/ask path once agentic is trusted; telemetry-graph tool that
+returns a chart image to the vision model (user's idea).
+
+**If you are a recovery fire:** verify `git status` clean + suite green, confirm
+the above is current, and STOP — the user is asleep and will feel-test/merge.
+Do not start new features or merge the branch unprompted.
+
+---
+
 # HANDOFF — overnight autonomous session (2026-08-27 → 28)
 
 **Goal:** Build the deferred v0.1-adjacent follow-up features on branch
