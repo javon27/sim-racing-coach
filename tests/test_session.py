@@ -1,24 +1,24 @@
 from simcoach.session import CoachSession
 from simcoach.coach import Coach
+from simcoach.coach_tools import CoachContext
 from simcoach.model.fake import FakeModel
-from simcoach.corners import CornerMap
-from simcoach.analysis import analyze_lap
+from simcoach.store import LapStore
 
 
-def _analysis(synthetic_lap):
-    cmap = CornerMap.load("simcoach/tracks/test_track.json")
-    return analyze_lap(synthetic_lap, cmap)
+def _ctx(tmp_path):
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    return CoachContext(store, track="test_track", car="test_car")
 
 
-def test_session_threads_history(synthetic_lap):
-    a = _analysis(synthetic_lap)
+def test_session_threads_history(tmp_path):
+    ctx = _ctx(tmp_path)
     m = FakeModel(reply="brake later")
     sess = CoachSession(Coach(m, "simcoach/knowledge"), car="test_car")
 
-    sess.ask(a, "where am I losing time?")
+    sess.ask(ctx, "where am I losing time?")
     assert len(sess.history) == 2  # user question + assistant answer
 
-    sess.ask(a, "what about turn 2?")
+    sess.ask(ctx, "what about turn 2?")
     contents = [msg["content"] for msg in m.last_messages]
     # prior question + prior answer are threaded before the current turn
     assert "where am I losing time?" in contents
@@ -26,12 +26,12 @@ def test_session_threads_history(synthetic_lap):
     assert len(sess.history) == 4
 
 
-def test_session_first_call_has_no_prior_history(synthetic_lap):
-    a = _analysis(synthetic_lap)
+def test_session_first_call_has_no_prior_history(tmp_path):
+    ctx = _ctx(tmp_path)
     m = FakeModel(reply="ok")
     sess = CoachSession(Coach(m, "simcoach/knowledge"), car="test_car")
-    sess.ask(a, "first question")
-    # only the current turn's user content (facts + question) is present
+    sess.ask(ctx, "first question")
+    # only the current turn's user question is present (no prior history)
     assert len(m.last_messages) == 1
     assert m.last_messages[0]["role"] == "user"
 

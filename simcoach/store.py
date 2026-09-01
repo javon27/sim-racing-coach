@@ -164,6 +164,18 @@ class LapStore:
             ).fetchall()
             return [r[0] for r in rows]
 
+    def recent_laps(self, track: str, car: str, limit: int = 10) -> list[dict]:
+        """Recent laps for a track/car (newest first) as lightweight rows — no
+        telemetry loaded — so a tool can list laps for the model to choose from."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT id, lap_time, valid, phase FROM laps WHERE track = ? AND car = ? "
+                "ORDER BY id DESC LIMIT ?",
+                (track, car, limit),
+            ).fetchall()
+            keys = ("lap_id", "lap_time", "valid", "phase")
+            return [dict(zip(keys, r)) for r in rows]
+
     def session_lap_ids(self, session_id: str) -> list[int]:
         with self._lock:
             rows = self.conn.execute(

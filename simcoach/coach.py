@@ -1,9 +1,9 @@
-import math
 import re
 from pathlib import Path
 
 from simcoach.analysis import LapAnalysis
 from simcoach.driver import DriverProfile
+from simcoach.format import format_lap_facts, unit_fns
 from simcoach.model.base import Model
 
 # Setup params worth putting in front of the coach — a full LMU setup is ~170 keys,
@@ -80,6 +80,43 @@ SYSTEM_PROMPT = (
 )
 
 
+AGENTIC_SYSTEM_PROMPT = (
+    "You are an expert sim-racing race engineer and driver coach for the driver of "
+    "a {car}. You have deep knowledge of vehicle dynamics, car setup, and driving "
+    "technique — apply it freely.\n\n"
+    "THIS IS ONE CONTINUING RADIO CONVERSATION across a session, not a series of "
+    "standalone reports. The messages above are what you and the driver already said — "
+    "read them and continue from there. Connect to where you left off; never re-introduce "
+    "yourself, never re-brief the whole lap unless asked, and if a previous read was "
+    "wrong, say so and correct it.\n\n"
+    "DATA IS ON DEMAND — you have tools that read the driver's live telemetry, laps, "
+    "tires, and setup. Do NOT expect data in the message; FETCH exactly what the question "
+    "needs and no more. A question about one corner → get_corner, not the whole lap. A "
+    "'how was that lap / where am I losing time' → get_lap_summary. Unsure what's "
+    "available → get_session_status first. A setup question → get_setup. Don't dump a full "
+    "lap breakdown for a narrow question. If a tool says no lap/data is captured yet, coach "
+    "from general knowledge and say you'll have specifics once there's a lap.\n\n"
+    "Corner identity (number, name, direction) in tool results is authoritative ground "
+    "truth from telemetry — never guess or change it; refer to each corner by BOTH number "
+    "and name, e.g. 'Turn 1 (Copse)', so the driver can place it. UNITS: speeds are in "
+    "{speed_unit}, temperatures in {temp_unit}, distances in meters — use exactly these and "
+    "don't convert. Brake/throttle points come RELATIVE to the apex; describe them that way "
+    "or vs the driver's best lap — NEVER quote an absolute lap-distance position.\n\n"
+    "How to coach — talk like a race engineer on the radio between laps, not a written "
+    "report:\n"
+    "- Plain, natural sentences. NO bold headlines, NO 'Root cause:'/'Fix:' labels, NO "
+    "bulleted templates, minimal markdown — just talk.\n"
+    "- Lead with the one thing that matters most; add a second point only if it earns the "
+    "airtime. Don't cover everything.\n"
+    "- Weave the fix into the sentence: what the data shows, why, and the specific change — "
+    "a setup move with direction and rough amount, or a driving cue. Keep setup vs driving "
+    "advice distinct in your wording.\n"
+    "- Weigh context before over-reading a lap: tire temp/warm-up, fuel, wear. Encouraging "
+    "and constructive; note what's working; never berate.\n"
+    "- Keep it short — a few sentences. The driver will ask follow-ups."
+)
+
+
 class Coach:
     """Assembles prompts from analysis + corner facts + knowledge notes and calls the Model."""
 
@@ -99,62 +136,11 @@ class Coach:
         input_device: str | None = None,
         units: str = "metric",
     ) -> tuple[str, str]:
-        imperial = units == "imperial"
-        spd = (lambda v: v * 0.621371) if imperial else (lambda v: v)      # km/h -> mph
-        temp = (lambda v: v * 9 / 5 + 32) if imperial else (lambda v: v)   # °C -> °F
-        spd_u = "mph" if imperial else "km/h"
-        temp_u = "°F" if imperial else "°C"
+        _, _, spd_u, temp_u = unit_fns(units)
 
         sections: list[str] = []
         if analysis is not None:
-            corner_lines = []
-            for cm in analysis.corners:
-                # Degenerate corner (no telemetry samples fell in its window, e.g. a
-                # sparse out-lap): say so plainly instead of rendering nan speeds and
-                # the fake defaulted brake/throttle distances — otherwise the coach
-                # confidently critiques driving that isn't in the data.
-                if math.isnan(cm.min_spd):
-                    corner_lines.append(
-                        f"T{cm.corner_no} {cm.name} ({cm.direction}): no telemetry captured here"
-                    )
-                    continue
-                # Brake/throttle points are given RELATIVE to the apex (a real
-                # driver reference), never as absolute lap-distance from the line.
-                brake_before = cm.apex_dist - cm.brake_point
-                thr_after = cm.throttle_point - cm.apex_dist
-                brake_txt = (
-                    f"brake {brake_before:.0f}m before apex @ {cm.peak_brake:.0%} peak"
-                    if brake_before > 0 else "no heavy braking"
-                )
-                thr_txt = f", back to throttle {thr_after:.0f}m after apex" if thr_after > 0 else ""
-                line = (
-                    f"T{cm.corner_no} {cm.name} ({cm.direction}): "
-                    f"{spd(cm.entry_spd):.0f}→min {spd(cm.min_spd):.0f}→{spd(cm.exit_spd):.0f} {spd_u}, "
-                    f"{brake_txt}{thr_txt}, trail {cm.trailbrake_overlap:.0%}, peak {cm.peak_lat_g:.1f}g"
-                )
-                if analysis.has_reference and cm.min_spd_delta is not None:
-                    line += f" (min vs best: {spd(cm.min_spd_delta):+.1f} {spd_u})"
-                corner_lines.append(line)
-            sections.append("Corner facts (authoritative, from telemetry):")
-            if analysis.has_reference:
-                sections.append("Deltas below are vs the driver's best lap on this track/car.")
-            sections.extend(corner_lines)
-
-            # Tire state (authoritative, from telemetry): imbalance across the four
-            # means, warm-up from the early→late pair. The system prompt already tells
-            # the coach to weigh cold/uneven tires before over-reading the lap.
-            if analysis.tire_means:
-                m = analysis.tire_means
-                sections.append(
-                    f"Tire temps {temp_u} (mean over lap): FL {temp(m['fl']):.0f} / "
-                    f"FR {temp(m['fr']):.0f} / RL {temp(m['rl']):.0f} / RR {temp(m['rr']):.0f}."
-                )
-                if analysis.tire_warmup:
-                    early, late = analysis.tire_warmup
-                    sections.append(
-                        f"Tire warm-up: ~{temp(early):.0f}{temp_u} early in the lap → "
-                        f"~{temp(late):.0f}{temp_u} late."
-                    )
+            sections.append(format_lap_facts(analysis, units))
         else:
             sections.append(
                 "No lap captured yet — answer from the track/car knowledge and current "
@@ -188,23 +174,31 @@ class Coach:
 
         sections.append(f"\nQuestion: {question}")
 
-        system = SYSTEM_PROMPT.format(car=car, speed_unit=spd_u, temp_unit=temp_u)
+        system = self._augment_system(
+            SYSTEM_PROMPT.format(car=car, speed_unit=spd_u, temp_unit=temp_u),
+            allowed_adjustments, driver_profile, input_device,
+        )
         if allowed_adjustments is not None:
-            allowed_str = ", ".join(allowed_adjustments)
-            system += (
-                f" SETUP CONSTRAINT: in this race only these adjustments are "
-                f"legal — {allowed_str}. Only suggest setup changes to these; "
-                f"if a helpful change is outside them, say it's locked this "
-                f"tier and give a driving-based alternative. Driving advice "
-                f"is unconstrained."
-            )
-            sections.append(f"\nLegal setup adjustments: {allowed_str}")
+            sections.append(f"\nLegal setup adjustments: {', '.join(allowed_adjustments)}")
 
+        user_content = "\n".join(sections)
+        return system, user_content
+
+    @staticmethod
+    def _augment_system(system, allowed_adjustments, driver_profile, input_device):
+        """Shared system-prompt additions (tier constraint, driver profile, input
+        device) used by both the legacy and agentic paths."""
+        if allowed_adjustments is not None:
+            system += (
+                f" SETUP CONSTRAINT: in this race only these adjustments are legal — "
+                f"{', '.join(allowed_adjustments)}. Only suggest setup changes to these; "
+                f"if a helpful change is outside them, say it's locked this tier and give a "
+                f"driving-based alternative. Driving advice is unconstrained."
+            )
         if driver_profile is not None:
             profile_text = driver_profile.to_prompt_text()
             if profile_text:
                 system += f" {profile_text}"
-
         if input_device:
             system += f" The driver is using a {input_device}."
             if any(w in input_device.lower() for w in ("controller", "gamepad", "pad")):
@@ -214,9 +208,29 @@ class Coach:
                     "brake are the DEVICE, not the driver. Coach line, braking point, commitment, "
                     "and setup — do not push trail-brake modulation or input smoothness as fixes."
                 )
+        return system
 
-        user_content = "\n".join(sections)
-        return system, user_content
+    def ask_agentic(
+        self,
+        context,
+        question: str,
+        car: str,
+        history: list[dict] | None = None,
+        driver_profile: DriverProfile | None = None,
+        input_device: str | None = None,
+        units: str = "metric",
+    ) -> str:
+        """Answer via the on-demand tool loop: the model fetches exactly the data the
+        question needs through `context`'s tools instead of receiving the whole lap."""
+        from simcoach.coach_tools import TOOLS
+        _, _, spd_u, temp_u = unit_fns(units)
+        system = self._augment_system(
+            AGENTIC_SYSTEM_PROMPT.format(car=car, speed_unit=spd_u, temp_unit=temp_u),
+            context.allowed_adjustments, driver_profile, input_device,
+        )
+        messages = list(history) if history else []
+        messages.append({"role": "user", "content": question})
+        return self.model.run(system, messages, TOOLS, context.dispatch)
 
     def ask(
         self,

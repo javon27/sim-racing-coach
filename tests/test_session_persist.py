@@ -38,19 +38,21 @@ def test_save_chat_roundtrip_and_recent_order(tmp_path):
 
 
 def test_session_threads_history_and_persists(tmp_path):
+    from simcoach.coach_tools import CoachContext
     store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
     model = FakeModel(reply="got it")
     session = CoachSession(Coach(model, str(tmp_path)), "car",
                            store=store, session_id="s1")
 
-    session.ask(None, "first question")
-    session.ask(None, "second question")
+    ctx = CoachContext(store, track="spa", car="car")   # no lap: tools report none
+    session.ask(ctx, "first question")
+    session.ask(ctx, "second question")
 
     # Turn 2 must carry turn 1's Q and A into the model call (the memory fix).
     contents = [m["content"] for m in model.last_messages]
     assert "first question" in contents
     assert "got it" in contents
-    assert contents[-1].endswith("Question: second question")
+    assert contents[-1] == "second question"
 
     # Both exchanges persisted.
     chat = store.session_chat("s1")

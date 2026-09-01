@@ -10,7 +10,6 @@ during a session (fresh setup fetched each question, tier constraints derived
 from it); the rest is session-constant and held on the instance."""
 from __future__ import annotations
 
-from simcoach.analysis import LapAnalysis
 from simcoach.coach import Coach
 from simcoach.driver import DriverProfile
 
@@ -41,25 +40,15 @@ class CoachSession:
         # appends the current lap's facts + question after this history.
         self.history: list[dict] = []
 
-    def ask(
-        self,
-        analysis: LapAnalysis | None,
-        question: str,
-        *,
-        setup: dict | None = None,
-        allowed_adjustments: list[str] | None = None,
-        track: str | None = None,
-        lap_id: int | None = None,
-    ) -> str:
-        answer = self.coach.ask(
-            analysis,
-            self.car,
+    def ask(self, context, question: str) -> str:
+        """Answer one question via the agentic tool loop. `context` (a CoachContext)
+        holds the live lap/setup/units the tools read; history threads the chat."""
+        answer = self.coach.ask_agentic(
+            context,
             question,
+            self.car,
             history=self.history,
-            allowed_adjustments=allowed_adjustments,
             driver_profile=self.driver_profile,
-            setup=setup,
-            track_note=self.track_note,
             input_device=self.input_device,
             units=self.units,
         )
@@ -68,8 +57,8 @@ class CoachSession:
         if self.store is not None:
             # A persistence hiccup must never swallow an answer the driver is waiting on.
             try:
-                self.store.save_chat(self.session_id, track, self.car, lap_id,
-                                     question, answer)
+                self.store.save_chat(self.session_id, context.track, self.car,
+                                     context.lap_id, question, answer)
             except Exception:
                 pass
         return answer

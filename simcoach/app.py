@@ -1,8 +1,8 @@
 import threading
 import time
 
-from simcoach.analysis import analyze_lap
 from simcoach.coach import Coach
+from simcoach.coach_tools import CoachContext
 from simcoach.corners import CornerMap
 from simcoach.session import CoachSession
 from simcoach.source import TelemetrySource
@@ -118,19 +118,18 @@ def run_repl(source: TelemetrySource, store: LapStore, cmap: CornerMap, coach: C
         allowed = legal_adjustments(setup) if setup else None
 
         record = latest["record"]
+        # track/car for store lookups come from the live lap when present, else the
+        # resolved context key. car here is the RAW name laps are stored under (the
+        # tools query the store), distinct from the coach's resolved display name.
+        track = record.track if record else (ctx_key[0] if ctx_key else None)
+        car_raw = record.car if record else (ctx_key[1] if ctx_key else None)
+        context = CoachContext(
+            store, units=units, record=record, lap_id=latest["lap_id"], cmap=cmap,
+            setup=setup, track=track, car=car_raw, on_track=record is not None,
+            allowed_adjustments=allowed,
+        )
         try:
-            if record is None or cmap is None:
-                # No lap yet (or no corner map for this track) — general guidance from
-                # track/car knowledge + setup.
-                answer = session.ask(None, question, setup=setup, allowed_adjustments=allowed)
-            else:
-                # Query history by the raw car the laps were stored under (record.car),
-                # not the resolved model display name passed for the coach.
-                reference = store.best_lap(record.track, record.car,
-                                           exclude_lap_id=latest["lap_id"])
-                analysis = analyze_lap(record, cmap, reference=reference)
-                answer = session.ask(analysis, question, setup=setup, allowed_adjustments=allowed,
-                                     track=record.track, lap_id=latest["lap_id"])
+            answer = session.ask(context, question)
         except Exception as e:
             answer = f"(couldn't answer that one: {type(e).__name__}: {e})"
 
