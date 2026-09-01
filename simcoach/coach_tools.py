@@ -75,7 +75,7 @@ class CoachContext:
 
     def __init__(self, store, units="metric", record=None, lap_id=None, cmap=None,
                  setup=None, track=None, car=None, on_track=None,
-                 allowed_adjustments=None):
+                 allowed_adjustments=None, session_id=None):
         self.store = store
         self.units = units
         self.record = record
@@ -86,6 +86,9 @@ class CoachContext:
         self.car = car or (record.car if record else None)
         self.on_track = on_track
         self.allowed_adjustments = allowed_adjustments
+        # The current on-track stint (practice/qualy/race), for scoping laps and the
+        # reference to this session rather than all-time. From the live lap's stamp.
+        self.session_id = session_id or (record.session_id if record else None)
         self.tool_calls: list = []   # (name, input) invoked this turn, for the chat log
         self._analysis_cache: dict = {}
 
@@ -95,7 +98,14 @@ class CoachContext:
             return None
         key = lap_id if lap_id is not None else id(record)
         if key not in self._analysis_cache:
-            ref = self.store.best_lap(record.track, record.car, exclude_lap_id=lap_id)
+            # Prefer this session's best (fair same-phase comparison — a race lap vs
+            # the race best, not a qualy hot lap); fall back to all-time.
+            ref = None
+            if self.session_id:
+                ref = self.store.best_lap(record.track, record.car, exclude_lap_id=lap_id,
+                                          session_id=self.session_id)
+            if ref is None:
+                ref = self.store.best_lap(record.track, record.car, exclude_lap_id=lap_id)
             self._analysis_cache[key] = analyze_lap(record, self.cmap, reference=ref)
         return self._analysis_cache[key]
 
@@ -124,20 +134,27 @@ class CoachContext:
 
     # --- tools -----------------------------------------------------------
     def get_session_status(self):
-        n = len(self.store.list_lap_ids(self.track, self.car)) if (self.track and self.car) else 0
+        n_all = len(self.store.list_lap_ids(self.track, self.car)) if (self.track and self.car) else 0
+        n_sess = len(self.store.session_lap_ids(self.session_id)) if self.session_id else None
         has_ref = bool(self.track and self.car and self.store.best_lap(self.track, self.car))
         on = "on track" if self.on_track else ("unknown" if self.on_track is None else "not on track")
         lap = "yes" if self.record is not None else "no lap captured yet"
+        phase = self.record.phase if self.record else None
+        laps_txt = (f"this session: {n_sess}, all-time this track/car: {n_all}"
+                    if n_sess is not None else f"this track/car: {n_all} (no session split)")
         return (f"Track: {self.track or 'unknown'} | Car: {self.car or 'unknown'} | "
-                f"State: {on} | Current lap: {lap} | Laps stored (this track/car): {n} | "
-                f"Reference (best) lap available: {'yes' if has_ref else 'no'}")
+                f"Session type: {phase or 'unknown'} | State: {on} | Current lap: {lap} | "
+                f"Laps ({laps_txt}) | Reference (best) lap available: {'yes' if has_ref else 'no'}")
 
     def list_recent_laps(self, limit=10):
         if not (self.track and self.car):
             return "No track/car resolved yet — no laps to list."
-        rows = self.store.recent_laps(self.track, self.car, int(limit or 10))
+        # Scope to the current stint when we have one, so the driver sees this
+        # session's laps rather than every lap ever run here.
+        rows = self.store.recent_laps(self.track, self.car, int(limit or 10),
+                                      session_id=self.session_id)
         if not rows:
-            return "No laps stored for this track/car yet."
+            return "No laps stored for this session yet."
         out = []
         for r in rows:
             valid = "valid" if r["valid"] else "INVALID"

@@ -149,7 +149,7 @@ class LapStore:
             return LapRecord(sim, track, car, lap_time, bool(valid), ts, channels, phase, session_id)
 
     def best_lap(self, track: str, car: str, exclude_lap_id: int | None = None,
-                 phase: str | None = None) -> LapRecord | None:
+                 phase: str | None = None, session_id: str | None = None) -> LapRecord | None:
         with self._lock:
             query = "SELECT id FROM laps WHERE track = ? AND car = ? AND valid = 1"
             params: list = [track, car]
@@ -159,6 +159,9 @@ class LapStore:
             if phase is not None:
                 query += " AND phase = ?"
                 params.append(phase)
+            if session_id is not None:
+                query += " AND session_id = ?"
+                params.append(session_id)
             query += " ORDER BY lap_time ASC LIMIT 1"
             row = self.conn.execute(query, params).fetchone()
             if row is None:
@@ -173,15 +176,20 @@ class LapStore:
             ).fetchall()
             return [r[0] for r in rows]
 
-    def recent_laps(self, track: str, car: str, limit: int = 10) -> list[dict]:
+    def recent_laps(self, track: str, car: str, limit: int = 10,
+                    session_id: str | None = None) -> list[dict]:
         """Recent laps for a track/car (newest first) as lightweight rows — no
-        telemetry loaded — so a tool can list laps for the model to choose from."""
+        telemetry loaded — so a tool can list laps for the model to choose from.
+        Pass session_id to scope to the current stint."""
         with self._lock:
-            rows = self.conn.execute(
-                "SELECT id, lap_time, valid, phase FROM laps WHERE track = ? AND car = ? "
-                "ORDER BY id DESC LIMIT ?",
-                (track, car, limit),
-            ).fetchall()
+            query = "SELECT id, lap_time, valid, phase FROM laps WHERE track = ? AND car = ?"
+            params: list = [track, car]
+            if session_id is not None:
+                query += " AND session_id = ?"
+                params.append(session_id)
+            query += " ORDER BY id DESC LIMIT ?"
+            params.append(limit)
+            rows = self.conn.execute(query, params).fetchall()
             keys = ("lap_id", "lap_time", "valid", "phase")
             return [dict(zip(keys, r)) for r in rows]
 

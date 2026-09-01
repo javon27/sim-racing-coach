@@ -36,7 +36,7 @@ def test_get_lap_summary_and_tires(tmp_path, synthetic_lap):
 def test_session_status_and_recent_laps(tmp_path, synthetic_lap):
     ctx, store, lap_id = _ctx(tmp_path, synthetic_lap)
     status = ctx.get_session_status()
-    assert "test_track" in status and "Laps stored" in status
+    assert "test_track" in status and "Laps" in status
     listing = ctx.list_recent_laps()
     assert f"lap {lap_id}:" in listing
 

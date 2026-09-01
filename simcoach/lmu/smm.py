@@ -237,6 +237,22 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
     }
 
 
+def session_phase(m_session: int) -> str:
+    """Map the rF2/LMU scoring mSession index to a coarse phase. Standard rFactor2
+    convention (0=test day, 1-4=practice, 5-8=qualifying, 9=warmup, 10-13=race),
+    PENDING LIVE VALIDATION. Used so laps can be filtered/compared by session type
+    instead of pooling qualy hot laps with race stints."""
+    if m_session <= 0:
+        return "testday"
+    if m_session <= 4:
+        return "practice"
+    if m_session <= 8:
+        return "qualifying"
+    if m_session == 9:
+        return "warmup"
+    return "race"
+
+
 def build_lap_record(
     sim: str,
     track: str,
@@ -245,6 +261,8 @@ def build_lap_record(
     invalidated: bool,
     timestamp: float,
     channels: dict[str, list[float]],
+    phase: str | None = None,
+    session_id: str | None = None,
 ) -> LapRecord | None:
     """Pure decision: turn a completed lap's raw fields into a LapRecord, or
     None if the lap shouldn't be stored.
@@ -264,6 +282,8 @@ def build_lap_record(
         valid=not invalidated,
         timestamp=timestamp,
         channels={k: np.array(v) for k, v in channels.items()},
+        phase=phase,
+        session_id=session_id,
     )
 
 
@@ -333,6 +353,11 @@ class LmuSource:
         period = 1.0 / self.poll_hz
         channels: dict[str, list[float]] = {}
         current_lap_number: int | None = None
+        # A "session" is one on-track stint: a fresh id is minted whenever the
+        # (track, car, sim-session-index) changes, so laps group by practice/qualy/
+        # race instead of pooling all-time. mSession also gives the phase label.
+        session_key: tuple | None = None
+        session_id: str | None = None
 
         while True:
             telem = read_consistent(telemetry_name, rF2Telemetry)
@@ -349,14 +374,23 @@ class LmuSource:
 
             if vt.mLapNumber != current_lap_number:
                 if channels:
+                    track = vt.mTrackName.decode(errors="replace")
+                    car = vt.mVehicleName.decode(errors="replace")
+                    phase = session_phase(scoring.mScoringInfo.mSession)
+                    key = (track, car, scoring.mScoringInfo.mSession)
+                    if key != session_key:
+                        session_key = key
+                        session_id = f"{time.strftime('%Y-%m-%dT%H%M%S')}-{phase}"
                     record = build_lap_record(
                         sim="lmu",
-                        track=vt.mTrackName.decode(errors="replace"),
-                        car=vt.mVehicleName.decode(errors="replace"),
+                        track=track,
+                        car=car,
                         lap_time=player.mLastLapTime,
                         invalidated=vt.mLapInvalidated,
                         timestamp=time.time(),
                         channels=channels,
+                        phase=phase,
+                        session_id=session_id,
                     )
                     if record is not None:
                         yield record

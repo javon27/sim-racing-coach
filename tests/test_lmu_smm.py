@@ -164,6 +164,23 @@ def test_build_lap_record_clean_lap_is_valid():
     assert record.valid is True
 
 
+def test_build_lap_record_stamps_phase_and_session():
+    record = build_lap_record(
+        "lmu", "track", "car", lap_time=92.5, invalidated=0, timestamp=0.0,
+        channels=_channels(), phase="race", session_id="s1",
+    )
+    assert record.phase == "race" and record.session_id == "s1"
+
+
+def test_session_phase_maps_msession_index():
+    from simcoach.lmu.smm import session_phase
+    assert session_phase(0) == "testday"
+    assert session_phase(2) == "practice"
+    assert session_phase(6) == "qualifying"
+    assert session_phase(9) == "warmup"
+    assert session_phase(13) == "race"
+
+
 def make_wrapper(num_vehicles: int = 1, **vehicle_overrides) -> rF2Telemetry:
     """Build an rF2Telemetry wrapper around make_telem(), the way a real MMF
     frame holds mNumVehicles + mVehicles[]."""

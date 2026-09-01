@@ -124,6 +124,19 @@ def test_best_lap_phase_filter(tmp_path, synthetic_lap):
     assert s.best_lap("test_track", "test_car").lap_time == 90.0
 
 
+def test_best_lap_session_filter(tmp_path, synthetic_lap):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path/"c.sqlite"), str(tmp_path/"data"))
+    # all-time best is a qualy lap; the race session's own best is slower
+    s.save(LapRecord(**{**synthetic_lap.__dict__, "lap_time": 90.0,
+                        "session_id": "qualy", "phase": "qualifying"}))
+    s.save(LapRecord(**{**synthetic_lap.__dict__, "lap_time": 95.0,
+                        "session_id": "race", "phase": "race"}))
+    assert s.best_lap("test_track", "test_car").lap_time == 90.0            # all-time
+    assert s.best_lap("test_track", "test_car", session_id="race").lap_time == 95.0
+    assert s.recent_laps("test_track", "test_car", session_id="race")[0]["phase"] == "race"
+
+
 def test_v1_schema_migrates_in_place_to_v2(tmp_path, synthetic_lap):
     from simcoach.store import SCHEMA_VERSION, LapStore
     db_path = str(tmp_path/"c.sqlite")
