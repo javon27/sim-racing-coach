@@ -100,12 +100,37 @@ def read_struct(name: str, ctype):
 def read_consistent(name: str, ctype, retries: int = 6):
     """read_struct, retried while mVersionUpdateBegin != mVersionUpdateEnd
     (a torn read caught mid-write). Best-effort: returns the last read even
-    if it never settles within `retries` attempts."""
+    if it never settles within `retries` attempts.
+
+    Opens the mapping by name each call — fine for ONE-SHOT reads
+    (read_session_track_car, compatibility_check). The 50 Hz capture loop uses
+    read_consistent_open against a mapping kept open for the whole run instead,
+    to avoid mapping/unmapping the shared memory tens of thousands of times."""
     inst = read_struct(name, ctype)
     for _ in range(retries):
         if version_ok(inst):
             return inst
         inst = read_struct(name, ctype)
+    return inst
+
+
+def _struct_from_open(mm: mmap.mmap, ctype):
+    """Copy sizeof(ctype) bytes from position 0 of an ALREADY-OPEN mapping."""
+    mm.seek(0)
+    buf = mm.read(C.sizeof(ctype))
+    inst = ctype()
+    C.memmove(C.addressof(inst), buf, C.sizeof(ctype))
+    return inst
+
+
+def read_consistent_open(mm: mmap.mmap, ctype, retries: int = 6):
+    """Like read_consistent but reads from a mapping that stays open across
+    calls (no per-read OpenFileMapping/mmap/close). Same torn-read retry."""
+    inst = _struct_from_open(mm, ctype)
+    for _ in range(retries):
+        if version_ok(inst):
+            return inst
+        inst = _struct_from_open(mm, ctype)
     return inst
 
 
@@ -291,6 +316,15 @@ def build_lap_record(
     """
     if lap_time <= 0:
         return None
+    # Reject a lap whose distance axis jumps BACKWARD by a lot: within one clean
+    # lap (S/F to S/F) lap_distance climbs 0->L monotonically, so a big negative
+    # step means a reset-to-track/pit or the first partial lap that spans an S/F
+    # crossing. Those produce a scrambled per-corner alignment axis (the bug that
+    # made every corner read "no telemetry"), so drop them rather than store junk.
+    dist = channels.get("lap_distance")
+    if dist is not None and len(dist) >= 2:
+        if float(np.min(np.diff(np.asarray(dist)))) < -500.0:
+            return None
     return LapRecord(
         sim=sim,
         track=track,
@@ -352,15 +386,11 @@ class LmuSource:
         self.poll_hz = poll_hz
 
     def laps(self) -> Iterator[LapRecord]:
+        # Open each buffer ONCE and keep it mapped for the whole run — the 50 Hz
+        # loop then only seeks+reads (no OpenFileMapping/mmap/close per sample).
         try:
-            telemetry_name, handle = open_first_available(
-                TELEMETRY_CANDIDATES, C.sizeof(rF2Telemetry)
-            )
-            handle.close()
-            scoring_name, handle = open_first_available(
-                SCORING_CANDIDATES, C.sizeof(rF2Scoring)
-            )
-            handle.close()
+            _, telem_mm = open_first_available(TELEMETRY_CANDIDATES, C.sizeof(rF2Telemetry))
+            _, scoring_mm = open_first_available(SCORING_CANDIDATES, C.sizeof(rF2Scoring))
         except RuntimeError as exc:
             raise RuntimeError(
                 "LMU shared memory not found (is LMU running? did an update "
@@ -376,46 +406,50 @@ class LmuSource:
         session_key: tuple | None = None
         session_id: str | None = None
 
-        while True:
-            telem = read_consistent(telemetry_name, rF2Telemetry)
-            scoring = read_consistent(scoring_name, rF2Scoring)
+        try:
+            while True:
+                telem = read_consistent_open(telem_mm, rF2Telemetry)
+                scoring = read_consistent_open(scoring_mm, rF2Scoring)
 
-            player = _find_player(scoring)
-            vt = _find_telem_by_id(telem, player.mID) if player is not None else None
-            if player is None or vt is None:
+                player = _find_player(scoring)
+                vt = _find_telem_by_id(telem, player.mID) if player is not None else None
+                if player is None or vt is None:
+                    time.sleep(period)
+                    continue
+
+                if current_lap_number is None:
+                    current_lap_number = vt.mLapNumber
+
+                if vt.mLapNumber != current_lap_number:
+                    if channels:
+                        track = vt.mTrackName.decode(errors="replace")
+                        car = vt.mVehicleName.decode(errors="replace")
+                        phase = session_phase(scoring.mScoringInfo.mSession)
+                        key = (track, car, scoring.mScoringInfo.mSession)
+                        if key != session_key:
+                            session_key = key
+                            session_id = f"{time.strftime('%Y-%m-%dT%H%M%S')}-{phase}"
+                        record = build_lap_record(
+                            sim="lmu",
+                            track=track,
+                            car=car,
+                            lap_time=player.mLastLapTime,
+                            invalidated=vt.mLapInvalidated,
+                            timestamp=time.time(),
+                            channels=channels,
+                            phase=phase,
+                            session_id=session_id,
+                        )
+                        if record is not None:
+                            yield record
+                    channels = {}
+                    current_lap_number = vt.mLapNumber
+
+                sample = sample_from_telem(vt, player.mLapDist)
+                for k, v in sample.items():
+                    channels.setdefault(k, []).append(v)
+
                 time.sleep(period)
-                continue
-
-            if current_lap_number is None:
-                current_lap_number = vt.mLapNumber
-
-            if vt.mLapNumber != current_lap_number:
-                if channels:
-                    track = vt.mTrackName.decode(errors="replace")
-                    car = vt.mVehicleName.decode(errors="replace")
-                    phase = session_phase(scoring.mScoringInfo.mSession)
-                    key = (track, car, scoring.mScoringInfo.mSession)
-                    if key != session_key:
-                        session_key = key
-                        session_id = f"{time.strftime('%Y-%m-%dT%H%M%S')}-{phase}"
-                    record = build_lap_record(
-                        sim="lmu",
-                        track=track,
-                        car=car,
-                        lap_time=player.mLastLapTime,
-                        invalidated=vt.mLapInvalidated,
-                        timestamp=time.time(),
-                        channels=channels,
-                        phase=phase,
-                        session_id=session_id,
-                    )
-                    if record is not None:
-                        yield record
-                channels = {}
-                current_lap_number = vt.mLapNumber
-
-            sample = sample_from_telem(vt, player.mLapDist)
-            for k, v in sample.items():
-                channels.setdefault(k, []).append(v)
-
-            time.sleep(period)
+        finally:
+            telem_mm.close()
+            scoring_mm.close()

@@ -43,9 +43,18 @@ def run_repl(source: TelemetrySource, store: LapStore, cmap: CornerMap, coach: C
                     lap_id = store.save(lap)
                     latest["lap_id"] = lap_id
                     latest["record"] = lap
-            except Exception:
+                    # One concise confirmation per stored lap: sample count is the
+                    # health signal — a clean ~50 Hz lap has thousands of samples;
+                    # a sparse count means the capture loop is starved (diagnostic).
+                    n = len(lap.channels.get("lap_distance", []))
+                    hz = n / lap.lap_time if lap.lap_time else 0
+                    print(f"\n  [lap {lap_id} stored: {n} samples, ~{hz:.0f} Hz]", flush=True)
+            except Exception as e:
                 # LMU likely closed / shared memory vanished — wait for it to
                 # come back, then re-open and resume. (daemon thread; loops forever)
+                # Surface it (was silently swallowed) so a real capture fault is
+                # visible instead of manifesting as missing/degraded laps.
+                print(f"\n  [capture paused: {type(e).__name__}: {e} — retrying in 3s]", flush=True)
                 time.sleep(3)
 
     threading.Thread(target=capture, daemon=True).start()
