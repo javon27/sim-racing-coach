@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import threading
@@ -9,12 +10,13 @@ import numpy as np
 
 from simcoach.model_types import LapRecord
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
-# (NULL for pre-lap general questions). Defined separately so both fresh installs
-# and the v2->v3 migration create the identical table.
+# (NULL for pre-lap general questions); tool_calls is a JSON list of the on-demand
+# tools the agentic coach invoked that turn (added v4). Defined separately so both
+# fresh installs and the migration create the identical table.
 _COACH_CHAT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS coach_chat (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -24,7 +26,8 @@ CREATE TABLE IF NOT EXISTS coach_chat (
     car TEXT,
     lap_id INTEGER,
     question TEXT,
-    answer TEXT
+    answer TEXT,
+    tool_calls TEXT
 );
 """
 
@@ -86,6 +89,12 @@ class LapStore:
             if current_version < 3:
                 # v2 -> v3: add the coach chat log.
                 self.conn.executescript(_COACH_CHAT_SCHEMA)
+            if current_version < 4:
+                # v3 -> v4: log the agentic coach's tool calls per turn. Guard the
+                # ADD COLUMN: a <3 db just created coach_chat with tool_calls already.
+                cols = [r[1] for r in self.conn.execute("PRAGMA table_info(coach_chat)")]
+                if "tool_calls" not in cols:
+                    self.conn.execute("ALTER TABLE coach_chat ADD COLUMN tool_calls TEXT")
         if current_version != SCHEMA_VERSION:
             self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self.conn.commit()
@@ -186,26 +195,32 @@ class LapStore:
 
     def save_chat(self, session_id: str, track: str | None, car: str | None,
                   lap_id: int | None, question: str, answer: str,
-                  ts: float | None = None) -> None:
-        """Append one coach Q&A exchange to the persistent chat log."""
+                  tool_calls: list | None = None, ts: float | None = None) -> None:
+        """Append one coach Q&A exchange (with the tools it invoked) to the log."""
+        tc_json = json.dumps(tool_calls) if tool_calls else None
         with self._lock, self.conn:
             self.conn.execute(
-                "INSERT INTO coach_chat (ts, session_id, track, car, lap_id, question, answer) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO coach_chat (ts, session_id, track, car, lap_id, question, "
+                "answer, tool_calls) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (ts if ts is not None else time.time(), session_id, track, car,
-                 lap_id, question, answer),
+                 lap_id, question, answer, tc_json),
             )
 
     def session_chat(self, session_id: str) -> list[dict]:
         """Every Q&A exchange in a session, oldest first (for review / memory)."""
         with self._lock:
             rows = self.conn.execute(
-                "SELECT ts, track, car, lap_id, question, answer FROM coach_chat "
+                "SELECT ts, track, car, lap_id, question, answer, tool_calls FROM coach_chat "
                 "WHERE session_id = ? ORDER BY id ASC",
                 (session_id,),
             ).fetchall()
-            keys = ("ts", "track", "car", "lap_id", "question", "answer")
-            return [dict(zip(keys, r)) for r in rows]
+            keys = ("ts", "track", "car", "lap_id", "question", "answer", "tool_calls")
+            out = []
+            for r in rows:
+                d = dict(zip(keys, r))
+                d["tool_calls"] = json.loads(d["tool_calls"]) if d["tool_calls"] else []
+                out.append(d)
+            return out
 
     def recent_session_ids(self, limit: int = 10) -> list[str]:
         """Chat session ids, most recent first."""

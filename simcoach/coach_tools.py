@@ -86,6 +86,7 @@ class CoachContext:
         self.car = car or (record.car if record else None)
         self.on_track = on_track
         self.allowed_adjustments = allowed_adjustments
+        self.tool_calls: list = []   # (name, input) invoked this turn, for the chat log
         self._analysis_cache: dict = {}
 
     # --- helpers ---------------------------------------------------------
@@ -184,6 +185,7 @@ class CoachContext:
     def dispatch(self, name: str, args: dict) -> str:
         """Execute one tool call by name. Unknown tool -> error string."""
         args = args or {}
+        self.tool_calls.append({"name": name, "input": args})
         handler = {
             "get_session_status": lambda: self.get_session_status(),
             "list_recent_laps": lambda: self.list_recent_laps(args.get("limit", 10)),

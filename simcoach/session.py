@@ -58,7 +58,8 @@ class CoachSession:
             # A persistence hiccup must never swallow an answer the driver is waiting on.
             try:
                 self.store.save_chat(self.session_id, context.track, self.car,
-                                     context.lap_id, question, answer)
+                                     context.lap_id, question, answer,
+                                     tool_calls=context.tool_calls)
             except Exception:
                 pass
         return answer
