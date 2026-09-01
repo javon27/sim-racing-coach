@@ -19,6 +19,8 @@ class CornerMetrics:
     brake_point: float
     throttle_point: float
     trailbrake_overlap: float
+    peak_brake: float = 0.0          # max brake input in the corner (0..1)
+    peak_lat_g: float = 0.0          # max |lateral g| — how hard the car was loaded
     min_spd_delta: Optional[float] = None
 
 
@@ -27,6 +29,26 @@ class LapAnalysis:
     lap_time: float
     corners: list[CornerMetrics]
     has_reference: bool
+    # Lap-level tire state (the coachable signal: imbalance + warm-up). Per-corner
+    # tire temps are deferred until the replay overlay actually consumes them.
+    tire_means: Optional[dict[str, float]] = None      # {'fl','fr','rl','rr'}: °C mean over lap
+    tire_warmup: Optional[tuple[float, float]] = None  # (early °C, late °C), all-wheel mean
+
+
+_TIRE_KEYS = ("tire_temp_fl", "tire_temp_fr", "tire_temp_rl", "tire_temp_rr")
+
+
+def _tire_summary(record: LapRecord):
+    """Lap-level tire temps: per-wheel mean (imbalance) and an early-vs-late
+    warm-up pair. Returns (None, None) for laps captured without tire channels."""
+    if not all(k in record.channels for k in _TIRE_KEYS):
+        return None, None
+    means = {k[-2:]: float(np.nanmean(record.channels[k])) for k in _TIRE_KEYS}
+    allt = np.vstack([record.channels[k] for k in _TIRE_KEYS])
+    w = max(1, allt.shape[1] // 7)  # first/last ~15% of the lap
+    early = float(np.nanmean(allt[:, :w]))
+    late = float(np.nanmean(allt[:, -w:]))
+    return means, (early, late)
 
 
 def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
@@ -95,6 +117,11 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
     )
 
     trailbrake_overlap = float(np.mean((win_brake > 0.1) & (np.abs(win_steering) > 0.1)))
+    peak_brake = float(np.nanmax(win_brake)) if win_brake.size else 0.0
+    win_lat_g = record.channels.get("lat_g")
+    peak_lat_g = (
+        float(np.nanmax(np.abs(win_lat_g[idx]))) if win_lat_g is not None and idx.size else 0.0
+    )
 
     try:
         direction = compute_direction(record, corner.start_dist, corner.end_dist)
@@ -113,6 +140,8 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
         brake_point=brake_point,
         throttle_point=throttle_point,
         trailbrake_overlap=trailbrake_overlap,
+        peak_brake=peak_brake,
+        peak_lat_g=peak_lat_g,
     )
 
 
@@ -134,4 +163,8 @@ def analyze_lap(
             else:
                 cm.min_spd_delta = None
 
-    return LapAnalysis(lap_time=record.lap_time, corners=corners, has_reference=has_reference)
+    tire_means, tire_warmup = _tire_summary(record)
+    return LapAnalysis(
+        lap_time=record.lap_time, corners=corners, has_reference=has_reference,
+        tire_means=tire_means, tire_warmup=tire_warmup,
+    )

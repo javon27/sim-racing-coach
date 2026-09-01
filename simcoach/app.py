@@ -4,6 +4,7 @@ import time
 from simcoach.analysis import analyze_lap
 from simcoach.coach import Coach
 from simcoach.corners import CornerMap
+from simcoach.session import CoachSession
 from simcoach.source import TelemetrySource
 from simcoach.store import LapStore
 from simcoach.tiers import legal_adjustments
@@ -11,7 +12,8 @@ from simcoach.tiers import legal_adjustments
 
 def run_repl(source: TelemetrySource, store: LapStore, cmap: CornerMap, coach: Coach,
              car: str, rest=None, track_note: str | None = None,
-             input_device: str | None = None) -> None:
+             input_device: str | None = None, units: str = "metric",
+             resolver=None, peek=None, initial_key: tuple[str, str] | None = None) -> None:
     """Background thread captures laps from `source` into `store` (silently, no
     per-lap print). Foreground loop answers questions — including BEFORE any lap is
     captured (general track/car/setup guidance), and lap-specific once you've driven.
@@ -19,6 +21,15 @@ def run_repl(source: TelemetrySource, store: LapStore, cmap: CornerMap, coach: C
     `car` is the resolved model name (coach + its knowledge note). `rest`, if given
     (an LmuRest), supplies the current setup to each answer. `track_note` is the map
     slug used to load the track's knowledge note.
+
+    The coaching context (corner map, car, track note) FOLLOWS the live session: when
+    the current lap's or live-peeked (track, car) no longer matches what the context
+    was resolved for, `resolver(track, vehicle, channels) -> (cmap, car, note)` is
+    called to re-resolve it. This corrects a stale startup snapshot (e.g. the coach
+    launched on LMU's menu showing the previous track) and a mid-run track/car change.
+    `peek() -> (track, vehicle) | None` reads the live session so context can switch
+    even before the first lap is captured. `initial_key` is what the passed-in context
+    was resolved for, so an already-correct startup doesn't re-resolve or print a notice.
 
     Resilience: the capture thread survives LMU dropping mid-session (it waits and
     retries rather than dying), and an error answering one question is reported
@@ -39,6 +50,46 @@ def run_repl(source: TelemetrySource, store: LapStore, cmap: CornerMap, coach: C
 
     threading.Thread(target=capture, daemon=True).start()
 
+    # One conversation for the whole run: threads prior Q&A so follow-ups have
+    # context, and persists every exchange to the chat log. session_id is a
+    # sortable timestamp so `store.recent_session_ids()` reads newest-first.
+    session_id = time.strftime("%Y-%m-%dT%H%M%S")
+    session = CoachSession(coach, car, track_note=track_note, input_device=input_device,
+                           store=store, session_id=session_id, units=units)
+
+    ctx_key = (initial_key[0].strip(), initial_key[1].strip()) if initial_key else None
+
+    def maybe_reresolve():
+        """Re-point the coaching context at the live (track, car) when it changes.
+        Driven by the current lap when there is one, else a live session peek so the
+        context is right even before a lap is captured."""
+        nonlocal cmap, ctx_key
+        if resolver is None:
+            return
+        rec = latest["record"]
+        if rec is not None:
+            cur, channels = (rec.track.strip(), rec.car.strip()), rec.channels
+        elif peek is not None:
+            p = peek()
+            if p is None:
+                return
+            cur, channels = (p[0].strip(), p[1].strip()), None
+        else:
+            return
+        if cur == ctx_key:
+            return
+        try:
+            new_cmap, new_car, new_note = resolver(cur[0], cur[1], channels)
+        except Exception:
+            return  # keep the current context rather than blanking it on a transient error
+        track_changed = ctx_key is None or cur[0] != ctx_key[0]
+        cmap, session.car, session.track_note = new_cmap, new_car, new_note
+        if ctx_key is not None:
+            print(f"\n  ↻ session changed → {cur[0]} / {new_car}")
+            if track_changed:
+                session.reset()  # don't let the previous track's conversation bleed in
+        ctx_key = cur
+
     rule = "─" * 60
     print(f"\nSim-racing coach ready. Ask a question any time (or 'quit' to exit).\n{rule}")
     while True:
@@ -53,6 +104,8 @@ def run_repl(source: TelemetrySource, store: LapStore, cmap: CornerMap, coach: C
         # few seconds with no output otherwise).
         print("\n  …coaching…", flush=True)
 
+        maybe_reresolve()
+
         setup = None
         if rest is not None:
             try:
@@ -66,18 +119,18 @@ def run_repl(source: TelemetrySource, store: LapStore, cmap: CornerMap, coach: C
 
         record = latest["record"]
         try:
-            if record is None:
-                # No lap yet — general guidance from track/car knowledge + setup.
-                answer = coach.ask(None, car, question, setup=setup, track_note=track_note,
-                                   input_device=input_device, allowed_adjustments=allowed)
+            if record is None or cmap is None:
+                # No lap yet (or no corner map for this track) — general guidance from
+                # track/car knowledge + setup.
+                answer = session.ask(None, question, setup=setup, allowed_adjustments=allowed)
             else:
                 # Query history by the raw car the laps were stored under (record.car),
                 # not the resolved model display name passed for the coach.
                 reference = store.best_lap(record.track, record.car,
                                            exclude_lap_id=latest["lap_id"])
                 analysis = analyze_lap(record, cmap, reference=reference)
-                answer = coach.ask(analysis, car, question, setup=setup, track_note=track_note,
-                                   input_device=input_device, allowed_adjustments=allowed)
+                answer = session.ask(analysis, question, setup=setup, allowed_adjustments=allowed,
+                                     track=record.track, lap_id=latest["lap_id"])
         except Exception as e:
             answer = f"(couldn't answer that one: {type(e).__name__}: {e})"
 

@@ -41,10 +41,10 @@ def test_save_is_atomic_on_failure(tmp_path, synthetic_lap):
 
 
 def test_user_version_not_clobbered(tmp_path):
-    from simcoach.store import LapStore
+    from simcoach.store import SCHEMA_VERSION, LapStore
     db_path = str(tmp_path/"c.sqlite")
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA user_version = 2")
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
     conn.close()
 
@@ -53,7 +53,7 @@ def test_user_version_not_clobbered(tmp_path):
     conn = sqlite3.connect(db_path)
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     conn.close()
-    assert version == 2
+    assert version == SCHEMA_VERSION
 
 
 def test_load_missing_lap_raises_keyerror(tmp_path):
@@ -125,7 +125,7 @@ def test_best_lap_phase_filter(tmp_path, synthetic_lap):
 
 
 def test_v1_schema_migrates_in_place_to_v2(tmp_path, synthetic_lap):
-    from simcoach.store import LapStore
+    from simcoach.store import SCHEMA_VERSION, LapStore
     db_path = str(tmp_path/"c.sqlite")
     conn = sqlite3.connect(db_path)
     conn.execute(
@@ -143,11 +143,15 @@ def test_v1_schema_migrates_in_place_to_v2(tmp_path, synthetic_lap):
     s = LapStore(db_path, str(tmp_path/"data"))
 
     version = s.conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 2
+    assert version == SCHEMA_VERSION  # v1 steps all the way to current
 
     # old row still queryable via the new query helpers
     old_row = s.conn.execute("SELECT id FROM laps WHERE track = 't' AND car = 'c'").fetchone()
     assert old_row is not None
+
+    # v3 coach_chat table reached by the same cumulative migration
+    s.save_chat("s1", "t", "c", None, "q", "a")
+    assert s.session_chat("s1")[0]["answer"] == "a"
 
     # a new save() with phase works against the migrated schema
     lap = LapRecord(**{**synthetic_lap.__dict__, "phase": "race", "session_id": "s1"})

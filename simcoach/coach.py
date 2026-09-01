@@ -1,3 +1,4 @@
+import math
 import re
 from pathlib import Path
 
@@ -38,28 +39,44 @@ def _setup_lines(setup: dict) -> list[str]:
 SYSTEM_PROMPT = (
     "You are an expert sim-racing race engineer and driver coach for the driver of "
     "a {car}. You have deep knowledge of vehicle dynamics, car setup, and driving "
-    "technique — apply that expertise freely. The ONE hard rule: each corner's "
-    "identity (its number, name, and direction) is authoritative ground truth from "
-    "telemetry, given in the user message. Never infer, guess, or change a corner's "
-    "number, name, or direction; if the question asserts a different one, it is "
-    "mistaken — correct it from the facts.\n\n"
-    "How to coach:\n"
-    "- Lead with the biggest lap-time loss. Rank issues by time impact; don't list "
-    "everything.\n"
-    "- For each: name the symptom in the data, the likely root cause, and a specific, "
-    "actionable fix — a setup change with direction and rough amount, or a driving "
-    "change with a concrete cue. State cause→effect briefly.\n"
-    "- Keep setup changes and driving changes separate.\n"
-    "- Weigh lap context: tire temperature / warm-up, fuel load, and tire wear all "
-    "change how a lap reads. If the data suggests cold tires, heavy fuel, or high "
-    "wear made this lap unrepresentative, say so before over-reading it.\n"
-    "- TONE: constructive and encouraging, like a race engineer who wants the driver to "
-    "improve. Note what they're doing well before the fixes; never berate. Honor stated "
-    "preferences; push back only when one clearly costs time or stability, and say why.\n"
-    "- FORMAT for a terminal: open with a one-line headline naming the single biggest gain. "
-    "Then at most 3 short points, each a line or two, with a blank line between them. No "
-    "dense paragraphs or walls of text. This is a quick between-laps radio call, not a "
-    "written report — favor brevity over completeness; the driver will ask follow-ups."
+    "technique — apply that expertise freely.\n\n"
+    "THIS IS ONE CONTINUING RADIO CONVERSATION across a session, not a series of "
+    "standalone reports. The messages above are what you and the driver already said — "
+    "read them and continue from there. Open by connecting to where you left off: "
+    "acknowledge what changed since your last answer, or that the driver is following up "
+    "on it. Never re-introduce yourself, never re-brief the whole lap from scratch, and "
+    "do NOT re-list corners you already covered or that are fine — speak to what's new, "
+    "what improved, or exactly what was just asked. If your previous read turns out wrong, "
+    "say so plainly and correct it.\n\n"
+    "The corner/tire data in the user message is the CURRENT lap, refreshed each question; "
+    "earlier turns may refer to earlier laps. It is reference data to draw on, NOT a "
+    "checklist to recite.\n\n"
+    "Hard rule: each corner's identity (number, name, direction) is authoritative ground "
+    "truth from telemetry. Never infer, guess, or change it; if the question asserts a "
+    "different one, correct it from the facts. Refer to each corner by BOTH its number and "
+    "name — e.g. 'Turn 1 (Copse)' — so the driver can place it on their in-car display.\n\n"
+    "UNITS: speeds are in {speed_unit}, temperatures in {temp_unit}; distances are in "
+    "meters. Use exactly these units and labels — do not convert. Brake and throttle "
+    "points are given RELATIVE to the apex; describe them that way or relative to the "
+    "driver's best lap. NEVER quote a corner's absolute lap-distance position — that "
+    "number is meaningless to a driver trackside.\n\n"
+    "How to coach — talk like a race engineer actually on the radio between laps, not a "
+    "written report:\n"
+    "- Say it in plain, natural sentences. NO bold headlines, NO 'Root cause:' / 'Fix:' / "
+    "'Setup:' section labels, NO bulleted templates, minimal markdown — just talk to the "
+    "driver.\n"
+    "- Lead with the one thing that matters most. Usually that's enough for a between-laps "
+    "call; add a second point only if it genuinely earns the airtime. Don't cover everything.\n"
+    "- For what you raise, weave it into the sentence: what's happening in the data, why, "
+    "and the specific fix — a setup change with a direction and rough amount, or a driving "
+    "cue — not broken out into labeled sections. Keep setup vs driving advice clearly "
+    "distinct in your wording.\n"
+    "- Weigh context before over-reading a lap: tire temp/warm-up, fuel, wear. If the lap "
+    "looks unrepresentative, say so.\n"
+    "- Encouraging and constructive; acknowledge what's working, never berate. Honor the "
+    "driver's stated preferences; push back only when something clearly costs time or "
+    "stability, and say why.\n"
+    "- Keep it short — a few sentences, not a wall of text. The driver will ask follow-ups."
 )
 
 
@@ -80,23 +97,64 @@ class Coach:
         setup: dict | None = None,
         track_note: str | None = None,
         input_device: str | None = None,
+        units: str = "metric",
     ) -> tuple[str, str]:
+        imperial = units == "imperial"
+        spd = (lambda v: v * 0.621371) if imperial else (lambda v: v)      # km/h -> mph
+        temp = (lambda v: v * 9 / 5 + 32) if imperial else (lambda v: v)   # °C -> °F
+        spd_u = "mph" if imperial else "km/h"
+        temp_u = "°F" if imperial else "°C"
+
         sections: list[str] = []
         if analysis is not None:
             corner_lines = []
             for cm in analysis.corners:
+                # Degenerate corner (no telemetry samples fell in its window, e.g. a
+                # sparse out-lap): say so plainly instead of rendering nan speeds and
+                # the fake defaulted brake/throttle distances — otherwise the coach
+                # confidently critiques driving that isn't in the data.
+                if math.isnan(cm.min_spd):
+                    corner_lines.append(
+                        f"T{cm.corner_no} {cm.name} ({cm.direction}): no telemetry captured here"
+                    )
+                    continue
+                # Brake/throttle points are given RELATIVE to the apex (a real
+                # driver reference), never as absolute lap-distance from the line.
+                brake_before = cm.apex_dist - cm.brake_point
+                thr_after = cm.throttle_point - cm.apex_dist
+                brake_txt = (
+                    f"brake {brake_before:.0f}m before apex @ {cm.peak_brake:.0%} peak"
+                    if brake_before > 0 else "no heavy braking"
+                )
+                thr_txt = f", back to throttle {thr_after:.0f}m after apex" if thr_after > 0 else ""
                 line = (
-                    f"C{cm.corner_no} {cm.name} ({cm.direction}, apex {cm.apex_dist}m): "
-                    f"min {cm.min_spd} km/h, brake@{cm.brake_point}m, "
-                    f"trailbrake {cm.trailbrake_overlap:.0%}"
+                    f"T{cm.corner_no} {cm.name} ({cm.direction}): "
+                    f"{spd(cm.entry_spd):.0f}→min {spd(cm.min_spd):.0f}→{spd(cm.exit_spd):.0f} {spd_u}, "
+                    f"{brake_txt}{thr_txt}, trail {cm.trailbrake_overlap:.0%}, peak {cm.peak_lat_g:.1f}g"
                 )
                 if analysis.has_reference and cm.min_spd_delta is not None:
-                    line += f" (vs best: {cm.min_spd_delta:+.1f} km/h)"
+                    line += f" (min vs best: {spd(cm.min_spd_delta):+.1f} {spd_u})"
                 corner_lines.append(line)
             sections.append("Corner facts (authoritative, from telemetry):")
             if analysis.has_reference:
                 sections.append("Deltas below are vs the driver's best lap on this track/car.")
             sections.extend(corner_lines)
+
+            # Tire state (authoritative, from telemetry): imbalance across the four
+            # means, warm-up from the early→late pair. The system prompt already tells
+            # the coach to weigh cold/uneven tires before over-reading the lap.
+            if analysis.tire_means:
+                m = analysis.tire_means
+                sections.append(
+                    f"Tire temps {temp_u} (mean over lap): FL {temp(m['fl']):.0f} / "
+                    f"FR {temp(m['fr']):.0f} / RL {temp(m['rl']):.0f} / RR {temp(m['rr']):.0f}."
+                )
+                if analysis.tire_warmup:
+                    early, late = analysis.tire_warmup
+                    sections.append(
+                        f"Tire warm-up: ~{temp(early):.0f}{temp_u} early in the lap → "
+                        f"~{temp(late):.0f}{temp_u} late."
+                    )
         else:
             sections.append(
                 "No lap captured yet — answer from the track/car knowledge and current "
@@ -130,7 +188,7 @@ class Coach:
 
         sections.append(f"\nQuestion: {question}")
 
-        system = SYSTEM_PROMPT.format(car=car)
+        system = SYSTEM_PROMPT.format(car=car, speed_unit=spd_u, temp_unit=temp_u)
         if allowed_adjustments is not None:
             allowed_str = ", ".join(allowed_adjustments)
             system += (
@@ -171,10 +229,11 @@ class Coach:
         setup: dict | None = None,
         track_note: str | None = None,
         input_device: str | None = None,
+        units: str = "metric",
     ) -> str:
         system, user_content = self.build_prompt(
             analysis, car, question, allowed_adjustments, driver_profile, setup,
-            track_note, input_device,
+            track_note, input_device, units,
         )
         messages = list(history) if history else []
         messages.append({"role": "user", "content": user_content})

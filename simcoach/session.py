@@ -1,8 +1,13 @@
-"""CoachSession: holds session state (car, tier constraints, driver profile) and
-maintains the conversation history so the coach remembers what was discussed
+"""CoachSession: holds session state (car, track, input device, driver profile)
+and maintains the conversation history so the coach remembers what was discussed
 within a session. Threads prior Q&A into each ask() so follow-up questions have
-context ("did the change you suggested help?"). This is memory layer L1 (short-
-term); cross-session memory (L3) is a separate, durable store."""
+context ("did the change you suggested help?"), and persists each exchange to the
+LapStore chat log. This is memory layer L1 (short-term); cross-session memory (L3)
+reads back the persisted log.
+
+Setup and the legal-adjustment list are passed per ask() because they change
+during a session (fresh setup fetched each question, tier constraints derived
+from it); the rest is session-constant and held on the instance."""
 from __future__ import annotations
 
 from simcoach.analysis import LapAnalysis
@@ -15,29 +20,58 @@ class CoachSession:
         self,
         coach: Coach,
         car: str,
-        allowed_adjustments: list[str] | None = None,
+        *,
+        track_note: str | None = None,
+        input_device: str | None = None,
         driver_profile: DriverProfile | None = None,
+        store=None,
+        session_id: str | None = None,
+        units: str = "metric",
     ):
         self.coach = coach
         self.car = car
-        self.allowed_adjustments = allowed_adjustments
+        self.track_note = track_note
+        self.input_device = input_device
         self.driver_profile = driver_profile
+        self.store = store            # optional LapStore; when set, exchanges persist
+        self.session_id = session_id
+        self.units = units
         # Lightweight Q&A history (questions + answers only — NOT the per-lap corner
         # fact dumps, which would bloat context and mix lap contexts). The coach
         # appends the current lap's facts + question after this history.
         self.history: list[dict] = []
 
-    def ask(self, analysis: LapAnalysis, question: str) -> str:
+    def ask(
+        self,
+        analysis: LapAnalysis | None,
+        question: str,
+        *,
+        setup: dict | None = None,
+        allowed_adjustments: list[str] | None = None,
+        track: str | None = None,
+        lap_id: int | None = None,
+    ) -> str:
         answer = self.coach.ask(
             analysis,
             self.car,
             question,
             history=self.history,
-            allowed_adjustments=self.allowed_adjustments,
+            allowed_adjustments=allowed_adjustments,
             driver_profile=self.driver_profile,
+            setup=setup,
+            track_note=self.track_note,
+            input_device=self.input_device,
+            units=self.units,
         )
         self.history.append({"role": "user", "content": question})
         self.history.append({"role": "assistant", "content": answer})
+        if self.store is not None:
+            # A persistence hiccup must never swallow an answer the driver is waiting on.
+            try:
+                self.store.save_chat(self.session_id, track, self.car, lap_id,
+                                     question, answer)
+            except Exception:
+                pass
         return answer
 
     def reset(self) -> None:

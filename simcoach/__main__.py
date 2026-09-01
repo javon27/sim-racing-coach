@@ -12,6 +12,7 @@ from pathlib import Path
 
 from simcoach.app import run_repl
 from simcoach.car_lookup import resolve_car
+from simcoach.config import load_config
 from simcoach.coach import Coach
 from simcoach.corners import CornerMap
 from simcoach.lmu.rest import LmuRest
@@ -27,6 +28,29 @@ TRACKS_DIR = PKG_DIR / "tracks"
 
 def _slug(track_name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", track_name.lower()).strip("_") or "unknown_track"
+
+
+def resolve_context(rest, tracks_dir, track_name: str, vehicle: str, channels=None):
+    """Resolve the coaching context (corner map, car display name, track-note slug)
+    for a live (track, car). Builds+saves a numbered map from `channels` if none
+    exists yet. Returns (CornerMap | None, car, note_slug); cmap is None when no map
+    exists and no lap is available to build one from."""
+    car_class = None
+    if rest is not None:
+        try:
+            car_class = rest.get_setup().get("carClass")
+        except Exception:
+            car_class = None
+    car = resolve_car(vehicle, car_class)
+    map_path = resolve_track_map(track_name, str(tracks_dir))
+    if map_path is None and channels is not None:
+        slug = _slug(track_name)
+        obj = build_map(slug, channels)
+        map_path = Path(tracks_dir) / f"{slug}.json"
+        map_path.write_text(json.dumps(obj, indent=2))
+    if map_path is None:
+        return None, car, _slug(track_name)
+    return CornerMap.load(str(map_path)), car, map_path.stem
 
 
 def wait_for_session(poll: float = 3.0):
@@ -86,8 +110,19 @@ def main():
     print(f"Corner map: {map_path.stem}")
     cmap = CornerMap.load(str(map_path))
     coach = Coach(make_model(), str(PKG_DIR / "knowledge"))
+    config = load_config()
+    print(f"Units: {config['units']}")
+
+    # The context (map/car/note) resolved above is a startup snapshot; it can be stale
+    # (LMU on the menu showing the previous track) or go out of date when the driver
+    # switches car/track mid-run. Hand run_repl a resolver + a live session peek so the
+    # coaching context follows whatever the driver is actually in.
+    def resolver(track_name, vehicle, channels):
+        return resolve_context(rest, TRACKS_DIR, track_name, vehicle, channels)
+
     run_repl(LmuSource(), store, cmap, coach, car, rest=rest, track_note=map_path.stem,
-             input_device=os.environ.get("SIMCOACH_INPUT_DEVICE"))
+             input_device=os.environ.get("SIMCOACH_INPUT_DEVICE"), units=config["units"],
+             resolver=resolver, peek=read_session_track_car, initial_key=(track_name, vehicle))
 
 
 if __name__ == "__main__":

@@ -17,6 +17,9 @@ data/
 *.sqlite
 *.sqlite3
 
+# User runtime settings (per-user; feeds the future UI settings page)
+simcoach.config.json
+
 # Operational scratch (SDD/review packages, agent coordination)
 .superpowers/
 scratchpad/

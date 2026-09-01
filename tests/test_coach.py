@@ -14,8 +14,9 @@ def test_coach_injects_corner_facts(synthetic_lap):
     assert "test_car" in m.last_system or "corner" in m.last_system.lower()
 
 
-def test_coach_apex_comes_from_analysis(synthetic_lap):
-    """Apex shown in the prompt must equal the analysis corner's apex_dist (single source of truth)."""
+def test_coach_brake_point_is_relative_to_apex(synthetic_lap):
+    """Braking is shown RELATIVE to the apex (driver-meaningful) and derives from the
+    analysis corner — the absolute lap-distance apex position must NOT leak to the driver."""
     from simcoach.model.fake import FakeModel
     from simcoach.coach import Coach
     from simcoach.corners import CornerMap
@@ -25,7 +26,27 @@ def test_coach_apex_comes_from_analysis(synthetic_lap):
     c = Coach(FakeModel(reply="ok"), "simcoach/knowledge")
     _, user_content = c.build_prompt(a, "test_car", "where am I losing time?")
     c1 = a.corners[0]
-    assert f"apex {c1.apex_dist}m" in user_content
+    before = c1.apex_dist - c1.brake_point
+    assert f"brake {before:.0f}m before apex" in user_content
+    assert f"apex {c1.apex_dist}m" not in user_content  # no absolute distance leak
+
+
+def test_coach_degenerate_corner_says_no_telemetry(synthetic_lap):
+    """A corner with no telemetry (nan min_spd) is flagged, not rendered with nan speeds
+    and fake defaulted brake/throttle distances the coach would critique."""
+    import math
+    from simcoach.model.fake import FakeModel
+    from simcoach.coach import Coach
+    from simcoach.corners import CornerMap
+    from simcoach.analysis import analyze_lap
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    a = analyze_lap(synthetic_lap, cmap)
+    a.corners[0].min_spd = math.nan
+    c = Coach(FakeModel(reply="ok"), "simcoach/knowledge")
+    _, user_content = c.build_prompt(a, "test_car", "q")
+    t1 = [l for l in user_content.splitlines() if l.startswith("T1 ")][0]
+    assert "no telemetry" in t1
+    assert "nan" not in t1 and "before apex" not in t1
 
 
 def test_coach_system_prompt_asserts_ground_truth(synthetic_lap):
@@ -182,5 +203,5 @@ def test_coach_skips_delta_text_when_delta_is_none(synthetic_lap):
     a.corners[0].min_spd_delta = None
     c = Coach(FakeModel(reply="ok"), "simcoach/knowledge")
     _, user_content = c.build_prompt(a, "test_car", "where am I losing time?")
-    c1_line = [l for l in user_content.splitlines() if l.startswith("C1 ")][0]
+    c1_line = [l for l in user_content.splitlines() if l.startswith("T1 ")][0]
     assert "vs best" not in c1_line

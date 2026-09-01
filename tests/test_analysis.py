@@ -12,6 +12,34 @@ def test_analyze_lap_metrics(synthetic_lap):
     assert c1.trailbrake_overlap > 0.0
 
 
+def test_tire_summary_and_prompt(synthetic_lap):
+    from simcoach.analysis import analyze_lap
+    from simcoach.coach import Coach
+    from simcoach.corners import CornerMap
+    from simcoach.model.fake import FakeModel
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    a = analyze_lap(synthetic_lap, cmap)
+    # synthetic tires: 80°C base, +5 under braking (in corners) -> mean between 80 and 85
+    assert set(a.tire_means) == {"fl", "fr", "rl", "rr"}
+    assert all(80.0 <= v <= 85.0 for v in a.tire_means.values())
+    assert a.tire_warmup is not None
+
+    _, user = Coach(FakeModel(), "kb").build_prompt(a, "car", "how were my tires?")
+    assert "Tire temps" in user and "FL" in user and "warm-up" in user.lower()
+
+
+def test_tire_summary_absent_without_channels(synthetic_lap):
+    import numpy as np
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap
+    from simcoach.model_types import LapRecord
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    ch = {k: v for k, v in synthetic_lap.channels.items() if not k.startswith("tire_temp")}
+    lap = LapRecord(**{**synthetic_lap.__dict__, "channels": ch})
+    a = analyze_lap(lap, cmap)
+    assert a.tire_means is None and a.tire_warmup is None
+
+
 def test_analyze_lap_delta(synthetic_lap):
     from simcoach.analysis import analyze_lap
     from simcoach.corners import CornerMap
