@@ -39,6 +39,13 @@ def test_get_wheel_report(tmp_path, synthetic_lap):
     assert "Brake temps" in rep and "wear" in rep.lower()
 
 
+def test_get_energy_report(tmp_path, synthetic_lap):
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    rep = ctx.dispatch("get_energy_report", {})
+    # synthetic fuel channel burns 2.6 L over the lap
+    assert "Fuel: 2.6" in rep and "laps left" in rep
+
+
 def test_session_status_and_recent_laps(tmp_path, synthetic_lap):
     ctx, store, lap_id = _ctx(tmp_path, synthetic_lap)
     status = ctx.get_session_status()

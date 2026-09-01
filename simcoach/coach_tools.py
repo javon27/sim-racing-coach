@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from simcoach.analysis import analyze_lap
 from simcoach.coach import _setup_lines
+from simcoach.fuel import fuel_per_lap_from_channel, laps_remaining
 from simcoach.format import (
     find_corner,
     format_corner_line,
@@ -78,6 +79,13 @@ TOOLS = [
         "name": "get_setup",
         "description": "The car's current adjustable setup values, so setup advice can name "
                        "specific changes. Includes which adjustments are legal this tier.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_energy_report",
+        "description": "Fuel and virtual-energy usage for the latest lap: per-lap burn, amount "
+                       "remaining, and roughly how many laps that lasts — for fuel/energy saving "
+                       "and stint-length questions.",
         "input_schema": {"type": "object", "properties": {}},
     },
 ]
@@ -208,6 +216,31 @@ class CoachContext:
         report = format_wheel_report(analysis, self.units)
         return report or "No brake/wear data was captured for this lap (older capture)."
 
+    def get_energy_report(self):
+        if self.record is None:
+            return "No lap captured yet — no fuel/energy usage to report."
+        ch = self.record.channels
+        lines = []
+        if "fuel" in ch:
+            remaining = float(ch["fuel"][-1])
+            try:
+                fpl = fuel_per_lap_from_channel(ch["fuel"])
+                lines.append(f"Fuel: {fpl:.2f} L used this lap; {remaining:.1f} L in tank "
+                             f"(~{laps_remaining(remaining, fpl):.1f} laps left).")
+            except ValueError:
+                lines.append(f"Fuel: {remaining:.1f} L in tank (no clear per-lap burn this lap).")
+        if "virtual_energy" in ch:
+            ve = ch["virtual_energy"]
+            used, cur = float(ve[0] - ve[-1]), float(ve[-1])
+            if used > 0:
+                lines.append(f"Virtual energy: {used * 100:.1f}% used this lap; {cur * 100:.0f}% "
+                             f"remaining (~{cur / used:.1f} laps left).")
+            else:
+                lines.append(f"Virtual energy: {cur * 100:.0f}% remaining.")
+        if "soc" in ch:
+            lines.append(f"Battery state of charge: {float(ch['soc'][-1]) * 100:.0f}%.")
+        return "\n".join(lines) if lines else "No fuel/energy data captured for this lap."
+
     def get_setup(self):
         if not self.setup:
             return "No setup data available (REST unavailable or open setup)."
@@ -230,6 +263,7 @@ class CoachContext:
             "get_corner": lambda: self.get_corner(args.get("corner", "")),
             "get_tire_report": lambda: self.get_tire_report(),
             "get_wheel_report": lambda: self.get_wheel_report(),
+            "get_energy_report": lambda: self.get_energy_report(),
             "get_setup": lambda: self.get_setup(),
         }.get(name)
         if handler is None:
