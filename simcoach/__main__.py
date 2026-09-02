@@ -5,7 +5,6 @@ live shared memory.
 Requires LMU running and the driver on track. The model provider comes from
 SIMCOACH_MODEL_PROVIDER (default anthropic, which reads ANTHROPIC_API_KEY from env)."""
 import json
-import os
 import time
 from pathlib import Path
 
@@ -105,8 +104,8 @@ def main():
 
     print(f"Corner map: {map_path.stem}")
     cmap = CornerMap.load(str(map_path))
-    coach = Coach(make_model(), str(PKG_DIR / "knowledge"))
     config = load_config()
+    coach = Coach(make_model(model=config["model"]), str(PKG_DIR / "knowledge"))
     print(f"Units: {config['units']}")
 
     # The context (map/car/note) resolved above is a startup snapshot; it can be stale
@@ -117,7 +116,7 @@ def main():
         return resolve_context(rest, TRACKS_DIR, track_name, vehicle, channels)
 
     run_repl(LmuSource(), store, cmap, coach, car, rest=rest, track_note=map_path.stem,
-             input_device=os.environ.get("SIMCOACH_INPUT_DEVICE"), units=config["units"],
+             input_device=config["input_device"], units=config["units"],
              resolver=resolver, peek=read_session_track_car, initial_key=(track_name, vehicle))
 
 
