@@ -197,7 +197,7 @@ def test_build_lap_record_stamps_phase_and_session():
     assert record.phase == "race" and record.session_id == "s1"
 
 
-def test_laps_commits_only_completed_freshly_timed_laps():
+def test_laps_commits_only_completed_freshly_timed_laps(monkeypatch):
     """Integration: LmuSource.laps() against a scripted fake buffer. Only a lap the
     car actually finished (distance wraps at S/F AND a fresh lap time posts) commits;
     an out-lap, a teleport, and an abandoned/frozen exit are all discarded."""
@@ -207,7 +207,12 @@ def test_laps_commits_only_completed_freshly_timed_laps():
     from simcoach.lmu import smm
     from simcoach.lmu.rf2structs import rF2Scoring, rF2Telemetry
 
-    tn, sn = smm.TELEMETRY_CANDIDATES[0], smm.SCORING_CANDIDATES[0]
+    # Test-only MMF names so this NEVER opens/writes LMU's real live buffers (which
+    # share the production candidate names) — that would corrupt a running game and
+    # pollute the store.
+    tn, sn = "$simcoach_test_telem$", "$simcoach_test_scoring$"
+    monkeypatch.setattr(smm, "TELEMETRY_CANDIDATES", [tn])
+    monkeypatch.setattr(smm, "SCORING_CANDIDATES", [sn])
     tmap = mmap.mmap(-1, C.sizeof(rF2Telemetry), tagname=tn, access=mmap.ACCESS_WRITE)
     smap = mmap.mmap(-1, C.sizeof(rF2Scoring), tagname=sn, access=mmap.ACCESS_WRITE)
 
@@ -246,10 +251,13 @@ def test_laps_commits_only_completed_freshly_timed_laps():
     records = []
 
     def cap():
-        for lap in smm.LmuSource(poll_hz=60).laps():
-            records.append(lap)
-            if stop[0]:
-                break
+        try:
+            for lap in smm.LmuSource(poll_hz=60).laps():
+                records.append(lap)
+                if stop[0]:
+                    break
+        except Exception:
+            pass  # mmaps closed on teardown while mid-read — expected, harmless
 
     threading.Thread(target=writer, daemon=True).start()
     ct = threading.Thread(target=cap, daemon=True); ct.start()
