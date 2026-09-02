@@ -244,6 +244,28 @@ class Coach:
         messages.append({"role": "user", "content": question})
         return self.model.run(system, messages, TOOLS, context.dispatch)
 
+    def ask_agentic_stream(
+        self,
+        context,
+        question: str,
+        car: str,
+        history: list[dict] | None = None,
+        driver_profile: DriverProfile | None = None,
+        input_device: str | None = None,
+        units: str = "metric",
+    ):
+        """Like `ask_agentic`, but yields tool/text events as they occur instead of
+        returning a final string. Does not persist or emit done/error — the caller does."""
+        from simcoach.coach_tools import TOOLS
+        _, _, spd_u, temp_u = unit_fns(units)
+        system = self._augment_system(
+            AGENTIC_SYSTEM_PROMPT.format(car=car, speed_unit=spd_u, temp_unit=temp_u),
+            context.allowed_adjustments, driver_profile, input_device,
+        )
+        messages = list(history) if history else []
+        messages.append({"role": "user", "content": question})
+        yield from self.model.run_stream(system, messages, TOOLS, context.dispatch)
+
     def ask(
         self,
         analysis: LapAnalysis | None,
