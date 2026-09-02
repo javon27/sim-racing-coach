@@ -28,6 +28,24 @@ def test_tire_summary_and_prompt(synthetic_lap):
     assert "Tire temps" in user and "FL" in user and "warm-up" in user.lower()
 
 
+def test_wheel_report_and_min_grip(synthetic_lap):
+    from simcoach.analysis import analyze_lap
+    from simcoach.coach import Coach
+    from simcoach.corners import CornerMap
+    from simcoach.format import format_wheel_report
+    from simcoach.model.fake import FakeModel
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    a = analyze_lap(synthetic_lap, cmap)
+    # min grip dips to 0.9 in the braking corners
+    assert abs(a.corners[0].min_grip - 0.9) < 1e-9
+    # lap-level wheel report: brake temps, pressures, wear
+    rep = format_wheel_report(a, "metric")
+    assert "Brake temps" in rep and "wear" in rep.lower()
+    # surfaced in the prompt corner line
+    _, user = Coach(FakeModel(), "kb").build_prompt(a, "car", "grip?")
+    assert "min grip" in user
+
+
 def test_tire_summary_absent_without_channels(synthetic_lap):
     import numpy as np
     from simcoach.analysis import analyze_lap

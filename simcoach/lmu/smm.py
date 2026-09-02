@@ -46,6 +46,10 @@ SCORING_CANDIDATES = ["$rFactor2SMMP_Scoring$"]
 _kernel32 = C.WinDLL("kernel32", use_last_error=True)
 _FILE_MAP_READ = 0x0004
 
+# A backward jump in lap distance larger than this marks a lap boundary (crossing
+# start/finish, or a teleport/reset). Smaller dips are off-track/jitter noise.
+_LAP_WRAP_M = 500.0
+
 
 def open_mmap(name: str, size: int) -> mmap.mmap:
     """Open an EXISTING named shared-memory mapping for read.
@@ -211,30 +215,63 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
       speed [km/h] = |mLocalVel| (m/s, z is longitudinal per the header's
         coordinate note) * 3.6 -- the rest of the pipeline (coach prompt,
         analysis.py, fixtures) is km/h-scale.
-      lat_g = mLocalAccel.x / 9.80665 (x is lateral in local vehicle coords)
-      tire temps: mTemperature[1] (center) Kelvin -> Celsius
+      lat_g = mLocalAccel.x / 9.80665 (x is lateral in local vehicle coords);
+        long_g = mLocalAccel.z / 9.80665 (z is longitudinal; braking/accel).
+      tire/brake temps: Kelvin -> Celsius (-273.15).
+      per-wheel [fl,fr,rl,rr]: wheel_rot (mRotation, rad/s -- lockup ~ 0 while
+        moving), brake_temp, brake_press (mBrakePressure), grip (mGripFract,
+        0..1), tire_load (mTireLoad, N), tire_press (mPressure, kPa), tire_wear
+        (mWear, 0..1). gear/rpm/abs_active/tc_active read as-is.
       virtual_energy / soc / battery_charge: read as-is, no unit conversion --
         all three are already fractions/percent-scale per the struct fields
         (mVirtualEnergy, mSoC, mBatteryChargeFraction), unlike fuel (liters)
-        or tire temp (Kelvin) which need conversion.
+        or temps (Kelvin) which need conversion.
     """
     wheels = telem.mWheel
-    return {
+    sample = {
         "speed": telem.mLocalVel.magnitude() * 3.6,
         "throttle": telem.mUnfilteredThrottle,
         "brake": telem.mUnfilteredBrake,
         "steering": telem.mUnfilteredSteering,
         "lat_g": telem.mLocalAccel.x / 9.80665,
+        "long_g": telem.mLocalAccel.z / 9.80665,
         "lap_distance": lap_dist,
+        "gear": float(telem.mGear),
+        "rpm": telem.mEngineRPM,
+        "abs_active": 1.0 if telem.mABSActive else 0.0,
+        "tc_active": 1.0 if telem.mTCActive else 0.0,
         "fuel": telem.mFuel,
         "virtual_energy": telem.mVirtualEnergy,
         "soc": telem.mSoC,
         "battery_charge": telem.mBatteryChargeFraction,
-        "tire_temp_fl": wheels[0].mTemperature[1] - 273.15,
-        "tire_temp_fr": wheels[1].mTemperature[1] - 273.15,
-        "tire_temp_rl": wheels[2].mTemperature[1] - 273.15,
-        "tire_temp_rr": wheels[3].mTemperature[1] - 273.15,
     }
+    for name, i in (("fl", 0), ("fr", 1), ("rl", 2), ("rr", 3)):
+        w = wheels[i]
+        sample[f"tire_temp_{name}"] = w.mTemperature[1] - 273.15
+        sample[f"tire_press_{name}"] = w.mPressure
+        sample[f"tire_load_{name}"] = w.mTireLoad
+        sample[f"tire_wear_{name}"] = w.mWear
+        sample[f"grip_{name}"] = w.mGripFract
+        sample[f"wheel_rot_{name}"] = w.mRotation
+        sample[f"brake_temp_{name}"] = w.mBrakeTemp - 273.15
+        sample[f"brake_press_{name}"] = w.mBrakePressure
+    return sample
+
+
+def session_phase(m_session: int) -> str:
+    """Map the rF2/LMU scoring mSession index to a coarse phase. Standard rFactor2
+    convention (0=test day, 1-4=practice, 5-8=qualifying, 9=warmup, 10-13=race),
+    PENDING LIVE VALIDATION. Used so laps can be filtered/compared by session type
+    instead of pooling qualy hot laps with race stints."""
+    if m_session <= 0:
+        return "testday"
+    if m_session <= 4:
+        return "practice"
+    if m_session <= 8:
+        return "qualifying"
+    if m_session == 9:
+        return "warmup"
+    return "race"
 
 
 def build_lap_record(
@@ -245,6 +282,8 @@ def build_lap_record(
     invalidated: bool,
     timestamp: float,
     channels: dict[str, list[float]],
+    phase: str | None = None,
+    session_id: str | None = None,
 ) -> LapRecord | None:
     """Pure decision: turn a completed lap's raw fields into a LapRecord, or
     None if the lap shouldn't be stored.
@@ -264,6 +303,8 @@ def build_lap_record(
         valid=not invalidated,
         timestamp=timestamp,
         channels={k: np.array(v) for k, v in channels.items()},
+        phase=phase,
+        session_id=session_id,
     )
 
 
@@ -331,8 +372,19 @@ class LmuSource:
             ) from exc
 
         period = 1.0 / self.poll_hz
+        # Buffer the in-progress lap; only COMMIT it when the car genuinely crosses
+        # the finish line (a downward lap-distance wrap) AND the sim posted a fresh
+        # lap time for it. A teleport, pit exit, pause, or out-lap wraps the distance
+        # too but posts no new time — those buffers are discarded, so half-driven /
+        # frozen / abandoned laps never reach the store or the coach.
         channels: dict[str, list[float]] = {}
-        current_lap_number: int | None = None
+        prev_dist: float | None = None
+        committed_time: float | None = None
+        # A "session" is one on-track stint: a fresh id is minted whenever the
+        # (track, car, sim-session-index) changes, so laps group by practice/qualy/
+        # race instead of pooling all-time. mSession also gives the phase label.
+        session_key: tuple | None = None
+        session_id: str | None = None
 
         while True:
             telem = read_consistent(telemetry_name, rF2Telemetry)
@@ -344,27 +396,33 @@ class LmuSource:
                 time.sleep(period)
                 continue
 
-            if current_lap_number is None:
-                current_lap_number = vt.mLapNumber
-
-            if vt.mLapNumber != current_lap_number:
-                if channels:
+            dist = player.mLapDist
+            # Finish line / lap boundary: lap distance jumped backward a long way.
+            if prev_dist is not None and dist < prev_dist - _LAP_WRAP_M:
+                lap_time = player.mLastLapTime
+                # Commit ONLY a completed, freshly-timed lap. A teleport/exit/out-lap
+                # also wraps here but carries a stale or sentinel (<=0) lap time.
+                if channels and lap_time > 0 and lap_time != committed_time:
+                    track = vt.mTrackName.decode(errors="replace")
+                    car = vt.mVehicleName.decode(errors="replace")
+                    phase = session_phase(scoring.mScoringInfo.mSession)
+                    key = (track, car, scoring.mScoringInfo.mSession)
+                    if key != session_key:
+                        session_key = key
+                        session_id = f"{time.strftime('%Y-%m-%dT%H%M%S')}-{phase}"
                     record = build_lap_record(
-                        sim="lmu",
-                        track=vt.mTrackName.decode(errors="replace"),
-                        car=vt.mVehicleName.decode(errors="replace"),
-                        lap_time=player.mLastLapTime,
-                        invalidated=vt.mLapInvalidated,
-                        timestamp=time.time(),
-                        channels=channels,
+                        sim="lmu", track=track, car=car, lap_time=lap_time,
+                        invalidated=vt.mLapInvalidated, timestamp=time.time(),
+                        channels=channels, phase=phase, session_id=session_id,
                     )
                     if record is not None:
+                        committed_time = lap_time
                         yield record
-                channels = {}
-                current_lap_number = vt.mLapNumber
+                channels = {}  # start the next lap fresh (committed or discarded)
 
-            sample = sample_from_telem(vt, player.mLapDist)
+            sample = sample_from_telem(vt, dist)
             for k, v in sample.items():
                 channels.setdefault(k, []).append(v)
+            prev_dist = dist
 
             time.sleep(period)

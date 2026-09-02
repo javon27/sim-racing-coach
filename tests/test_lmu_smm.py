@@ -33,10 +33,18 @@ def make_telem(**overrides) -> TelemInfoV01:
     t.mUnfilteredBrake = 0.25
     t.mUnfilteredSteering = -0.3
     t.mGear = 4
+    t.mEngineRPM = 7500.0
     t.mFuel = 42.0
     t.mLapNumber = 1
+    t.mABSActive = True
     for i in range(4):
         t.mWheel[i].mTemperature[1] = 273.15 + 80.0  # 80C center temp
+        t.mWheel[i].mBrakeTemp = 273.15 + 350.0       # 350C brake temp
+        t.mWheel[i].mPressure = 165.0                 # kPa
+        t.mWheel[i].mRotation = -40.0                 # rad/s (rolling)
+        t.mWheel[i].mGripFract = 0.95
+        t.mWheel[i].mTireLoad = 3000.0
+        t.mWheel[i].mWear = 0.98
     for field, value in overrides.items():
         setattr(t, field, value)
     return t
@@ -75,6 +83,23 @@ def test_sample_from_telem_maps_channels():
     assert sample["fuel"] == 42.0
     assert abs(sample["tire_temp_fl"] - 80.0) < 1e-9
     assert abs(sample["tire_temp_rr"] - 80.0) < 1e-9
+
+
+def test_sample_from_telem_maps_extended_channels():
+    t = roundtrip(make_telem())
+    s = sample_from_telem(t, lap_dist=0.0)
+    # chassis/inputs
+    assert s["gear"] == 4.0
+    assert s["rpm"] == 7500.0
+    assert s["abs_active"] == 1.0 and s["tc_active"] == 0.0
+    assert abs(s["long_g"]) < 1e-9              # z accel is 0 in make_telem
+    # per-wheel: brake temp K->C, pressure, rotation, grip, load, wear
+    assert abs(s["brake_temp_fl"] - 350.0) < 1e-9
+    assert s["tire_press_rr"] == 165.0
+    assert s["wheel_rot_fl"] == -40.0
+    assert s["grip_fr"] == 0.95
+    assert s["tire_load_rl"] == 3000.0
+    assert s["tire_wear_fr"] == 0.98
 
 
 def test_sample_from_telem_maps_energy_channels():
@@ -162,6 +187,98 @@ def test_build_lap_record_clean_lap_is_valid():
     )
     assert record is not None
     assert record.valid is True
+
+
+def test_build_lap_record_stamps_phase_and_session():
+    record = build_lap_record(
+        "lmu", "track", "car", lap_time=92.5, invalidated=0, timestamp=0.0,
+        channels=_channels(), phase="race", session_id="s1",
+    )
+    assert record.phase == "race" and record.session_id == "s1"
+
+
+def test_laps_commits_only_completed_freshly_timed_laps(monkeypatch):
+    """Integration: LmuSource.laps() against a scripted fake buffer. Only a lap the
+    car actually finished (distance wraps at S/F AND a fresh lap time posts) commits;
+    an out-lap, a teleport, and an abandoned/frozen exit are all discarded."""
+    import mmap
+    import threading
+    import time as _t
+    from simcoach.lmu import smm
+    from simcoach.lmu.rf2structs import rF2Scoring, rF2Telemetry
+
+    # Test-only MMF names so this NEVER opens/writes LMU's real live buffers (which
+    # share the production candidate names) — that would corrupt a running game and
+    # pollute the store.
+    tn, sn = "$simcoach_test_telem$", "$simcoach_test_scoring$"
+    monkeypatch.setattr(smm, "TELEMETRY_CANDIDATES", [tn])
+    monkeypatch.setattr(smm, "SCORING_CANDIDATES", [sn])
+    tmap = mmap.mmap(-1, C.sizeof(rF2Telemetry), tagname=tn, access=mmap.ACCESS_WRITE)
+    smap = mmap.mmap(-1, C.sizeof(rF2Scoring), tagname=sn, access=mmap.ACCESS_WRITE)
+
+    def write(dist, last_lap, lap_no=0, spd=180.0):
+        t = rF2Telemetry(); t.mVersionUpdateBegin = t.mVersionUpdateEnd = 1; t.mNumVehicles = 1
+        v = t.mVehicles[0]; v.mID = 1; v.mLapNumber = lap_no; v.mLocalVel.z = -spd / 3.6
+        v.mTrackName = b"Test Circuit"; v.mVehicleName = b"Car"
+        s = rF2Scoring(); s.mScoringInfo.mVersionUpdateBegin = s.mScoringInfo.mVersionUpdateEnd = 1
+        s.mScoringInfo.mNumVehicles = 1; s.mScoringInfo.mSession = 2
+        pv = s.mVehicles[0]; pv.mID = 1; pv.mIsPlayer = True; pv.mLapDist = dist; pv.mLastLapTime = last_lap
+        tmap.seek(0); tmap.write(bytes(t)); smap.seek(0); smap.write(bytes(s))
+
+    write(5.0, -1.0)
+    stop = [False]
+
+    def writer():
+        def ramp(d0, d1, last, lap, secs=1.2):
+            n = int(secs / 0.03)
+            for i in range(n):
+                if stop[0]:
+                    return
+                write(d0 + (d1 - d0) * i / n, last, lap); _t.sleep(0.03)
+        ramp(5, 4000, -1.0, 0)                    # OUT-LAP (no valid time yet)
+        write(3.0, -1.0, 1); _t.sleep(0.05)       # cross S/F, out-lap still -1 -> DROP
+        ramp(3, 4000, -1.0, 1)                    # the flying lap
+        write(2.0, 92.5, 2); _t.sleep(0.4)        # cross S/F, fresh time 92.5 -> COMMIT
+        ramp(2, 1500, 92.5, 2)                    # into next lap...
+        write(3.0, 92.5, 3); _t.sleep(0.2)        # TELEPORT-style wrap, stale time -> DROP
+        ramp(3, 800, 92.5, 3)                     # drove a bit then...
+        for _ in range(20):                       # ABANDONED: frozen, never wraps again
+            if stop[0]:
+                break
+            write(800.0, 92.5, 3); _t.sleep(0.05)
+        stop[0] = True
+
+    records = []
+
+    def cap():
+        try:
+            for lap in smm.LmuSource(poll_hz=60).laps():
+                records.append(lap)
+                if stop[0]:
+                    break
+        except Exception:
+            pass  # mmaps closed on teardown while mid-read — expected, harmless
+
+    threading.Thread(target=writer, daemon=True).start()
+    ct = threading.Thread(target=cap, daemon=True); ct.start()
+    while not stop[0]:
+        _t.sleep(0.05)
+    _t.sleep(0.3)
+    tmap.close(); smap.close()
+
+    assert len(records) == 1, f"expected 1 committed lap, got {len(records)}"
+    assert abs(records[0].lap_time - 92.5) < 1e-6
+    d = records[0].channels["lap_distance"]
+    assert d.max() > 3000 and d.min() < 100   # spans the flying lap, not the out-lap/teleport
+
+
+def test_session_phase_maps_msession_index():
+    from simcoach.lmu.smm import session_phase
+    assert session_phase(0) == "testday"
+    assert session_phase(2) == "practice"
+    assert session_phase(6) == "qualifying"
+    assert session_phase(9) == "warmup"
+    assert session_phase(13) == "race"
 
 
 def make_wrapper(num_vehicles: int = 1, **vehicle_overrides) -> rF2Telemetry:

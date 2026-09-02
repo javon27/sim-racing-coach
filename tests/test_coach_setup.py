@@ -51,6 +51,7 @@ def test_controller_caveat_in_system(synthetic_lap):
 def test_track_note_loaded_when_slug_given(synthetic_lap):
     a = analyze_lap(synthetic_lap, CornerMap.load("simcoach/tracks/test_track.json"))
     coach = Coach(FakeModel(), "simcoach/knowledge")
-    _s, with_note = coach.build_prompt(a, "test_car", "q", track_note="silverstone")
+    _s, with_note = coach.build_prompt(a, "test_car", "q",
+                                       track_note="silverstone_grand_prix_circuit")
     _s, without = coach.build_prompt(a, "test_car", "q")
     assert "Track notes" in with_note and "Track notes" not in without

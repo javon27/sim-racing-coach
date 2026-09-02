@@ -6,7 +6,6 @@ Requires LMU running and the driver on track. The model provider comes from
 SIMCOACH_MODEL_PROVIDER (default anthropic, which reads ANTHROPIC_API_KEY from env)."""
 import json
 import os
-import re
 import time
 from pathlib import Path
 
@@ -20,21 +19,18 @@ from simcoach.lmu.smm import LmuSource, read_session_track_car
 from simcoach.mapbuild import build_map
 from simcoach.model.factory import make_model
 from simcoach.store import LapStore
-from simcoach.track_lookup import resolve_track_map
+from simcoach.track_lookup import resolve_track_map, track_slug
 
 PKG_DIR = Path(__file__).parent
 TRACKS_DIR = PKG_DIR / "tracks"
 
 
-def _slug(track_name: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", track_name.lower()).strip("_") or "unknown_track"
-
-
 def resolve_context(rest, tracks_dir, track_name: str, vehicle: str, channels=None):
     """Resolve the coaching context (corner map, car display name, track-note slug)
-    for a live (track, car). Builds+saves a numbered map from `channels` if none
-    exists yet. Returns (CornerMap | None, car, note_slug); cmap is None when no map
-    exists and no lap is available to build one from."""
+    for a live (track, car). Builds+saves a numbered map (named by the track slug, so
+    it resolves next time) from `channels` if none exists yet. Returns
+    (CornerMap | None, car, note_slug); cmap is None when no map exists and no lap is
+    available to build one from."""
     car_class = None
     if rest is not None:
         try:
@@ -42,14 +38,14 @@ def resolve_context(rest, tracks_dir, track_name: str, vehicle: str, channels=No
         except Exception:
             car_class = None
     car = resolve_car(vehicle, car_class)
+    slug = track_slug(track_name)
     map_path = resolve_track_map(track_name, str(tracks_dir))
     if map_path is None and channels is not None:
-        slug = _slug(track_name)
         obj = build_map(slug, channels)
         map_path = Path(tracks_dir) / f"{slug}.json"
         map_path.write_text(json.dumps(obj, indent=2))
     if map_path is None:
-        return None, car, _slug(track_name)
+        return None, car, slug
     return CornerMap.load(str(map_path)), car, map_path.stem
 
 
@@ -96,7 +92,7 @@ def main():
     if map_path is None:
         # No map for this track/layout yet — build a numbered-geometry one from the
         # first completed lap, then continue. Names stay "Turn N" until enriched.
-        slug = _slug(track_name)
+        slug = track_slug(track_name)
         print(f"No corner map for this track — drive one clean lap and I'll build "
               f"'{slug}.json' from it...")
         first = next(LmuSource().laps())  # blocks until the first completed lap
