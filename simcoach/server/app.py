@@ -4,17 +4,34 @@
 the docs/openapi surface. Reuses store/coach/analysis unchanged."""
 from __future__ import annotations
 
+import asyncio
 import math
+import threading
+import urllib.parse
 from dataclasses import asdict
 
-from fastapi import Body, FastAPI, HTTPException, Request
+from fastapi import Body, FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse
+from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from .. import config, paths, secrets
 from ..analysis import analyze_lap
+from ..coach_tools import CoachContext
 from ..model.factory import make_model
+from ..tiers import legal_adjustments
 
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}  # port stripped before compare
+
+
+def _bad_origin(origin: str | None) -> bool:
+    """True if a browser Origin is present AND its host isn't allowed. A missing
+    Origin (native/Tauri client, or a non-browser client) is allowed — only a
+    browser sets Origin, and that's the cross-site-WS vector we're blocking.
+    Port-blind by design (any localhost port is fine for a local desktop app)."""
+    if not origin:
+        return False
+    host = (urllib.parse.urlparse(origin).hostname or "").lower()
+    return host not in ALLOWED_HOSTS
 
 
 def _clean(v):
@@ -91,6 +108,106 @@ def create_app(store, coach, cmap=None, rest=None) -> FastAPI:
     @app.get("/chats/{chat_id}")
     def chat_messages(chat_id: str):
         return store.chat_messages(chat_id)
+
+    @app.websocket("/coach")
+    async def coach_ws(ws: WebSocket):
+        # HTTP Host-guard middleware does NOT run for websockets — check here.
+        host = (ws.headers.get("host") or "").split(":")[0].lower()
+        if host not in ALLOWED_HOSTS or _bad_origin(ws.headers.get("origin")):
+            await ws.close(code=1008)      # reject before accept
+            return
+        await ws.accept()
+
+        # Read + validate the one request message. receive_json raises ValueError on
+        # non-JSON; a non-dict body has no .get — guard both, don't crash the socket.
+        try:
+            req = await ws.receive_json()
+        except WebSocketDisconnect:
+            return
+        except ValueError:
+            await ws.send_json({"type": "error", "message": "invalid JSON"})
+            await ws.close(code=1003);  return
+        if not isinstance(req, dict):
+            await ws.send_json({"type": "error", "message": "expected a JSON object"})
+            await ws.close(code=1003);  return
+        question = (req.get("question") or "").strip()
+        if not question:
+            await ws.send_json({"type": "error", "message": "empty question"})
+            await ws.close();  return
+
+        # Coerce lap_id ONCE (used for load AND persisted context stamp).
+        lap_id = req.get("lap_id")
+        try: lap_id = int(lap_id) if lap_id is not None else None
+        except (TypeError, ValueError): lap_id = None
+        session_id = req.get("session_id")
+
+        record = None
+        if lap_id is not None:
+            try: record = app.state.store.load(lap_id)
+            except Exception: record = None
+        setup = {}
+        if app.state.rest:
+            try: setup = app.state.rest.get_setup()
+            except Exception: setup = {}
+        ctx = CoachContext(app.state.store, record=record, lap_id=lap_id, cmap=app.state.cmap,
+                           setup=setup, on_track=record is not None,
+                           allowed_adjustments=(legal_adjustments(setup) if setup else None),
+                           session_id=session_id)
+        car = ctx.car or "car"
+
+        loop = asyncio.get_running_loop()
+        q: asyncio.Queue = asyncio.Queue()   # unbounded; localhost token rate is the ceiling
+        _SENTINEL = object()
+
+        def _emit(ev):
+            # Worker may outlive a client disconnect / the test loop; swallow a
+            # closed-loop RuntimeError so it dies quietly instead of tracebacking.
+            try: loop.call_soon_threadsafe(q.put_nowait, ev)
+            except RuntimeError: pass
+
+        def worker():
+            # ponytail: no cancellation on client disconnect — worker runs the
+            # (billed) call to completion regardless. Fine for a localhost
+            # single-user app; a stop-flag through the tool loop is deferred.
+            text = ""
+            try:
+                for ev in app.state.coach.ask_agentic_stream(
+                        ctx, question, car=car, input_device=req.get("input_device")):
+                    if ev["type"] == "text":
+                        text = ev["text"]        # first cut: whole block; Task 5: accumulate deltas
+                    _emit(ev)
+                terminal = {"type": "done"}
+            except Exception as e:
+                # Surface our own guidance (no-key RuntimeError, bad input ValueError);
+                # hide any other internal error text from the client.
+                msg = str(e) if isinstance(e, (RuntimeError, ValueError)) else "coach error"
+                terminal = {"type": "error", "message": msg}
+            # Persist best-effort REGARDLESS of success, so the turn isn't lost from
+            # history (matches CoachSession's persist-then-swallow pattern).
+            try:
+                chat_id = req.get("chat_id") or app.state.store.create_chat()
+                app.state.store.save_chat(chat_id, session_id, ctx.track, ctx.car, lap_id,
+                                          question, text, ctx.tool_calls)
+                if terminal["type"] == "done":
+                    terminal["chat_id"] = chat_id
+            except Exception:
+                pass
+            _emit(terminal)
+            _emit(_SENTINEL)
+
+        threading.Thread(target=worker, daemon=True).start()
+        try:
+            while True:
+                ev = await q.get()
+                if ev is _SENTINEL:
+                    break
+                await ws.send_json(ev)
+        except WebSocketDisconnect:
+            pass          # client left mid-stream; worker still finishes + persists (known ceiling)
+        finally:
+            if ws.application_state != WebSocketState.DISCONNECTED:
+                try: await ws.close()
+                except RuntimeError: pass
 
     def _settings_view() -> dict:
         try:
