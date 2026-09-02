@@ -1,6 +1,8 @@
 import numpy as np
 import pytest
 from simcoach.model_types import LapRecord
+import keyring as _keyring
+from keyring.backend import KeyringBackend
 
 
 @pytest.fixture
@@ -36,3 +38,20 @@ def synthetic_lap():
         ch[f"tire_wear_{t}"] = np.linspace(1.0, 0.97, n)   # slight wear over the lap
     ch["fuel"] = np.linspace(80.0, 77.4, n)   # liters; 2.6 L consumed over the lap
     return LapRecord("lmu", "test_track", "test_car", 92.5, True, 0.0, ch)
+
+
+class MemoryKeyring(KeyringBackend):
+    priority = 1
+    def __init__(self): self._store = {}
+    def get_password(self, service, username): return self._store.get((service, username))
+    def set_password(self, service, username, password): self._store[(service, username)] = password
+    def delete_password(self, service, username): self._store.pop((service, username), None)
+
+
+@pytest.fixture
+def mem_keyring():
+    prev = _keyring.get_keyring()
+    kr = MemoryKeyring()
+    _keyring.set_keyring(kr)
+    yield kr
+    _keyring.set_keyring(prev)
