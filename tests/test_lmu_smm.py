@@ -197,6 +197,73 @@ def test_build_lap_record_stamps_phase_and_session():
     assert record.phase == "race" and record.session_id == "s1"
 
 
+def test_laps_commits_only_completed_freshly_timed_laps():
+    """Integration: LmuSource.laps() against a scripted fake buffer. Only a lap the
+    car actually finished (distance wraps at S/F AND a fresh lap time posts) commits;
+    an out-lap, a teleport, and an abandoned/frozen exit are all discarded."""
+    import mmap
+    import threading
+    import time as _t
+    from simcoach.lmu import smm
+    from simcoach.lmu.rf2structs import rF2Scoring, rF2Telemetry
+
+    tn, sn = smm.TELEMETRY_CANDIDATES[0], smm.SCORING_CANDIDATES[0]
+    tmap = mmap.mmap(-1, C.sizeof(rF2Telemetry), tagname=tn, access=mmap.ACCESS_WRITE)
+    smap = mmap.mmap(-1, C.sizeof(rF2Scoring), tagname=sn, access=mmap.ACCESS_WRITE)
+
+    def write(dist, last_lap, lap_no=0, spd=180.0):
+        t = rF2Telemetry(); t.mVersionUpdateBegin = t.mVersionUpdateEnd = 1; t.mNumVehicles = 1
+        v = t.mVehicles[0]; v.mID = 1; v.mLapNumber = lap_no; v.mLocalVel.z = -spd / 3.6
+        v.mTrackName = b"Test Circuit"; v.mVehicleName = b"Car"
+        s = rF2Scoring(); s.mScoringInfo.mVersionUpdateBegin = s.mScoringInfo.mVersionUpdateEnd = 1
+        s.mScoringInfo.mNumVehicles = 1; s.mScoringInfo.mSession = 2
+        pv = s.mVehicles[0]; pv.mID = 1; pv.mIsPlayer = True; pv.mLapDist = dist; pv.mLastLapTime = last_lap
+        tmap.seek(0); tmap.write(bytes(t)); smap.seek(0); smap.write(bytes(s))
+
+    write(5.0, -1.0)
+    stop = [False]
+
+    def writer():
+        def ramp(d0, d1, last, lap, secs=1.2):
+            n = int(secs / 0.03)
+            for i in range(n):
+                if stop[0]:
+                    return
+                write(d0 + (d1 - d0) * i / n, last, lap); _t.sleep(0.03)
+        ramp(5, 4000, -1.0, 0)                    # OUT-LAP (no valid time yet)
+        write(3.0, -1.0, 1); _t.sleep(0.05)       # cross S/F, out-lap still -1 -> DROP
+        ramp(3, 4000, -1.0, 1)                    # the flying lap
+        write(2.0, 92.5, 2); _t.sleep(0.4)        # cross S/F, fresh time 92.5 -> COMMIT
+        ramp(2, 1500, 92.5, 2)                    # into next lap...
+        write(3.0, 92.5, 3); _t.sleep(0.2)        # TELEPORT-style wrap, stale time -> DROP
+        ramp(3, 800, 92.5, 3)                     # drove a bit then...
+        for _ in range(20):                       # ABANDONED: frozen, never wraps again
+            if stop[0]:
+                break
+            write(800.0, 92.5, 3); _t.sleep(0.05)
+        stop[0] = True
+
+    records = []
+
+    def cap():
+        for lap in smm.LmuSource(poll_hz=60).laps():
+            records.append(lap)
+            if stop[0]:
+                break
+
+    threading.Thread(target=writer, daemon=True).start()
+    ct = threading.Thread(target=cap, daemon=True); ct.start()
+    while not stop[0]:
+        _t.sleep(0.05)
+    _t.sleep(0.3)
+    tmap.close(); smap.close()
+
+    assert len(records) == 1, f"expected 1 committed lap, got {len(records)}"
+    assert abs(records[0].lap_time - 92.5) < 1e-6
+    d = records[0].channels["lap_distance"]
+    assert d.max() > 3000 and d.min() < 100   # spans the flying lap, not the out-lap/teleport
+
+
 def test_session_phase_maps_msession_index():
     from simcoach.lmu.smm import session_phase
     assert session_phase(0) == "testday"

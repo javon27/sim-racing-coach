@@ -46,6 +46,10 @@ SCORING_CANDIDATES = ["$rFactor2SMMP_Scoring$"]
 _kernel32 = C.WinDLL("kernel32", use_last_error=True)
 _FILE_MAP_READ = 0x0004
 
+# A backward jump in lap distance larger than this marks a lap boundary (crossing
+# start/finish, or a teleport/reset). Smaller dips are off-track/jitter noise.
+_LAP_WRAP_M = 500.0
+
 
 def open_mmap(name: str, size: int) -> mmap.mmap:
     """Open an EXISTING named shared-memory mapping for read.
@@ -368,8 +372,14 @@ class LmuSource:
             ) from exc
 
         period = 1.0 / self.poll_hz
+        # Buffer the in-progress lap; only COMMIT it when the car genuinely crosses
+        # the finish line (a downward lap-distance wrap) AND the sim posted a fresh
+        # lap time for it. A teleport, pit exit, pause, or out-lap wraps the distance
+        # too but posts no new time — those buffers are discarded, so half-driven /
+        # frozen / abandoned laps never reach the store or the coach.
         channels: dict[str, list[float]] = {}
-        current_lap_number: int | None = None
+        prev_dist: float | None = None
+        committed_time: float | None = None
         # A "session" is one on-track stint: a fresh id is minted whenever the
         # (track, car, sim-session-index) changes, so laps group by practice/qualy/
         # race instead of pooling all-time. mSession also gives the phase label.
@@ -386,11 +396,13 @@ class LmuSource:
                 time.sleep(period)
                 continue
 
-            if current_lap_number is None:
-                current_lap_number = vt.mLapNumber
-
-            if vt.mLapNumber != current_lap_number:
-                if channels:
+            dist = player.mLapDist
+            # Finish line / lap boundary: lap distance jumped backward a long way.
+            if prev_dist is not None and dist < prev_dist - _LAP_WRAP_M:
+                lap_time = player.mLastLapTime
+                # Commit ONLY a completed, freshly-timed lap. A teleport/exit/out-lap
+                # also wraps here but carries a stale or sentinel (<=0) lap time.
+                if channels and lap_time > 0 and lap_time != committed_time:
                     track = vt.mTrackName.decode(errors="replace")
                     car = vt.mVehicleName.decode(errors="replace")
                     phase = session_phase(scoring.mScoringInfo.mSession)
@@ -399,23 +411,18 @@ class LmuSource:
                         session_key = key
                         session_id = f"{time.strftime('%Y-%m-%dT%H%M%S')}-{phase}"
                     record = build_lap_record(
-                        sim="lmu",
-                        track=track,
-                        car=car,
-                        lap_time=player.mLastLapTime,
-                        invalidated=vt.mLapInvalidated,
-                        timestamp=time.time(),
-                        channels=channels,
-                        phase=phase,
-                        session_id=session_id,
+                        sim="lmu", track=track, car=car, lap_time=lap_time,
+                        invalidated=vt.mLapInvalidated, timestamp=time.time(),
+                        channels=channels, phase=phase, session_id=session_id,
                     )
                     if record is not None:
+                        committed_time = lap_time
                         yield record
-                channels = {}
-                current_lap_number = vt.mLapNumber
+                channels = {}  # start the next lap fresh (committed or discarded)
 
-            sample = sample_from_telem(vt, player.mLapDist)
+            sample = sample_from_telem(vt, dist)
             for k, v in sample.items():
                 channels.setdefault(k, []).append(v)
+            prev_dist = dist
 
             time.sleep(period)
