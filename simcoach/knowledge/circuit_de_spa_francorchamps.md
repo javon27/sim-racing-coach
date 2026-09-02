@@ -5,9 +5,10 @@
 numbering (18 named corners of the guide's 20; unnamed connectors T16/T20
 omitted), rebuilt 2026-09-01 from 13 clean laps after the original auto-built
 map collapsed the chicanes to only 10 corners. Directions are telemetry-
-computed. Verify: T9 Speaker's Corner (wiki says right, telemetry reads left
--- possible unnamed left before Pouhon) and Campus (T14, faint). This note
-adds the wiki's driving detail on top of that map.
+computed. Driver-confirmed 2026-09-01: T9 Speaker's Corner is a LEFT (the LMU
+wiki calls it a right -- wiki is wrong); T14 Campus is the slow 2nd-gear RIGHT
+right after Les Fagnes and T15 Stavelot is the near-flat RIGHT that follows.
+This note adds the wiki's driving detail on top of that map.
 
 ## General
 - [LMU] Hypercar can brake significantly later than GT3 into La Source and

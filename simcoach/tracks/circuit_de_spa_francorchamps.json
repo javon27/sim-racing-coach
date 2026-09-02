@@ -1,7 +1,7 @@
 {
   "track": "circuit_de_spa_francorchamps",
-  "_config_note": "Spa, LMU/WEC GP numbering (source: lemansultimate.wiki.gg Track Guide: Spa, 20 corners). Names + numbering owned from that guide; directions computed from 13 clean laps, cross-checked with wiki geometry. HIGH: La Source(1), Raidillon(3), Les Combes(5-6), Malmedy(7), Bruxelles(8), Pouhon(10), Les Fagnes(12-13), Stavelot(15). MED: Eau Rouge(2), Raidillon exit(4), Pouhon-2(11), Blanchimont(17), Bus Stop(18-19). LOW/verify: T9 Speaker's Corner -- wiki calls it a right-hander but telemetry at this distance reads LEFT, so an unnamed left may sit before Pouhon (confirm with a slow lap); Campus(14) faint. Unnamed connectors T16/T20 omitted (flat-out kinks). Previously this map had only 10 corners (chicanes collapsed).",
-  "_distances_note": "apex from lap-averaged steering peaks (13 clean laps, 2026); windows apex +/-45m clamped to neighbours.",
+  "_config_note": "Spa, LMU/WEC GP numbering (source: lemansultimate.wiki.gg Track Guide: Spa, 20 corners; 18 named, unnamed connectors T16/T20 omitted). Names/numbering owned from that guide; directions from 13 clean laps. Driver-confirmed 2026-09-01: T9 Speaker's Corner is a LEFT (wiki was wrong); T14 Campus is the slow 2nd-gear RIGHT after Les Fagnes; T15 Stavelot is the near-flat RIGHT that follows (earlier build had Campus/Stavelot swapped and mislabeled the Fagnes exit as Campus). Rebuilt from a collapsed 10-corner auto map.",
+  "_distances_note": "apex from lap-averaged steering peaks + speed minima (13 clean laps, 2026); windows apex +/-45m clamped.",
   "length_m": 7004,
   "corners": [
     {
@@ -96,33 +96,33 @@
       "number": 12,
       "name": "Les Fagnes",
       "direction": "right",
-      "start_dist": 4351,
-      "apex_dist": 4396.0,
-      "end_dist": 4441
+      "start_dist": 4340,
+      "apex_dist": 4385.0,
+      "end_dist": 4430
     },
     {
       "number": 13,
       "name": "Les Fagnes",
       "direction": "left",
-      "start_dist": 4492,
-      "apex_dist": 4537.0,
-      "end_dist": 4572.0
+      "start_dist": 4515,
+      "apex_dist": 4560.0,
+      "end_dist": 4605
     },
     {
       "number": 14,
       "name": "Campus",
-      "direction": "left",
-      "start_dist": 4572.0,
-      "apex_dist": 4607.0,
-      "end_dist": 4652
+      "direction": "right",
+      "start_dist": 4775,
+      "apex_dist": 4820.0,
+      "end_dist": 4865
     },
     {
       "number": 15,
       "name": "Stavelot",
       "direction": "right",
-      "start_dist": 4789,
-      "apex_dist": 4834.0,
-      "end_dist": 4879
+      "start_dist": 5005,
+      "apex_dist": 5050.0,
+      "end_dist": 5095
     },
     {
       "number": 17,
