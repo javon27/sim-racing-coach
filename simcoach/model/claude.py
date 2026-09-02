@@ -40,6 +40,31 @@ class ClaudeModel:
         )
         return _first_text(resp)
 
+    def _stream_turn(self, system: str, convo: list[dict], tools: list[dict] | None):
+        """One model turn. Streams token deltas via `messages.stream` (yielding a
+        `text` event per chunk) when the client supports it; falls back to a
+        single whole-block `messages.create` call otherwise (a client/test-double
+        without `.stream` — the real Anthropic client always has it). Either way,
+        returns the final message so the caller can inspect `stop_reason`/`content`
+        — its text is never re-yielded (that would double the answer once `run`
+        accumulates deltas). `tools=None` omits the `tools` kwarg entirely (the
+        iteration-cap call)."""
+        kw = dict(model=self.model, max_tokens=self.max_tokens, system=system,
+                  messages=convo, thinking=self._thinking_param())
+        if tools is not None:
+            kw["tools"] = tools
+        if not hasattr(self.client.messages, "stream"):
+            resp = self.client.messages.create(**kw)
+            text = _first_text(resp)
+            if text:
+                yield {"type": "text", "text": text}
+            return resp
+        with self.client.messages.stream(**kw) as stream:
+            for delta in stream.text_stream:
+                yield {"type": "text", "text": delta}
+            final = stream.get_final_message()
+        return final
+
     def run_stream(
         self,
         system: str,
@@ -49,26 +74,18 @@ class ClaudeModel:
     ) -> Iterator[dict]:
         """Agentic tool-use loop: let the model call `tools` to fetch data on
         demand, executing each via `dispatch`, until it stops calling tools.
-        Yields a `tool` event before dispatching each tool_use block, then a
-        `text` event with the final answer."""
+        Yields a `tool` event before dispatching each tool_use block, and
+        streams the answer as one or more `text` delta events."""
         # Copy so we don't mutate the caller's history (the coach appends only the
         # final Q/A itself). tool_use/tool_result turns stay internal to this call.
         convo = list(messages)
         for _ in range(MAX_TOOL_ITERATIONS):
-            resp = self.client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                system=system,
-                messages=convo,
-                tools=tools,
-                thinking=self._thinking_param(),
-            )
-            if resp.stop_reason != "tool_use":
-                yield {"type": "text", "text": _first_text(resp)}
+            final = yield from self._stream_turn(system, convo, tools)
+            if final.stop_reason != "tool_use":
                 return
-            convo.append({"role": "assistant", "content": resp.content})
+            convo.append({"role": "assistant", "content": final.content})
             results = []
-            for block in resp.content:
+            for block in final.content:
                 if getattr(block, "type", None) != "tool_use":
                     continue
                 yield {"type": "tool", "name": block.name, "input": block.input}
@@ -83,11 +100,7 @@ class ClaudeModel:
             convo.append({"role": "user", "content": results})
         # Hit the iteration cap — make one final tool-free call so the model answers
         # from what it has gathered rather than returning nothing.
-        resp = self.client.messages.create(
-            model=self.model, max_tokens=self.max_tokens, system=system,
-            messages=convo, thinking=self._thinking_param(),
-        )
-        yield {"type": "text", "text": _first_text(resp)}
+        yield from self._stream_turn(system, convo, tools=None)
 
     def run(
         self,
@@ -96,11 +109,12 @@ class ClaudeModel:
         tools: list[dict],
         dispatch: Callable[[str, dict], str],
     ) -> str:
-        """Agentic tool-use loop; drains `run_stream` and returns the final text."""
+        """Agentic tool-use loop; drains `run_stream`, accumulating text deltas
+        into the final answer."""
         text = ""
         for ev in self.run_stream(system, messages, tools, dispatch):
             if ev["type"] == "text":
-                text = ev["text"]
+                text += ev["text"]
         return text
 
 

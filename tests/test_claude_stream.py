@@ -15,22 +15,59 @@ class _ToolUse:
     def __init__(self, id, name, inp): self.id = id; self.name = name; self.input = inp
 
 
+class _StreamCM:
+    """Fake `messages.stream(...)` context manager: `text_stream` yields
+    `deltas`, `get_final_message()` returns `final`."""
+    def __init__(self, deltas, final):
+        self.text_stream = deltas
+        self._final = final
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def get_final_message(self):
+        return self._final
+
+
+def _resp_text(resp) -> str:
+    return "".join(getattr(b, "text", "") for b in resp.content)
+
+
 class _FakeClient:
-    """Scripts two turns: a tool_use, then a final text."""
-    def __init__(self):
+    """Scripts two turns: a tool_use, then a final text. `.create()` supplies
+    both turns (unchanged); `.stream()` wraps the SAME turn as a streamed
+    response — pass `stream_deltas`/`final_text` to also cover token-delta
+    streaming with this one fixture."""
+    def __init__(self, stream_deltas=None, final_text="Carry more speed through Turn 1."):
         self._turns = [
             _Resp([_ToolUse("t1", "get_corner", {"corner": "1"})], "tool_use"),
-            _Resp([_Text("Carry more speed through Turn 1.")], "end_turn"),
+            _Resp([_Text(final_text)], "end_turn"),
         ]
         self.messages = self
+        self._stream_deltas = stream_deltas
+
     def create(self, **kw):
         return self._turns.pop(0)
 
+    def stream(self, **kw):
+        resp = self.create(**kw)
+        text = _resp_text(resp)
+        if not text:
+            deltas = []
+        elif self._stream_deltas is not None:
+            deltas = self._stream_deltas
+        else:
+            deltas = [text]
+        return _StreamCM(deltas, resp)
 
-def _model():
+
+def _model(stream_deltas=None, final_text="Carry more speed through Turn 1."):
     m = ClaudeModel.__new__(ClaudeModel)          # bypass __init__ (no real anthropic client)
     m.model = "x"; m.max_tokens = 100; m.thinking = False
-    m.client = _FakeClient()
+    m.client = _FakeClient(stream_deltas=stream_deltas, final_text=final_text)
     return m
 
 
@@ -120,3 +157,25 @@ def test_run_hits_iteration_cap_and_makes_final_tool_free_call():
     assert out == "Iteration cap reached."
     assert len(client.calls) == MAX_TOOL_ITERATIONS + 1
     assert "tools" not in client.calls[-1]
+
+
+def test_run_stream_token_deltas():
+    """The final turn streams via `messages.stream(...)` — text arrives as
+    per-chunk deltas, not one whole-block event. Double-count guard: the
+    deltas' total length equals the final answer's length (the streamed
+    message's own text is never separately re-yielded)."""
+    final_answer = "Brake later into 1."
+    deltas = ["Brake ", "later ", "into 1."]
+
+    m = _model(stream_deltas=deltas, final_text=final_answer)
+    events = list(m.run_stream("sys", [{"role": "user", "content": "q"}],
+                               tools=[{"name": "get_corner"}],
+                               dispatch=lambda n, i: "corner data"))
+    text_events = [e["text"] for e in events if e["type"] == "text"]
+    assert text_events == deltas
+    assert sum(len(d) for d in text_events) == len(final_answer)
+
+    m2 = _model(stream_deltas=deltas, final_text=final_answer)
+    out = m2.run("sys", [{"role": "user", "content": "q"}],
+                 tools=[{"name": "get_corner"}], dispatch=lambda n, i: "corner data")
+    assert out == final_answer
