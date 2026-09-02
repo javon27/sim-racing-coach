@@ -8,12 +8,14 @@ from pathlib import Path
 
 
 def app_data_dir() -> Path:
-    override = os.environ.get("SIMCOACH_DATA_DIR")
+    override = (os.environ.get("SIMCOACH_DATA_DIR") or "").strip()
     if override:
         root = Path(override)
     else:
         appdata = os.environ.get("APPDATA")
         root = Path(appdata) / "SimCoach" if appdata else Path.home() / ".simcoach"
+    if root.exists() and not root.is_dir():
+        raise RuntimeError(f"SimCoach data path exists but is not a directory: {root}")
     root.mkdir(parents=True, exist_ok=True)
     return root
 
