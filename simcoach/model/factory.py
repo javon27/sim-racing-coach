@@ -17,6 +17,12 @@ MODEL_ALIASES = {
 }
 
 
+class CoachUserError(RuntimeError):
+    """Raised for errors whose message is safe (and useful) to show the user
+    verbatim, as opposed to internal errors that must be masked."""
+    pass
+
+
 def make_model(provider: str | None = None, model: str | None = None,
                api_key: str | None = None) -> Model:
     """Return a Model for the given provider.
@@ -30,7 +36,7 @@ def make_model(provider: str | None = None, model: str | None = None,
     if provider == "anthropic":
         key = api_key or get_api_key()
         if not key:
-            raise RuntimeError("No Anthropic API key set — add one in Settings.")
+            raise CoachUserError("No Anthropic API key set — add one in Settings.")
         model_id = MODEL_ALIASES.get(model or "sonnet", model or "claude-sonnet-5")
         return ClaudeModel(model=model_id, api_key=key)
     if provider in PLANNED:

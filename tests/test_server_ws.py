@@ -51,7 +51,8 @@ def test_ws_coach_rejects_hostile_origin_good_host(tmp_path):
     import pytest
     from starlette.websockets import WebSocketDisconnect
     with pytest.raises(WebSocketDisconnect):
-        with client.websocket_connect("/coach", headers={"origin": "http://evil.com"}) as ws:
+        with client.websocket_connect("/coach", headers={"host": "127.0.0.1",
+                                                          "origin": "http://evil.com"}) as ws:
             ws.receive_json()
 
 
@@ -82,3 +83,57 @@ def test_ws_coach_through_lazymodel(tmp_path, monkeypatch):
             ev = ws.receive_json();  types.append(ev["type"])
             if ev["type"] in ("done", "error"): break
     assert types[-1] == "done" and "text" in types
+
+
+def test_ws_coach_error_no_key_is_curated(tmp_path, monkeypatch):
+    from simcoach.model import factory
+    from simcoach.model.factory import CoachUserError
+
+    # No API key -> CoachUserError -> the friendly message reaches the client verbatim.
+    monkeypatch.setattr(factory, "make_model",
+                        lambda provider=None, model=None: (_ for _ in ()).throw(
+                            CoachUserError("No Anthropic API key set — add one in Settings.")))
+    store = LapStore(str(tmp_path / "c1.sqlite"), str(tmp_path / "data1"))
+    app = create_app(store, Coach(factory.LazyModel(), "simcoach/knowledge"))
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "hi"})
+        events = []
+        while True:
+            ev = ws.receive_json();  events.append(ev)
+            if ev["type"] in ("done", "error"): break
+    assert events[-1]["type"] == "error"
+    assert "API key" in events[-1]["message"]
+
+    # A generic internal error must NOT leak its text to the client.
+    coach2 = Coach(FakeModel(reply="x"), "simcoach/knowledge")
+    monkeypatch.setattr(coach2, "ask_agentic_stream",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("secret internal detail")))
+    store2 = LapStore(str(tmp_path / "c2.sqlite"), str(tmp_path / "data2"))
+    app2 = create_app(store2, coach2)
+    client2 = TestClient(app2, base_url="http://127.0.0.1")
+    with client2.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "hi"})
+        events2 = []
+        while True:
+            ev = ws.receive_json();  events2.append(ev)
+            if ev["type"] in ("done", "error"): break
+    assert events2[-1] == {"type": "error", "message": "coach error"}
+
+
+def test_ws_coach_error_without_text_persists_nothing(tmp_path, monkeypatch):
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    coach = Coach(FakeModel(reply="x"), "simcoach/knowledge")
+    monkeypatch.setattr(coach, "ask_agentic_stream",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    app = create_app(store, coach)
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "hi"})
+        events = []
+        while True:
+            ev = ws.receive_json();  events.append(ev)
+            if ev["type"] in ("done", "error"): break
+    assert events[-1]["type"] == "error"
+    assert "chat_id" not in events[-1]
+    assert store.list_chats() == []
