@@ -299,6 +299,29 @@ class LapStore:
                 out.append(d)
             return out
 
+    def recent_race_sessions(self, limit: int = 20) -> list[dict]:
+        """Race sessions from the laps table (not coach_chat, which would miss
+        capture-only sessions with no coach questions asked)."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT session_id, track, car, COUNT(*), "
+                "MIN(CASE WHEN valid THEN lap_time END), MIN(ts), MAX(ts) "
+                "FROM laps WHERE session_id IS NOT NULL "
+                "GROUP BY session_id ORDER BY MAX(ts) DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            keys = ("session_id", "track", "car", "laps", "best", "started", "last")
+            return [dict(zip(keys, r)) for r in rows]
+
+    def session_laps(self, session_id: str) -> list[dict]:
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT id, lap_time, valid, ts FROM laps WHERE session_id = ? ORDER BY ts",
+                (session_id,),
+            ).fetchall()
+            keys = ("id", "lap_time", "valid", "ts")
+            return [dict(zip(keys, r)) for r in rows]
+
     def recent_session_ids(self, limit: int = 10) -> list[str]:
         """Chat session ids, most recent first."""
         with self._lock:
