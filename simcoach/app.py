@@ -1,8 +1,6 @@
 import threading
 import time
 
-import numpy as np
-
 from simcoach.coach import Coach
 from simcoach.coach_tools import CoachContext
 from simcoach.corners import CornerMap
@@ -45,17 +43,6 @@ def run_repl(source: TelemetrySource, store: LapStore, cmap: CornerMap, coach: C
                     lap_id = store.save(lap)
                     latest["lap_id"] = lap_id
                     latest["record"] = lap
-                    # Per-lap health line so a bad capture is visible immediately.
-                    # A clean lap: thousands of samples, ~45-50 Hz, full-track span,
-                    # 0 teleports. A junk lap (out-lap/teleport): few samples and/or
-                    # teleport(s) = a >500 m backward jump in lap distance.
-                    d = lap.channels.get("lap_distance")
-                    n = len(d) if d is not None else 0
-                    teleports = int(np.sum(np.diff(d) < -500)) if n > 1 else 0
-                    span = f"{float(d.min()):.0f}-{float(d.max()):.0f}m" if n else "?"
-                    hz = n / lap.lap_time if lap.lap_time else 0
-                    print(f"\n  [lap {lap_id}: {n} samples ~{hz:.0f}Hz, {span}, "
-                          f"{teleports} teleport(s)]", flush=True)
             except Exception as e:
                 # LMU likely closed / shared memory vanished — wait for it to come
                 # back, then re-open and resume. Surface it (was silently swallowed)
