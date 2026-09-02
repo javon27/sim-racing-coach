@@ -1,9 +1,13 @@
 # Spa-Francorchamps notes
 
-7.004 km, WEC layout (the corner-map JSON `simcoach/tracks/spa.json`
-already covers the 10 officially-numbered corners; this note adds the
-wiki's driving detail on top of that existing map -- it does not replace
-it, and JSON was not touched per project instructions).
+7.004 km, WEC layout. The corner-map JSON
+`simcoach/tracks/circuit_de_spa_francorchamps.json` uses the LMU/WEC GP
+numbering (18 named corners of the guide's 20; unnamed connectors T16/T20
+omitted), rebuilt 2026-09-01 from 13 clean laps after the original auto-built
+map collapsed the chicanes to only 10 corners. Directions are telemetry-
+computed. Verify: T9 Speaker's Corner (wiki says right, telemetry reads left
+-- possible unnamed left before Pouhon) and Campus (T14, faint). This note
+adds the wiki's driving detail on top of that map.
 
 ## General
 - [LMU] Hypercar can brake significantly later than GT3 into La Source and

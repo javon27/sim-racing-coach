@@ -1,17 +1,152 @@
 {
-  "track": "spa",
-  "_distances_note": "start_dist/apex_dist/end_dist are ESTIMATES spread over the official 7004m lap length, based on general knowledge of corner order/spacing, NOT measured LMU telemetry. Calibrate against real lap_distance data before trusting these windows for detection; corner names/numbers/directions are sourced (see docs/superpowers/knowledge/lmu-roster.md and README.md).",
+  "track": "circuit_de_spa_francorchamps",
+  "_config_note": "Spa, LMU/WEC GP numbering (source: lemansultimate.wiki.gg Track Guide: Spa, 20 corners). Names + numbering owned from that guide; directions computed from 13 clean laps, cross-checked with wiki geometry. HIGH: La Source(1), Raidillon(3), Les Combes(5-6), Malmedy(7), Bruxelles(8), Pouhon(10), Les Fagnes(12-13), Stavelot(15). MED: Eau Rouge(2), Raidillon exit(4), Pouhon-2(11), Blanchimont(17), Bus Stop(18-19). LOW/verify: T9 Speaker's Corner -- wiki calls it a right-hander but telemetry at this distance reads LEFT, so an unnamed left may sit before Pouhon (confirm with a slow lap); Campus(14) faint. Unnamed connectors T16/T20 omitted (flat-out kinks). Previously this map had only 10 corners (chicanes collapsed).",
+  "_distances_note": "apex from lap-averaged steering peaks (13 clean laps, 2026); windows apex +/-45m clamped to neighbours.",
   "length_m": 7004,
   "corners": [
-    {"number": 1, "name": "La Source", "direction": "right", "start_dist": 200, "apex_dist": 280, "end_dist": 380},
-    {"number": 2, "name": "Eau Rouge/Raidillon", "direction": "right", "start_dist": 850, "apex_dist": 1000, "end_dist": 1150},
-    {"number": 3, "name": "Les Combes", "direction": "right", "start_dist": 1900, "apex_dist": 2000, "end_dist": 2150},
-    {"number": 4, "name": "Malmedy", "direction": "right", "start_dist": 2500, "apex_dist": 2600, "end_dist": 2750},
-    {"number": 5, "name": "Rivage", "direction": "right", "start_dist": 3000, "apex_dist": 3150, "end_dist": 3350},
-    {"number": 6, "name": "Pouhon", "direction": "left", "start_dist": 3900, "apex_dist": 4050, "end_dist": 4300},
-    {"number": 7, "name": "Fagnes", "direction": "right", "start_dist": 4550, "apex_dist": 4650, "end_dist": 4800},
-    {"number": 8, "name": "Stavelot", "direction": "right", "start_dist": 5300, "apex_dist": 5400, "end_dist": 5550},
-    {"number": 9, "name": "Blanchimont", "direction": "left", "start_dist": 6000, "apex_dist": 6150, "end_dist": 6350},
-    {"number": 10, "name": "Bus Stop", "direction": "right", "start_dist": 6700, "apex_dist": 6800, "end_dist": 6950}
+    {
+      "number": 1,
+      "name": "La Source",
+      "direction": "right",
+      "start_dist": 233,
+      "apex_dist": 278.0,
+      "end_dist": 323
+    },
+    {
+      "number": 2,
+      "name": "Eau Rouge",
+      "direction": "left",
+      "start_dist": 857,
+      "apex_dist": 902.0,
+      "end_dist": 947
+    },
+    {
+      "number": 3,
+      "name": "Raidillon",
+      "direction": "right",
+      "start_dist": 960,
+      "apex_dist": 1005.0,
+      "end_dist": 1050
+    },
+    {
+      "number": 4,
+      "name": "Raidillon exit",
+      "direction": "left",
+      "start_dist": 1119,
+      "apex_dist": 1164.0,
+      "end_dist": 1209
+    },
+    {
+      "number": 5,
+      "name": "Les Combes",
+      "direction": "right",
+      "start_dist": 2264,
+      "apex_dist": 2309.0,
+      "end_dist": 2349.5
+    },
+    {
+      "number": 6,
+      "name": "Les Combes",
+      "direction": "left",
+      "start_dist": 2349.5,
+      "apex_dist": 2390.0,
+      "end_dist": 2435
+    },
+    {
+      "number": 7,
+      "name": "Malmedy",
+      "direction": "right",
+      "start_dist": 2468,
+      "apex_dist": 2513.0,
+      "end_dist": 2558
+    },
+    {
+      "number": 8,
+      "name": "Bruxelles",
+      "direction": "right",
+      "start_dist": 2892,
+      "apex_dist": 2937.0,
+      "end_dist": 2982
+    },
+    {
+      "number": 9,
+      "name": "Speaker's Corner",
+      "direction": "left",
+      "start_dist": 3114,
+      "apex_dist": 3159.0,
+      "end_dist": 3204
+    },
+    {
+      "number": 10,
+      "name": "Pouhon",
+      "direction": "left",
+      "start_dist": 3755,
+      "apex_dist": 3800.0,
+      "end_dist": 3845
+    },
+    {
+      "number": 11,
+      "name": "Pouhon",
+      "direction": "left",
+      "start_dist": 3905,
+      "apex_dist": 3950.0,
+      "end_dist": 3995
+    },
+    {
+      "number": 12,
+      "name": "Les Fagnes",
+      "direction": "right",
+      "start_dist": 4351,
+      "apex_dist": 4396.0,
+      "end_dist": 4441
+    },
+    {
+      "number": 13,
+      "name": "Les Fagnes",
+      "direction": "left",
+      "start_dist": 4492,
+      "apex_dist": 4537.0,
+      "end_dist": 4572.0
+    },
+    {
+      "number": 14,
+      "name": "Campus",
+      "direction": "left",
+      "start_dist": 4572.0,
+      "apex_dist": 4607.0,
+      "end_dist": 4652
+    },
+    {
+      "number": 15,
+      "name": "Stavelot",
+      "direction": "right",
+      "start_dist": 4789,
+      "apex_dist": 4834.0,
+      "end_dist": 4879
+    },
+    {
+      "number": 17,
+      "name": "Blanchimont",
+      "direction": "left",
+      "start_dist": 5985,
+      "apex_dist": 6030.0,
+      "end_dist": 6075
+    },
+    {
+      "number": 18,
+      "name": "Bus Stop",
+      "direction": "left",
+      "start_dist": 6622,
+      "apex_dist": 6667.0,
+      "end_dist": 6712
+    },
+    {
+      "number": 19,
+      "name": "Bus Stop",
+      "direction": "right",
+      "start_dist": 6813,
+      "apex_dist": 6858.0,
+      "end_dist": 6903
+    }
   ]
 }
