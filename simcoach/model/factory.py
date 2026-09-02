@@ -62,3 +62,9 @@ class LazyModel:
 
     def run(self, system, messages, tools, dispatch):
         return self._get().run(system, messages, tools, dispatch)
+
+    def run_stream(self, system, messages, tools, dispatch):
+        # Must be a generator (has `yield`) so `self._get()` runs on first
+        # iteration, not at call time — a no-key RuntimeError then surfaces
+        # lazily, inside the caller's try/except around the iteration.
+        yield from self._get().run_stream(system, messages, tools, dispatch)

@@ -41,6 +41,14 @@ def test_anthropic_explicit_api_key_wins(monkeypatch):
     assert captured["api_key"] == "sk-explicit"
 
 
+def test_lazy_model_run_stream_defers_construction(monkeypatch):
+    # No key: constructing LazyModel must NOT raise; only iterating run_stream does.
+    monkeypatch.setattr(factory, "get_api_key", lambda: None)
+    lm = factory.LazyModel(provider="anthropic", model="sonnet")  # no raise
+    with pytest.raises(RuntimeError, match="API key"):
+        list(lm.run_stream("sys", [{"role": "user", "content": "hi"}], [], lambda n, i: ""))
+
+
 def test_lazy_model_builds_once(monkeypatch):
     calls = {"n": 0}
     def fake_make(provider, model):

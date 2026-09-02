@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Callable, Iterator
 
 import anthropic
 
@@ -40,15 +40,17 @@ class ClaudeModel:
         )
         return _first_text(resp)
 
-    def run(
+    def run_stream(
         self,
         system: str,
         messages: list[dict],
         tools: list[dict],
         dispatch: Callable[[str, dict], str],
-    ) -> str:
+    ) -> Iterator[dict]:
         """Agentic tool-use loop: let the model call `tools` to fetch data on
-        demand, executing each via `dispatch`, until it stops calling tools."""
+        demand, executing each via `dispatch`, until it stops calling tools.
+        Yields a `tool` event before dispatching each tool_use block, then a
+        `text` event with the final answer."""
         # Copy so we don't mutate the caller's history (the coach appends only the
         # final Q/A itself). tool_use/tool_result turns stay internal to this call.
         convo = list(messages)
@@ -62,12 +64,14 @@ class ClaudeModel:
                 thinking=self._thinking_param(),
             )
             if resp.stop_reason != "tool_use":
-                return _first_text(resp)
+                yield {"type": "text", "text": _first_text(resp)}
+                return
             convo.append({"role": "assistant", "content": resp.content})
             results = []
             for block in resp.content:
                 if getattr(block, "type", None) != "tool_use":
                     continue
+                yield {"type": "tool", "name": block.name, "input": block.input}
                 try:
                     out = dispatch(block.name, block.input)
                     results.append({"type": "tool_result", "tool_use_id": block.id,
@@ -83,7 +87,21 @@ class ClaudeModel:
             model=self.model, max_tokens=self.max_tokens, system=system,
             messages=convo, thinking=self._thinking_param(),
         )
-        return _first_text(resp)
+        yield {"type": "text", "text": _first_text(resp)}
+
+    def run(
+        self,
+        system: str,
+        messages: list[dict],
+        tools: list[dict],
+        dispatch: Callable[[str, dict], str],
+    ) -> str:
+        """Agentic tool-use loop; drains `run_stream` and returns the final text."""
+        text = ""
+        for ev in self.run_stream(system, messages, tools, dispatch):
+            if ev["type"] == "text":
+                text = ev["text"]
+        return text
 
 
 def _first_text(resp) -> str:
