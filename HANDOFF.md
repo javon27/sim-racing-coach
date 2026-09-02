@@ -1,4 +1,37 @@
-# CURRENT STATE (2026-09-01, overnight) — READ THIS FIRST
+# CURRENT STATE (2026-09-02) — READ THIS FIRST
+
+**On `main`, tree clean, 164 tests passing** (`python -m pytest -q`). The agentic
+tool-call coach is **merged**; the capture buffer-and-commit fix landed; Imola and
+Spa corner maps were **rebuilt to WEC/GP numbering** (Spa driver-verified). The
+mmap-reuse "fix" described in the older block below was **reverted** — ignore it.
+
+## NEXT PHASE: v1.0 desktop UI (a fresh session will orchestrate this)
+
+**Read first:** `docs/superpowers/specs/2026-08-29-v1-standalone-ui-design.md`
+(decisions locked 2026-09-02) and the visual prototype
+`docs/design/v1-ui-prototype.html`.
+
+**Locked decisions:**
+- **Scope:** Coach + Sessions screens. Pit Wall deferred behind a scoring-feasibility spike.
+- **Stack:** Tauri shell + **Svelte + Vite** frontend + localhost **FastAPI/websocket**
+  sidecar wrapping the existing Python core unchanged.
+- **Chat is continuous, decoupled from race session** — one conversation spans races;
+  sessions are context. Needs a `coach_chat` migration (add `chat_id`; keep
+  `session_id`/`lap_id` as per-message context; wrap existing rows into one legacy chat).
+- **Agentic streaming:** the `Model` interface needs a streaming path that yields
+  `tool`/`text`/`done` events (it has `complete`+`run`, no streaming yet).
+- Sessions rows **deep-link into the continuous chat**, anchored to that session's messages.
+
+**Next step:** invoke writing-plans on the spec to produce the implementation plan, then
+build phase 1 (FastAPI over the core + the chat/session data-model migration). Build
+phases are in the spec.
+
+**Open track-map work (not blocking UI):** Silverstone GP (15→18 corners) and a Le Mans
+named-subset call. See `memory/track-map-audit.md`.
+
+---
+
+# CURRENT STATE (2026-09-01, overnight) — HISTORICAL (superseded by the block above)
 
 **Branch:** `feat/agentic-tool-coach` (NOT merged — user feel-tests + merges).
 `main` has the earlier "usable coaching" + live-session-context bugfix.
@@ -533,3 +566,10 @@ Full capture pipeline validated end-to-end on a live lap (Mulsanne straight + ch
 - REST fully validated + strategy_usage (per-lap fuel/ve/tyres) added (bc24120).
 STILL TODO: full lap-boundary capture (needs a completed lap; logic unit-tested);
 coach end-to-end (needs ANTHROPIC_API_KEY); Le Mans corner map; tier auto-detect build.
+
+<!-- claude-code-stop-failure incident=fccb724787eab78c -->
+
+Automatic note: Claude Code stopped with a rate limit at 2026-09-01 22:58:39 CDT.
+Raw hook input was saved to `.claude/stop-failure-events.jsonl`.
+Automatic recovery is enabled for this failure type.
+This hook cannot schedule a same-session resume by itself.
