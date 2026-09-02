@@ -7,10 +7,12 @@ from __future__ import annotations
 import math
 from dataclasses import asdict
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from .. import config, paths, secrets
 from ..analysis import analyze_lap
+from ..model.factory import make_model
 
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}  # port stripped before compare
 
@@ -81,5 +83,57 @@ def create_app(store, coach, cmap=None, rest=None) -> FastAPI:
     @app.get("/chats/{chat_id}")
     def chat_messages(chat_id: str):
         return store.chat_messages(chat_id)
+
+    def _settings_view() -> dict:
+        try:
+            from importlib.metadata import version
+            app_version = version("simcoach")
+        except Exception:
+            app_version = "dev"
+        cfg = config.load_config()
+        cfg.update({
+            "api_key_set": secrets.has_api_key(),
+            "data_dir": str(paths.app_data_dir()),
+            "app_version": app_version,
+            "lmu_build": None,
+        })
+        return cfg
+
+    @app.get("/settings")
+    def get_settings():
+        return _settings_view()
+
+    @app.put("/settings")
+    def put_settings(body: dict = Body(...)):
+        # Whitelist to config.DEFAULTS keys before saving — this is the
+        # secret-leak guard: an injected "key"/"api_key" field can never
+        # reach the JSON file on disk.
+        config.save_config({k: body[k] for k in config.DEFAULTS if k in body})
+        return _settings_view()
+
+    @app.post("/settings/api-key")
+    def set_api_key(body: dict = Body(...)):
+        key = (body.get("key") or "").strip()
+        if not key:
+            raise HTTPException(400, "key is required")
+        secrets.set_api_key(key)
+        return {"api_key_set": True}
+
+    @app.post("/settings/test-key")
+    def test_key():
+        try:
+            cfg = config.load_config()
+            model = make_model(model=cfg.get("model"))
+            model.complete("ping", [{"role": "user", "content": "ping"}])
+            return {"ok": True, "error": None}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    @app.delete("/data")
+    def delete_data(body: dict = Body(default={})):
+        if not body.get("confirm"):
+            raise HTTPException(400, "confirmation required")
+        store.clear_all()
+        return {"cleared": True}
 
     return app

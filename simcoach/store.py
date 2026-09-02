@@ -5,6 +5,7 @@ import os
 import sqlite3
 import threading
 import time
+from pathlib import Path
 from uuid import uuid4
 
 import numpy as np
@@ -321,6 +322,16 @@ class LapStore:
             ).fetchall()
             keys = ("id", "lap_time", "valid", "ts")
             return [dict(zip(keys, r)) for r in rows]
+
+    def clear_all(self) -> None:
+        """Wipe all persisted data: laps, setups, corner metrics, coach chat,
+        and the raw per-lap telemetry files. Used by Settings > reset data."""
+        with self._lock:
+            for t in ("corner_metrics", "coach_chat", "laps", "setups"):
+                self.conn.execute(f"DELETE FROM {t}")
+            self.conn.commit()
+        for f in Path(self.data_dir).glob("*.npz"):
+            f.unlink(missing_ok=True)
 
     def recent_session_ids(self, limit: int = 10) -> list[str]:
         """Chat session ids, most recent first."""
