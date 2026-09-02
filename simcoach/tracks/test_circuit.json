@@ -1,7 +1,0 @@
-{
-  "track": "test_circuit",
-  "_config_note": "Auto-built from one captured lap by simcoach.mapbuild.",
-  "_distances_note": "GEOMETRY from telemetry (steering-peak detection): distances + directions are real data (RIGHT_IS_POSITIVE=True). 'Turn N' names are detection order, NOT official numbers/names \u2014 enrich from wiki/diagram/driver. Fast/flat corners may be missed on a single lap; more laps help.",
-  "length_m": 1463,
-  "corners": []
-}
