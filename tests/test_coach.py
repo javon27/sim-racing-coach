@@ -61,6 +61,14 @@ def test_coach_system_prompt_asserts_ground_truth(synthetic_lap):
     assert "ground truth" in system.lower()
 
 
+def test_agentic_system_prompt_has_scope_guard():
+    """The agentic prompt must keep the coach in character and decline off-purpose
+    requests (code, chit-chat, unrelated tasks) — this is prompt-only, no classifier."""
+    from simcoach.coach import AGENTIC_SYSTEM_PROMPT
+    assert "SCOPE:" in AGENTIC_SYSTEM_PROMPT
+    assert "nothing else" in AGENTIC_SYSTEM_PROMPT
+
+
 def test_coach_rejects_path_traversal_in_car(synthetic_lap):
     """A crafted car value must not escape knowledge_dir; notes are simply omitted."""
     from simcoach.model.fake import FakeModel
