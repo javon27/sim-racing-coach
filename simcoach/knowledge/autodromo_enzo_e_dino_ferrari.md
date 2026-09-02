@@ -13,12 +13,15 @@ Tamburello (stated as a "left-right-left sequence" for turns 2-4), Piratella
 ("blind left-hander," turn 9) and Rivazza ("final double left-hander," turns
 17-18) give explicit left/right direction -- Villeneuve (5-6), Tosa (7) and
 Acque Minerali (11-13) do not. That's roughly two-thirds of the lap without
-a stated direction. **No corner-map JSON was created for this track** --
-building one would mean inventing directions for most of the circuit, which
-violates the "never invent corner data" rule for this project (same call
-made for `bahrain_international_circuit`). Once telemetry is captured, use
-`simcoach.corners.compute_direction`/`verify_map_directions` to build the
-map instead of the wiki.
+a stated direction. **The corner-map JSON now exists** (`tracks/autodromo_enzo_e_dino_ferrari.json`),
+built from 11 captured laps using FIA/WEC GP 19-corner numbering: identity
+(numbers + names) from the FIA circuit map and this wiki note, directions
+computed from telemetry and cross-checked against the wiki-stated geometry.
+High-confidence corners: Tamburello (2-4, L-R-L), Tosa (7), Piratella (9),
+Acque Minerali (11 right / 12 left), Rivazza (17-18). Low-confidence / verify:
+turns 1, 13, 14, 15, 16 -- flat kinks plus the Acque Minerali/Variante Alta
+grouping are hard to separate from telemetry alone; confirm with a slow lap or
+driver input. Rebuild via `simcoach.corners.compute_direction`/`verify_map_directions`.
 
 ## Corner-by-corner (as given)
 - **T2-4 Tamburello:** High-speed left-right-left sequence, braking at the
