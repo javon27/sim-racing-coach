@@ -78,3 +78,30 @@ def test_analysis_404_missing_lap(tmp_path, synthetic_lap):
     app, lap_id, cid = _app(tmp_path, synthetic_lap, cmap=cmap)
     r = _tc(app).get("/laps/99999/analysis")
     assert r.status_code == 404
+
+
+def test_setup_survives_rest_failure(tmp_path, synthetic_lap):
+    class BrokenRest:
+        def get_setup(self):
+            raise RuntimeError("LMU closed")
+
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    coach = Coach(FakeModel(), "simcoach/knowledge")
+    app = create_app(store, coach, rest=BrokenRest())
+    r = _tc(app).get("/setup")
+    assert r.status_code == 200
+    assert r.json() == {}
+
+
+def test_analysis_unanalyzable_is_422(tmp_path, synthetic_lap, monkeypatch):
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    app, lap_id, cid = _app(tmp_path, synthetic_lap, cmap=cmap)
+
+    import simcoach.server.app as app_module
+
+    def _boom(*args, **kwargs):
+        raise ValueError("bad telemetry")
+
+    monkeypatch.setattr(app_module, "analyze_lap", _boom)
+    r = _tc(app).get(f"/laps/{lap_id}/analysis")
+    assert r.status_code == 422

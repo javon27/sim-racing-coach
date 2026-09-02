@@ -38,8 +38,8 @@ def create_app(store, coach, cmap=None, rest=None) -> FastAPI:
 
     @app.middleware("http")
     async def _host_guard(request: Request, call_next):
-        host = (request.headers.get("host") or "").split(":")[0]
-        if host and host not in ALLOWED_HOSTS:
+        host = (request.headers.get("host") or "").split(":")[0].lower()
+        if host not in ALLOWED_HOSTS:
             return JSONResponse({"detail": "forbidden host"}, status_code=403)
         return await call_next(request)
 
@@ -61,10 +61,13 @@ def create_app(store, coach, cmap=None, rest=None) -> FastAPI:
             raise HTTPException(404, "no corner map")
         try:
             rec = store.load(lap_id)
-        except Exception:
+        except (KeyError, FileNotFoundError):
             raise HTTPException(404, "lap not found")
-        ref = store.best_lap(rec.track, rec.car, exclude_lap_id=lap_id)
-        a = analyze_lap(rec, app.state.cmap, reference=ref)
+        try:
+            ref = store.best_lap(rec.track, rec.car, exclude_lap_id=lap_id)
+            a = analyze_lap(rec, app.state.cmap, reference=ref)
+        except Exception:
+            raise HTTPException(422, "lap telemetry could not be analyzed")
         return _clean({
             "lap_time": a.lap_time,
             "corners": [asdict(c) for c in a.corners],
@@ -74,7 +77,12 @@ def create_app(store, coach, cmap=None, rest=None) -> FastAPI:
     def setup():
         # Phase 1: raw dict from LmuRest, unfiltered. Filtering to the
         # human-meaningful subset is deferred to the Setup-panel phase (Phase 4).
-        return app.state.rest.get_setup() if app.state.rest else {}
+        if not app.state.rest:
+            return {}
+        try:
+            return app.state.rest.get_setup()
+        except Exception:
+            return {}
 
     @app.get("/chats")
     def chats():

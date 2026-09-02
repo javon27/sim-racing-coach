@@ -78,5 +78,7 @@ def save_config(cfg: dict, path: str | None = None) -> None:
                 on_disk = loaded
         except (json.JSONDecodeError, OSError):
             on_disk = {}
+    if isinstance(on_disk.get("driver"), dict) and isinstance(safe.get("driver"), dict):
+        safe = {**safe, "driver": {**on_disk["driver"], **safe["driver"]}}
     on_disk.update(safe)
     p.write_text(json.dumps(on_disk, indent=2))

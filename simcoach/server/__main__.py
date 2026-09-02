@@ -29,6 +29,7 @@ def build_app():
                 rest.get_setup()
             except Exception:
                 rest = None  # REST unavailable — degrade, don't block boot
+            # ponytail: no auto-build of a missing corner map at boot (needs a completed lap); /laps analysis 404s for an unmapped track until Phase 2/3
             map_path = m.resolve_track_map(track_name, str(m.TRACKS_DIR))
             if map_path is not None:
                 cmap = m.CornerMap.load(str(map_path))

@@ -72,3 +72,15 @@ def test_post_api_key_rejects_empty(tmp_path, monkeypatch, mem_keyring):
     assert r.status_code == 400
     r2 = c.post("/settings/api-key", json={})
     assert r2.status_code == 400
+
+
+def test_put_partial_driver_preserves_siblings(tmp_path, monkeypatch, mem_keyring):
+    c, _ = _client(tmp_path, monkeypatch, mem_keyring)
+    c.put("/settings", json={"driver": {"braking_style": "late", "balance_preference": "neutral"}})
+    c.put("/settings", json={"driver": {"risk_tolerance": "high"}})
+    body = c.get("/settings").json()
+    assert body["driver"] == {
+        "braking_style": "late",
+        "balance_preference": "neutral",
+        "risk_tolerance": "high",
+    }

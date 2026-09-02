@@ -21,3 +21,14 @@ def test_health(tmp_path):
 def test_spoofed_host_forbidden(tmp_path):
     r = _client(tmp_path).get("/health", headers={"host": "evil.com"})
     assert r.status_code == 403
+
+
+def test_missing_host_forbidden(tmp_path):
+    # TestClient sends a default Host, so force an empty one to simulate missing.
+    r = _client(tmp_path).get("/health", headers={"host": ""})
+    assert r.status_code == 403
+
+
+def test_uppercase_localhost_allowed(tmp_path):
+    r = _client(tmp_path).get("/health", headers={"host": "LOCALHOST"})
+    assert r.status_code == 200
