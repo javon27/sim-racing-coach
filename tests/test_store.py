@@ -236,3 +236,53 @@ def test_new_chat_round_trip(tmp_path):
     assert [m["question"] for m in msgs] == ["q1", "q2"]
     assert msgs[1]["lap_id"] == 7
     assert msgs[1]["tool_calls"] == [{"t": "get_corner"}]
+
+
+def test_migration_tolerates_duplicate_column(tmp_path):
+    """Simulates a raced/partial v4->v5 upgrade: coach_chat already has
+    chat_id but user_version is still 4. Opening the store (twice, to also
+    cover the case of a second process racing the first) must not crash."""
+    from simcoach.store import SCHEMA_VERSION, LapStore
+    db = str(tmp_path / "c.sqlite")
+    con = sqlite3.connect(db)
+    con.execute("PRAGMA user_version=4")
+    con.execute("""CREATE TABLE coach_chat(id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts REAL, session_id TEXT, track TEXT, car TEXT, lap_id INTEGER,
+        question TEXT, answer TEXT, tool_calls TEXT, chat_id TEXT)""")
+    con.execute("INSERT INTO coach_chat(ts,session_id,chat_id,question,answer) "
+                "VALUES(1.0,'s1','legacy','q','a')")
+    con.commit(); con.close()
+
+    LapStore(db, str(tmp_path / "data"))
+    store = LapStore(db, str(tmp_path / "data"))  # open again: no crash
+
+    version = store.conn.execute("PRAGMA user_version").fetchone()[0]
+    assert version == SCHEMA_VERSION
+    rows = store.conn.execute("SELECT chat_id, question, answer FROM coach_chat").fetchall()
+    assert rows == [("legacy", "q", "a")]
+
+
+def test_chat_messages_survives_bad_tool_calls(tmp_path):
+    from simcoach.store import LapStore
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    cid = store.create_chat()
+    store.save_chat(cid, "s1", "Le Mans", "Corvette", None, "q1", "a1",
+                     tool_calls=[{"t": "get_corner"}])
+    store.save_chat(cid, "s2", "Le Mans", "Corvette", 7, "q2", "a2")
+    store.conn.execute(
+        "UPDATE coach_chat SET tool_calls = ? WHERE question = ?",
+        ("not json {{{", "q2"),
+    )
+    store.conn.commit()
+
+    msgs = store.chat_messages(cid)
+    assert [m["question"] for m in msgs] == ["q1", "q2"]
+    assert msgs[0]["tool_calls"] == [{"t": "get_corner"}]
+    assert msgs[1]["tool_calls"] == "not json {{{"
+
+
+def test_save_chat_rejects_null_chat_id(tmp_path):
+    from simcoach.store import LapStore
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    with pytest.raises(ValueError):
+        store.save_chat(None, "s1", "Le Mans", "Corvette", None, "q", "a")

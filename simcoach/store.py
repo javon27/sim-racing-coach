@@ -70,6 +70,27 @@ CREATE TABLE IF NOT EXISTS corner_metrics (
 """ + _COACH_CHAT_SCHEMA
 
 
+def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
+    """ALTER TABLE ... ADD COLUMN, tolerating a race where another process (or a
+    partially-applied prior migration) already added it."""
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column_def}")
+    except sqlite3.OperationalError as e:
+        if "duplicate column" not in str(e).lower():
+            raise
+
+
+def _decode(tc):
+    """Decode a tool_calls JSON column, returning the raw string (not None) if
+    a row is corrupted so the corruption stays visible instead of vanishing."""
+    if tc is None:
+        return None
+    try:
+        return json.loads(tc)
+    except (TypeError, ValueError):
+        return tc
+
+
 class LapStore:
     def __init__(self, db_path: str, data_dir: str):
         self.data_dir = data_dir
@@ -89,8 +110,8 @@ class LapStore:
             # Cumulative migrations: an old db steps through each version it's behind.
             if current_version < 2:
                 # v1 -> v2: add nullable session/phase metadata columns in place.
-                self.conn.execute("ALTER TABLE laps ADD COLUMN phase TEXT")
-                self.conn.execute("ALTER TABLE laps ADD COLUMN session_id TEXT")
+                _add_column(self.conn, "laps", "phase TEXT")
+                _add_column(self.conn, "laps", "session_id TEXT")
             if current_version < 3:
                 # v2 -> v3: add the coach chat log.
                 self.conn.executescript(_COACH_CHAT_SCHEMA)
@@ -99,7 +120,7 @@ class LapStore:
                 # ADD COLUMN: a <3 db just created coach_chat with tool_calls already.
                 cols = [r[1] for r in self.conn.execute("PRAGMA table_info(coach_chat)")]
                 if "tool_calls" not in cols:
-                    self.conn.execute("ALTER TABLE coach_chat ADD COLUMN tool_calls TEXT")
+                    _add_column(self.conn, "coach_chat", "tool_calls TEXT")
             if current_version < 5:
                 # v4 -> v5: decouple chat from the race session via chat_id. Guard
                 # the ADD COLUMN (a <3 db just created coach_chat with chat_id
@@ -107,7 +128,7 @@ class LapStore:
                 # migration (crash between ALTER and UPDATE) still completes.
                 cols = [r[1] for r in self.conn.execute("PRAGMA table_info(coach_chat)")]
                 if "chat_id" not in cols:
-                    self.conn.execute("ALTER TABLE coach_chat ADD COLUMN chat_id TEXT")
+                    _add_column(self.conn, "coach_chat", "chat_id TEXT")
                 self.conn.execute("UPDATE coach_chat SET chat_id='legacy' WHERE chat_id IS NULL")
         if current_version != SCHEMA_VERSION:
             self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -224,6 +245,8 @@ class LapStore:
                   lap_id: int | None, question: str, answer: str,
                   tool_calls: list | None = None, ts: float | None = None) -> None:
         """Append one coach Q&A exchange (with the tools it invoked) to the log."""
+        if chat_id is None:
+            raise ValueError("chat_id is required")
         tc_json = json.dumps(tool_calls) if tool_calls else None
         with self._lock, self.conn:
             self.conn.execute(
@@ -249,14 +272,14 @@ class LapStore:
         with self._lock:
             rows = self.conn.execute(
                 "SELECT ts, session_id, track, car, lap_id, question, answer, tool_calls "
-                "FROM coach_chat WHERE chat_id = ? ORDER BY ts",
+                "FROM coach_chat WHERE chat_id = ? ORDER BY ts, id",
                 (chat_id,),
             ).fetchall()
             keys = ("ts", "session_id", "track", "car", "lap_id", "question", "answer", "tool_calls")
             out = []
             for r in rows:
                 d = dict(zip(keys, r))
-                d["tool_calls"] = json.loads(d["tool_calls"]) if d["tool_calls"] else None
+                d["tool_calls"] = _decode(d["tool_calls"])
                 out.append(d)
             return out
 
@@ -272,7 +295,7 @@ class LapStore:
             out = []
             for r in rows:
                 d = dict(zip(keys, r))
-                d["tool_calls"] = json.loads(d["tool_calls"]) if d["tool_calls"] else []
+                d["tool_calls"] = _decode(d["tool_calls"]) if d["tool_calls"] else []
                 out.append(d)
             return out
 
