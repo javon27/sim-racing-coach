@@ -1,23 +1,44 @@
-"""User settings, persisted as JSON so the future desktop UI's settings page and
-the terminal app read/write the same file. Flat dict on purpose — easy for a UI
-to bind to. Unknown/malformed files fall back to defaults rather than crashing."""
+"""User settings, persisted as flat JSON so the desktop UI's settings page and
+the terminal app read/write the same file. Secrets are NOT stored here (see
+simcoach.secrets). Env vars override the file for the documented keys only;
+nothing requires them. Malformed/unknown files fall back to defaults."""
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
+from . import paths
+
 DEFAULTS = {
-    "units": "metric",   # "metric" (km/h, °C) or "imperial" (mph, °F); distances stay meters
+    "units": "metric",            # "metric" (km/h, °C) or "imperial" (mph, °F)
+    "input_device": "wheel",      # "wheel" or "controller"
+    "model": "sonnet",            # "opus" | "sonnet" | "haiku" -> make_model
+    "corner_naming": "names",     # "names" or "numbers"
+    "driver": {                   # DriverProfile fields; None = unset
+        "braking_style": None,
+        "balance_preference": None,
+        "risk_tolerance": None,
+    },
 }
 
-CONFIG_PATH = "simcoach.config.json"
+ENV_OVERRIDES = {
+    "input_device": "SIMCOACH_INPUT_DEVICE",
+    "units": "SIMCOACH_UNITS",
+    "model": "SIMCOACH_MODEL",
+}
+
+
+def _path(path: str | None) -> Path:
+    return Path(path) if path else paths.config_path()
 
 
 def load_config(path: str | None = None) -> dict:
-    """Read the config file merged over DEFAULTS. Writes a starter file with the
-    defaults on first run so there's something to edit / point the UI at."""
-    p = Path(path or CONFIG_PATH)
-    cfg = dict(DEFAULTS)
+    """Read the config file merged over DEFAULTS, then apply env overrides.
+    Writes a starter file with the defaults on first run so there's something
+    to edit / point the UI at."""
+    p = _path(path)
+    cfg = json.loads(json.dumps(DEFAULTS))  # deep copy (nested driver dict)
     if p.exists():
         try:
             loaded = json.loads(p.read_text())
@@ -30,4 +51,12 @@ def load_config(path: str | None = None) -> dict:
             p.write_text(json.dumps(cfg, indent=2))
         except OSError:
             pass
+    for key, env in ENV_OVERRIDES.items():
+        val = os.environ.get(env)
+        if val:
+            cfg[key] = val
     return cfg
+
+
+def save_config(cfg: dict, path: str | None = None) -> None:
+    _path(path).write_text(json.dumps(cfg, indent=2))
