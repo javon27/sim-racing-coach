@@ -1,4 +1,5 @@
 import json
+import pytest
 from simcoach import config
 
 
@@ -15,12 +16,39 @@ def test_load_merges_file_over_defaults(tmp_path):
     assert cfg["model"] == "sonnet"  # default fills the rest
 
 
-def test_env_override_beats_file(tmp_path, monkeypatch):
+@pytest.mark.parametrize("key,env", list(config.ENV_OVERRIDES.items()))
+def test_env_override_beats_file(tmp_path, monkeypatch, key, env):
     p = tmp_path / "c.json"
-    p.write_text(json.dumps({"input_device": "wheel"}))
-    monkeypatch.setenv("SIMCOACH_INPUT_DEVICE", "controller")
+    p.write_text(json.dumps({key: "from-file"}))
+    monkeypatch.setenv(env, "from-env")
     cfg = config.load_config(str(p))
-    assert cfg["input_device"] == "controller"
+    assert cfg[key] == "from-env"
+
+
+def test_driver_partial_merge(tmp_path):
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"driver": {"braking_style": "late"}}))
+    cfg = config.load_config(str(p))
+    assert cfg["driver"]["braking_style"] == "late"
+    assert cfg["driver"]["balance_preference"] is None
+    assert cfg["driver"]["risk_tolerance"] is None
+
+
+def test_load_allow_lists_unknown_keys(tmp_path):
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"api_key": "sk-x", "units": "imperial"}))
+    cfg = config.load_config(str(p))
+    assert cfg["units"] == "imperial"
+    assert "api_key" not in cfg
+
+
+def test_save_drops_env_override(tmp_path, monkeypatch):
+    p = tmp_path / "c.json"
+    monkeypatch.setenv("SIMCOACH_MODEL", "opus")
+    cfg = config.load_config(str(p))
+    config.save_config(cfg, str(p))
+    monkeypatch.delenv("SIMCOACH_MODEL")
+    assert config.load_config(str(p))["model"] != "opus"
 
 
 def test_save_round_trips(tmp_path):

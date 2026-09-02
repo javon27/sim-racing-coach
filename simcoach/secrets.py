@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 
 import keyring
+import keyring.errors
 
 SERVICE = "SimCoach"
 KEY_USER = "anthropic_api_key"
@@ -24,7 +25,10 @@ def get_api_key() -> str | None:
 
 
 def set_api_key(key: str) -> None:
-    keyring.set_password(SERVICE, KEY_USER, key.strip())
+    key = (key or "").strip()
+    if not key:
+        raise ValueError("API key is empty")
+    keyring.set_password(SERVICE, KEY_USER, key)
 
 
 def has_api_key() -> bool:
@@ -35,4 +39,6 @@ def clear_api_key() -> None:
     try:
         keyring.delete_password(SERVICE, KEY_USER)
     except keyring.errors.PasswordDeleteError:
+        pass
+    except Exception:
         pass

@@ -43,7 +43,13 @@ def load_config(path: str | None = None) -> dict:
         try:
             loaded = json.loads(p.read_text())
             if isinstance(loaded, dict):
-                cfg.update(loaded)
+                driver = loaded.get("driver")
+                if isinstance(driver, dict):
+                    merged = dict(cfg["driver"]); merged.update(driver)
+                    loaded = {**loaded, "driver": merged}
+                else:
+                    loaded = {k: v for k, v in loaded.items() if k != "driver"}
+                cfg.update({k: v for k, v in loaded.items() if k in DEFAULTS})
         except (json.JSONDecodeError, OSError):
             pass  # malformed/unreadable -> defaults
     else:
@@ -59,4 +65,18 @@ def load_config(path: str | None = None) -> dict:
 
 
 def save_config(cfg: dict, path: str | None = None) -> None:
-    _path(path).write_text(json.dumps(cfg, indent=2))
+    safe = {k: v for k, v in cfg.items() if k in DEFAULTS}
+    for key, env in ENV_OVERRIDES.items():
+        if os.environ.get(env):
+            safe.pop(key, None)  # never persist a dev env override
+    p = _path(path)
+    on_disk = {}
+    if p.exists():
+        try:
+            loaded = json.loads(p.read_text())
+            if isinstance(loaded, dict):
+                on_disk = loaded
+        except (json.JSONDecodeError, OSError):
+            on_disk = {}
+    on_disk.update(safe)
+    p.write_text(json.dumps(on_disk, indent=2))
