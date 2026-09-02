@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 
 from .base import Model
 from .claude import ClaudeModel
@@ -44,10 +45,16 @@ class LazyModel:
     no API key set and only fail when the coach is actually called."""
     def __init__(self, provider=None, model=None):
         self._provider, self._model, self._impl = provider, model, None
+        self._lock = threading.Lock()
 
     def _get(self):
+        # FastAPI runs sync handlers in a threadpool, so concurrent first calls
+        # could race to double-build the real model. Double-checked locking:
+        # only the build-and-cache is serialized, not every call.
         if self._impl is None:
-            self._impl = make_model(provider=self._provider, model=self._model)
+            with self._lock:
+                if self._impl is None:
+                    self._impl = make_model(provider=self._provider, model=self._model)
         return self._impl
 
     def complete(self, system, messages):

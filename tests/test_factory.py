@@ -31,6 +31,16 @@ def test_lazy_model_defers_construction(monkeypatch):
         lm.complete("sys", [{"role": "user", "content": "hi"}])
 
 
+def test_anthropic_explicit_api_key_wins(monkeypatch):
+    monkeypatch.setattr(factory, "get_api_key", lambda: "sk-from-secrets")
+    captured = {}
+    monkeypatch.setattr(factory, "ClaudeModel",
+                        lambda model, api_key: captured.update(model=model, api_key=api_key) or "M")
+    m = factory.make_model(provider="anthropic", api_key="sk-explicit")
+    assert m == "M"
+    assert captured["api_key"] == "sk-explicit"
+
+
 def test_lazy_model_builds_once(monkeypatch):
     calls = {"n": 0}
     def fake_make(provider, model):
