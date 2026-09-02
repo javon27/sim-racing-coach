@@ -1,4 +1,4 @@
-from typing import Callable, Protocol
+from typing import Callable, Iterator, Protocol
 
 
 class Model(Protocol):
@@ -39,4 +39,17 @@ class Model(Protocol):
         Returns:
             The model's final text response after any tool calls.
         """
+        ...
+
+    def run_stream(
+        self,
+        system: str,
+        messages: list[dict],
+        tools: list[dict],
+        dispatch: Callable[[str, dict], str],
+    ) -> Iterator[dict]:
+        """Like `run`, but yield events as they occur instead of returning a string:
+        {"type":"tool","name","input"} as each tool is called, then one or more
+        {"type":"text","text"} events for the answer. Terminal done/error markers are
+        added by the caller (coach/server), not here."""
         ...

@@ -31,3 +31,12 @@ class FakeModel:
             result = dispatch(name, inp)
             self.dispatched.append((name, inp, result))
         return self.reply
+
+    def run_stream(self, system: str, messages: list[dict], tools: list[dict],
+                   dispatch: Callable[[str, dict], str]):
+        """Dispatch the scripted tool calls, yielding a tool event per call, then
+        yield the fixed reply as one text event."""
+        for name, inp in self.tool_script:
+            dispatch(name, inp)
+            yield {"type": "tool", "name": name, "input": inp}
+        yield {"type": "text", "text": self.reply}
