@@ -177,7 +177,7 @@ def create_app(store, coach, cmap=None, rest=None) -> FastAPI:
                 for ev in app.state.coach.ask_agentic_stream(
                         ctx, question, car=car, input_device=req.get("input_device")):
                     if ev["type"] == "text":
-                        text = ev["text"]        # first cut: whole block; Task 5: accumulate deltas
+                        text += ev["text"]       # accumulate streamed deltas into the full answer
                     _emit(ev)
                 terminal = {"type": "done"}
             except Exception as e:

@@ -121,6 +121,42 @@ def test_ws_coach_error_no_key_is_curated(tmp_path, monkeypatch):
     assert events2[-1] == {"type": "error", "message": "coach error"}
 
 
+class _DeltaModel:
+    """Fake model that yields the answer as multiple text deltas, like the real
+    ClaudeModel.run_stream token-streaming — regression test for the worker's
+    last-wins accumulation bug (see test_ws_coach_persists_full_streamed_answer)."""
+
+    def complete(self, system, messages):
+        return "Brake later into 1."
+
+    def run(self, system, messages, tools, dispatch):
+        return "Brake later into 1."
+
+    def run_stream(self, system, messages, tools, dispatch):
+        for t in ["Brake ", "later ", "into 1."]:
+            yield {"type": "text", "text": t}
+
+
+def test_ws_coach_persists_full_streamed_answer(tmp_path):
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    coach = Coach(_DeltaModel(), "simcoach/knowledge")
+    app = create_app(store, coach)
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "where do I lose time?", "session_id": "s1"})
+        events = []
+        while True:
+            ev = ws.receive_json()
+            events.append(ev)
+            if ev["type"] in ("done", "error"):
+                break
+    text_events = [e for e in events if e["type"] == "text"]
+    assert len(text_events) == 3
+    chat_id = events[-1]["chat_id"]
+    msgs = store.chat_messages(chat_id)
+    assert msgs[0]["answer"] == "Brake later into 1."
+
+
 def test_ws_coach_error_without_text_persists_nothing(tmp_path, monkeypatch):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     coach = Coach(FakeModel(reply="x"), "simcoach/knowledge")
