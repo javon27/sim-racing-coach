@@ -57,8 +57,9 @@ def run_repl(source: TelemetrySource, store: LapStore, cmap: CornerMap, coach: C
     # context, and persists every exchange to the chat log. session_id is a
     # sortable timestamp so `store.recent_session_ids()` reads newest-first.
     session_id = time.strftime("%Y-%m-%dT%H%M%S")
+    chat_id = store.create_chat()
     session = CoachSession(coach, car, track_note=track_note, input_device=input_device,
-                           store=store, session_id=session_id, units=units)
+                           store=store, session_id=session_id, units=units, chat_id=chat_id)
 
     ctx_key = (initial_key[0].strip(), initial_key[1].strip()) if initial_key else None
 

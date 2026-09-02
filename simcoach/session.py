@@ -26,6 +26,7 @@ class CoachSession:
         store=None,
         session_id: str | None = None,
         units: str = "metric",
+        chat_id: str | None = None,
     ):
         self.coach = coach
         self.car = car
@@ -35,6 +36,10 @@ class CoachSession:
         self.store = store            # optional LapStore; when set, exchanges persist
         self.session_id = session_id
         self.units = units
+        # Chat is decoupled from the race session (a chat can span sessions). Minted
+        # lazily on first persisted exchange if not supplied, so no message is ever
+        # stored with a NULL chat_id.
+        self.chat_id = chat_id
         # Lightweight Q&A history (questions + answers only — NOT the per-lap corner
         # fact dumps, which would bloat context and mix lap contexts). The coach
         # appends the current lap's facts + question after this history.
@@ -57,7 +62,9 @@ class CoachSession:
         if self.store is not None:
             # A persistence hiccup must never swallow an answer the driver is waiting on.
             try:
-                self.store.save_chat(self.session_id, context.track, self.car,
+                if self.chat_id is None:
+                    self.chat_id = self.store.create_chat()
+                self.store.save_chat(self.chat_id, self.session_id, context.track, self.car,
                                      context.lap_id, question, answer,
                                      tool_calls=context.tool_calls)
             except Exception:

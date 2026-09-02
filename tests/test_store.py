@@ -163,7 +163,7 @@ def test_v1_schema_migrates_in_place_to_v2(tmp_path, synthetic_lap):
     assert old_row is not None
 
     # v3 coach_chat table reached by the same cumulative migration
-    s.save_chat("s1", "t", "c", None, "q", "a")
+    s.save_chat(s.create_chat(), "s1", "t", "c", None, "q", "a")
     assert s.session_chat("s1")[0]["answer"] == "a"
 
     # a new save() with phase works against the migrated schema
@@ -204,5 +204,35 @@ def test_concurrent_save_and_read_is_safe(tmp_path, synthetic_lap):
     except Exception as e:
         errors.append(e)
     t.join()
-
     assert errors == []
+
+
+def test_migration_wraps_legacy_rows(tmp_path):
+    from simcoach.store import LapStore
+    db = str(tmp_path / "c.sqlite")
+    # simulate a v4 DB with a legacy chat row lacking chat_id
+    con = sqlite3.connect(db)
+    con.execute("PRAGMA user_version=4")
+    con.execute("""CREATE TABLE coach_chat(id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts REAL, session_id TEXT, track TEXT, car TEXT, lap_id INTEGER,
+        question TEXT, answer TEXT, tool_calls TEXT)""")
+    con.execute("INSERT INTO coach_chat(ts,session_id,question,answer) VALUES(1.0,'s1','q','a')")
+    con.commit(); con.close()
+
+    store = LapStore(db, str(tmp_path / "data"))  # opening runs the migration
+    chats = store.list_chats()
+    assert len(chats) == 1
+    assert chats[0]["chat_id"] == "legacy"
+    assert chats[0]["message_count"] == 1
+
+
+def test_new_chat_round_trip(tmp_path):
+    from simcoach.store import LapStore
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    cid = store.create_chat()
+    store.save_chat(cid, "s1", "Le Mans", "Corvette", None, "q1", "a1")
+    store.save_chat(cid, "s2", "Le Mans", "Corvette", 7, "q2", "a2", tool_calls=[{"t": "get_corner"}])
+    msgs = store.chat_messages(cid)
+    assert [m["question"] for m in msgs] == ["q1", "q2"]
+    assert msgs[1]["lap_id"] == 7
+    assert msgs[1]["tool_calls"] == [{"t": "get_corner"}]

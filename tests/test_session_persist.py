@@ -24,7 +24,7 @@ def test_v2_migration_adds_chat_and_keeps_laps(tmp_path):
     # existing lap survived the migration
     assert store.conn.execute("SELECT track FROM laps").fetchone()[0] == "spa"
     # new table is usable, incl. the v4 tool_calls column
-    store.save_chat("s1", "spa", "car", None, "q", "a",
+    store.save_chat(store.create_chat(), "s1", "spa", "car", None, "q", "a",
                     tool_calls=[{"name": "get_corner", "input": {"corner": "1"}}])
     row = store.session_chat("s1")[0]
     assert row["question"] == "q"
@@ -33,8 +33,8 @@ def test_v2_migration_adds_chat_and_keeps_laps(tmp_path):
 
 def test_save_chat_roundtrip_and_recent_order(tmp_path):
     store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
-    store.save_chat("early", "spa", "car", 1, "q1", "a1", ts=100.0)
-    store.save_chat("late", "spa", "car", 2, "q2", "a2", ts=200.0)
+    store.save_chat(store.create_chat(), "early", "spa", "car", 1, "q1", "a1", ts=100.0)
+    store.save_chat(store.create_chat(), "late", "spa", "car", 2, "q2", "a2", ts=200.0)
     assert store.recent_session_ids() == ["late", "early"]
     row = store.session_chat("late")[0]
     assert (row["question"], row["answer"], row["lap_id"]) == ("q2", "a2", 2)

@@ -5,22 +5,26 @@ import os
 import sqlite3
 import threading
 import time
+from uuid import uuid4
 
 import numpy as np
 
 from simcoach.model_types import LapRecord
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
 # (NULL for pre-lap general questions); tool_calls is a JSON list of the on-demand
-# tools the agentic coach invoked that turn (added v4). Defined separately so both
-# fresh installs and the migration create the identical table.
+# tools the agentic coach invoked that turn (added v4). chat_id (added v5) groups
+# messages into a chat that can span multiple race sessions (session_id stays the
+# race-session scope). Defined separately so both fresh installs and the
+# migration create the identical table.
 _COACH_CHAT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS coach_chat (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts REAL,
+    chat_id TEXT,
     session_id TEXT,
     track TEXT,
     car TEXT,
@@ -76,6 +80,7 @@ class LapStore:
         # access since sqlite3 itself does not guard against interleaved reads
         # mid-write (e.g. reading a laps row while telemetry_path is still NULL).
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self.conn.execute("PRAGMA busy_timeout=5000")
         self._lock = threading.RLock()
         current_version = self.conn.execute("PRAGMA user_version").fetchone()[0]
         if current_version == 0:
@@ -95,6 +100,15 @@ class LapStore:
                 cols = [r[1] for r in self.conn.execute("PRAGMA table_info(coach_chat)")]
                 if "tool_calls" not in cols:
                     self.conn.execute("ALTER TABLE coach_chat ADD COLUMN tool_calls TEXT")
+            if current_version < 5:
+                # v4 -> v5: decouple chat from the race session via chat_id. Guard
+                # the ADD COLUMN (a <3 db just created coach_chat with chat_id
+                # already); the backfill runs unconditionally so a half-applied
+                # migration (crash between ALTER and UPDATE) still completes.
+                cols = [r[1] for r in self.conn.execute("PRAGMA table_info(coach_chat)")]
+                if "chat_id" not in cols:
+                    self.conn.execute("ALTER TABLE coach_chat ADD COLUMN chat_id TEXT")
+                self.conn.execute("UPDATE coach_chat SET chat_id='legacy' WHERE chat_id IS NULL")
         if current_version != SCHEMA_VERSION:
             self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self.conn.commit()
@@ -201,18 +215,50 @@ class LapStore:
             ).fetchall()
             return [r[0] for r in rows]
 
-    def save_chat(self, session_id: str, track: str | None, car: str | None,
+    def create_chat(self) -> str:
+        """Mint a new chat id (a chat can span multiple race sessions). No row is
+        created — a chat is implied by the messages saved under its id."""
+        return f"chat-{time.strftime('%Y%m%dT%H%M%S')}-{uuid4().hex[:6]}"
+
+    def save_chat(self, chat_id: str, session_id: str, track: str | None, car: str | None,
                   lap_id: int | None, question: str, answer: str,
                   tool_calls: list | None = None, ts: float | None = None) -> None:
         """Append one coach Q&A exchange (with the tools it invoked) to the log."""
         tc_json = json.dumps(tool_calls) if tool_calls else None
         with self._lock, self.conn:
             self.conn.execute(
-                "INSERT INTO coach_chat (ts, session_id, track, car, lap_id, question, "
-                "answer, tool_calls) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (ts if ts is not None else time.time(), session_id, track, car,
+                "INSERT INTO coach_chat (ts, chat_id, session_id, track, car, lap_id, "
+                "question, answer, tool_calls) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (ts if ts is not None else time.time(), chat_id, session_id, track, car,
                  lap_id, question, answer, tc_json),
             )
+
+    def list_chats(self) -> list[dict]:
+        """One entry per chat_id, newest last-activity first."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT chat_id, MIN(ts), MAX(ts), COUNT(*), "
+                "GROUP_CONCAT(DISTINCT track) FROM coach_chat "
+                "GROUP BY chat_id ORDER BY MAX(ts) DESC"
+            ).fetchall()
+            keys = ("chat_id", "started", "last", "message_count", "tracks")
+            return [dict(zip(keys, r)) for r in rows]
+
+    def chat_messages(self, chat_id: str) -> list[dict]:
+        """Every Q&A exchange in a chat, oldest first."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT ts, session_id, track, car, lap_id, question, answer, tool_calls "
+                "FROM coach_chat WHERE chat_id = ? ORDER BY ts",
+                (chat_id,),
+            ).fetchall()
+            keys = ("ts", "session_id", "track", "car", "lap_id", "question", "answer", "tool_calls")
+            out = []
+            for r in rows:
+                d = dict(zip(keys, r))
+                d["tool_calls"] = json.loads(d["tool_calls"]) if d["tool_calls"] else None
+                out.append(d)
+            return out
 
     def session_chat(self, session_id: str) -> list[dict]:
         """Every Q&A exchange in a session, oldest first (for review / memory)."""
