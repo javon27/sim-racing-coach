@@ -12,6 +12,7 @@ from dataclasses import asdict
 
 from fastapi import Body, FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse
+from starlette.middleware.cors import CORSMiddleware
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from .. import config, paths, secrets
@@ -21,6 +22,8 @@ from ..model.factory import CoachUserError, make_model
 from ..tiers import legal_adjustments
 
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}  # port stripped before compare
+FRONTEND_ORIGINS = ["http://localhost:5173", "http://tauri.localhost"]
+ALLOWED_ORIGIN_HOSTS = ALLOWED_HOSTS | {"tauri.localhost"}
 
 
 def _bad_origin(origin: str | None) -> bool:
@@ -31,7 +34,7 @@ def _bad_origin(origin: str | None) -> bool:
     if not origin:
         return False
     host = (urllib.parse.urlparse(origin).hostname or "").lower()
-    return host not in ALLOWED_HOSTS
+    return host not in ALLOWED_ORIGIN_HOSTS
 
 
 def _clean(v):
@@ -52,6 +55,9 @@ def create_app(store, coach, cmap=None, rest=None) -> FastAPI:
     app.state.coach = coach
     app.state.cmap = cmap
     app.state.rest = rest
+
+    app.add_middleware(CORSMiddleware, allow_origins=FRONTEND_ORIGINS,
+                        allow_methods=["*"], allow_headers=["*"])
 
     @app.middleware("http")
     async def _host_guard(request: Request, call_next):

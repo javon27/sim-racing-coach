@@ -157,6 +157,18 @@ def test_ws_coach_persists_full_streamed_answer(tmp_path):
     assert msgs[0]["answer"] == "Brake later into 1."
 
 
+def test_ws_coach_allows_tauri_origin(tmp_path):
+    client, _ = _client(tmp_path)   # reuse the module's FakeModel-backed helper
+    with client.websocket_connect(
+            "/coach", headers={"host": "127.0.0.1", "origin": "http://tauri.localhost"}) as ws:
+        ws.send_json({"question": "hi"})
+        seen = []
+        while True:
+            ev = ws.receive_json(); seen.append(ev["type"])
+            if ev["type"] in ("done", "error"): break
+    assert seen[-1] == "done"
+
+
 def test_ws_coach_error_without_text_persists_nothing(tmp_path, monkeypatch):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     coach = Coach(FakeModel(reply="x"), "simcoach/knowledge")
