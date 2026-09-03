@@ -32,3 +32,9 @@ def telemetry_dir() -> Path:
     d = app_data_dir() / "telemetry"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def logs_dir() -> Path:
+    d = app_data_dir() / "logs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d

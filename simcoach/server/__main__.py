@@ -10,6 +10,7 @@ import time
 from .. import __main__ as m  # reuse track/car/corner-map resolution helpers
 from ..coach import Coach
 from ..config import load_config
+from ..logging_setup import configure_logging
 from ..model.factory import LazyModel
 from ..paths import db_path, telemetry_dir
 from ..store import LapStore
@@ -17,6 +18,7 @@ from .app import create_app, _capture_loop
 
 
 def build_app():
+    configure_logging()
     cfg = load_config()
     store = LapStore(str(db_path()), str(telemetry_dir()))
     coach = Coach(LazyModel(model=cfg["model"]), str(m.PKG_DIR / "knowledge"))
@@ -60,7 +62,8 @@ def build_app():
 
 def main():
     import uvicorn
-    uvicorn.run(build_app(), host="127.0.0.1", port=8765)
+    configure_logging()
+    uvicorn.run(build_app(), host="127.0.0.1", port=8765, log_config=None)
 
 
 if __name__ == "__main__":
