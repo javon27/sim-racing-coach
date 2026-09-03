@@ -64,6 +64,23 @@ def create_app(store, coach, cmap=None, rest=None) -> FastAPI:
     def health():
         return {"status": "ok"}
 
+    @app.get("/status")
+    def status():
+        track = car = None
+        try:
+            from ..lmu.smm import read_session_track_car
+            tc = read_session_track_car()
+            if tc:
+                track, car = tc
+        except Exception:
+            track = car = None
+        return {
+            "track": track, "car": car,
+            "on_track": False,               # no live capture in the server yet
+            "has_map": app.state.cmap is not None,
+            "lmu_connected": app.state.rest is not None,
+        }
+
     @app.get("/sessions")
     def sessions():
         return store.recent_race_sessions()
