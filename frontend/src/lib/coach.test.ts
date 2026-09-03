@@ -1,0 +1,108 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { CoachStream } from "./coach";
+
+// Fake WebSocket the test drives synchronously — no real network, no timers.
+class FakeWebSocket {
+  static instances: FakeWebSocket[] = [];
+  url: string;
+  sent: string[] = [];
+  closed = false;
+  onopen: (() => void) | null = null;
+  onmessage: ((event: { data: string }) => void) | null = null;
+
+  constructor(url: string) {
+    this.url = url;
+    FakeWebSocket.instances.push(this);
+  }
+  send(data: string) {
+    this.sent.push(data);
+  }
+  close() {
+    this.closed = true;
+  }
+}
+
+function emit(ws: FakeWebSocket, payload: unknown) {
+  ws.onmessage?.({ data: JSON.stringify(payload) });
+}
+
+describe("CoachStream", () => {
+  beforeEach(() => {
+    FakeWebSocket.instances.length = 0;
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+  });
+
+  it("opens ws://127.0.0.1:8765/coach and sends the question payload on open", () => {
+    const stream = new CoachStream();
+    stream.ask("where do I brake?", { sessionId: "s1", lapId: 9 });
+
+    expect(stream.phase).toBe("connecting");
+    const ws = FakeWebSocket.instances[0];
+    expect(ws.url).toBe("ws://127.0.0.1:8765/coach");
+
+    ws.onopen?.();
+    expect(JSON.parse(ws.sent[0])).toEqual({
+      question: "where do I brake?",
+      session_id: "s1",
+      lap_id: 9,
+    });
+  });
+
+  it("accumulates text deltas and ends done, closing the socket", () => {
+    const stream = new CoachStream();
+    stream.ask("how's my braking?");
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.();
+
+    emit(ws, { type: "tool", name: "get_lap_analysis", input: { lap_id: 9 } });
+    expect(stream.phase).toBe("tool");
+    expect(stream.toolActivity).toEqual({ name: "get_lap_analysis", input: { lap_id: 9 } });
+
+    emit(ws, { type: "text", text: "Brake later " });
+    emit(ws, { type: "text", text: "into T3." });
+    expect(stream.phase).toBe("streaming");
+    expect(stream.answer).toBe("Brake later into T3.");
+
+    emit(ws, { type: "done", chat_id: "chat-1" });
+    expect(stream.phase).toBe("done");
+    expect(stream.chatId).toBe("chat-1");
+    expect(ws.closed).toBe(true);
+  });
+
+  it("sets phase=error and closes the socket on an error event", () => {
+    const stream = new CoachStream();
+    stream.ask("what happened?");
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.();
+
+    emit(ws, { type: "error", message: "coach error" });
+    expect(stream.phase).toBe("error");
+    expect(stream.error).toBe("coach error");
+    expect(ws.closed).toBe(true);
+  });
+
+  it("closes the previous socket when a new ask starts before the first finishes", () => {
+    const stream = new CoachStream();
+    stream.ask("first question");
+    const first = FakeWebSocket.instances[0];
+    first.onopen?.();
+
+    stream.ask("second question");
+    expect(first.closed).toBe(true);
+    expect(FakeWebSocket.instances.length).toBe(2);
+  });
+
+  it("notifies subscribers on state changes (store contract)", () => {
+    const stream = new CoachStream();
+    const seen: string[] = [];
+    const unsubscribe = stream.subscribe((s) => seen.push(s.phase));
+
+    stream.ask("q");
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.();
+    emit(ws, { type: "done", chat_id: "c1" });
+
+    expect(seen).toEqual(["idle", "connecting", "done"]);
+    unsubscribe();
+  });
+});
