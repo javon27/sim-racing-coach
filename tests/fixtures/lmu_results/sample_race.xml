@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE rF [
+<!ENTITY rFEnt "rFactor Entity">
+]>
+<rFactorXML version="1.0">
+<RaceResults>
+<Setting>Multiplayer</Setting>
+<PlayerFile>Settings</PlayerFile>
+<DateTime>1750472422</DateTime>
+<TimeString>2025/06/20 21:20:22</TimeString>
+<TrackVenue>Sebring International Raceway</TrackVenue>
+<TrackCourse>Sebring International Raceway</TrackCourse>
+<TrackEvent>1000 Miles of Sebring</TrackEvent>
+<TrackLength>5820.3</TrackLength>
+<GameVersion>0.9100</GameVersion>
+<VehiclesAllowed>LMP2,</VehiclesAllowed>
+<Race>
+<DateTime>1750473029</DateTime>
+<TimeString>2025/06/20 21:30:29</TimeString>
+<Minutes>20</Minutes>
+<Stream>
+<Sent et="0.0">&quot;Jayson G&quot; has taken the wheel.</Sent>
+<Incident et="159.6">Jayson G(17) reported contact (42.27) with another vehicle Enrique Ojeda(12)</Incident>
+<Penalty et="200.1">Jayson G received Drive Thru penalty, 0s, 0laps for &quot;Speeding&quot;. Result: penalties=1, 1st=Drive Thru,0s</Penalty>
+<TrackLimits Driver="Jayson G" ID="17" Lap="3" WarningPoints="1" CurrentPoints="1" Resolution="5" et="221.0">Warning issued</TrackLimits>
+</Stream>
+<Driver>
+<Name>Ryan Friend</Name>
+<VehName>Duqueine Team 2024 #30:LM</VehName>
+<CarClass>LMP2</CarClass>
+<CarNumber>3</CarNumber>
+<isPlayer>1</isPlayer>
+<Position>1</Position>
+<ClassPosition>1</ClassPosition>
+<Lap num="1" p="1" et="155.8025" s1="48.1695" s2="30.6034" s3="40.8677" topspeed="272.52">119.6406</Lap>
+<Lap num="2" p="1" et="275.4600" s1="43.6740" s2="30.6161" s3="40.6966" topspeed="272.52">114.9868</Lap>
+<BestLapTime>114.9868</BestLapTime>
+<FinishTime>1267.3374</FinishTime>
+<Laps>2</Laps>
+<Pitstops>0</Pitstops>
+<FinishStatus>Finished Normally</FinishStatus>
+</Driver>
+<Driver>
+<Name>Jayson G</Name>
+<VehName>Team WRT #41:LM</VehName>
+<CarClass>LMP2</CarClass>
+<CarNumber>41</CarNumber>
+<isPlayer>1</isPlayer>
+<Position>17</Position>
+<ClassPosition>8</ClassPosition>
+<Lap num="1" p="17" et="160.1201" s1="49.0212" s2="31.4488" s3="41.7803" topspeed="268.91">122.2503</Lap>
+<Lap num="2" p="17" et="281.0300" s1="48.5511" s2="31.0044" s3="41.3548" topspeed="269.42">120.9103</Lap>
+<Lap num="3" p="17" et="--.---" s1="--.----" s2="--.----" s3="--.----" topspeed="0.00">--.----</Lap>
+<BestLapTime>120.9103</BestLapTime>
+<FinishTime>1361.4004</FinishTime>
+<Laps>3</Laps>
+<Pitstops>1</Pitstops>
+<FinishStatus>Finished Normally</FinishStatus>
+</Driver>
+</Race>
+</RaceResults>
+</rFactorXML>
