@@ -1,5 +1,6 @@
 <script lang="ts">
   import { nextTheme, applyTheme, THEME_LABELS, THEME_ICONS, type ThemeMode } from "./theme";
+  import SessionBar from "./SessionBar.svelte";
 
   type Screen = "coach" | "sessions" | "pitwall" | "settings";
 
@@ -59,7 +60,10 @@
   </nav>
   <div class="screens">
     <section class="screen" class:on={screen === "coach"}>
-      <!-- Coach screen: SessionBar + LapList land here (Tasks 5-6); chat is Phase 4. -->
+      <div class="app">
+        <SessionBar />
+        <!-- LapList lands here (Task 6); chat is Phase 4. -->
+      </div>
     </section>
     <section class="screen" class:on={screen === "sessions"}>Sessions (coming soon)</section>
     <section class="screen" class:on={screen === "pitwall"}>Pit Wall (coming soon)</section>

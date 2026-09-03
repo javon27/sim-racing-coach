@@ -114,6 +114,59 @@ body {
   outline-offset: 2px;
 }
 
+.app {
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+/* ---------- session bar ---------- */
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  padding: 12px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-right: 6px;
+}
+.brand .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+.brand b {
+  font-family: var(--display);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  font-size: 16px;
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.stat .k {
+  font-family: var(--display);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--faint);
+}
+.stat .v {
+  font-size: 13px;
+  font-weight: 600;
+}
+.bar .spacer {
+  flex: 1;
+}
+
 /* ---------- app shell ---------- */
 .shell {
   height: 100vh;
