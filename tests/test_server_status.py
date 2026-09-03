@@ -17,3 +17,16 @@ def test_status_offline_shape(tmp_path):
     b = r.json()
     assert set(b) == {"track", "car", "on_track", "has_map", "lmu_connected"}
     assert b["has_map"] is False and b["lmu_connected"] is False and b["on_track"] is False
+
+
+def test_status_on_track_from_latest(tmp_path, synthetic_lap):
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    app = create_app(store, Coach(FakeModel(), "simcoach/knowledge"))
+    app.state.latest = {"record": synthetic_lap, "lap_id": 1}
+
+    r = TestClient(app, base_url="http://127.0.0.1").get("/status")
+    assert r.status_code == 200
+    b = r.json()
+    assert b["on_track"] is True
+    assert b["track"] == synthetic_lap.track
+    assert b["car"] == synthetic_lap.car

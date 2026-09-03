@@ -4,13 +4,16 @@ so a fresh install with no Anthropic key still boots and can reach /settings
 to enter one."""
 from __future__ import annotations
 
+import threading
+import time
+
 from .. import __main__ as m  # reuse track/car/corner-map resolution helpers
 from ..coach import Coach
 from ..config import load_config
 from ..model.factory import LazyModel
 from ..paths import db_path, telemetry_dir
 from ..store import LapStore
-from .app import create_app
+from .app import create_app, _capture_loop
 
 
 def build_app():
@@ -36,7 +39,23 @@ def build_app():
     except Exception:
         cmap = rest = None  # offline: never let resolution failures block boot
 
-    return create_app(store, coach, cmap, rest)
+    app = create_app(store, coach, cmap, rest)
+
+    def _capture_forever():
+        # Retries like simcoach.app.run_repl's capture thread: LMU may not be
+        # running yet (or drops mid-session) -- wait and reopen rather than
+        # dying, and never let a failure here block/crash the sidecar.
+        while True:
+            try:
+                _capture_loop(m.LmuSource(), store, app.state)
+            except Exception:
+                pass
+            time.sleep(3)
+
+    app.state.capture_thread = threading.Thread(target=_capture_forever, daemon=True)
+    app.state.capture_thread.start()
+
+    return app
 
 
 def main():

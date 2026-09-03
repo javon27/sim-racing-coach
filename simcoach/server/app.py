@@ -50,12 +50,24 @@ def _clean(v):
     return v
 
 
+def _capture_loop(source, store, app_state) -> None:
+    """One pass over `source.laps()`: save each completed lap to `store` and
+    record it on `app_state.latest` so /status and the lap list see it live.
+    Mirrors simcoach.app.run_repl's capture thread body. Returns when
+    `source.laps()` is exhausted or raises -- the caller (build_app) wraps
+    this in a retry loop so a real LMU source reconnects after a drop."""
+    for lap in source.laps():
+        lap_id = store.save(lap)
+        app_state.latest = {"record": lap, "lap_id": lap_id}
+
+
 def create_app(store, coach, cmap=None, rest=None) -> FastAPI:
     app = FastAPI(title="SimCoach", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store = store
     app.state.coach = coach
     app.state.cmap = cmap
     app.state.rest = rest
+    app.state.latest = None  # set by the capture thread (build_app): {"record", "lap_id"} | None
 
     app.add_middleware(CORSMiddleware, allow_origins=FRONTEND_ORIGINS,
                         allow_methods=["*"], allow_headers=["*"])
@@ -73,17 +85,23 @@ def create_app(store, coach, cmap=None, rest=None) -> FastAPI:
 
     @app.get("/status")
     def status():
-        track = car = None
-        try:
-            from ..lmu.smm import read_session_track_car
-            tc = read_session_track_car()
-            if tc:
-                track, car = tc
-        except Exception:
+        latest = app.state.latest
+        if latest is not None:
+            record = latest["record"]
+            track, car, on_track = record.track, record.car, True
+        else:
+            on_track = False
             track = car = None
+            try:
+                from ..lmu.smm import read_session_track_car
+                tc = read_session_track_car()
+                if tc:
+                    track, car = tc
+            except Exception:
+                track = car = None
         return {
             "track": track, "car": car,
-            "on_track": False,               # no live capture in the server yet
+            "on_track": on_track,
             "has_map": app.state.cmap is not None,
             "lmu_connected": app.state.rest is not None,
         }
