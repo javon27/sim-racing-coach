@@ -117,6 +117,16 @@ describe("LapList", () => {
     expect(screen.queryByText(/can't reach the coach server/i)).toBeNull();
   });
 
+  it("loads a deep-linked session's laps directly when sessionId is set", async () => {
+    vi.mocked(getSessionLaps).mockResolvedValue([{ id: 42, lap_time: 210.0, valid: 1, ts: 300 }]);
+
+    render(LapList, { props: { sessionId: "s2" } });
+
+    expect(await screen.findByText(/Lap 42/)).toBeTruthy();
+    expect(vi.mocked(getSessionLaps)).toHaveBeenCalledWith("s2");
+    expect(vi.mocked(getSessions)).not.toHaveBeenCalled();
+  });
+
   it("stops polling after unmount", async () => {
     vi.mocked(getSessions).mockResolvedValue([
       { session_id: "s1", track: "Le Mans", car: "Corvette Z06", laps: 1, best: 216.0, started: 1, last: 2 },

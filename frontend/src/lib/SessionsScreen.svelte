@@ -18,7 +18,8 @@
 
   onMount(async () => {
     try {
-      sessions = await getSessions();
+      const res = await getSessions();
+      sessions = Array.isArray(res) ? res : [];
     } catch {
       sessions = [];
     }

@@ -4,6 +4,8 @@
   import LapList from "./LapList.svelte";
   import ChatPanel from "./ChatPanel.svelte";
   import CornerSetupTabs from "./CornerSetupTabs.svelte";
+  import SessionsScreen from "./SessionsScreen.svelte";
+  import SettingsScreen from "./SettingsScreen.svelte";
 
   type Screen = "coach" | "sessions" | "pitwall" | "settings";
 
@@ -11,10 +13,17 @@
   let theme: ThemeMode = $state("system");
   let selectedLapId: number | undefined = $state(undefined);
   let selectedSessionId: string | undefined = $state(undefined);
+  let activeSessionId: string | undefined = $state(undefined);
 
   function toggleTheme() {
     theme = nextTheme(theme);
     applyTheme(theme);
+  }
+
+  function handleSelectSession(sessionId: string) {
+    activeSessionId = sessionId;
+    selectedSessionId = sessionId;
+    screen = "coach";
   }
 </script>
 
@@ -70,6 +79,7 @@
         <div class="main">
           <aside class="rail">
             <LapList
+              sessionId={activeSessionId}
               onselect={(detail) => {
                 selectedLapId = detail.lap_id;
                 selectedSessionId = detail.session_id;
@@ -81,8 +91,12 @@
         </div>
       </div>
     </section>
-    <section class="screen" class:on={screen === "sessions"}>Sessions (coming soon)</section>
+    <section class="screen" class:on={screen === "sessions"}>
+      <SessionsScreen onselectSession={handleSelectSession} />
+    </section>
     <section class="screen" class:on={screen === "pitwall"}>Pit Wall (coming soon)</section>
-    <section class="screen" class:on={screen === "settings"}>Settings (coming soon)</section>
+    <section class="screen" class:on={screen === "settings"}>
+      <SettingsScreen />
+    </section>
   </div>
 </div>

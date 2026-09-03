@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onDestroy } from "svelte";
   import { getSessions, getSessionLaps, withRetry, type LapRow } from "./api";
 
   let {
@@ -7,11 +7,13 @@
     retryTries = 8,
     retryDelayMs = 750,
     pollMs = 5000,
+    sessionId = null,
   }: {
     onselect?: (detail: { lap_id: number; session_id: string }) => void;
     retryTries?: number;
     retryDelayMs?: number;
     pollMs?: number;
+    sessionId?: string | null;
   } = $props();
 
   let laps: LapRow[] = $state([]);
@@ -20,7 +22,23 @@
   let phase: "connecting" | "ok" | "unreachable" = $state("connecting");
   let pollTimer: ReturnType<typeof setInterval> | undefined;
 
+  function bestIdOf(l: LapRow[]): number | null {
+    return (
+      l.reduce<LapRow | null>(
+        (best, lap) => (best === null || lap.lap_time < best.lap_time ? lap : best),
+        null,
+      )?.id ?? null
+    );
+  }
+
   async function fetchLatest() {
+    if (sessionId) {
+      currentSessionId = sessionId;
+      const l = await getSessionLaps(sessionId);
+      laps = l;
+      bestId = bestIdOf(l);
+      return;
+    }
     const sessions = await getSessions();
     if (sessions.length === 0) {
       laps = [];
@@ -32,11 +50,7 @@
     currentSessionId = latest.session_id;
     const l = await getSessionLaps(latest.session_id);
     laps = l;
-    bestId =
-      l.reduce<LapRow | null>(
-        (best, lap) => (best === null || lap.lap_time < best.lap_time ? lap : best),
-        null,
-      )?.id ?? null;
+    bestId = bestIdOf(l);
   }
 
   async function poll() {
@@ -64,7 +78,10 @@
     }
   }
 
-  onMount(load);
+  $effect(() => {
+    sessionId;
+    load();
+  });
   onDestroy(() => {
     if (pollTimer !== undefined) clearInterval(pollTimer);
   });

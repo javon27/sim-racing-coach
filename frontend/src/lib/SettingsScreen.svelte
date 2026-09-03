@@ -36,14 +36,14 @@
       theme = stored;
       applyTheme(theme);
     }
-    getSettings()
-      .then((res) => {
-        settings = res;
+    (async () => {
+      try {
+        settings = await getSettings();
         phase = "ok";
-      })
-      .catch(() => {
+      } catch {
         phase = "error";
-      });
+      }
+    })();
   });
 
   function saveConfig() {

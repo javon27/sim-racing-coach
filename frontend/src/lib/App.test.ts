@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/svelte";
+import { render, screen, fireEvent, cleanup, within } from "@testing-library/svelte";
 import {
   getStatus,
   getSettings,
@@ -29,12 +29,13 @@ describe("App shell", () => {
   afterEach(cleanup);
 
   it("renders the three nav items and a theme toggle", () => {
-    render(App);
+    const { container } = render(App);
+    const nav = within(container.querySelector(".nav") as HTMLElement);
 
-    expect(screen.getByText("Coach")).toBeTruthy();
-    expect(screen.getByText("Sessions")).toBeTruthy();
-    expect(screen.getByText("Pit Wall")).toBeTruthy();
-    expect(screen.getByText(/^Theme ·/)).toBeTruthy();
+    expect(nav.getByText("Coach")).toBeTruthy();
+    expect(nav.getByText("Sessions")).toBeTruthy();
+    expect(nav.getByText("Pit Wall")).toBeTruthy();
+    expect(nav.getByText(/^Theme ·/)).toBeTruthy();
   });
 });
 
@@ -70,9 +71,10 @@ describe("Coach screen assembly", () => {
   afterEach(cleanup);
 
   it("renders the session bar, lap list, corner/setup tabs, and chat composer together", async () => {
-    render(App);
+    const { container } = render(App);
+    const bar = container.querySelector(".bar") as HTMLElement;
 
-    expect(await screen.findByText("Le Mans")).toBeTruthy(); // session bar
+    expect(await within(bar).findByText("Le Mans")).toBeTruthy(); // session bar
     expect(await screen.findByText(/Lap 9/)).toBeTruthy(); // lap list
     expect(screen.getByText("Corners")).toBeTruthy(); // tabs
     expect(screen.getByText("Setup")).toBeTruthy();
@@ -89,5 +91,37 @@ describe("Coach screen assembly", () => {
 
     expect(await screen.findByText("Lap 9 selected")).toBeTruthy();
     expect(vi.mocked(getLapAnalysis)).toHaveBeenCalledWith(9);
+  });
+
+  it("switches to the Sessions screen when the Sessions nav item is clicked", async () => {
+    const { container } = render(App);
+    const nav = within(container.querySelector(".nav") as HTMLElement);
+
+    await fireEvent.click(nav.getByText("Sessions"));
+
+    expect(await screen.findByRole("heading", { name: "Sessions" })).toBeTruthy();
+  });
+
+  it("switches to the Settings screen when the Settings nav item is clicked", async () => {
+    const { container } = render(App);
+    const nav = within(container.querySelector(".nav") as HTMLElement);
+
+    await fireEvent.click(nav.getByText("Settings"));
+
+    expect(await screen.findByText("Display")).toBeTruthy();
+  });
+
+  it("deep-links a clicked session row into the Coach screen and loads that session's laps", async () => {
+    const { container } = render(App);
+    const nav = within(container.querySelector(".nav") as HTMLElement);
+
+    await fireEvent.click(nav.getByText("Sessions"));
+    const sessionRow = await screen.findByRole("button", { name: /Le Mans/i });
+    await fireEvent.click(sessionRow);
+
+    // Back on the Coach screen, with laps loaded for the deep-linked session.
+    expect(nav.getByText("Coach").closest(".nav-item")?.classList.contains("on")).toBe(true);
+    expect(await screen.findByText(/Lap 9/)).toBeTruthy();
+    expect(vi.mocked(getSessionLaps)).toHaveBeenCalledWith("s1");
   });
 });
