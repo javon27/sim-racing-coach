@@ -32,3 +32,8 @@ Thumbs.db
 
 # Live-validation probe scripts (throwaway)
 scratchpad_live/
+
+# Frontend (Vite/Svelte) + Tauri shell build artifacts
+frontend/node_modules
+frontend/dist
+src-tauri/target
