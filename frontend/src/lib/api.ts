@@ -146,3 +146,7 @@ export function getChatMessages(chatId: string): Promise<ChatMessage[]> {
 export function getSettings(): Promise<SettingsResponse> {
   return request<SettingsResponse>("/settings");
 }
+
+export function getSetup(): Promise<Record<string, unknown>> {
+  return request<Record<string, unknown>>("/setup");
+}
