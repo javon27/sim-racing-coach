@@ -7,12 +7,11 @@
   let activeTab: "corners" | "setup" = $state("corners");
 </script>
 
-<div class="tabs" role="tablist">
+<div class="tabs">
   <button
     type="button"
     class="tab"
-    role="tab"
-    aria-selected={activeTab === "corners"}
+    aria-pressed={activeTab === "corners"}
     class:on={activeTab === "corners"}
     onclick={() => (activeTab = "corners")}
   >
@@ -21,8 +20,7 @@
   <button
     type="button"
     class="tab"
-    role="tab"
-    aria-selected={activeTab === "setup"}
+    aria-pressed={activeTab === "setup"}
     class:on={activeTab === "setup"}
     onclick={() => (activeTab = "setup")}
   >

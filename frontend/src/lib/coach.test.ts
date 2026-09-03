@@ -96,6 +96,19 @@ describe("CoachStream", () => {
     expect(stream.error).toBe("lost connection to the coach server");
   });
 
+  it("sets phase=error on a malformed (non-JSON) message instead of hanging", () => {
+    const stream = new CoachStream();
+    stream.ask("where do I brake?");
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.();
+
+    ws.onmessage?.({ data: "not json" });
+
+    expect(stream.phase).toBe("error");
+    expect(stream.error).toBe("received a malformed message from the coach server");
+    expect(ws.closed).toBe(true);
+  });
+
   it("sets phase=error when the socket closes before done/error", () => {
     const stream = new CoachStream();
     stream.ask("where do I brake?");

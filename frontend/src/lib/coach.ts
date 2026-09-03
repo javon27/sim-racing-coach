@@ -54,28 +54,33 @@ export class CoachStream {
     };
 
     ws.onmessage = (event: MessageEvent) => {
-      const data = JSON.parse(event.data as string);
-      switch (data.type) {
-        case "tool":
-          this.phase = "tool";
-          this.toolActivity = { name: data.name, input: data.input };
-          break;
-        case "text":
-          this.phase = "streaming";
-          this.answer += data.text;
-          break;
-        case "done":
-          this.phase = "done";
-          this.chatId = data.chat_id ?? null;
-          this.#settled = true;
-          this.#close();
-          break;
-        case "error":
-          this.phase = "error";
-          this.error = data.message;
-          this.#settled = true;
-          this.#close();
-          break;
+      try {
+        const data = JSON.parse(event.data as string);
+        switch (data.type) {
+          case "tool":
+            this.phase = "tool";
+            this.toolActivity = { name: data.name, input: data.input };
+            break;
+          case "text":
+            this.phase = "streaming";
+            this.answer += data.text;
+            break;
+          case "done":
+            this.phase = "done";
+            this.chatId = data.chat_id ?? null;
+            this.#settled = true;
+            this.#close();
+            break;
+          case "error":
+            this.phase = "error";
+            this.error = data.message;
+            this.#settled = true;
+            this.#close();
+            break;
+        }
+      } catch {
+        this.#fail("received a malformed message from the coach server");
+        return;
       }
       this.#notify();
     };
@@ -87,10 +92,14 @@ export class CoachStream {
   // Socket errored or closed before a done/error message arrived — surface it
   // instead of leaving phase stuck on connecting/tool/streaming forever.
   #lostConnection(): void {
+    this.#fail("lost connection to the coach server");
+  }
+
+  #fail(message: string): void {
     if (this.#settled) return;
     this.#settled = true;
     this.phase = "error";
-    this.error = "lost connection to the coach server";
+    this.error = message;
     this.#close();
     this.#notify();
   }

@@ -77,6 +77,18 @@
   let toolActivity: ToolActivity | null = $state(null);
   let answer = $state("");
   let error: string | null = $state(null);
+  let scrollEl: HTMLDivElement | undefined = $state();
+
+  // Keep the newest message/streaming text in view, unless the user has
+  // scrolled up to read history (within 80px of bottom = "at the bottom").
+  $effect(() => {
+    messages.length;
+    answer;
+    const el = scrollEl;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    if (nearBottom) el.scrollTop = el.scrollHeight;
+  });
 
   async function loadHistory() {
     try {
@@ -137,7 +149,7 @@
 </script>
 
 <section class="chat">
-  <div class="chat-scroll">
+  <div class="chat-scroll" bind:this={scrollEl}>
     <div class="thread">
       {#each messages as m, i (i)}
         <div class="msg {m.role}">
@@ -175,6 +187,7 @@
     <div class="wrap">
       <textarea
         rows="1"
+        aria-label="Ask your engineer"
         placeholder="Ask your engineer…  (e.g. where am I losing time?)"
         bind:value={question}
         oninput={autoGrow}
