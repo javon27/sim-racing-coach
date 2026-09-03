@@ -286,3 +286,106 @@ def test_save_chat_rejects_null_chat_id(tmp_path):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     with pytest.raises(ValueError):
         store.save_chat(None, "s1", "Le Mans", "Corvette", None, "q", "a")
+
+
+def test_v5_schema_migrates_source_column_to_v6(tmp_path, synthetic_lap):
+    from simcoach.store import SCHEMA_VERSION, LapStore
+    db_path = str(tmp_path / "c.sqlite")
+    # simulate a v5 db: laps table with no `source` column, one legacy row.
+    con = sqlite3.connect(db_path)
+    con.execute(
+        "CREATE TABLE laps (id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, sim TEXT, "
+        "track TEXT, car TEXT, lap_time REAL, valid INTEGER, telemetry_path TEXT, "
+        "phase TEXT, session_id TEXT)"
+    )
+    con.execute(
+        "INSERT INTO laps (ts,sim,track,car,lap_time,valid,telemetry_path) "
+        "VALUES (0,'lmu','t','c',90.0,1,'x.npz')"
+    )
+    con.execute("PRAGMA user_version = 5")
+    con.commit()
+    con.close()
+
+    s = LapStore(db_path, str(tmp_path / "data"))
+    version = s.conn.execute("PRAGMA user_version").fetchone()[0]
+    assert version == SCHEMA_VERSION
+
+    # legacy row reads back with the default source
+    row = s.conn.execute("SELECT source FROM laps WHERE track='t'").fetchone()
+    assert row[0] == "live"
+
+    # a new save() still works and defaults to 'live'
+    lid = s.save(synthetic_lap)
+    row = s.conn.execute("SELECT source FROM laps WHERE id=?", (lid,)).fetchone()
+    assert row[0] == "live"
+
+    # dup-safe on 2nd open of an already-migrated db
+    LapStore(db_path, str(tmp_path / "data"))
+
+
+def _fake_result_session(**overrides):
+    from simcoach.lmu.results import ResultLap, ResultSession
+    laps = overrides.pop("laps", [
+        ResultLap(lap_no=1, lap_time=91.234, sectors=[30.1, 30.2, 30.9], valid=True),
+        ResultLap(lap_no=2, lap_time=90.876, sectors=[29.9, 30.1, 30.9], valid=True),
+    ])
+    defaults = dict(
+        sim="lmu", track="Sebring", car="GT3 Vantage", car_class="GT3",
+        date_ts=1234567890, session_type="race", position=3, class_position=2,
+        best_lap=90.876, finish_status="Finished", laps=laps, incidents=[], penalties=[],
+    )
+    defaults.update(overrides)
+    return ResultSession(**defaults)
+
+
+def test_save_result_session_inserts_rows_queryable(tmp_path):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    rs = _fake_result_session()
+
+    s.save_result_session(rs, session_id="result-abc")
+
+    laps = s.session_laps("result-abc")
+    assert len(laps) == 2
+    assert sorted(l["lap_time"] for l in laps) == [90.876, 91.234]
+    rows = s.conn.execute(
+        "SELECT source, telemetry_path, track, car, phase FROM laps WHERE session_id='result-abc'"
+    ).fetchall()
+    assert all(r[0] == "result" for r in rows)
+    assert all(r[1] is None for r in rows)
+    assert all(r[2] == "Sebring" and r[3] == "GT3 Vantage" and r[4] == "race" for r in rows)
+
+    sessions = s.recent_race_sessions()
+    assert any(sess["session_id"] == "result-abc" and sess["laps"] == 2 for sess in sessions)
+
+
+def test_save_result_session_marks_invalid_laps(tmp_path):
+    from simcoach.lmu.results import ResultLap
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    rs = _fake_result_session(laps=[ResultLap(lap_no=1, lap_time=None, sectors=[], valid=False)])
+
+    s.save_result_session(rs, session_id="result-dnf")
+
+    row = s.conn.execute(
+        "SELECT lap_time, valid FROM laps WHERE session_id='result-dnf'"
+    ).fetchone()
+    assert row[0] is None
+    assert row[1] == 0
+
+
+def test_is_ingested_and_mark_ingested_round_trip(tmp_path):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+
+    assert s.is_ingested("some/file.xml", 100.0) is False
+
+    s.mark_ingested("some/file.xml", 100.0)
+    assert s.is_ingested("some/file.xml", 100.0) is True
+
+    # a changed mtime (file re-saved) is treated as not-yet-ingested
+    assert s.is_ingested("some/file.xml", 200.0) is False
+
+    # marking again (re-ingest after mtime change) updates cleanly, no crash
+    s.mark_ingested("some/file.xml", 200.0)
+    assert s.is_ingested("some/file.xml", 200.0) is True

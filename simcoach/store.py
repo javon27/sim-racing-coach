@@ -12,7 +12,7 @@ import numpy as np
 
 from simcoach.model_types import LapRecord
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
@@ -47,7 +47,12 @@ CREATE TABLE IF NOT EXISTS laps (
     valid INTEGER,
     telemetry_path TEXT,
     phase TEXT,
-    session_id TEXT
+    session_id TEXT,
+    source TEXT DEFAULT 'live'
+);
+CREATE TABLE IF NOT EXISTS ingested_files (
+    path TEXT PRIMARY KEY,
+    mtime REAL
 );
 CREATE TABLE IF NOT EXISTS setups (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -131,6 +136,19 @@ class LapStore:
                 if "chat_id" not in cols:
                     _add_column(self.conn, "coach_chat", "chat_id TEXT")
                 self.conn.execute("UPDATE coach_chat SET chat_id='legacy' WHERE chat_id IS NULL")
+            if current_version < 6:
+                # v5 -> v6: tag each lap's origin (live capture vs backfilled
+                # result-log import) and track which result files are already
+                # imported, for dedup. Existing rows default to 'live'. Guard
+                # the ADD COLUMN on the table existing at all -- some tests
+                # simulate a bare pre-v6 db with only the tables relevant to
+                # their own migration step.
+                cols = [r[1] for r in self.conn.execute("PRAGMA table_info(laps)")]
+                if cols and "source" not in cols:
+                    _add_column(self.conn, "laps", "source TEXT DEFAULT 'live'")
+                self.conn.execute(
+                    "CREATE TABLE IF NOT EXISTS ingested_files (path TEXT PRIMARY KEY, mtime REAL)"
+                )
         if current_version != SCHEMA_VERSION:
             self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self.conn.commit()
@@ -332,6 +350,35 @@ class LapStore:
             self.conn.commit()
         for f in Path(self.data_dir).glob("*.npz"):
             f.unlink(missing_ok=True)
+
+    def save_result_session(self, rs, session_id: str) -> None:
+        """Backfill a parsed LMU result-log session's laps into the laps
+        table (source='result', no telemetry -- summary only)."""
+        with self._lock, self.conn:
+            self.conn.executemany(
+                "INSERT INTO laps (ts, sim, track, car, lap_time, valid, telemetry_path, "
+                "phase, session_id, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'result')",
+                [
+                    (rs.date_ts, rs.sim, rs.track, rs.car, lap.lap_time, int(lap.valid),
+                     None, rs.session_type, session_id)
+                    for lap in rs.laps
+                ],
+            )
+
+    def is_ingested(self, path: str, mtime: float) -> bool:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT 1 FROM ingested_files WHERE path = ? AND mtime = ?", (path, mtime)
+            ).fetchone()
+            return row is not None
+
+    def mark_ingested(self, path: str, mtime: float) -> None:
+        with self._lock, self.conn:
+            self.conn.execute(
+                "INSERT INTO ingested_files (path, mtime) VALUES (?, ?) "
+                "ON CONFLICT(path) DO UPDATE SET mtime = excluded.mtime",
+                (path, mtime),
+            )
 
     def recent_session_ids(self, limit: int = 10) -> list[str]:
         """Chat session ids, most recent first."""
