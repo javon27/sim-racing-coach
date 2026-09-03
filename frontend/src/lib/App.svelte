@@ -1,6 +1,7 @@
 <script lang="ts">
   import { nextTheme, applyTheme, THEME_LABELS, THEME_ICONS, type ThemeMode } from "./theme";
   import SessionBar from "./SessionBar.svelte";
+  import LapList from "./LapList.svelte";
 
   type Screen = "coach" | "sessions" | "pitwall" | "settings";
 
@@ -62,7 +63,10 @@
     <section class="screen" class:on={screen === "coach"}>
       <div class="app">
         <SessionBar />
-        <!-- LapList lands here (Task 6); chat is Phase 4. -->
+        <div class="main">
+          <LapList />
+          <!-- onselect consumed by the chat/corner panel in Phase 4 -->
+        </div>
       </div>
     </section>
     <section class="screen" class:on={screen === "sessions"}>Sessions (coming soon)</section>
