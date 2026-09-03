@@ -8,7 +8,7 @@
     retryDelayMs = 750,
     pollMs = 5000,
   }: {
-    onselect?: (detail: { lap_id: number }) => void;
+    onselect?: (detail: { lap_id: number; session_id: string }) => void;
     retryTries?: number;
     retryDelayMs?: number;
     pollMs?: number;
@@ -16,6 +16,7 @@
 
   let laps: LapRow[] = $state([]);
   let bestId: number | null = $state(null);
+  let currentSessionId: string | null = $state(null);
   let phase: "connecting" | "ok" | "unreachable" = $state("connecting");
   let pollTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -24,9 +25,11 @@
     if (sessions.length === 0) {
       laps = [];
       bestId = null;
+      currentSessionId = null;
       return;
     }
     const latest = [...sessions].sort((a, b) => b.last - a.last)[0];
+    currentSessionId = latest.session_id;
     const l = await getSessionLaps(latest.session_id);
     laps = l;
     bestId =
@@ -73,33 +76,31 @@
   }
 
   function select(lapId: number) {
-    onselect?.({ lap_id: lapId });
+    onselect?.({ lap_id: lapId, session_id: currentSessionId ?? "" });
   }
 </script>
 
-<aside class="rail">
-  <div class="rail-head">
-    <h2>This session</h2>
-    <span>{laps.length} laps</span>
-  </div>
-  <div class="laps">
-    {#if phase === "connecting"}
-      <p class="empty">Connecting to the coach server…</p>
-    {:else if phase === "unreachable"}
-      <p class="empty">
-        Can't reach the coach server — is it running?
-        <button type="button" onclick={load}>Retry</button>
-      </p>
-    {:else if laps.length === 0}
-      <p class="empty">No laps yet</p>
-    {:else}
-      {#each laps as lap (lap.id)}
-        <button type="button" class="lap" class:best={lap.id === bestId} onclick={() => select(lap.id)}>
-          <span class="n">Lap {lap.id}</span>
-          <span class="t">{formatTime(lap.lap_time)}</span>
-          <span class="flag">{lap.valid ? "" : "✗ inv"}</span>
-        </button>
-      {/each}
-    {/if}
-  </div>
-</aside>
+<div class="rail-head">
+  <h2>This session</h2>
+  <span>{laps.length} laps</span>
+</div>
+<div class="laps">
+  {#if phase === "connecting"}
+    <p class="empty">Connecting to the coach server…</p>
+  {:else if phase === "unreachable"}
+    <p class="empty">
+      Can't reach the coach server — is it running?
+      <button type="button" onclick={load}>Retry</button>
+    </p>
+  {:else if laps.length === 0}
+    <p class="empty">No laps yet</p>
+  {:else}
+    {#each laps as lap (lap.id)}
+      <button type="button" class="lap" class:best={lap.id === bestId} onclick={() => select(lap.id)}>
+        <span class="n">Lap {lap.id}</span>
+        <span class="t">{formatTime(lap.lap_time)}</span>
+        <span class="flag">{lap.valid ? "" : "✗ inv"}</span>
+      </button>
+    {/each}
+  {/if}
+</div>

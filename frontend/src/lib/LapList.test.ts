@@ -31,7 +31,7 @@ describe("LapList", () => {
     expect(row).toBeTruthy();
 
     await fireEvent.click(row);
-    expect(onselect).toHaveBeenCalledWith({ lap_id: 9 });
+    expect(onselect).toHaveBeenCalledWith({ lap_id: 9, session_id: "s1" });
   });
 
   it("shows an empty state when there are no laps yet", async () => {

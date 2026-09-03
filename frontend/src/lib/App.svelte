@@ -3,12 +3,14 @@
   import SessionBar from "./SessionBar.svelte";
   import LapList from "./LapList.svelte";
   import ChatPanel from "./ChatPanel.svelte";
+  import CornerSetupTabs from "./CornerSetupTabs.svelte";
 
   type Screen = "coach" | "sessions" | "pitwall" | "settings";
 
   let screen: Screen = $state("coach");
   let theme: ThemeMode = $state("system");
   let selectedLapId: number | undefined = $state(undefined);
+  let selectedSessionId: string | undefined = $state(undefined);
 
   function toggleTheme() {
     theme = nextTheme(theme);
@@ -66,8 +68,16 @@
       <div class="app">
         <SessionBar />
         <div class="main">
-          <LapList onselect={(detail) => (selectedLapId = detail.lap_id)} />
-          <ChatPanel lapId={selectedLapId} />
+          <aside class="rail">
+            <LapList
+              onselect={(detail) => {
+                selectedLapId = detail.lap_id;
+                selectedSessionId = detail.session_id;
+              }}
+            />
+            <CornerSetupTabs lapId={selectedLapId ?? null} />
+          </aside>
+          <ChatPanel lapId={selectedLapId} sessionId={selectedSessionId} />
         </div>
       </div>
     </section>

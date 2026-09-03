@@ -1,8 +1,33 @@
-import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/svelte";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, fireEvent, cleanup } from "@testing-library/svelte";
+import {
+  getStatus,
+  getSettings,
+  getSessions,
+  getSessionLaps,
+  getLapAnalysis,
+  getSetup,
+  getChats,
+} from "./api";
 import App from "./App.svelte";
 
+vi.mock("./api", async () => {
+  const actual = await vi.importActual<typeof import("./api")>("./api");
+  return {
+    ...actual,
+    getStatus: vi.fn(),
+    getSettings: vi.fn(),
+    getSessions: vi.fn(),
+    getSessionLaps: vi.fn(),
+    getLapAnalysis: vi.fn(),
+    getSetup: vi.fn(),
+    getChats: vi.fn(),
+  };
+});
+
 describe("App shell", () => {
+  afterEach(cleanup);
+
   it("renders the three nav items and a theme toggle", () => {
     render(App);
 
@@ -10,5 +35,59 @@ describe("App shell", () => {
     expect(screen.getByText("Sessions")).toBeTruthy();
     expect(screen.getByText("Pit Wall")).toBeTruthy();
     expect(screen.getByText(/^Theme ·/)).toBeTruthy();
+  });
+});
+
+describe("Coach screen assembly", () => {
+  beforeEach(() => {
+    vi.mocked(getStatus).mockResolvedValue({
+      track: "Le Mans",
+      car: "Corvette Z06",
+      on_track: false,
+      has_map: true,
+      lmu_connected: true,
+    });
+    vi.mocked(getSettings).mockResolvedValue({
+      units: "metric",
+      input_device: "wheel",
+      model: "sonnet",
+      corner_naming: "names",
+      driver: { braking_style: null, balance_preference: null, risk_tolerance: null },
+      api_key_set: true,
+      data_dir: "x",
+      app_version: "0.1",
+      lmu_build: null,
+    });
+    vi.mocked(getSessions).mockResolvedValue([
+      { session_id: "s1", track: "Le Mans", car: "Corvette Z06", laps: 1, best: 216.0, started: 1, last: 2 },
+    ]);
+    vi.mocked(getSessionLaps).mockResolvedValue([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
+    vi.mocked(getLapAnalysis).mockResolvedValue({ lap_time: 216.0, corners: [] });
+    vi.mocked(getSetup).mockResolvedValue({});
+    vi.mocked(getChats).mockResolvedValue([]);
+  });
+
+  afterEach(cleanup);
+
+  it("renders the session bar, lap list, corner/setup tabs, and chat composer together", async () => {
+    render(App);
+
+    expect(await screen.findByText("Le Mans")).toBeTruthy(); // session bar
+    expect(await screen.findByText(/Lap 9/)).toBeTruthy(); // lap list
+    expect(screen.getByText("Corners")).toBeTruthy(); // tabs
+    expect(screen.getByText("Setup")).toBeTruthy();
+    expect(screen.getByPlaceholderText(/ask your engineer/i)).toBeTruthy(); // chat composer
+  });
+
+  it("flows a selected lap's id + session id into the corner panel and the chat hint", async () => {
+    render(App);
+
+    expect(screen.getByText(/ask about your last lap/i)).toBeTruthy();
+
+    const lapRow = await screen.findByText(/Lap 9/);
+    await fireEvent.click(lapRow);
+
+    expect(await screen.findByText("Lap 9 selected")).toBeTruthy();
+    expect(vi.mocked(getLapAnalysis)).toHaveBeenCalledWith(9);
   });
 });
