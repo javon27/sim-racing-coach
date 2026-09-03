@@ -198,6 +198,8 @@ class LapStore:
             if row is None:
                 raise KeyError(f"no lap with id {lap_id}")
             ts, sim, track, car, lap_time, valid, telemetry_path, phase, session_id = row
+            if telemetry_path is None:
+                raise FileNotFoundError(f"lap {lap_id} has no telemetry (imported from a result log)")
             with np.load(telemetry_path) as npz:
                 channels = {k: npz[k] for k in npz.files}
             return LapRecord(sim, track, car, lap_time, bool(valid), ts, channels, phase, session_id)
@@ -205,7 +207,8 @@ class LapStore:
     def best_lap(self, track: str, car: str, exclude_lap_id: int | None = None,
                  phase: str | None = None, session_id: str | None = None) -> LapRecord | None:
         with self._lock:
-            query = "SELECT id FROM laps WHERE track = ? AND car = ? AND valid = 1"
+            query = ("SELECT id FROM laps WHERE track = ? AND car = ? AND valid = 1 "
+                     "AND telemetry_path IS NOT NULL")
             params: list = [track, car]
             if exclude_lap_id is not None:
                 query += " AND id != ?"

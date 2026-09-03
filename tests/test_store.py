@@ -374,6 +374,39 @@ def test_save_result_session_marks_invalid_laps(tmp_path):
     assert row[1] == 0
 
 
+def test_best_lap_skips_result_laps_without_telemetry(tmp_path, synthetic_lap):
+    from simcoach.lmu.results import ResultLap
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+
+    # Only lap for this track/car is a result-import (no telemetry) -- must not crash.
+    rs = _fake_result_session(track="test_track", car="test_car")
+    s.save_result_session(rs, session_id="result-abc")
+    assert s.best_lap("test_track", "test_car") is None
+
+    # A live lap (with telemetry) beats a faster result-import lap.
+    s.save(synthetic_lap)  # lap_time 92.5
+    faster_result = _fake_result_session(
+        track="test_track", car="test_car",
+        laps=[ResultLap(lap_no=1, lap_time=80.0, sectors=[], valid=True)],
+    )
+    s.save_result_session(faster_result, session_id="result-fast")
+    best = s.best_lap("test_track", "test_car")
+    assert best is not None
+    assert best.lap_time == 92.5
+
+
+def test_load_result_lap_raises_filenotfounderror(tmp_path):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    rs = _fake_result_session()
+    s.save_result_session(rs, session_id="result-abc")
+    lap_id = s.session_lap_ids("result-abc")[0]
+
+    with pytest.raises(FileNotFoundError):
+        s.load(lap_id)
+
+
 def test_is_ingested_and_mark_ingested_round_trip(tmp_path):
     from simcoach.store import LapStore
     s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
