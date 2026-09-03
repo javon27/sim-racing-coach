@@ -81,6 +81,21 @@ export interface SettingsResponse {
   lmu_build: string | null;
 }
 
+// Retries a rejected fn up to `tries` times, waiting `delayMs` between attempts.
+// Used by components to ride out the sidecar's startup race (server not bound yet).
+export async function withRetry<T>(fn: () => Promise<T>, tries = 8, delayMs = 750): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (i < tries - 1) await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  throw lastErr;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, init);
   if (!res.ok) {

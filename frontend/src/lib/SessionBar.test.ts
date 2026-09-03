@@ -1,18 +1,20 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/svelte";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, fireEvent, cleanup } from "@testing-library/svelte";
 import { getStatus, getSettings } from "./api";
 import SessionBar from "./SessionBar.svelte";
 
-vi.mock("./api", () => ({
-  getStatus: vi.fn(),
-  getSettings: vi.fn(),
-}));
+vi.mock("./api", async () => {
+  const actual = await vi.importActual<typeof import("./api")>("./api");
+  return { ...actual, getStatus: vi.fn(), getSettings: vi.fn() };
+});
 
 describe("SessionBar", () => {
   beforeEach(() => {
     vi.mocked(getStatus).mockReset();
     vi.mocked(getSettings).mockReset();
   });
+
+  afterEach(cleanup);
 
   it("renders track/car + units from the API", async () => {
     vi.mocked(getStatus).mockResolvedValue({
@@ -41,12 +43,64 @@ describe("SessionBar", () => {
     expect(screen.getByText("metric")).toBeTruthy();
   });
 
-  it("shows a server-not-reachable state when the fetch fails", async () => {
+  it("retries through transient failures and eventually renders data", async () => {
+    vi.mocked(getStatus)
+      .mockRejectedValueOnce(new Error("network"))
+      .mockRejectedValueOnce(new Error("network"))
+      .mockResolvedValue({
+        track: "Le Mans",
+        car: "Corvette Z06",
+        on_track: false,
+        has_map: true,
+        lmu_connected: true,
+      });
+    vi.mocked(getSettings).mockResolvedValue({
+      units: "metric",
+      input_device: "wheel",
+      model: "sonnet",
+      corner_naming: "names",
+      driver: { braking_style: null, balance_preference: null, risk_tolerance: null },
+      api_key_set: true,
+      data_dir: "x",
+      app_version: "0.1",
+      lmu_build: null,
+    });
+
+    render(SessionBar, { props: { retryTries: 5, retryDelayMs: 5 } });
+
+    expect(await screen.findByText("Le Mans")).toBeTruthy();
+  });
+
+  it("shows an unreachable state with a Retry button when all attempts fail, and Retry re-fetches", async () => {
     vi.mocked(getStatus).mockRejectedValue(new Error("network"));
     vi.mocked(getSettings).mockRejectedValue(new Error("network"));
 
-    render(SessionBar);
+    render(SessionBar, { props: { retryTries: 2, retryDelayMs: 5 } });
 
-    expect(await screen.findByText(/not reachable/i)).toBeTruthy();
+    const retryBtn = await screen.findByRole("button", { name: /retry/i });
+    expect(screen.getByText(/can't reach the coach server/i)).toBeTruthy();
+
+    vi.mocked(getStatus).mockResolvedValue({
+      track: "Le Mans",
+      car: "Corvette Z06",
+      on_track: false,
+      has_map: true,
+      lmu_connected: true,
+    });
+    vi.mocked(getSettings).mockResolvedValue({
+      units: "metric",
+      input_device: "wheel",
+      model: "sonnet",
+      corner_naming: "names",
+      driver: { braking_style: null, balance_preference: null, risk_tolerance: null },
+      api_key_set: true,
+      data_dir: "x",
+      app_version: "0.1",
+      lmu_build: null,
+    });
+
+    await fireEvent.click(retryBtn);
+
+    expect(await screen.findByText("Le Mans")).toBeTruthy();
   });
 });
