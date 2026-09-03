@@ -63,6 +63,17 @@ export interface ChatRow {
   tracks: string;
 }
 
+export interface ChatMessage {
+  ts: number;
+  session_id: string;
+  track: string;
+  car: string;
+  lap_id: number | null;
+  question: string;
+  answer: string;
+  tool_calls: unknown;
+}
+
 export interface DriverProfile {
   braking_style: string | null;
   balance_preference: string | null;
@@ -126,6 +137,10 @@ export function getLapAnalysis(id: number): Promise<LapAnalysisResponse> {
 
 export function getChats(): Promise<ChatRow[]> {
   return request<ChatRow[]>("/chats");
+}
+
+export function getChatMessages(chatId: string): Promise<ChatMessage[]> {
+  return request<ChatMessage[]>(`/chats/${chatId}`);
 }
 
 export function getSettings(): Promise<SettingsResponse> {

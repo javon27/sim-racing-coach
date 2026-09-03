@@ -353,3 +353,194 @@ body {
 .screen.on {
   display: block;
 }
+
+/* ---------- chat ---------- */
+.chat {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg);
+}
+.chat-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 26px 8px;
+}
+.thread {
+  max-width: 680px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+.msg {
+  display: flex;
+  gap: 12px;
+}
+.msg .who {
+  flex: 0 0 30px;
+  height: 30px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 12px;
+}
+.msg.you .who {
+  background: var(--surface-2);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+.msg.coach .who {
+  background: var(--accent);
+  color: #fff;
+}
+:root[data-theme="dark"] .msg.coach .who {
+  color: #160f2b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .msg.coach .who {
+    color: #160f2b;
+  }
+}
+.bubble {
+  flex: 1;
+  min-width: 0;
+}
+.bubble .name {
+  font-family: var(--display);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--faint);
+  margin-bottom: 5px;
+}
+.msg.you .bubble .body {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 13px;
+  display: inline-block;
+}
+.md h4 {
+  font-family: var(--display);
+  font-size: 14.5px;
+  margin: 0 0 10px;
+  line-height: 1.35;
+}
+.md p {
+  margin: 0 0 10px;
+}
+.md p:last-child {
+  margin-bottom: 0;
+}
+.md ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.md li {
+  position: relative;
+  padding-left: 18px;
+}
+.md li::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 8px;
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.md strong {
+  font-weight: 600;
+}
+.md code {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+.typing {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  color: var(--faint);
+  font-family: var(--display);
+  font-size: 12px;
+  letter-spacing: 0.05em;
+}
+/* composer */
+.composer {
+  padding: 14px 26px 20px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+.composer .wrap {
+  max-width: 680px;
+  margin: 0 auto;
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+}
+.composer textarea {
+  flex: 1;
+  resize: none;
+  font-family: var(--body);
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  line-height: 1.4;
+  max-height: 120px;
+  overflow-y: hidden;
+}
+.composer textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.send {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.03em;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  padding: 12px 18px;
+  cursor: pointer;
+}
+:root[data-theme="dark"] .send {
+  color: #160f2b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .send {
+    color: #160f2b;
+  }
+}
+.send:hover {
+  background: var(--accent-2);
+}
+.send:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.hint {
+  max-width: 680px;
+  margin: 8px auto 0;
+  font-size: 11px;
+  color: var(--faint);
+  text-align: center;
+  font-family: var(--mono);
+}

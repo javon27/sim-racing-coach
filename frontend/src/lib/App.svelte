@@ -2,11 +2,13 @@
   import { nextTheme, applyTheme, THEME_LABELS, THEME_ICONS, type ThemeMode } from "./theme";
   import SessionBar from "./SessionBar.svelte";
   import LapList from "./LapList.svelte";
+  import ChatPanel from "./ChatPanel.svelte";
 
   type Screen = "coach" | "sessions" | "pitwall" | "settings";
 
   let screen: Screen = $state("coach");
   let theme: ThemeMode = $state("system");
+  let selectedLapId: number | undefined = $state(undefined);
 
   function toggleTheme() {
     theme = nextTheme(theme);
@@ -64,8 +66,8 @@
       <div class="app">
         <SessionBar />
         <div class="main">
-          <LapList />
-          <!-- onselect consumed by the chat/corner panel in Phase 4 -->
+          <LapList onselect={(detail) => (selectedLapId = detail.lap_id)} />
+          <ChatPanel lapId={selectedLapId} />
         </div>
       </div>
     </section>
