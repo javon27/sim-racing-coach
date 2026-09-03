@@ -9,6 +9,8 @@ class FakeWebSocket {
   closed = false;
   onopen: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
+  onerror: (() => void) | null = null;
+  onclose: (() => void) | null = null;
 
   constructor(url: string) {
     this.url = url;
@@ -19,6 +21,7 @@ class FakeWebSocket {
   }
   close() {
     this.closed = true;
+    this.onclose?.();
   }
 }
 
@@ -79,6 +82,57 @@ describe("CoachStream", () => {
     expect(stream.phase).toBe("error");
     expect(stream.error).toBe("coach error");
     expect(ws.closed).toBe(true);
+  });
+
+  it("sets phase=error when the socket errors before done", () => {
+    const stream = new CoachStream();
+    stream.ask("where do I brake?");
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.();
+
+    ws.onerror?.();
+
+    expect(stream.phase).toBe("error");
+    expect(stream.error).toBe("lost connection to the coach server");
+  });
+
+  it("sets phase=error when the socket closes before done/error", () => {
+    const stream = new CoachStream();
+    stream.ask("where do I brake?");
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.();
+
+    ws.onclose?.();
+
+    expect(stream.phase).toBe("error");
+    expect(stream.error).toBe("lost connection to the coach server");
+  });
+
+  it("does not override phase/error when the socket closes after done", () => {
+    const stream = new CoachStream();
+    stream.ask("how's my braking?");
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.();
+
+    emit(ws, { type: "done", chat_id: "chat-1" });
+    ws.onclose?.();
+
+    expect(stream.phase).toBe("done");
+    expect(stream.error).toBeNull();
+  });
+
+  it("notifies subscribers when the connection is lost", () => {
+    const stream = new CoachStream();
+    const seen: string[] = [];
+    const unsubscribe = stream.subscribe((s) => seen.push(s.phase));
+
+    stream.ask("q");
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.();
+    ws.onerror?.();
+
+    expect(seen).toEqual(["idle", "connecting", "error"]);
+    unsubscribe();
   });
 
   it("closes the previous socket when a new ask starts before the first finishes", () => {

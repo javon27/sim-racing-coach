@@ -28,6 +28,7 @@ export class CoachStream {
 
   #ws: WebSocket | null = null;
   #listeners = new Set<(value: this) => void>();
+  #settled = false; // true once done/error was received for the in-flight ask
 
   subscribe(run: (value: this) => void): () => void {
     this.#listeners.add(run);
@@ -42,6 +43,7 @@ export class CoachStream {
     this.answer = "";
     this.chatId = null;
     this.error = null;
+    this.#settled = false;
     this.#notify();
 
     const ws = new WebSocket(`${WS_BASE}/coach`);
@@ -65,16 +67,32 @@ export class CoachStream {
         case "done":
           this.phase = "done";
           this.chatId = data.chat_id ?? null;
+          this.#settled = true;
           this.#close();
           break;
         case "error":
           this.phase = "error";
           this.error = data.message;
+          this.#settled = true;
           this.#close();
           break;
       }
       this.#notify();
     };
+
+    ws.onerror = () => this.#lostConnection();
+    ws.onclose = () => this.#lostConnection();
+  }
+
+  // Socket errored or closed before a done/error message arrived — surface it
+  // instead of leaving phase stuck on connecting/tool/streaming forever.
+  #lostConnection(): void {
+    if (this.#settled) return;
+    this.#settled = true;
+    this.phase = "error";
+    this.error = "lost connection to the coach server";
+    this.#close();
+    this.#notify();
   }
 
   #close(): void {
@@ -83,6 +101,8 @@ export class CoachStream {
     if (!ws) return;
     ws.onopen = null;
     ws.onmessage = null;
+    ws.onerror = null;
+    ws.onclose = null;
     ws.close();
   }
 
