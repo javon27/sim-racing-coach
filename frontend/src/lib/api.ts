@@ -90,6 +90,8 @@ export interface SettingsResponse {
   data_dir: string;
   app_version: string;
   lmu_build: string | null;
+  lmu_dir: string | null;
+  lmu_player_names: string[];
 }
 
 // Retries a rejected fn up to `tries` times, waiting `delayMs` between attempts.
@@ -149,4 +151,46 @@ export function getSettings(): Promise<SettingsResponse> {
 
 export function getSetup(): Promise<Record<string, unknown>> {
   return request<Record<string, unknown>>("/setup");
+}
+
+const JSON_HEADERS = { "Content-Type": "application/json" };
+
+export function putSettings(cfg: Record<string, unknown>): Promise<SettingsResponse> {
+  return request<SettingsResponse>("/settings", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(cfg),
+  });
+}
+
+export function setApiKey(key: string): Promise<{ api_key_set: boolean }> {
+  return request<{ api_key_set: boolean }>("/settings/api-key", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ key }),
+  });
+}
+
+export function testApiKey(): Promise<{ ok: boolean; error: string | null }> {
+  return request<{ ok: boolean; error: string | null }>("/settings/test-key", { method: "POST" });
+}
+
+export function clearData(): Promise<{ cleared: boolean }> {
+  return request<{ cleared: boolean }>("/data", {
+    method: "DELETE",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ confirm: true }),
+  });
+}
+
+export interface IngestResult {
+  scanned: number;
+  imported: number;
+  skipped: number;
+  unmatched: number;
+  errors: number;
+}
+
+export function ingestHistory(): Promise<IngestResult> {
+  return request<IngestResult>("/ingest", { method: "POST" });
 }

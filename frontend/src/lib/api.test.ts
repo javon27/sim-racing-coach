@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { getSessions } from "./api";
+import { getSessions, putSettings, setApiKey, testApiKey, clearData, ingestHistory } from "./api";
 
 const BASE = "http://127.0.0.1:8765";
+const JSON_HEADERS = { "Content-Type": "application/json" };
 
 describe("api client", () => {
   beforeEach(() => {
@@ -34,5 +35,104 @@ describe("api client", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(getSessions()).rejects.toThrow();
+  });
+
+  it("putSettings PUTs {base}/settings with the config body and returns the parsed settings", async () => {
+    const cfg = { units: "imperial" };
+    const payload = { units: "imperial", api_key_set: true };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => payload,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await putSettings(cfg);
+
+    expect(fetchMock).toHaveBeenCalledWith(`${BASE}/settings`, {
+      method: "PUT",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(cfg),
+    });
+    expect(result).toEqual(payload);
+  });
+
+  it("setApiKey POSTs {base}/settings/api-key with the key and returns api_key_set", async () => {
+    const payload = { api_key_set: true };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => payload,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await setApiKey("sk-test");
+
+    expect(fetchMock).toHaveBeenCalledWith(`${BASE}/settings/api-key`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ key: "sk-test" }),
+    });
+    expect(result).toEqual(payload);
+  });
+
+  it("testApiKey POSTs {base}/settings/test-key and returns the result", async () => {
+    const payload = { ok: true, error: null };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => payload,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await testApiKey();
+
+    expect(fetchMock).toHaveBeenCalledWith(`${BASE}/settings/test-key`, { method: "POST" });
+    expect(result).toEqual(payload);
+  });
+
+  it("clearData DELETEs {base}/data with confirm:true and returns cleared", async () => {
+    const payload = { cleared: true };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => payload,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await clearData();
+
+    expect(fetchMock).toHaveBeenCalledWith(`${BASE}/data`, {
+      method: "DELETE",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ confirm: true }),
+    });
+    expect(result).toEqual(payload);
+  });
+
+  it("ingestHistory POSTs {base}/ingest and returns the import summary", async () => {
+    const payload = { scanned: 10, imported: 8, skipped: 1, unmatched: 1, errors: 0 };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => payload,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await ingestHistory();
+
+    expect(fetchMock).toHaveBeenCalledWith(`${BASE}/ingest`, { method: "POST" });
+    expect(result).toEqual(payload);
+  });
+
+  it("throws on a non-2xx response for a mutating call", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({ detail: "bad" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(clearData()).rejects.toThrow();
   });
 });
