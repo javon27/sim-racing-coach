@@ -1,12 +1,32 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { getStatus, getSettings, withRetry, type StatusResponse, type SettingsResponse } from "./api";
 
-  let { retryTries = 8, retryDelayMs = 750 }: { retryTries?: number; retryDelayMs?: number } = $props();
+  let {
+    retryTries = 8,
+    retryDelayMs = 750,
+    pollMs = 3000,
+  }: { retryTries?: number; retryDelayMs?: number; pollMs?: number } = $props();
 
   let status: StatusResponse | null = $state(null);
   let units: SettingsResponse["units"] | null = $state(null);
   let phase: "connecting" | "ok" | "unreachable" = $state("connecting");
+  let pollTimer: ReturnType<typeof setInterval> | undefined;
+
+  async function poll() {
+    try {
+      const [s, settings] = await Promise.all([getStatus(), getSettings()]);
+      status = s;
+      units = settings.units;
+    } catch {
+      // transient poll failure - keep last good data, don't touch phase
+    }
+  }
+
+  function startPolling() {
+    if (pollTimer !== undefined) return;
+    pollTimer = setInterval(poll, pollMs);
+  }
 
   async function load() {
     phase = "connecting";
@@ -19,12 +39,16 @@
       status = s;
       units = settings.units;
       phase = "ok";
+      startPolling();
     } catch {
       phase = "unreachable";
     }
   }
 
   onMount(load);
+  onDestroy(() => {
+    if (pollTimer !== undefined) clearInterval(pollTimer);
+  });
 </script>
 
 <header class="bar">

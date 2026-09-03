@@ -73,4 +73,66 @@ describe("LapList", () => {
 
     expect(await screen.findByText(/Lap 9/)).toBeTruthy();
   });
+
+  it("polls for new laps periodically and shows them", async () => {
+    vi.mocked(getSessions).mockResolvedValue([
+      { session_id: "s1", track: "Le Mans", car: "Corvette Z06", laps: 1, best: 216.0, started: 1, last: 2 },
+    ]);
+    vi.mocked(getSessionLaps).mockResolvedValueOnce([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
+
+    render(LapList, { props: { pollMs: 5 } });
+
+    expect(await screen.findByText(/Lap 9/)).toBeTruthy();
+    expect(screen.queryByText(/Lap 10/)).toBeNull();
+
+    vi.mocked(getSessionLaps).mockResolvedValue([
+      { id: 9, lap_time: 216.0, valid: 1, ts: 100 },
+      { id: 10, lap_time: 214.0, valid: 1, ts: 200 },
+    ]);
+
+    expect(await screen.findByText(/Lap 10/, {}, { timeout: 2000 })).toBeTruthy();
+  });
+
+  it("keeps last good laps and does not go unreachable on a transient poll failure", async () => {
+    vi.mocked(getSessions).mockResolvedValueOnce([
+      { session_id: "s1", track: "Le Mans", car: "Corvette Z06", laps: 1, best: 216.0, started: 1, last: 2 },
+    ]);
+    vi.mocked(getSessionLaps).mockResolvedValue([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
+
+    render(LapList, { props: { pollMs: 5 } });
+
+    expect(await screen.findByText(/Lap 9/)).toBeTruthy();
+
+    // Establish a persistent good default for further polls, then fail exactly the next one.
+    vi.mocked(getSessions).mockResolvedValue([
+      { session_id: "s1", track: "Le Mans", car: "Corvette Z06", laps: 1, best: 216.0, started: 1, last: 2 },
+    ]);
+    vi.mocked(getSessions).mockRejectedValueOnce(new Error("transient"));
+
+    await vi.waitFor(() => expect(vi.mocked(getSessions).mock.calls.length).toBeGreaterThan(1), {
+      timeout: 2000,
+    });
+
+    expect(screen.getByText(/Lap 9/)).toBeTruthy();
+    expect(screen.queryByText(/can't reach the coach server/i)).toBeNull();
+  });
+
+  it("stops polling after unmount", async () => {
+    vi.mocked(getSessions).mockResolvedValue([
+      { session_id: "s1", track: "Le Mans", car: "Corvette Z06", laps: 1, best: 216.0, started: 1, last: 2 },
+    ]);
+    vi.mocked(getSessionLaps).mockResolvedValue([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
+
+    const { unmount } = render(LapList, { props: { pollMs: 5 } });
+
+    expect(await screen.findByText(/Lap 9/)).toBeTruthy();
+    await vi.waitFor(() => expect(vi.mocked(getSessions).mock.calls.length).toBeGreaterThan(1), {
+      timeout: 2000,
+    });
+
+    unmount();
+    const callsAtUnmount = vi.mocked(getSessions).mock.calls.length;
+    await new Promise((r) => setTimeout(r, 50));
+    expect(vi.mocked(getSessions).mock.calls.length).toBe(callsAtUnmount);
+  });
 });

@@ -103,4 +103,114 @@ describe("SessionBar", () => {
 
     expect(await screen.findByText("Le Mans")).toBeTruthy();
   });
+
+  it("polls getStatus periodically and reflects updated data", async () => {
+    vi.mocked(getStatus).mockResolvedValueOnce({
+      track: "Le Mans",
+      car: "Corvette Z06",
+      on_track: false,
+      has_map: true,
+      lmu_connected: true,
+    });
+    vi.mocked(getSettings).mockResolvedValue({
+      units: "metric",
+      input_device: "wheel",
+      model: "sonnet",
+      corner_naming: "names",
+      driver: { braking_style: null, balance_preference: null, risk_tolerance: null },
+      api_key_set: true,
+      data_dir: "x",
+      app_version: "0.1",
+      lmu_build: null,
+    });
+
+    render(SessionBar, { props: { pollMs: 5 } });
+
+    expect(await screen.findByText("Le Mans")).toBeTruthy();
+
+    vi.mocked(getStatus).mockResolvedValue({
+      track: "Sebring",
+      car: "Corvette Z06",
+      on_track: true,
+      has_map: true,
+      lmu_connected: true,
+    });
+
+    expect(await screen.findByText("Sebring", {}, { timeout: 2000 })).toBeTruthy();
+  });
+
+  it("keeps last good data and does not go unreachable on a transient poll failure", async () => {
+    vi.mocked(getStatus).mockResolvedValueOnce({
+      track: "Le Mans",
+      car: "Corvette Z06",
+      on_track: false,
+      has_map: true,
+      lmu_connected: true,
+    });
+    vi.mocked(getSettings).mockResolvedValue({
+      units: "metric",
+      input_device: "wheel",
+      model: "sonnet",
+      corner_naming: "names",
+      driver: { braking_style: null, balance_preference: null, risk_tolerance: null },
+      api_key_set: true,
+      data_dir: "x",
+      app_version: "0.1",
+      lmu_build: null,
+    });
+
+    render(SessionBar, { props: { pollMs: 5 } });
+
+    expect(await screen.findByText("Le Mans")).toBeTruthy();
+
+    // Establish a persistent good default for further polls, then fail exactly the next one.
+    vi.mocked(getStatus).mockResolvedValue({
+      track: "Le Mans",
+      car: "Corvette Z06",
+      on_track: false,
+      has_map: true,
+      lmu_connected: true,
+    });
+    vi.mocked(getStatus).mockRejectedValueOnce(new Error("transient"));
+
+    await vi.waitFor(() => expect(vi.mocked(getStatus).mock.calls.length).toBeGreaterThan(1), {
+      timeout: 2000,
+    });
+
+    expect(screen.getByText("Le Mans")).toBeTruthy();
+    expect(screen.queryByText(/can't reach the coach server/i)).toBeNull();
+  });
+
+  it("stops polling after unmount", async () => {
+    vi.mocked(getStatus).mockResolvedValue({
+      track: "Le Mans",
+      car: "Corvette Z06",
+      on_track: false,
+      has_map: true,
+      lmu_connected: true,
+    });
+    vi.mocked(getSettings).mockResolvedValue({
+      units: "metric",
+      input_device: "wheel",
+      model: "sonnet",
+      corner_naming: "names",
+      driver: { braking_style: null, balance_preference: null, risk_tolerance: null },
+      api_key_set: true,
+      data_dir: "x",
+      app_version: "0.1",
+      lmu_build: null,
+    });
+
+    const { unmount } = render(SessionBar, { props: { pollMs: 5 } });
+
+    expect(await screen.findByText("Le Mans")).toBeTruthy();
+    await vi.waitFor(() => expect(vi.mocked(getStatus).mock.calls.length).toBeGreaterThan(1), {
+      timeout: 2000,
+    });
+
+    unmount();
+    const callsAtUnmount = vi.mocked(getStatus).mock.calls.length;
+    await new Promise((r) => setTimeout(r, 50));
+    expect(vi.mocked(getStatus).mock.calls.length).toBe(callsAtUnmount);
+  });
 });
