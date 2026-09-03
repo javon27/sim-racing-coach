@@ -15,6 +15,8 @@ DEFAULTS = {
     "input_device": "wheel",      # "wheel" or "controller"
     "model": "sonnet",            # "opus" | "sonnet" | "haiku" -> make_model
     "corner_naming": "names",     # "names" or "numbers"
+    "lmu_dir": None,              # override for lmu.install.lmu_userdata_dir()
+    "lmu_player_names": [],       # alias set for result-log ingest matching (see lmu.results)
     "driver": {                   # DriverProfile fields; None = unset
         "braking_style": None,
         "balance_preference": None,

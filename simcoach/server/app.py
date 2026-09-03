@@ -18,6 +18,7 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 from .. import config, paths, secrets
 from ..analysis import analyze_lap
 from ..coach_tools import CoachContext
+from ..lmu.ingest import ingest_all
 from ..model.factory import CoachUserError, make_model
 from ..tiers import legal_adjustments
 
@@ -281,6 +282,10 @@ def create_app(store, coach, cmap=None, rest=None) -> FastAPI:
             return {"ok": True, "error": None}
         except Exception as e:
             return {"ok": False, "error": str(e)}
+
+    @app.post("/ingest")
+    def ingest():
+        return ingest_all(store)
 
     @app.delete("/data")
     def delete_data(body: dict = Body(default={})):

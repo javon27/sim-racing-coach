@@ -13,6 +13,7 @@ import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterable
 
 from .. import config as _config
 
@@ -89,10 +90,15 @@ def _find_session_elem(race_results: ET.Element) -> ET.Element | None:
     return None
 
 
-def _find_player_driver(session_elem: ET.Element, player_name: str) -> ET.Element | None:
-    target = player_name.strip().lower()
+def _normalize_names(player_names: str | Iterable[str]) -> set[str]:
+    if isinstance(player_names, str):
+        player_names = [player_names]
+    return {n.strip().lower() for n in player_names if n and n.strip()}
+
+
+def _find_player_driver(session_elem: ET.Element, names: set[str]) -> ET.Element | None:
     for driver in session_elem.findall("Driver"):
-        if (driver.findtext("Name") or "").strip().lower() == target:
+        if (driver.findtext("Name") or "").strip().lower() in names:
             return driver
     return None
 
@@ -138,11 +144,14 @@ def _player_penalties(stream: ET.Element | None, player_name: str) -> list[dict]
     ]
 
 
-def parse_result(path, player_name: str) -> ResultSession | None:
-    """Parse one LMU result XML for `player_name`'s session/laps/incidents.
-    None if the player isn't in the file, the session type can't be
-    identified, or the XML is malformed -- this NEVER raises."""
-    if not player_name:
+def parse_result(path, player_names: str | Iterable[str]) -> ResultSession | None:
+    """Parse one LMU result XML for a session/laps/incidents belonging to any
+    name in `player_names` (a single name or an alias set -- display names
+    change over time, see module docstring). None if none of the names are
+    in the file, the session type can't be identified, or the XML is
+    malformed -- this NEVER raises."""
+    names = _normalize_names(player_names)
+    if not names:
         return None
     try:
         race_results = ET.parse(path).getroot().find("RaceResults")
@@ -151,9 +160,10 @@ def parse_result(path, player_name: str) -> ResultSession | None:
         session_elem = _find_session_elem(race_results)
         if session_elem is None:
             return None
-        driver = _find_player_driver(session_elem, player_name)
+        driver = _find_player_driver(session_elem, names)
         if driver is None:
             return None
+        player_name = driver.findtext("Name") or ""
 
         stream = session_elem.find("Stream")
         date_ts = _to_int(session_elem.findtext("DateTime")) or _to_int(race_results.findtext("DateTime"))
