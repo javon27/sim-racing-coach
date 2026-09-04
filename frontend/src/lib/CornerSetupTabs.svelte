@@ -1,10 +1,11 @@
 <script lang="ts">
   import CornerPanel from "./CornerPanel.svelte";
   import SetupPanel from "./SetupPanel.svelte";
+  import TrackMap from "./TrackMap.svelte";
 
   let { lapId }: { lapId: number | null } = $props();
 
-  let activeTab: "corners" | "setup" = $state("corners");
+  let activeTab: "corners" | "setup" | "map" = $state("corners");
 </script>
 
 <div class="tabs">
@@ -26,10 +27,21 @@
   >
     Setup
   </button>
+  <button
+    type="button"
+    class="tab"
+    aria-pressed={activeTab === "map"}
+    class:on={activeTab === "map"}
+    onclick={() => (activeTab = "map")}
+  >
+    Map
+  </button>
 </div>
 
 {#if activeTab === "corners"}
   <CornerPanel {lapId} />
-{:else}
+{:else if activeTab === "setup"}
   <SetupPanel />
+{:else}
+  <TrackMap {lapId} />
 {/if}

@@ -1,17 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/svelte";
-import { getLapAnalysis, getSetup } from "./api";
+import { getLapAnalysis, getSetup, getLapMap } from "./api";
 import CornerSetupTabs from "./CornerSetupTabs.svelte";
 
 vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
-  return { ...actual, getLapAnalysis: vi.fn(), getSetup: vi.fn() };
+  return { ...actual, getLapAnalysis: vi.fn(), getSetup: vi.fn(), getLapMap: vi.fn() };
 });
 
 describe("CornerSetupTabs", () => {
   beforeEach(() => {
     vi.mocked(getLapAnalysis).mockReset();
     vi.mocked(getSetup).mockReset();
+    vi.mocked(getLapMap).mockReset();
+    vi.mocked(getLapMap).mockResolvedValue({});
     // Real /setup shape: only isFreeSetting entries render (SetupPanel filters).
     vi.mocked(getSetup).mockResolvedValue({
       VM_FRONT_ANTISWAY: { isFreeSetting: true, stringValue: "P3" },
@@ -37,5 +39,12 @@ describe("CornerSetupTabs", () => {
     await fireEvent.click(screen.getByText("Corners"));
     expect(screen.getByText(/select a lap/i)).toBeTruthy();
     expect(screen.queryByText("Front Anti-roll Bar")).toBeNull();
+  });
+
+  it("shows the track map view when the Map tab is clicked", async () => {
+    render(CornerSetupTabs, { props: { lapId: null } });
+
+    await fireEvent.click(screen.getByText("Map"));
+    expect(await screen.findByText(/select a lap to see the track map/i)).toBeTruthy();
   });
 });

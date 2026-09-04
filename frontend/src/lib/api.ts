@@ -156,6 +156,17 @@ export function getLapAnalysis(id: number): Promise<LapAnalysisResponse> {
   return request<LapAnalysisResponse>(`/laps/${id}/analysis`);
 }
 
+export interface TrackMap {
+  width: number;
+  height: number;
+  path: [number, number][];
+  corners: { number: number; name: string; direction: string; x: number; y: number }[];
+}
+
+export function getLapMap(id: number): Promise<TrackMap | Record<string, never>> {
+  return request<TrackMap | Record<string, never>>(`/laps/${id}/map`);
+}
+
 export function getChats(): Promise<ChatRow[]> {
   return request<ChatRow[]>("/chats");
 }
