@@ -23,8 +23,41 @@ fn python_path() -> PathBuf {
         .unwrap_or_else(|_| repo_root().join(".venv/Scripts/python.exe"))
 }
 
+/// Mirrors simcoach/paths.py's app_data_dir(): SIMCOACH_DATA_DIR override, else
+/// %APPDATA%\SimCoach, else %USERPROFILE%\.simcoach (home fallback).
+fn app_data_dir() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var("SIMCOACH_DATA_DIR") {
+        let dir = dir.trim();
+        if !dir.is_empty() {
+            return Some(PathBuf::from(dir));
+        }
+    }
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        return Some(PathBuf::from(appdata).join("SimCoach"));
+    }
+    dirs_home().map(|home| home.join(".simcoach"))
+}
+
+fn dirs_home() -> Option<PathBuf> {
+    std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .ok()
+        .map(PathBuf::from)
+}
+
+/// Bootstrap log lives in app-data, not the repo root, so the working tree
+/// stays clean. Falls back to the repo root only if app-data can't be resolved.
 fn sidecar_log_path() -> PathBuf {
-    repo_root().join("sidecar.log")
+    match app_data_dir() {
+        Some(dir) => {
+            let logs = dir.join("logs");
+            if std::fs::create_dir_all(&logs).is_ok() {
+                return logs.join("sidecar-bootstrap.log");
+            }
+            repo_root().join("sidecar.log")
+        }
+        None => repo_root().join("sidecar.log"),
+    }
 }
 
 /// A GUI app has no console, so without this the sidecar's stdout/stderr
