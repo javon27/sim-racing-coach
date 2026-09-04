@@ -247,6 +247,13 @@
         <input type="text" placeholder="add alias…" bind:value={newPlayerName} />
         <button type="button" onclick={addPlayerName}>Add</button>
       </div>
+      <p class="help">
+        <strong>Import history</strong> scans LMU's result logs in the folder above and
+        backfills your past sessions — practice, qualifying and races for your player
+        name(s) — with lap times, sector splits, and race results (finishing position,
+        incidents). It reads finished-session logs only; it doesn't capture live laps and
+        skips sessions already imported.
+      </p>
       <div class="row">
         <button type="button" onclick={saveLmuSettings}>Save LMU settings</button>
         <button type="button" onclick={runImport} disabled={importing}>
@@ -415,6 +422,15 @@
     font-family: var(--mono);
     font-size: 12px;
     color: var(--muted);
+  }
+  .help {
+    margin: 4px 0 8px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--muted);
+  }
+  .help strong {
+    color: var(--text);
   }
   .warn {
     color: var(--bad);
