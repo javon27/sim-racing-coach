@@ -23,6 +23,10 @@ simcoach.config.json
 # Operational scratch (SDD/review packages, agent coordination)
 .superpowers/
 scratchpad/
+.claude/
+.omc/
+.remember/
+HANDOFF.md
 
 # OS / editor
 .DS_Store
@@ -37,3 +41,6 @@ scratchpad_live/
 frontend/node_modules
 frontend/dist
 src-tauri/target
+
+# Tauri sidecar runtime log
+sidecar.log
