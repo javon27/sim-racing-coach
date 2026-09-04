@@ -4,7 +4,7 @@
   // this builds against the real SessionRow shape (session_id, track, car,
   // laps, best, started, last) and filters/groups by track + car only.
   import { onMount } from "svelte";
-  import { getSessions, getSessionChats, type SessionRow } from "./api";
+  import { getSessions, getSessionChats, withRetry, type SessionRow } from "./api";
   import TrendChart from "./TrendChart.svelte";
 
   let { onselectSession }: { onselectSession?: (sessionId: string, chatId?: string) => void } = $props();
@@ -29,8 +29,10 @@
   let selectedCar = $state(ALL);
 
   onMount(async () => {
+    // Retry through the sidecar startup race — all screens mount at app start,
+    // so this fetch can fire before the server is bound (like LapList/SessionBar).
     try {
-      const res = await getSessions();
+      const res = await withRetry(getSessions);
       sessions = Array.isArray(res) ? res : [];
     } catch {
       sessions = [];
