@@ -15,6 +15,7 @@ coexist with LMU anti-cheat.
 import ctypes as C
 import math
 import mmap
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Iterator
@@ -274,6 +275,34 @@ def session_phase(m_session: int) -> str:
     return "race"
 
 
+def _is_online(scoring: rF2Scoring) -> bool:
+    """True if any mapped opponent is a remote/human driver (mControl == 2).
+    Offline AI opponents are mControl == 1; a solo/empty grid is the player
+    only (mControl == 0). This is the verified online signal.
+
+    # ponytail: hotlapping ALONE on an online server (0 remote opponents) is
+    # indistinguishable from offline in the mapped fields, so it classifies as
+    # offline. The real online flag lives in the unmapped struct tail; not worth
+    # chasing until it matters.
+    """
+    n = min(scoring.mScoringInfo.mNumVehicles, MAX_MAPPED_VEHICLES)
+    for i in range(max(n, 0)):
+        if scoring.mVehicles[i].mControl == 2:
+            return True
+    return False
+
+
+def _slug(s: str) -> str:
+    return "-".join(re.findall(r"[a-z0-9]+", s.lower())) or "unknown"
+
+
+def session_id_for(track: str, car: str, online: bool) -> str:
+    """Deterministic, URL-safe session id: same (track, car, mode) always yields
+    the same id, so a session is one (track, car, online|offline) combo that
+    survives sidecar restarts. Used in /sessions/{sid} paths -- no spaces/#/:."""
+    return f"{_slug(track)}--{_slug(car)}--{'online' if online else 'offline'}"
+
+
 def build_lap_record(
     sim: str,
     track: str,
@@ -380,11 +409,9 @@ class LmuSource:
         channels: dict[str, list[float]] = {}
         prev_dist: float | None = None
         committed_time: float | None = None
-        # A "session" is one on-track stint: a fresh id is minted whenever the
-        # (track, car, sim-session-index) changes, so laps group by practice/qualy/
-        # race instead of pooling all-time. mSession also gives the phase label.
-        session_key: tuple | None = None
-        session_id: str | None = None
+        # A "session" is one (track, car, online|offline) combo with a stable,
+        # deterministic id -- all sim phases merge, and the id survives sidecar
+        # restarts. mSession still gives the per-lap phase label.
 
         while True:
             telem = read_consistent(telemetry_name, rF2Telemetry)
@@ -406,10 +433,7 @@ class LmuSource:
                     track = vt.mTrackName.decode(errors="replace")
                     car = vt.mVehicleName.decode(errors="replace")
                     phase = session_phase(scoring.mScoringInfo.mSession)
-                    key = (track, car, scoring.mScoringInfo.mSession)
-                    if key != session_key:
-                        session_key = key
-                        session_id = f"{time.strftime('%Y-%m-%dT%H%M%S')}-{phase}"
+                    session_id = session_id_for(track, car, _is_online(scoring))
                     record = build_lap_record(
                         sim="lmu", track=track, car=car, lap_time=lap_time,
                         invalidated=vt.mLapInvalidated, timestamp=time.time(),

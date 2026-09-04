@@ -281,6 +281,42 @@ def test_session_phase_maps_msession_index():
     assert session_phase(13) == "race"
 
 
+def _scoring_with_controls(controls: list[int]):
+    from simcoach.lmu.rf2structs import rF2Scoring
+    s = rF2Scoring()
+    s.mScoringInfo.mNumVehicles = len(controls)
+    for i, c in enumerate(controls):
+        s.mVehicles[i].mControl = c
+    return s
+
+
+def test_session_id_for_is_stable_and_url_safe():
+    from simcoach.lmu.smm import session_id_for
+    a = session_id_for("Sebring International", "Ferrari 499P", online=False)
+    b = session_id_for("Sebring International", "Ferrari 499P", online=False)
+    assert a == b
+    assert not any(ch in a for ch in " #:/?")
+
+
+def test_session_id_for_differs_by_track_car_and_mode():
+    from simcoach.lmu.smm import session_id_for
+    base = session_id_for("Sebring", "Ferrari", online=False)
+    assert session_id_for("Spa", "Ferrari", online=False) != base
+    assert session_id_for("Sebring", "Porsche", online=False) != base
+    assert session_id_for("Sebring", "Ferrari", online=True) != base
+
+
+def test_is_online_true_with_remote_opponent():
+    from simcoach.lmu.smm import _is_online
+    assert _is_online(_scoring_with_controls([0, 2])) is True
+
+
+def test_is_online_false_for_ai_and_solo():
+    from simcoach.lmu.smm import _is_online
+    assert _is_online(_scoring_with_controls([0, 1, 1])) is False  # all AI
+    assert _is_online(_scoring_with_controls([0])) is False        # solo
+
+
 def make_wrapper(num_vehicles: int = 1, **vehicle_overrides) -> rF2Telemetry:
     """Build an rF2Telemetry wrapper around make_telem(), the way a real MMF
     frame holds mNumVehicles + mVehicles[]."""
