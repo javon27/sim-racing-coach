@@ -5,6 +5,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::Manager;
+use tauri_plugin_window_state::{StateFlags, WindowExt};
 
 /// Host:port the sidecar serves on; also used to detect an already-running instance.
 const SIDECAR_ADDR: &str = "127.0.0.1:8765";
@@ -111,10 +112,52 @@ fn assign_kill_on_close_job(child: &Child) -> windows::core::Result<()> {
     Ok(())
 }
 
+/// AABB overlap: is the window rect (x, y, w, h) touching ANY monitor rect
+/// (mx, my, mw, mh)? Pure decision fn so the off-screen recovery is testable
+/// without a real window/monitor.
+fn is_on_screen(x: i32, y: i32, w: u32, h: u32, monitors: &[(i32, i32, u32, u32)]) -> bool {
+    let (wx0, wy0) = (x, y);
+    let (wx1, wy1) = (x + w as i32, y + h as i32);
+    monitors.iter().any(|&(mx, my, mw, mh)| {
+        let (mx1, my1) = (mx + mw as i32, my + mh as i32);
+        wx0 < mx1 && wx1 > mx && wy0 < my1 && wy1 > my
+    })
+}
+
+/// After the window-state plugin restores geometry, recenter on the primary
+/// monitor if the restored rect lands outside every monitor (layout changed
+/// since last launch). No-op if any Result fails — a missing window/monitor is
+/// not worth crashing startup over.
+fn recenter_if_offscreen(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        if let (Ok(pos), Ok(size), Ok(monitors)) = (
+            window.outer_position(),
+            window.outer_size(),
+            window.available_monitors(),
+        ) {
+            let rects: Vec<(i32, i32, u32, u32)> = monitors
+                .iter()
+                .map(|m| {
+                    (
+                        m.position().x,
+                        m.position().y,
+                        m.size().width,
+                        m.size().height,
+                    )
+                })
+                .collect();
+            if !is_on_screen(pos.x, pos.y, size.width, size.height, &rects) {
+                let _ = window.center();
+            }
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -149,6 +192,13 @@ pub fn run() {
             };
             app.manage(Sidecar(Mutex::new(child)));
 
+            // Restore explicitly so the off-screen guard runs strictly AFTER
+            // the plugin applies the saved geometry, regardless of hook order.
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.restore_state(StateFlags::all());
+            }
+            recenter_if_offscreen(app.handle());
+
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -165,4 +215,34 @@ pub fn run() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_on_screen;
+
+    #[test]
+    fn fully_inside_one_monitor() {
+        let mons = [(0, 0, 1920, 1080)];
+        assert!(is_on_screen(100, 100, 800, 600, &mons));
+    }
+
+    #[test]
+    fn straddling_two_monitors() {
+        let mons = [(0, 0, 1920, 1080), (1920, 0, 1920, 1080)];
+        // Window spans the seam at x=1920.
+        assert!(is_on_screen(1800, 100, 800, 600, &mons));
+    }
+
+    #[test]
+    fn entirely_off_all_monitors() {
+        let mons = [(0, 0, 1920, 1080), (1920, 0, 1920, 1080)];
+        // Sits far below every monitor (a disconnected display's old coords).
+        assert!(!is_on_screen(500, 5000, 800, 600, &mons));
+    }
+
+    #[test]
+    fn empty_monitor_list() {
+        assert!(!is_on_screen(0, 0, 800, 600, &[]));
+    }
 }
