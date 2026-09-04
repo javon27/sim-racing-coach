@@ -280,7 +280,8 @@
 <style>
   .settings {
     padding: 20px 26px;
-    max-width: 560px;
+    max-width: 680px;
+    margin: 0 auto;
     overflow-y: auto;
     height: 100%;
   }
