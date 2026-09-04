@@ -35,6 +35,7 @@ export interface LapRow {
   s1: number | null;
   s2: number | null;
   s3: number | null;
+  phase: string | null;
 }
 
 export interface CornerMetrics {

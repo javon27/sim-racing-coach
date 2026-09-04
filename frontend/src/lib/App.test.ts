@@ -78,7 +78,7 @@ describe("Coach screen assembly", () => {
     const bar = container.querySelector(".bar") as HTMLElement;
 
     expect(await within(bar).findByText("Le Mans")).toBeTruthy(); // session bar
-    expect(await screen.findByText(/Lap 9/)).toBeTruthy(); // lap list
+    expect(await screen.findByText("Lap 1")).toBeTruthy(); // lap list
     expect(screen.getByText("Corners")).toBeTruthy(); // tabs
     expect(screen.getByText("Setup")).toBeTruthy();
     expect(screen.getByPlaceholderText(/ask your engineer/i)).toBeTruthy(); // chat composer
@@ -89,7 +89,7 @@ describe("Coach screen assembly", () => {
 
     expect(screen.getByText(/ask about your last lap/i)).toBeTruthy();
 
-    const lapRow = await screen.findByText(/Lap 9/);
+    const lapRow = await screen.findByText("Lap 1");
     await fireEvent.click(lapRow);
 
     expect(await screen.findByText("Lap 9 selected")).toBeTruthy();
@@ -127,7 +127,7 @@ describe("Coach screen assembly", () => {
     await waitFor(() =>
       expect(nav.getByText("Coach").closest(".nav-item")?.classList.contains("on")).toBe(true),
     );
-    expect(await screen.findByText(/Lap 9/)).toBeTruthy();
+    expect(await screen.findByText("Lap 1")).toBeTruthy();
     expect(vi.mocked(getSessionLaps)).toHaveBeenCalledWith("s1");
     expect(vi.mocked(getSessionChats)).toHaveBeenCalledWith("s1");
   });

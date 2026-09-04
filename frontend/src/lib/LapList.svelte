@@ -29,6 +29,26 @@
 
   const bestTime = $derived(laps.find((l) => l.id === bestId)?.lap_time ?? null);
 
+  // Group consecutive laps by phase (a session spans practice/qualy/race in
+  // chronological blocks) and number laps 1..N within each phase.
+  type LapGroup = { phase: string | null; laps: LapRow[] };
+  const groups = $derived.by<LapGroup[]>(() => {
+    const out: LapGroup[] = [];
+    let cur: LapGroup | null = null;
+    for (const lap of laps) {
+      const p = lap.phase ?? null;
+      if (!cur || cur.phase !== p) {
+        cur = { phase: p, laps: [] };
+        out.push(cur);
+      }
+      cur.laps.push(lap);
+    }
+    return out;
+  });
+  function phaseLabel(p: string | null): string {
+    return (p ?? "laps").toUpperCase();
+  }
+
   // Review state: `sessionId` prop is the review target (a past session deep-linked
   // from Sessions). We hold on it until a NEW live lap arrives past the baseline
   // (the live lap_id captured on the first poll after entering review).
@@ -158,15 +178,20 @@
   {:else if laps.length === 0}
     <p class="empty">No laps yet</p>
   {:else}
-    {#each laps as lap (lap.id)}
-      <button type="button" class="lap" class:best={lap.id === bestId} onclick={() => select(lap.id)}>
-        <span class="n">Lap {lap.id}</span>
-        <span class="t">{formatTime(lap.lap_time)}</span>
-        <span class="flag">{lap.valid ? "" : "✗ inv"}</span>
-        {#if hasSectors(lap)}
-          <span class="sectors">{fmtSector(lap.s1)} · {fmtSector(lap.s2)} · {fmtSector(lap.s3)}</span>
-        {/if}
-      </button>
+    {#each groups as group (group.phase ?? "_")}
+      {#if group.phase}
+        <div class="phase-head">{phaseLabel(group.phase)}</div>
+      {/if}
+      {#each group.laps as lap, i (lap.id)}
+        <button type="button" class="lap" class:best={lap.id === bestId} onclick={() => select(lap.id)}>
+          <span class="n">Lap {i + 1}</span>
+          <span class="t">{formatTime(lap.lap_time)}</span>
+          <span class="flag">{lap.valid ? "" : "✗ inv"}</span>
+          {#if hasSectors(lap)}
+            <span class="sectors">{fmtSector(lap.s1)} · {fmtSector(lap.s2)} · {fmtSector(lap.s3)}</span>
+          {/if}
+        </button>
+      {/each}
     {/each}
   {/if}
 </div>

@@ -44,7 +44,7 @@ describe("LapList", () => {
     const onselect = vi.fn();
     render(LapList, { props: { onselect } });
 
-    const row = await screen.findByText(/Lap 9/);
+    const row = await screen.findByText("Lap 1");
     expect(vi.mocked(getSessionLaps)).toHaveBeenCalledWith("S1");
 
     await fireEvent.click(row);
@@ -60,11 +60,29 @@ describe("LapList", () => {
 
     const { container } = render(LapList);
 
-    await screen.findByText(/Lap 9/);
+    await screen.findByText("Lap 1");
     const sectorEls = container.querySelectorAll(".sectors");
     expect(sectorEls.length).toBe(1); // only the lap with sectors shows a sector line
     expect(sectorEls[0].textContent).toContain("30.1");
     expect(sectorEls[0].textContent).toContain("30.9");
+  });
+
+  it("groups laps by phase with per-phase numbering that restarts each phase", async () => {
+    vi.mocked(getStatus).mockResolvedValue(status("S1", 4));
+    vi.mocked(getSessionLaps).mockResolvedValue([
+      { id: 1, lap_time: 95.0, valid: 1, ts: 100, s1: null, s2: null, s3: null, phase: "practice" },
+      { id: 2, lap_time: 94.0, valid: 1, ts: 200, s1: null, s2: null, s3: null, phase: "practice" },
+      { id: 3, lap_time: 93.0, valid: 1, ts: 300, s1: null, s2: null, s3: null, phase: "race" },
+      { id: 4, lap_time: 92.5, valid: 1, ts: 400, s1: null, s2: null, s3: null, phase: "race" },
+    ]);
+
+    const { container } = render(LapList);
+
+    await screen.findByText("PRACTICE");
+    expect(screen.getByText("RACE")).toBeTruthy();
+    // Numbering restarts per phase: two "Lap 1" rows (one per phase).
+    expect(screen.getAllByText("Lap 1")).toHaveLength(2);
+    expect(container.querySelectorAll(".phase-head")).toHaveLength(2);
   });
 
   it("shows a best-lap header with the fastest lap time", async () => {
@@ -76,7 +94,7 @@ describe("LapList", () => {
 
     const { container } = render(LapList);
 
-    await screen.findByText(/Lap 10/);
+    await screen.findByText("Lap 2");
     const head = container.querySelector(".best-head");
     expect(head).not.toBeNull();
     expect(head!.textContent).toContain("Best");
@@ -91,15 +109,20 @@ describe("LapList", () => {
         : [{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }],
     );
 
-    render(LapList, { props: { sessionId: "OLD", pollMs: 5 } });
+    const { container } = render(LapList, { props: { sessionId: "OLD", pollMs: 5 } });
 
-    // Holds on OLD while live lap_id stays at the baseline (5).
-    expect(await screen.findByText(/Lap 42/)).toBeTruthy();
-    expect(screen.queryByText(/Lap 9/)).toBeNull();
+    // Holds on OLD (3:30.000) while live lap_id stays at the baseline (5).
+    // Numbering is per-phase positional now, so discriminate by the row's time.
+    await vi.waitFor(() =>
+      expect(container.querySelector(".lap .t")?.textContent).toBe("3:30.000"),
+    );
 
-    // A new live lap arrives -> snap to the live session.
+    // A new live lap arrives -> snap to the live session (3:36.000).
     vi.mocked(getStatus).mockResolvedValue(status("S1", 6));
-    expect(await screen.findByText(/Lap 9/, {}, { timeout: 2000 })).toBeTruthy();
+    await vi.waitFor(
+      () => expect(container.querySelector(".lap .t")?.textContent).toBe("3:36.000"),
+      { timeout: 2000 },
+    );
   });
 
   it("retries through transient failures and eventually renders laps", async () => {
@@ -111,7 +134,7 @@ describe("LapList", () => {
 
     render(LapList, { props: { retryTries: 5, retryDelayMs: 5 } });
 
-    expect(await screen.findByText(/Lap 9/)).toBeTruthy();
+    expect(await screen.findByText("Lap 1")).toBeTruthy();
   });
 
   it("shows an unreachable state with a Retry button when all attempts fail, and Retry re-fetches", async () => {
@@ -127,7 +150,7 @@ describe("LapList", () => {
 
     await fireEvent.click(retryBtn);
 
-    expect(await screen.findByText(/Lap 9/)).toBeTruthy();
+    expect(await screen.findByText("Lap 1")).toBeTruthy();
   });
 
   it("polls for new laps periodically and shows them", async () => {
@@ -136,15 +159,15 @@ describe("LapList", () => {
 
     render(LapList, { props: { pollMs: 5 } });
 
-    expect(await screen.findByText(/Lap 9/)).toBeTruthy();
-    expect(screen.queryByText(/Lap 10/)).toBeNull();
+    expect(await screen.findByText("Lap 1")).toBeTruthy();
+    expect(screen.queryByText("Lap 2")).toBeNull();
 
     vi.mocked(getSessionLaps).mockResolvedValue([
       { id: 9, lap_time: 216.0, valid: 1, ts: 100 },
       { id: 10, lap_time: 214.0, valid: 1, ts: 200 },
     ]);
 
-    expect(await screen.findByText(/Lap 10/, {}, { timeout: 2000 })).toBeTruthy();
+    expect(await screen.findByText("Lap 2", {}, { timeout: 2000 })).toBeTruthy();
   });
 
   it("keeps last good laps and does not go unreachable on a transient poll failure", async () => {
@@ -153,7 +176,7 @@ describe("LapList", () => {
 
     render(LapList, { props: { pollMs: 5 } });
 
-    expect(await screen.findByText(/Lap 9/)).toBeTruthy();
+    expect(await screen.findByText("Lap 1")).toBeTruthy();
 
     vi.mocked(getStatus).mockResolvedValueOnce(status("S1", 5));
     vi.mocked(getStatus).mockRejectedValueOnce(new Error("transient"));
@@ -162,7 +185,7 @@ describe("LapList", () => {
       timeout: 2000,
     });
 
-    expect(screen.getByText(/Lap 9/)).toBeTruthy();
+    expect(screen.getByText("Lap 1")).toBeTruthy();
     expect(screen.queryByText(/can't reach the coach server/i)).toBeNull();
   });
 
@@ -172,7 +195,7 @@ describe("LapList", () => {
 
     const { unmount } = render(LapList, { props: { pollMs: 5 } });
 
-    expect(await screen.findByText(/Lap 9/)).toBeTruthy();
+    expect(await screen.findByText("Lap 1")).toBeTruthy();
     await vi.waitFor(() => expect(vi.mocked(getStatus).mock.calls.length).toBeGreaterThan(1), {
       timeout: 2000,
     });

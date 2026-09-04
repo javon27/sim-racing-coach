@@ -236,6 +236,18 @@ body {
   padding: 16px 6px;
   text-align: center;
 }
+.phase-head {
+  font-family: var(--display);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--faint);
+  padding: 12px 10px 4px;
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+}
 .lap {
   display: grid;
   grid-template-columns: 1fr auto auto;
