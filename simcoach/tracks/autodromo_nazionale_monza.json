@@ -1,15 +1,18 @@
 {
   "track": "autodromo_nazionale_monza",
-  "_config_note": "Monza WEC / GP layout (with chicanes). Fast circuit — most 'corners' are the three chicanes plus Curva Grande, Lesmo, Parabolica.",
-  "_distances_note": "CALIBRATED from telemetry (steering-peak detection, 1 lap, 2026-08-29): apex distances + directions from real data (RIGHT_IS_POSITIVE=True); names are confident Monza landmarks. Corner-level, not every sub-apex: the Rettifilo right entry, the 2nd Lesmo, and the full Ascari triple were not each separately resolved on one lap — sharpen with more laps. verify_map_directions passes on the captured lap.",
+  "_config_note": "Monza WEC / GP layout (with chicanes). Fast circuit — most 'corners' are the three chicanes plus Curva Grande, the two Lesmos, and Parabolica.",
+  "_distances_note": "Apex distances + directions from telemetry (steering-peak detection, RIGHT_IS_POSITIVE=True). Lesmo split into 1 & 2 and the Variante Ascari left-right-left triple resolved from lap telemetry (id 50) + driver verification 2026-09-04. Rettifilo kept as a single apex (its right entry not separately flagged).",
   "length_m": 5793,
   "corners": [
     {"number": 1, "name": "Variante del Rettifilo", "direction": "left", "start_dist": 900, "apex_dist": 963, "end_dist": 1040},
     {"number": 2, "name": "Curva Grande", "direction": "right", "start_dist": 1400, "apex_dist": 1522, "end_dist": 1650},
     {"number": 3, "name": "Variante della Roggia (1st apex)", "direction": "left", "start_dist": 2090, "apex_dist": 2147, "end_dist": 2210},
     {"number": 4, "name": "Variante della Roggia (2nd apex)", "direction": "right", "start_dist": 2490, "apex_dist": 2547, "end_dist": 2610},
-    {"number": 5, "name": "Lesmo", "direction": "right", "start_dist": 2820, "apex_dist": 2878, "end_dist": 2950},
-    {"number": 6, "name": "Variante Ascari", "direction": "left", "start_dist": 3880, "apex_dist": 3970, "end_dist": 4080},
-    {"number": 7, "name": "Parabolica", "direction": "right", "start_dist": 5080, "apex_dist": 5184, "end_dist": 5320}
+    {"number": 5, "name": "Lesmo 1", "direction": "right", "start_dist": 2800, "apex_dist": 2840, "end_dist": 2862},
+    {"number": 6, "name": "Lesmo 2", "direction": "right", "start_dist": 2862, "apex_dist": 2880, "end_dist": 2910},
+    {"number": 7, "name": "Variante Ascari (1st apex)", "direction": "left", "start_dist": 3880, "apex_dist": 3940, "end_dist": 3958},
+    {"number": 8, "name": "Variante Ascari (2nd apex)", "direction": "right", "start_dist": 3958, "apex_dist": 3975, "end_dist": 4058},
+    {"number": 9, "name": "Variante Ascari (3rd apex)", "direction": "left", "start_dist": 4058, "apex_dist": 4080, "end_dist": 4110},
+    {"number": 10, "name": "Parabolica", "direction": "right", "start_dist": 5080, "apex_dist": 5184, "end_dist": 5320}
   ]
 }
