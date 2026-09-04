@@ -2,6 +2,7 @@
   import { tick } from "svelte";
   import { nextTheme, applyTheme, THEME_LABELS, THEME_ICONS, type ThemeMode } from "./theme";
   import SessionBar from "./SessionBar.svelte";
+  import RaceStrip from "./RaceStrip.svelte";
   import LapList from "./LapList.svelte";
   import ChatPanel from "./ChatPanel.svelte";
   import CornerSetupTabs from "./CornerSetupTabs.svelte";
@@ -88,6 +89,7 @@
     <section class="screen" class:on={screen === "coach"}>
       <div class="app">
         <SessionBar />
+        <RaceStrip sessionId={selectedSessionId} />
         <div class="main">
           <aside class="rail">
             <LapList

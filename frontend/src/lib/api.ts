@@ -61,6 +61,14 @@ export interface LapAnalysisResponse {
   corners: CornerMetrics[];
 }
 
+export interface RaceResult {
+  position: number | null;
+  class_position: number | null;
+  finish_status: string | null;
+  incidents: string[];
+  penalties: unknown[];
+}
+
 export interface ChatRow {
   chat_id: string;
   started: number;
@@ -138,6 +146,10 @@ export function getSessions(): Promise<SessionRow[]> {
 
 export function getSessionLaps(sid: string): Promise<LapRow[]> {
   return request<LapRow[]>(`/sessions/${sid}/laps`);
+}
+
+export function getSessionRace(sid: string): Promise<RaceResult | Record<string, never>> {
+  return request<RaceResult | Record<string, never>>(`/sessions/${sid}/race`);
 }
 
 export function getLapAnalysis(id: number): Promise<LapAnalysisResponse> {
