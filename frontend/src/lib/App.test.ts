@@ -95,7 +95,7 @@ describe("Coach screen assembly", () => {
     render(App);
 
     const lapRow = await screen.findByText("Lap 1");
-    const btn = lapRow.closest("button") as HTMLButtonElement;
+    const btn = lapRow.closest(".lap") as HTMLElement; // row is a role=button div now
     expect(btn.getAttribute("aria-pressed")).toBe("false"); // not selected yet
 
     await fireEvent.click(lapRow);

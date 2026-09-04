@@ -152,8 +152,46 @@
   function hasSectors(lap: LapRow): boolean {
     return lap.s1 != null || lap.s2 != null || lap.s3 != null;
   }
-  function fmtSector(s: number | null): string {
-    return s == null ? "—" : s.toFixed(1);
+
+  // Session best per sector = min over the displayed laps (nulls ignored).
+  const bests = $derived({
+    s1: minSector(laps, "s1"),
+    s2: minSector(laps, "s2"),
+    s3: minSector(laps, "s3"),
+  });
+  function minSector(l: LapRow[], k: "s1" | "s2" | "s3"): number | null {
+    let m: number | null = null;
+    for (const lap of l) {
+      const v = lap[k];
+      if (v != null && (m === null || v < m)) m = v;
+    }
+    return m;
+  }
+
+  // Per-sector delta vs session best. cls drives color: pb (is best) / up (slower)
+  // / down (faster than best — unreachable while best = min, kept for completeness).
+  type SecInfo = { label: string; cls: string; delta: string };
+  function sectorCell(label: string, v: number | null, b: number | null): SecInfo {
+    if (v == null || b == null) return { label, cls: "", delta: "—" };
+    if (v === b) return { label, cls: "pb", delta: "best" };
+    const d = v - b;
+    return { label, cls: d > 0 ? "up" : "down", delta: (d < 0 ? "−" : "+") + Math.abs(d).toFixed(2) };
+  }
+  function sectorInfo(lap: LapRow): SecInfo[] {
+    return [
+      sectorCell("S1", lap.s1, bests.s1),
+      sectorCell("S2", lap.s2, bests.s2),
+      sectorCell("S3", lap.s3, bests.s3),
+    ];
+  }
+
+  // Per-lap expand state for the sector-detail panel (independent of selection).
+  let expanded: Set<number> = $state(new Set());
+  function toggleDetail(lapId: number) {
+    const next = new Set(expanded);
+    if (next.has(lapId)) next.delete(lapId);
+    else next.add(lapId);
+    expanded = next;
   }
 
   function select(lapId: number) {
@@ -187,21 +225,64 @@
         <div class="phase-head">{phaseLabel(group.phase)}</div>
       {/if}
       {#each group.laps as lap, i (lap.id)}
-        <button
-          type="button"
-          class="lap"
-          class:best={lap.id === bestId}
-          class:selected={lap.id === selectedLapId}
-          aria-pressed={lap.id === selectedLapId}
-          onclick={() => select(lap.id)}
-        >
-          <span class="n">Lap {i + 1}</span>
-          <span class="t">{formatTime(lap.lap_time)}</span>
-          <span class="flag">{lap.valid ? "" : "✗ inv"}</span>
-          {#if hasSectors(lap)}
-            <span class="sectors">{fmtSector(lap.s1)} · {fmtSector(lap.s2)} · {fmtSector(lap.s3)}</span>
+        {@const sectors = hasSectors(lap) ? sectorInfo(lap) : null}
+        {@const open = expanded.has(lap.id)}
+        <div class="lapwrap" class:open>
+          <div
+            class="lap"
+            class:best={lap.id === bestId}
+            class:selected={lap.id === selectedLapId}
+            role="button"
+            tabindex="0"
+            aria-pressed={lap.id === selectedLapId}
+            onclick={() => select(lap.id)}
+            onkeydown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                select(lap.id);
+              }
+            }}
+          >
+            <span class="n">
+              Lap {i + 1}
+              {#if sectors}
+                <span class="lapsec">
+                  {#each sectors as s}
+                    <i class={s.cls} title="{s.label} {s.delta}"></i>
+                  {/each}
+                </span>
+              {/if}
+            </span>
+            <span class="t">{formatTime(lap.lap_time)}</span>
+            <span class="flag">{lap.valid ? "" : "✗ inv"}</span>
+            {#if sectors}
+              <button
+                type="button"
+                class="chev"
+                aria-label="Toggle sector detail"
+                aria-expanded={open}
+                onclick={(e) => {
+                  e.stopPropagation();
+                  toggleDetail(lap.id);
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6" /></svg>
+              </button>
+            {/if}
+          </div>
+          {#if sectors}
+            <div class="lapdetail">
+              <div class="secgrid">
+                {#each sectors as s}
+                  <div class="seccell">
+                    <span class="sl">{s.label}</span>
+                    <span class="sv {s.cls}">{s.delta}</span>
+                  </div>
+                {/each}
+              </div>
+            </div>
           {/if}
-        </button>
+        </div>
       {/each}
     {/each}
   {/if}
