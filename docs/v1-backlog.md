@@ -79,7 +79,11 @@ STILL TODO on race-narrative: (a) DONE `f83881f` — live per-lap `mPlace` captu
 ## Miscellaneous
 - [x] ~~"Could not load settings."~~ — **DIAGNOSED 2026-09-04 00:51: not a data/config problem.** Caused by the broken uncommitted sidecar WIP (above) running in the live sidecar. On committed code `972013e`, GET /settings returns 200 fine. Fixed by stashing the WIP + rebuilding the sidecar. No further action unless it recurs on clean code.
 - [x] ~~Sessions tab doesn't list any sessions.~~ — **Same root cause.** On committed code, GET /sessions returns the real session list (verified). Also resolved by stashing the broken WIP.
-## Feature idea: in-app labeled track maps (2026-09-04)
-User wants a labeled track map in the app so they don't browser-search map images while chatting with the coach. Two approaches:
-- Pull the game's track PNG from LMU files + overlay corner labels — needs per-track pixel↔lap-distance calibration (fiddly).
-- **RECOMMENDED: generate the outline from telemetry X/Y position + auto-place corner labels by apex_dist along the path** (owned data, self-labels from existing corner maps). BLOCKER: capture doesn't record X/Y position channels yet (only lap_distance) — would add mPos.x/z to the smm capture (like sectors/mPlace), store per-lap or derive a track path once, then render an SVG map with corner labels. Fits the north-star (context without leaving the coach). Not started — needs a design pass.
+## In-app labeled track maps (2026-09-04) — SHIPPED
+Telemetry-generated outline + auto-placed corner labels (the RECOMMENDED approach; owned data, no game assets). Delivered:
+- capture records `pos_x`/`pos_z` (`smm.py`, via `mPos`) → flows to the lap `.npz` (no schema change) — `b50dc8f`-style guardless append; the builder filters non-finite.
+- `simcoach/trackmap.py` `build_track_map(channels, corner_map, width=1000)` — pure world→screen (aspect-preserved, vertical-flipped), path downsampled ≤300 pts, corners placed at the sample nearest each `apex_dist`; `{}` when no usable position data.
+- `GET /laps/{id}/map` (`2a43826`) → `{width,height,path,corners}` or `{}`; resolves the cmap per-track via `_map_for`.
+- UI: `TrackMap.svelte` + a **Map** tab in `CornerSetupTabs` (`e617b8f`); `getLapMap` in api.ts. 320 py / 100 fe green.
+- LIMITATION: maps only render for laps captured AFTER this change (existing laps have no position data — same as sectors/mPlace).
+- [ ] TWEAK against LMU PNGs on the rig — the outline is the driver's racing line, so shape may want correcting vs the real circuit. USER: drive a lap, open a corner → Map tab, eyeball vs the game map; adjust if needed. (User: "we'll probably have to tweak them… we can use the lmu PNGs to correct.")
