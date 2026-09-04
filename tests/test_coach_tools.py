@@ -54,6 +54,29 @@ def test_session_status_and_recent_laps(tmp_path, synthetic_lap):
     assert f"lap {lap_id}:" in listing
 
 
+def test_get_race_result_formats_and_falls_back(tmp_path, synthetic_lap):
+    from simcoach.lmu.results import ResultLap, ResultSession
+    ctx, store, _ = _ctx(tmp_path, synthetic_lap)
+    ctx.session_id = "race-1"
+    rs = ResultSession(
+        sim="lmu", track=synthetic_lap.track, car=synthetic_lap.car, car_class="GT3",
+        date_ts=1, session_type="race", position=3, class_position=2, best_lap=90.0,
+        finish_status="Finished",
+        laps=[ResultLap(lap_no=1, lap_time=90.0, sectors=[], valid=True)],
+        incidents=["Off track T7", "Contact T3"], penalties=[{"text": "Track limits DT"}],
+    )
+    store.save_result_session(rs, session_id="race-1")
+
+    out = ctx.dispatch("get_race_result", {})
+    assert "P3 overall" in out and "P2 in class" in out and "Finished" in out
+    assert "Incidents (2)" in out and "Off track T7" in out
+    assert "Penalties (1)" in out and "Track limits DT" in out
+
+    # No race row for this session -> honest fallback.
+    ctx.session_id = "practice-1"
+    assert "No race result recorded" in ctx.get_race_result()
+
+
 def test_no_lap_context_is_honest(tmp_path):
     store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
     ctx = CoachContext(store, track="spa", car="car", on_track=False)

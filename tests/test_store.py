@@ -431,6 +431,37 @@ def test_best_lap_skips_result_laps_without_telemetry(tmp_path, synthetic_lap):
     assert best.lap_time == 92.5
 
 
+def test_save_result_session_persists_race_row(tmp_path):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    rs = _fake_result_session()
+    s.save_result_session(rs, session_id="result-abc")
+
+    race = s.race_session("result-abc")
+    assert race == {"position": 3, "class_position": 2, "finish_status": "Finished",
+                    "incidents": [], "penalties": []}
+
+
+def test_race_session_round_trips_incidents_and_penalties(tmp_path):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    rs = _fake_result_session(
+        incidents=["Contact with wall at T3", "Off track T7"],
+        penalties=[{"text": "Drive-through: track limits", "et": "123.4"}],
+    )
+    s.save_result_session(rs, session_id="result-inc")
+
+    race = s.race_session("result-inc")
+    assert race["incidents"] == ["Contact with wall at T3", "Off track T7"]
+    assert race["penalties"] == [{"text": "Drive-through: track limits", "et": "123.4"}]
+
+
+def test_race_session_none_when_absent(tmp_path):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    assert s.race_session("nope") is None
+
+
 def test_load_result_lap_raises_filenotfounderror(tmp_path):
     from simcoach.store import LapStore
     s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))

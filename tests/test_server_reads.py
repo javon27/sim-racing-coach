@@ -39,6 +39,25 @@ def test_session_chats_endpoint(tmp_path, synthetic_lap):
     assert c.get("/sessions/other/chats").json() == []
 
 
+def test_session_race_endpoint(tmp_path, synthetic_lap):
+    from simcoach.lmu.results import ResultLap, ResultSession
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    rs = ResultSession(
+        sim="lmu", track="Sebring", car="GT3", car_class="GT3", date_ts=1, session_type="race",
+        position=3, class_position=2, best_lap=90.0, finish_status="Finished",
+        laps=[ResultLap(lap_no=1, lap_time=90.0, sectors=[], valid=True)],
+        incidents=["Off track T7"], penalties=[],
+    )
+    store.save_result_session(rs, session_id="race-1")
+    coach = Coach(FakeModel(), "simcoach/knowledge")
+    c = _tc(create_app(store, coach))
+    body = c.get("/sessions/race-1/race").json()
+    assert body == {"position": 3, "class_position": 2, "finish_status": "Finished",
+                    "incidents": ["Off track T7"], "penalties": []}
+    # No race row -> empty object per contract.
+    assert c.get("/sessions/absent/race").json() == {}
+
+
 def test_setup_empty_without_rest(tmp_path, synthetic_lap):
     app, *_ = _app(tmp_path, synthetic_lap)
     assert _tc(app).get("/setup").json() == {}

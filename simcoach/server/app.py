@@ -185,6 +185,10 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     def session_chats(sid: str):
         return store.chats_for_session(sid)
 
+    @app.get("/sessions/{sid}/race")
+    def session_race(sid: str):
+        return store.race_session(sid) or {}
+
     @app.get("/laps/{lap_id}/analysis")
     def lap_analysis(lap_id: int):
         try:

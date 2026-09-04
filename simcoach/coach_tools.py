@@ -89,6 +89,13 @@ TOOLS = [
                        "and stint-length questions.",
         "input_schema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "get_race_result",
+        "description": "The race outcome + racecraft context for this session — finishing "
+                       "position, incidents, penalties. Call this for questions about the "
+                       "race/result/how it went overall.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
 ]
 
 
@@ -242,6 +249,30 @@ class CoachContext:
             lines.append(f"Battery state of charge: {float(ch['soc'][-1]) * 100:.0f}%.")
         return "\n".join(lines) if lines else "No fuel/energy data captured for this lap."
 
+    def get_race_result(self):
+        rr = self.store.race_session(self.session_id) if self.session_id else None
+        if not rr:
+            return ("No race result recorded for this session (practice/qualy, or not a "
+                    "completed race).")
+        parts = []
+        if rr["position"] is not None:
+            parts.append(f"Finished P{rr['position']} overall")
+        if rr["class_position"] is not None:
+            parts.append(f"P{rr['class_position']} in class")
+        if rr["finish_status"]:
+            parts.append(f"status: {rr['finish_status']}")
+        lines = ["; ".join(parts) + "." if parts else "Race result recorded."]
+        incidents = rr["incidents"]
+        if incidents:
+            head = "; ".join(incidents[:3])
+            more = f" (+{len(incidents) - 3} more)" if len(incidents) > 3 else ""
+            lines.append(f"Incidents ({len(incidents)}): {head}{more}")
+        penalties = rr["penalties"]
+        if penalties:
+            texts = [str(p.get("text") or p) for p in penalties[:3]]
+            lines.append(f"Penalties ({len(penalties)}): {'; '.join(texts)}")
+        return "\n".join(lines)
+
     def get_setup(self):
         if not self.setup:
             return "No setup data available (REST unavailable or open setup)."
@@ -265,6 +296,7 @@ class CoachContext:
             "get_tire_report": lambda: self.get_tire_report(),
             "get_wheel_report": lambda: self.get_wheel_report(),
             "get_energy_report": lambda: self.get_energy_report(),
+            "get_race_result": lambda: self.get_race_result(),
             "get_setup": lambda: self.get_setup(),
         }.get(name)
         if handler is None:

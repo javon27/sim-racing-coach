@@ -12,7 +12,7 @@ import numpy as np
 
 from simcoach.model_types import LapRecord
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
@@ -75,6 +75,14 @@ CREATE TABLE IF NOT EXISTS corner_metrics (
     brake_point REAL,
     throttle_point REAL,
     trailbrake_overlap REAL
+);
+CREATE TABLE IF NOT EXISTS race_sessions (
+    session_id TEXT PRIMARY KEY,
+    position INTEGER,
+    class_position INTEGER,
+    finish_status TEXT,
+    incidents TEXT,
+    penalties TEXT
 );
 """ + _COACH_CHAT_SCHEMA
 
@@ -161,6 +169,15 @@ class LapStore:
                     for c in ("s1", "s2", "s3"):
                         if c not in cols:
                             _add_column(self.conn, "laps", f"{c} REAL")
+            if current_version < 8:
+                # v7 -> v8: persist race outcome/racecraft context (position,
+                # incidents, penalties) parsed from result logs but previously
+                # dropped. Idempotent create (incidents/penalties are JSON).
+                self.conn.execute(
+                    "CREATE TABLE IF NOT EXISTS race_sessions ("
+                    "session_id TEXT PRIMARY KEY, position INTEGER, class_position INTEGER, "
+                    "finish_status TEXT, incidents TEXT, penalties TEXT)"
+                )
         if current_version != SCHEMA_VERSION:
             self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self.conn.commit()
@@ -401,6 +418,40 @@ class LapStore:
                     for lap in rs.laps
                 ],
             )
+            self.conn.execute(
+                "INSERT OR REPLACE INTO race_sessions "
+                "(session_id, position, class_position, finish_status, incidents, penalties) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (session_id, rs.position, rs.class_position, rs.finish_status,
+                 json.dumps(rs.incidents or []), json.dumps(rs.penalties or [])),
+            )
+
+    def race_session(self, session_id: str) -> dict | None:
+        """The persisted race outcome (position, incidents, penalties) for a
+        session, or None if no race row exists (practice/qualy, or not imported)."""
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT position, class_position, finish_status, incidents, penalties "
+                "FROM race_sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        pos, cls_pos, finish, incidents, penalties = row
+
+        def _load(s):
+            try:
+                return json.loads(s) if s else []
+            except (TypeError, ValueError):
+                return []
+
+        return {
+            "position": pos,
+            "class_position": cls_pos,
+            "finish_status": finish,
+            "incidents": _load(incidents),
+            "penalties": _load(penalties),
+        }
 
     def is_ingested(self, path: str, mtime: float) -> bool:
         with self._lock:
