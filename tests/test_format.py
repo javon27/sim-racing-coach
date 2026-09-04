@@ -15,6 +15,12 @@ def test_format_laptime_pads_seconds():
     assert format_laptime(63.05) == "1:03.050"
 
 
+def test_format_laptime_minute_boundary_rounding():
+    # Just under a whole minute must roll over the minute, not render ":60.000".
+    assert format_laptime(119.9996) == "2:00.000"
+    assert format_laptime(59.9999) == "1:00.000"
+
+
 def test_format_laptime_invalid():
     for bad in (None, -1.0, float("nan"), float("inf"), "x"):
         assert format_laptime(bad) == "—"

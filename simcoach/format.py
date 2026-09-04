@@ -12,9 +12,11 @@ def format_laptime(seconds) -> str:
     list. Non-finite/negative/None -> '—'."""
     if seconds is None or not isinstance(seconds, (int, float)) or not math.isfinite(seconds) or seconds < 0:
         return "—"
-    m = int(seconds // 60)
-    s = seconds - m * 60
-    return f"{m}:{s:06.3f}"
+    # Round to ms BEFORE splitting, else e.g. 119.9996 -> "1:60.000" (the :.3f
+    # rounds the seconds field up past 60) instead of "2:00.000".
+    total_ms = round(seconds * 1000)
+    m, rem_ms = divmod(total_ms, 60_000)
+    return f"{m}:{rem_ms / 1000:06.3f}"
 
 
 def unit_fns(units: str = "metric"):
