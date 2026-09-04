@@ -1,8 +1,20 @@
+import importlib.util
+
 from fastapi.testclient import TestClient
 from simcoach.server.app import create_app
 from simcoach.store import LapStore
 from simcoach.coach import Coach
 from simcoach.model.fake import FakeModel
+
+
+def test_ws_protocol_library_installed():
+    # Starlette's TestClient has its own in-process WS impl, so every test above
+    # passes even when uvicorn has NO WebSocket library -- in which case the real
+    # sidecar answers /coach with "404 Unsupported upgrade request" and the UI
+    # shows "lost connection". Guard the runtime dependency explicitly.
+    assert (importlib.util.find_spec("websockets")
+            or importlib.util.find_spec("wsproto")), \
+        "uvicorn needs 'websockets' or 'wsproto' to serve WS /coach"
 
 
 def _client(tmp_path):
