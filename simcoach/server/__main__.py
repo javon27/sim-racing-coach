@@ -23,25 +23,19 @@ def build_app():
     store = LapStore(str(db_path()), str(telemetry_dir()))
     coach = Coach(LazyModel(model=cfg["model"]), str(m.PKG_DIR / "knowledge"))
 
-    cmap = rest = None
-    try:
-        # ponytail: cmap fixed at boot; live re-resolution arrives with WS /telemetry (Phase 2/3)
-        tc = m.read_session_track_car()  # None when LMU is closed / no player on track
-        if tc is not None:
-            track_name, _vehicle = tc
-            rest = m.LmuRest()
-            try:
-                rest.get_setup()
-            except Exception:
-                rest = None  # REST unavailable — degrade, don't block boot
-            # ponytail: no auto-build of a missing corner map at boot (needs a completed lap); /laps analysis 404s for an unmapped track until Phase 2/3
-            map_path = m.resolve_track_map(track_name, str(m.TRACKS_DIR))
+    def _map_resolver(track):
+        # Resolve+load the corner map for a track name, or None if unmapped.
+        # Called per-lap by the app so a track change follows the live car.
+        try:
+            map_path = m.resolve_track_map(track, str(m.TRACKS_DIR))
             if map_path is not None:
-                cmap = m.CornerMap.load(str(map_path))
-    except Exception:
-        cmap = rest = None  # offline: never let resolution failures block boot
+                return m.CornerMap.load(str(map_path))
+        except Exception:
+            pass
+        return None
 
-    app = create_app(store, coach, cmap, rest)
+    app = create_app(store, coach, cmap=None, rest=None,
+                     map_resolver=_map_resolver, rest_factory=m.LmuRest)
 
     def _capture_forever():
         # Retries like simcoach.app.run_repl's capture thread: LMU may not be

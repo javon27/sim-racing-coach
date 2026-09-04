@@ -102,11 +102,55 @@ def test_setup_survives_rest_failure(tmp_path, synthetic_lap):
     assert r.json() == {}
 
 
+def test_setup_lazily_connects_via_factory(tmp_path, synthetic_lap):
+    class FakeRest:
+        def get_setup(self):
+            return {"wing": 5}
+
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    coach = Coach(FakeModel(), "simcoach/knowledge")
+    app = create_app(store, coach, rest=None, rest_factory=FakeRest)
+    c = _tc(app)
+    # No boot rest, but the factory connects on first /setup call.
+    assert c.get("/setup").json() == {"wing": 5}
+    # …and /status now reports the live connection.
+    assert c.get("/status").json()["lmu_connected"] is True
+
+
+def test_analysis_resolves_map_per_track(tmp_path, synthetic_lap):
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    track_a = synthetic_lap.track
+    # Resolver returns a map only for track A; anything else -> None.
+    resolver = lambda track: cmap if track == track_a else None
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    lap_id = store.save(synthetic_lap)
+    coach = Coach(FakeModel(), "simcoach/knowledge")
+    app = create_app(store, coach, map_resolver=resolver)
+    c = _tc(app)
+    assert c.get(f"/laps/{lap_id}/analysis").status_code == 200
+
+    synthetic_lap.track = "some_other_track"
+    other_id = store.save(synthetic_lap)
+    assert c.get(f"/laps/{other_id}/analysis").status_code == 404
+
+
+def test_status_has_map_reflects_resolver(tmp_path, synthetic_lap):
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    lap_id = store.save(synthetic_lap)
+    coach = Coach(FakeModel(), "simcoach/knowledge")
+    resolver = lambda track: cmap if track == synthetic_lap.track else None
+    app = create_app(store, coach, map_resolver=resolver)
+    # Latest lap sets the live track -> has_map true for that track's map.
+    app.state.latest = {"record": synthetic_lap, "lap_id": lap_id}
+    assert _tc(app).get("/status").json()["has_map"] is True
+
+
 def test_analysis_unanalyzable_is_422(tmp_path, synthetic_lap, monkeypatch):
     cmap = CornerMap.load("simcoach/tracks/test_track.json")
     app, lap_id, cid = _app(tmp_path, synthetic_lap, cmap=cmap)
 
-    import simcoach.server.app as app_module
+    from simcoach.server import app as app_module
 
     def _boom(*args, **kwargs):
         raise ValueError("bad telemetry")

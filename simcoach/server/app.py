@@ -61,13 +61,61 @@ def _capture_loop(source, store, app_state) -> None:
         app_state.latest = {"record": lap, "lap_id": lap_id}
 
 
-def create_app(store, coach, cmap=None, rest=None) -> FastAPI:
+def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_factory=None) -> FastAPI:
     app = FastAPI(title="SimCoach", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store = store
     app.state.coach = coach
-    app.state.cmap = cmap
-    app.state.rest = rest
+    app.state.cmap = cmap            # fallback map when no resolver is wired
+    app.state.rest = rest            # cached live REST client once connected
+    app.state.map_resolver = map_resolver  # (track) -> CornerMap | None
+    app.state.rest_factory = rest_factory  # () -> LmuRest (probed on first use)
+    app.state.cmaps = {}             # per-track CornerMap cache (only non-None cached)
     app.state.latest = None  # set by the capture thread (build_app): {"record", "lap_id"} | None
+
+    def _map_for(track):
+        # Resolve a corner map for a specific track, following track changes.
+        # Only non-None results are cached, so a still-missing map is re-checked
+        # cheaply on the next call (it may appear once a lap completes).
+        if not track:
+            return None
+        cached = app.state.cmaps.get(track)
+        if cached is not None:
+            return cached
+        if app.state.map_resolver is not None:
+            m = app.state.map_resolver(track)
+            if m is not None:
+                app.state.cmaps[track] = m
+            return m
+        return app.state.cmap
+
+    def _ensure_rest():
+        # Lazily connect the LMU REST client: probe once per call while
+        # disconnected (cheap on localhost), then cache it for the process.
+        if app.state.rest:
+            return app.state.rest
+        if app.state.rest_factory is not None:
+            try:
+                r = app.state.rest_factory()
+                r.get_setup()  # probe: fails if LMU isn't reachable / on track
+                app.state.rest = r
+                return r
+            except Exception:
+                return None
+        return None
+
+    def _live_track():
+        # Current track: the latest captured lap's track, else the live SMM read.
+        latest = app.state.latest
+        if latest is not None:
+            return latest["record"].track
+        try:
+            from ..lmu.smm import read_session_track_car
+            tc = read_session_track_car()
+            if tc:
+                return tc[0]
+        except Exception:
+            pass
+        return None
 
     app.add_middleware(CORSMiddleware, allow_origins=FRONTEND_ORIGINS,
                         allow_methods=["*"], allow_headers=["*"])
@@ -104,8 +152,8 @@ def create_app(store, coach, cmap=None, rest=None) -> FastAPI:
         return {
             "track": track, "car": car,
             "on_track": on_track,
-            "has_map": app.state.cmap is not None,
-            "lmu_connected": app.state.rest is not None,
+            "has_map": _map_for(track) is not None,
+            "lmu_connected": _ensure_rest() is not None,
             "session_id": session_id,
             "lap_id": lap_id,
         }
@@ -124,15 +172,16 @@ def create_app(store, coach, cmap=None, rest=None) -> FastAPI:
 
     @app.get("/laps/{lap_id}/analysis")
     def lap_analysis(lap_id: int):
-        if app.state.cmap is None:
-            raise HTTPException(404, "no corner map")
         try:
             rec = store.load(lap_id)
         except (KeyError, FileNotFoundError):
             raise HTTPException(404, "lap not found")
+        cmap = _map_for(rec.track)
+        if cmap is None:
+            raise HTTPException(404, "no corner map")
         try:
             ref = store.best_lap(rec.track, rec.car, exclude_lap_id=lap_id)
-            a = analyze_lap(rec, app.state.cmap, reference=ref)
+            a = analyze_lap(rec, cmap, reference=ref)
         except Exception:
             raise HTTPException(422, "lap telemetry could not be analyzed")
         return _clean({
@@ -144,10 +193,11 @@ def create_app(store, coach, cmap=None, rest=None) -> FastAPI:
     def setup():
         # Phase 1: raw dict from LmuRest, unfiltered. Filtering to the
         # human-meaningful subset is deferred to the Setup-panel phase (Phase 4).
-        if not app.state.rest:
+        rest = _ensure_rest()
+        if not rest:
             return {}
         try:
-            return app.state.rest.get_setup()
+            return rest.get_setup()
         except Exception:
             return {}
 
@@ -213,10 +263,12 @@ def create_app(store, coach, cmap=None, rest=None) -> FastAPI:
                 try: record = app.state.store.load(lap_id)
                 except Exception: record = None
             setup = {}
-            if app.state.rest:
-                try: setup = app.state.rest.get_setup()
+            rest = _ensure_rest()
+            if rest:
+                try: setup = rest.get_setup()
                 except Exception: setup = {}
-            ctx = CoachContext(app.state.store, record=record, lap_id=lap_id, cmap=app.state.cmap,
+            cmap = _map_for(record.track) if record is not None else _map_for(_live_track())
+            ctx = CoachContext(app.state.store, record=record, lap_id=lap_id, cmap=cmap,
                                setup=setup, on_track=record is not None,
                                allowed_adjustments=(legal_adjustments(setup) if setup else None),
                                session_id=session_id)
