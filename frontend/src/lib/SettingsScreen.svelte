@@ -118,6 +118,7 @@
 </script>
 
 <div class="settings">
+  <div class="settings-inner">
   {#if phase === "loading"}
     <p class="empty">Loading settings…</p>
   {:else if phase === "error"}
@@ -275,15 +276,18 @@
       </div>
     </section>
   {/if}
+  </div>
 </div>
 
 <style>
   .settings {
-    padding: 20px 26px;
-    max-width: 680px;
-    margin: 0 auto;
     overflow-y: auto;
     height: 100%;
+  }
+  .settings-inner {
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 20px 26px;
   }
   .empty {
     color: var(--faint);
