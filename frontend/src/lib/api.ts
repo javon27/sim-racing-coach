@@ -32,6 +32,9 @@ export interface LapRow {
   lap_time: number;
   valid: number;
   ts: number;
+  s1: number | null;
+  s2: number | null;
+  s3: number | null;
 }
 
 export interface CornerMetrics {

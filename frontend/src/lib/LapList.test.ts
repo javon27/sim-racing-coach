@@ -51,6 +51,22 @@ describe("LapList", () => {
     expect(onselect).toHaveBeenCalledWith({ lap_id: 9, session_id: "S1" });
   });
 
+  it("renders per-lap sector times when present, omits them when null", async () => {
+    vi.mocked(getStatus).mockResolvedValue(status("S1", 6));
+    vi.mocked(getSessionLaps).mockResolvedValue([
+      { id: 9, lap_time: 91.2, valid: 1, ts: 100, s1: 30.1, s2: 30.2, s3: 30.9 },
+      { id: 10, lap_time: 92.0, valid: 1, ts: 200, s1: null, s2: null, s3: null },
+    ]);
+
+    const { container } = render(LapList);
+
+    await screen.findByText(/Lap 9/);
+    const sectorEls = container.querySelectorAll(".sectors");
+    expect(sectorEls.length).toBe(1); // only the lap with sectors shows a sector line
+    expect(sectorEls[0].textContent).toContain("30.1");
+    expect(sectorEls[0].textContent).toContain("30.9");
+  });
+
   it("shows a best-lap header with the fastest lap time", async () => {
     vi.mocked(getStatus).mockResolvedValue(status("S1", 6));
     vi.mocked(getSessionLaps).mockResolvedValue([

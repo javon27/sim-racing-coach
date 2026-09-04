@@ -124,6 +124,14 @@
     return `${m}:${s.padStart(6, "0")}`;
   }
 
+  // `== null` catches both null (API: no sectors) and undefined (defensive).
+  function hasSectors(lap: LapRow): boolean {
+    return lap.s1 != null || lap.s2 != null || lap.s3 != null;
+  }
+  function fmtSector(s: number | null): string {
+    return s == null ? "—" : s.toFixed(1);
+  }
+
   function select(lapId: number) {
     onselect?.({ lap_id: lapId, session_id: currentSessionId ?? "" });
   }
@@ -155,6 +163,9 @@
         <span class="n">Lap {lap.id}</span>
         <span class="t">{formatTime(lap.lap_time)}</span>
         <span class="flag">{lap.valid ? "" : "✗ inv"}</span>
+        {#if hasSectors(lap)}
+          <span class="sectors">{fmtSector(lap.s1)} · {fmtSector(lap.s2)} · {fmtSector(lap.s3)}</span>
+        {/if}
       </button>
     {/each}
   {/if}
