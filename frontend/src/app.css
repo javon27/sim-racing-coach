@@ -200,6 +200,29 @@ body {
   font-size: 11px;
   color: var(--faint);
 }
+.best-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 0 16px 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+}
+.best-head .lbl {
+  font-family: var(--display);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+}
+.best-head .t {
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
 .laps {
   overflow-y: auto;
   padding: 0 10px 8px;

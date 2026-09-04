@@ -22,6 +22,13 @@
   let phase: "connecting" | "ok" | "unreachable" = $state("connecting");
   let pollTimer: ReturnType<typeof setInterval> | undefined;
 
+  // Auto-scroll: keep the newest lap in view as laps are appended (session_laps
+  // is ordered by ts, newest last).
+  let lapsEl: HTMLDivElement | undefined = $state();
+  let prevCount = 0;
+
+  const bestTime = $derived(laps.find((l) => l.id === bestId)?.lap_time ?? null);
+
   // Review state: `sessionId` prop is the review target (a past session deep-linked
   // from Sessions). We hold on it until a NEW live lap arrives past the baseline
   // (the live lap_id captured on the first poll after entering review).
@@ -99,6 +106,14 @@
     reviewBaselineSet = false;
     load();
   });
+  // Scroll to the newest lap when the count grows (new lap captured, or first load).
+  $effect(() => {
+    if (laps.length > prevCount && lapsEl) {
+      lapsEl.scrollTop = lapsEl.scrollHeight;
+    }
+    prevCount = laps.length;
+  });
+
   onDestroy(() => {
     if (pollTimer !== undefined) clearInterval(pollTimer);
   });
@@ -118,7 +133,13 @@
   <h2>This session</h2>
   <span>{laps.length} laps</span>
 </div>
-<div class="laps">
+{#if bestTime !== null}
+  <div class="best-head">
+    <span class="lbl">Best</span>
+    <span class="t">{formatTime(bestTime)}</span>
+  </div>
+{/if}
+<div class="laps" bind:this={lapsEl}>
   {#if phase === "connecting"}
     <p class="empty">Connecting to the coach server…</p>
   {:else if phase === "unreachable"}

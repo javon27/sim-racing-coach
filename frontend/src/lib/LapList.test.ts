@@ -51,6 +51,22 @@ describe("LapList", () => {
     expect(onselect).toHaveBeenCalledWith({ lap_id: 9, session_id: "S1" });
   });
 
+  it("shows a best-lap header with the fastest lap time", async () => {
+    vi.mocked(getStatus).mockResolvedValue(status("S1", 6));
+    vi.mocked(getSessionLaps).mockResolvedValue([
+      { id: 9, lap_time: 216.0, valid: 1, ts: 100 },
+      { id: 10, lap_time: 210.5, valid: 1, ts: 200 },
+    ]);
+
+    const { container } = render(LapList);
+
+    await screen.findByText(/Lap 10/);
+    const head = container.querySelector(".best-head");
+    expect(head).not.toBeNull();
+    expect(head!.textContent).toContain("Best");
+    expect(head!.textContent).toContain("3:30.500");
+  });
+
   it("review hold then snap: holds on the deep-linked session until a new live lap arrives", async () => {
     vi.mocked(getStatus).mockResolvedValue(status("S1", 5)); // live session already running
     vi.mocked(getSessionLaps).mockImplementation(async (sid: string) =>
