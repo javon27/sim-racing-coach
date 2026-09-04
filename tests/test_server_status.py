@@ -15,8 +15,9 @@ def test_status_offline_shape(tmp_path):
     r = _tc(tmp_path).get("/status")
     assert r.status_code == 200
     b = r.json()
-    assert set(b) == {"track", "car", "on_track", "has_map", "lmu_connected"}
+    assert set(b) == {"track", "car", "on_track", "has_map", "lmu_connected", "session_id", "lap_id"}
     assert b["has_map"] is False and b["lmu_connected"] is False and b["on_track"] is False
+    assert b["session_id"] is None and b["lap_id"] is None
 
 
 def test_status_on_track_from_latest(tmp_path, synthetic_lap):
@@ -30,3 +31,5 @@ def test_status_on_track_from_latest(tmp_path, synthetic_lap):
     assert b["on_track"] is True
     assert b["track"] == synthetic_lap.track
     assert b["car"] == synthetic_lap.car
+    assert b["session_id"] == synthetic_lap.session_id
+    assert b["lap_id"] == 1

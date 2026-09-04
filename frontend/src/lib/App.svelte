@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import { nextTheme, applyTheme, THEME_LABELS, THEME_ICONS, type ThemeMode } from "./theme";
   import SessionBar from "./SessionBar.svelte";
   import LapList from "./LapList.svelte";
@@ -20,7 +21,11 @@
     applyTheme(theme);
   }
 
-  function handleSelectSession(sessionId: string) {
+  async function handleSelectSession(sessionId: string) {
+    // Clear then re-set so re-selecting the SAME session is a real prop change,
+    // which re-arms LapList's review baseline (it may have snapped to live).
+    activeSessionId = undefined;
+    await tick();
     activeSessionId = sessionId;
     selectedSessionId = sessionId;
     screen = "coach";

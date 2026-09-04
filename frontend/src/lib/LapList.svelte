@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { getSessions, getSessionLaps, withRetry, type LapRow } from "./api";
+  import { getStatus, getSessionLaps, withRetry, type LapRow } from "./api";
 
   let {
     onselect,
@@ -22,6 +22,13 @@
   let phase: "connecting" | "ok" | "unreachable" = $state("connecting");
   let pollTimer: ReturnType<typeof setInterval> | undefined;
 
+  // Review state: `sessionId` prop is the review target (a past session deep-linked
+  // from Sessions). We hold on it until a NEW live lap arrives past the baseline
+  // (the live lap_id captured on the first poll after entering review).
+  let reviewTarget: string | null = null;
+  let reviewBaseline: number | null = null;
+  let reviewBaselineSet = false;
+
   function bestIdOf(l: LapRow[]): number | null {
     return (
       l.reduce<LapRow | null>(
@@ -32,23 +39,29 @@
   }
 
   async function fetchLatest() {
-    if (sessionId) {
-      currentSessionId = sessionId;
-      const l = await getSessionLaps(sessionId);
-      laps = l;
-      bestId = bestIdOf(l);
-      return;
+    const st = await getStatus();
+    const liveSessionId = st.session_id;
+    const liveLapId = st.lap_id;
+
+    if (reviewTarget !== null && !reviewBaselineSet) {
+      reviewBaseline = liveLapId;
+      reviewBaselineSet = true;
     }
-    const sessions = await getSessions();
-    if (sessions.length === 0) {
+
+    // Hold on the review target until a live lap advances past the baseline.
+    const reviewing =
+      reviewTarget !== null &&
+      !(liveLapId !== null && (reviewBaseline === null || liveLapId > reviewBaseline));
+    const target = reviewing ? reviewTarget : liveSessionId;
+
+    if (target === null) {
       laps = [];
       bestId = null;
       currentSessionId = null;
       return;
     }
-    const latest = [...sessions].sort((a, b) => b.last - a.last)[0];
-    currentSessionId = latest.session_id;
-    const l = await getSessionLaps(latest.session_id);
+    currentSessionId = target;
+    const l = await getSessionLaps(target);
     laps = l;
     bestId = bestIdOf(l);
   }
@@ -78,8 +91,12 @@
     }
   }
 
+  // Keyed on the prop: entering (or re-entering) review resets the baseline so
+  // the next poll re-snapshots the live lap_id.
   $effect(() => {
-    sessionId;
+    reviewTarget = sessionId ?? null;
+    reviewBaseline = null;
+    reviewBaselineSet = false;
     load();
   });
   onDestroy(() => {

@@ -13,6 +13,8 @@ export interface StatusResponse {
   on_track: boolean;
   has_map: boolean;
   lmu_connected: boolean;
+  session_id: string | null;
+  lap_id: number | null;
 }
 
 export interface SessionRow {

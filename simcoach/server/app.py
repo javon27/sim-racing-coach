@@ -86,9 +86,11 @@ def create_app(store, coach, cmap=None, rest=None) -> FastAPI:
     @app.get("/status")
     def status():
         latest = app.state.latest
+        session_id = lap_id = None
         if latest is not None:
             record = latest["record"]
             track, car, on_track = record.track, record.car, True
+            session_id, lap_id = record.session_id, latest["lap_id"]
         else:
             on_track = False
             track = car = None
@@ -104,6 +106,8 @@ def create_app(store, coach, cmap=None, rest=None) -> FastAPI:
             "on_track": on_track,
             "has_map": app.state.cmap is not None,
             "lmu_connected": app.state.rest is not None,
+            "session_id": session_id,
+            "lap_id": lap_id,
         }
 
     @app.get("/sessions")
