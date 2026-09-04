@@ -44,7 +44,10 @@ describe("TrackMap", () => {
     expect(screen.getByText("T2")).toBeTruthy();
     expect(container.querySelector("svg")).toBeTruthy();
     expect(container.querySelector("polyline")).toBeTruthy();
-    expect(container.querySelectorAll("text").length).toBe(2);
+    expect(container.querySelectorAll("text.corner-lbl").length).toBe(2);
+    // Start/finish marker + direction arrow are drawn from the path.
+    expect(container.querySelector("text.sf")).toBeTruthy();
+    expect(container.querySelector("polygon")).toBeTruthy();
   });
 
   it("shows the no-map note when the fetch returns an empty object", async () => {
