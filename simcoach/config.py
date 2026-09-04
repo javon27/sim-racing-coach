@@ -15,6 +15,7 @@ DEFAULTS = {
     "input_device": "wheel",      # "wheel" or "controller"
     "model": "sonnet",            # "opus" | "sonnet" | "haiku" -> make_model
     "corner_naming": "names",     # "names" or "numbers"
+    "log_level": "INFO",          # stdlib logging level name; see logging_setup
     "lmu_dir": None,              # override for lmu.install.lmu_userdata_dir()
     "lmu_player_names": [],       # alias set for result-log ingest matching (see lmu.results)
     "driver": {                   # DriverProfile fields; None = unset
@@ -28,6 +29,7 @@ ENV_OVERRIDES = {
     "input_device": "SIMCOACH_INPUT_DEVICE",
     "units": "SIMCOACH_UNITS",
     "model": "SIMCOACH_MODEL",
+    "log_level": "SIMCOACH_LOG_LEVEL",
 }
 
 

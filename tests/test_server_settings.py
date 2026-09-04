@@ -1,3 +1,5 @@
+import logging
+
 from fastapi.testclient import TestClient
 from simcoach.server.app import create_app
 from simcoach.store import LapStore
@@ -72,6 +74,14 @@ def test_post_api_key_rejects_empty(tmp_path, monkeypatch, mem_keyring):
     assert r.status_code == 400
     r2 = c.post("/settings/api-key", json={})
     assert r2.status_code == 400
+
+
+def test_put_settings_log_level_persists_and_applies_live(tmp_path, monkeypatch, mem_keyring):
+    c, _ = _client(tmp_path, monkeypatch, mem_keyring)
+    c.put("/settings", json={"log_level": "DEBUG"})
+    body = c.get("/settings").json()
+    assert body["log_level"] == "DEBUG"
+    assert logging.getLogger().level == logging.DEBUG
 
 
 def test_put_partial_driver_preserves_siblings(tmp_path, monkeypatch, mem_keyring):

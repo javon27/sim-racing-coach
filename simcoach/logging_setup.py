@@ -6,10 +6,29 @@ from __future__ import annotations
 import logging
 import logging.handlers
 
+from . import config
 from .paths import logs_dir
 
 _FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 _UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
+
+
+def _resolve_level(name: str | None) -> int:
+    level = getattr(logging, str(name).upper(), None)
+    return level if isinstance(level, int) else logging.INFO
+
+
+def apply_log_level(level: str) -> None:
+    """Re-set the root logger, uvicorn loggers, and our own handlers to
+    `level` at runtime (no restart needed). Invalid values fall back to INFO."""
+    resolved = _resolve_level(level)
+    root = logging.getLogger()
+    root.setLevel(resolved)
+    for name in _UVICORN_LOGGERS:
+        logging.getLogger(name).setLevel(resolved)
+    for h in root.handlers:
+        if getattr(h, "_simcoach_handler", False):
+            h.setLevel(resolved)
 
 
 def configure_logging() -> None:
@@ -34,7 +53,8 @@ def configure_logging() -> None:
 
     root.addHandler(file_handler)
     root.addHandler(console_handler)
-    root.setLevel(logging.INFO)
 
+    level = _resolve_level(config.load_config().get("log_level"))
+    root.setLevel(level)
     for name in _UVICORN_LOGGERS:
-        logging.getLogger(name).setLevel(logging.INFO)
+        logging.getLogger(name).setLevel(level)

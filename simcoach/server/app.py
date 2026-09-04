@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
-from .. import config, paths, secrets
+from .. import config, logging_setup, paths, secrets
 from ..analysis import analyze_lap
 from ..coach_tools import CoachContext
 from ..lmu.ingest import ingest_all
@@ -280,7 +280,10 @@ def create_app(store, coach, cmap=None, rest=None) -> FastAPI:
         # Whitelist to config.DEFAULTS keys before saving — this is the
         # secret-leak guard: an injected "key"/"api_key" field can never
         # reach the JSON file on disk.
-        config.save_config({k: body[k] for k in config.DEFAULTS if k in body})
+        whitelisted = {k: body[k] for k in config.DEFAULTS if k in body}
+        config.save_config(whitelisted)
+        if "log_level" in whitelisted:
+            logging_setup.apply_log_level(whitelisted["log_level"])
         return _settings_view()
 
     @app.post("/settings/api-key")
