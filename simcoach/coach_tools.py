@@ -16,6 +16,7 @@ from simcoach.format import (
     find_corner,
     format_corner_line,
     format_lap_facts,
+    format_laptime,
     format_tire_report,
     format_wheel_report,
 )
@@ -180,7 +181,7 @@ class CoachContext:
         for r in rows:
             valid = "valid" if r["valid"] else "INVALID"
             phase = f" [{r['phase']}]" if r["phase"] else ""
-            out.append(f"lap {r['lap_id']}: {r['lap_time']:.3f}s {valid}{phase}")
+            out.append(f"lap {r['lap_id']}: {format_laptime(r['lap_time'])} {valid}{phase}")
         return "\n".join(out)
 
     def get_lap_summary(self, which="latest"):

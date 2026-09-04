@@ -7,6 +7,16 @@ from __future__ import annotations
 import math
 
 
+def format_laptime(seconds) -> str:
+    """Race lap time as m:ss.mmm (e.g. 83.456 -> '1:23.456'), matching the UI lap
+    list. Non-finite/negative/None -> '—'."""
+    if seconds is None or not isinstance(seconds, (int, float)) or not math.isfinite(seconds) or seconds < 0:
+        return "—"
+    m = int(seconds // 60)
+    s = seconds - m * 60
+    return f"{m}:{s:06.3f}"
+
+
 def unit_fns(units: str = "metric"):
     """Return (speed_fn, temp_fn, speed_label, temp_label). Distances stay meters."""
     imperial = units == "imperial"
