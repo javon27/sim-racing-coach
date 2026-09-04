@@ -51,6 +51,10 @@ describe("CornerPanel", () => {
     expect(screen.getByText("↱", { exact: false })).toBeTruthy();
     const delta = await screen.findByText("+0.90s");
     expect(delta.className).toContain("up");
+    // Brake shown as metres BEFORE apex (apex_dist 1990 - brake_point 1980 = 10m),
+    // not the raw distance from start/finish (1980m).
+    expect(screen.getByText("10m")).toBeTruthy();
+    expect(screen.queryByText("1980m")).toBeNull();
   });
 
   it("renders a left-turn arrow and a down delta for a negative min_spd_delta", async () => {

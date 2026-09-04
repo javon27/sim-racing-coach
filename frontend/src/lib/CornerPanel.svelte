@@ -36,6 +36,13 @@
     const sign = delta > 0 ? "+" : "";
     return `${sign}${delta.toFixed(2)}s`;
   }
+
+  // brake_point/apex_dist are absolute lap-distances; show the brake point the way
+  // the coach does — metres BEFORE the apex — not the raw distance from S/F.
+  function brakeBeforeApex(c: CornerMetrics): string {
+    const d = c.apex_dist - c.brake_point;
+    return d > 0 ? `${d.toFixed(0)}m` : "—";
+  }
 </script>
 
 <div class="panel">
@@ -53,7 +60,7 @@
         <tr>
           <th>Corner</th>
           <th>Min</th>
-          <th>Brake</th>
+          <th title="metres before apex">Brake</th>
           <th>Trail</th>
           <th>Δ best</th>
         </tr>
@@ -65,7 +72,7 @@
               <span class="dir">{dirArrow(c.direction)}</span>T{c.corner_no} {c.name}
             </td>
             <td>{Number.isFinite(c.min_spd) ? c.min_spd.toFixed(0) : "—"}</td>
-            <td>{c.brake_point.toFixed(0)}m</td>
+            <td title="metres before apex">{brakeBeforeApex(c)}</td>
             <td>{(c.trailbrake_overlap * 100).toFixed(0)}%</td>
             <td
               class="delta"
