@@ -25,20 +25,43 @@ as fact and is told never to infer them. See the design doc:
 
 ## Running the coach
 
-Prerequisites:
-- **LMU running and you on track** (it reads live shared memory to detect the track
-  + car; it exits with a message if no session is found).
-- **`ANTHROPIC_API_KEY`** set in your environment. Optionally set
-  `SIMCOACH_MODEL_PROVIDER` (default `anthropic`).
+Two interfaces share the same core (capture → analysis → coach).
+
+### Desktop app (v1)
+
+A Tauri shell with a Svelte UI and a localhost FastAPI sidecar — coach chat, a
+sessions browser, and a settings screen. Dev run (needs Rust + Node):
+
+```
+cargo tauri dev        # from repo root — spawns the Python sidecar + Vite dev server
+```
+
+First run: open **Settings → AI**, paste your Anthropic API key and pick a model.
+The key is stored in the OS keyring (via `keyring` — Windows Credential Manager),
+never in a file, and **no environment variables are required**. App data — config,
+laps, telemetry, logs — lives under `%APPDATA%\SimCoach` (override with
+`SIMCOACH_DATA_DIR`).
+
+**Import history** (Settings → LMU history) backfills past sessions by parsing LMU
+result logs (`UserData/Log/Results/*.xml`) — no live capture needed. Set your LMU
+profile name(s) there so it can pick out your own laps.
+
+### Terminal
+
+The original CLI coach loop. Needs **LMU running with you on track** (it reads the
+live shared memory to detect track + car; exits if no session is found):
 
 ```
 .venv/Scripts/python.exe -m simcoach
 ```
 
-It detects your current track and car, loads (or auto-builds) the corner map, then:
-laps are captured in the background while you drive, and between laps you type
-questions — e.g. `where am I losing time?` — answered against your best stored lap
-on that track/car and your current setup. Type `quit` to exit.
+It loads (or auto-builds) the corner map, captures laps in the background while you
+drive, and between laps answers questions — e.g. `where am I losing time?` — against
+your best stored lap on that track/car and your current setup. Type `quit` to exit.
+The API key comes from the keyring (set it once in the app) or an `ANTHROPIC_API_KEY`
+override.
+
+The sidecar alone, for frontend dev: `python -m simcoach.server` (→ `127.0.0.1:8765`).
 
 ## Corner maps
 
@@ -83,7 +106,10 @@ python -m venv .venv
 
 ## Status
 
-v0.1 is wired end-to-end (live capture → analysis → coach) and unit-tested; the
-remaining step is a live shakedown at the rig. Deferred by design: voice, a web UI,
-side-by-side replay, multi-provider models beyond Anthropic, and automated
-corner-name enrichment.
+v1.0 is the standalone desktop app (Tauri + Svelte + FastAPI sidecar) built over the
+v0.1 core: live capture → per-corner analysis → streaming coach chat, plus a sessions
+browser, a settings screen (keyring-backed key, driver profile, data reset), and LMU
+result-log history import. Unit-tested (Python + frontend). Remaining: a shareable
+installer (Phase 6 packaging) and a full live shakedown at the rig. Deferred by
+design: voice, side-by-side replay, multi-provider models beyond Anthropic, and
+automated corner-name enrichment.
