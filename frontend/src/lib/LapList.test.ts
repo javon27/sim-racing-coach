@@ -51,9 +51,9 @@ describe("LapList", () => {
     expect(onselect).toHaveBeenCalledWith({ lap_id: 9, session_id: "S1" });
   });
 
-  it("renders per-sector delta bars colored vs session best, omits them when null", async () => {
+  it("renders per-sector delta bars colored vs the fastest lap, omits them when null", async () => {
     vi.mocked(getStatus).mockResolvedValue(status("S1", 6));
-    // Session best per sector = min over laps: s1=30.0 (lap9), s2=30.0 (lap10), s3=30.0 (lap9).
+    // Reference = fastest lap with sectors = lap9 (91.2s): S1 30.0, S2 30.5, S3 30.0.
     vi.mocked(getSessionLaps).mockResolvedValue([
       { id: 9, lap_time: 91.2, valid: 1, ts: 100, s1: 30.0, s2: 30.5, s3: 30.0 },
       { id: 10, lap_time: 91.5, valid: 1, ts: 200, s1: 30.5, s2: 30.0, s3: 30.5 },
@@ -67,16 +67,12 @@ describe("LapList", () => {
     expect(secRows.length).toBe(2); // only laps with sectors show delta bars
     expect(secRows[0].querySelectorAll("i").length).toBe(3); // one bar per sector
 
-    // Lap 9 (row 0): S1/S3 are the session best -> pb; S2 is slower -> up.
+    // Lap 9 IS the reference -> all sectors match -> pb.
     const bars9 = secRows[0].querySelectorAll("i");
-    expect(bars9[0].className).toBe("pb");
-    expect(bars9[1].className).toBe("up");
-    expect(bars9[2].className).toBe("pb");
-    // Lap 10 (row 1): S2 is the session best -> pb; S1/S3 slower -> up.
+    expect([...bars9].map((b) => b.className)).toEqual(["pb", "pb", "pb"]);
+    // Lap 10 vs lap9: S1 slower (up/red), S2 FASTER (down/green), S3 slower (up).
     const bars10 = secRows[1].querySelectorAll("i");
-    expect(bars10[0].className).toBe("up");
-    expect(bars10[1].className).toBe("pb");
-    expect(bars10[2].className).toBe("up");
+    expect([...bars10].map((b) => b.className)).toEqual(["up", "down", "up"]);
   });
 
   it("expanding a lap's chevron reveals the sector delta detail", async () => {
@@ -89,7 +85,7 @@ describe("LapList", () => {
     const { container } = render(LapList);
     await screen.findByText("Lap 1");
 
-    // Second lap's detail: S1 +0.50 (up), S2 best (pb), S3 +0.50 (up).
+    // Second lap's detail vs the fastest lap (lap9): S1 +0.50, S2 −0.50 (faster!), S3 +0.50.
     const wraps = container.querySelectorAll(".lapwrap");
     expect(wraps[1].classList.contains("open")).toBe(false);
 
@@ -101,7 +97,7 @@ describe("LapList", () => {
     expect(chev.getAttribute("aria-expanded")).toBe("true");
     const cells = wraps[1].querySelectorAll(".seccell .sv");
     expect(cells[0].textContent).toBe("+0.50");
-    expect(cells[1].textContent).toBe("best");
+    expect(cells[1].textContent).toBe("−0.50");
     expect(cells[2].textContent).toBe("+0.50");
   });
 

@@ -153,23 +153,21 @@
     return lap.s1 != null || lap.s2 != null || lap.s3 != null;
   }
 
-  // Session best per sector = min over the displayed laps (nulls ignored).
-  const bests = $derived({
-    s1: minSector(laps, "s1"),
-    s2: minSector(laps, "s2"),
-    s3: minSector(laps, "s3"),
-  });
-  function minSector(l: LapRow[], k: "s1" | "s2" | "s3"): number | null {
-    let m: number | null = null;
-    for (const lap of l) {
-      const v = lap[k];
-      if (v != null && (m === null || v < m)) m = v;
+  // Reference for sector deltas = the FASTEST lap that has sector data. Comparing
+  // each lap's sectors against that lap (not a per-sector min) is what makes a lap
+  // able to be faster (down/green) or slower (up/red) sector by sector — matching
+  // the prototype's delta view.
+  const bests = $derived.by(() => {
+    let ref: LapRow | null = null;
+    for (const l of laps) {
+      if (l.s1 == null && l.s2 == null && l.s3 == null) continue;
+      if (ref === null || l.lap_time < ref.lap_time) ref = l;
     }
-    return m;
-  }
+    return { s1: ref?.s1 ?? null, s2: ref?.s2 ?? null, s3: ref?.s3 ?? null };
+  });
 
-  // Per-sector delta vs session best. cls drives color: pb (is best) / up (slower)
-  // / down (faster than best — unreachable while best = min, kept for completeness).
+  // Per-sector delta vs the reference lap. cls drives color: pb (matches ref) /
+  // up (slower, red) / down (faster than the reference lap, green).
   type SecInfo = { label: string; cls: string; delta: string };
   function sectorCell(label: string, v: number | null, b: number | null): SecInfo {
     if (v == null || b == null) return { label, cls: "", delta: "—" };
