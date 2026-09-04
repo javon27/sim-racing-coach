@@ -289,10 +289,26 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                                session_id=session_id)
             car = ctx.car or "car"
 
+            # Thread the chat's prior turns so the coach continues the conversation
+            # instead of treating each question standalone (the system prompt tells it
+            # "the messages above are what you and the driver already said").
+            history: list[dict] = []
+            chat_id_in = req.get("chat_id")
+            if chat_id_in:
+                try:
+                    for row in app.state.store.chat_messages(chat_id_in):
+                        if row.get("question"):
+                            history.append({"role": "user", "content": row["question"]})
+                        if row.get("answer"):
+                            history.append({"role": "assistant", "content": row["answer"]})
+                except Exception:
+                    history = []
+
             text = ""
             try:
                 for ev in app.state.coach.ask_agentic_stream(
-                        ctx, question, car=car, input_device=req.get("input_device")):
+                        ctx, question, car=car, input_device=req.get("input_device"),
+                        history=history):
                     if ev["type"] == "text":
                         text += ev["text"]       # accumulate streamed deltas into the full answer
                     _emit(ev)

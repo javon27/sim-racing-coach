@@ -197,3 +197,46 @@ def test_ws_coach_error_without_text_persists_nothing(tmp_path, monkeypatch):
     assert events[-1]["type"] == "error"
     assert "chat_id" not in events[-1]
     assert store.list_chats() == []
+
+
+def test_ws_coach_threads_prior_chat_history(tmp_path):
+    # Regression: the WS worker must pass the chat's prior turns as history so the
+    # coach continues the conversation instead of treating each question standalone
+    # ("lost thread mid conversation"). Verify via FakeModel.last_messages.
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    fake = FakeModel(reply="Second answer.")
+    coach = Coach(fake, "simcoach/knowledge")
+    app = create_app(store, coach)
+    store.save_chat("c1", "s1", "trk", "car", None,
+                    "first question", "first answer", None)
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "second question", "chat_id": "c1"})
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"):
+                break
+
+    contents = [m["content"] for m in fake.last_messages]
+    assert "first question" in contents and "first answer" in contents
+    assert contents[-1] == "second question"
+    assert contents.index("first question") < contents.index("second question")
+
+
+def test_ws_coach_no_history_for_new_chat(tmp_path):
+    # A brand-new chat (no chat_id) threads no history -> just the question.
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    fake = FakeModel(reply="Answer.")
+    coach = Coach(fake, "simcoach/knowledge")
+    app = create_app(store, coach)
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "only question"})
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"):
+                break
+
+    assert [m["content"] for m in fake.last_messages] == ["only question"]
