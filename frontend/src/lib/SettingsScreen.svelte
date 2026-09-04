@@ -10,6 +10,7 @@
     type IngestResult,
   } from "./api";
   import { nextTheme, applyTheme, THEME_LABELS, type ThemeMode } from "./theme";
+  import InfoTip from "./InfoTip.svelte";
 
   const THEME_KEY = "simcoach-theme";
   const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -145,18 +146,18 @@
     <section class="grp">
       <h3>Display</h3>
       <div class="row">
-        <span class="lbl">Units</span>
+        <span class="lbl">Units<InfoTip text="Metric (km/h, °C) or imperial (mph, °F) for coach + telemetry readouts." /></span>
         <select bind:value={settings.units} onchange={saveConfig}>
           <option value="metric">Metric</option>
           <option value="imperial">Imperial</option>
         </select>
       </div>
       <div class="row">
-        <span class="lbl">Theme</span>
+        <span class="lbl">Theme<InfoTip text="Light, dark, or follow your system setting." /></span>
         <button type="button" onclick={toggleTheme}>{THEME_LABELS[theme]}</button>
       </div>
       <div class="row">
-        <span class="lbl">Corner naming</span>
+        <span class="lbl">Corner naming<InfoTip text="Show corner names (Copse) or just numbers (Turn 9)." /></span>
         <select bind:value={settings.corner_naming} onchange={saveConfig}>
           <option value="names">Names</option>
           <option value="numbers">Numbers</option>
@@ -167,7 +168,7 @@
     <section class="grp">
       <h3>Driving</h3>
       <div class="row">
-        <span class="lbl">Input device</span>
+        <span class="lbl">Input device<InfoTip text="Wheel or controller — the coach tailors driving cues to your input." /></span>
         <select bind:value={settings.input_device} onchange={saveConfig}>
           <option value="wheel">Wheel</option>
           <option value="controller">Controller</option>
@@ -178,7 +179,7 @@
     <section class="grp">
       <h3>AI / Coach</h3>
       <div class="row">
-        <span class="lbl">Model</span>
+        <span class="lbl">Model<InfoTip text="Which Claude model answers — Opus (deepest), Sonnet (balanced), Haiku (fastest)." /></span>
         <select bind:value={settings.model} onchange={saveConfig}>
           <option value="opus">Opus</option>
           <option value="sonnet">Sonnet</option>
@@ -186,7 +187,7 @@
         </select>
       </div>
       <div class="row">
-        <span class="lbl">API key</span>
+        <span class="lbl">API key<InfoTip text="Your Anthropic API key. Stored in the OS keyring, never in a file. Save, then Test to verify." /></span>
         <span class="badge">{settings.api_key_set ? "set ✓" : "not set"}</span>
       </div>
       <div class="row">
@@ -206,15 +207,15 @@
     <section class="grp">
       <h3>Driver profile</h3>
       <div class="row">
-        <span class="lbl">Braking style</span>
+        <span class="lbl">Braking style<InfoTip text="Part of your driver profile — e.g. trail-braker vs early-and-off. The coach factors this in." /></span>
         <input type="text" bind:value={settings.driver.braking_style} onchange={saveConfig} />
       </div>
       <div class="row">
-        <span class="lbl">Balance preference</span>
+        <span class="lbl">Balance preference<InfoTip text="Part of your driver profile — e.g. prefer understeer vs oversteer. The coach factors this in." /></span>
         <input type="text" bind:value={settings.driver.balance_preference} onchange={saveConfig} />
       </div>
       <div class="row">
-        <span class="lbl">Risk tolerance</span>
+        <span class="lbl">Risk tolerance<InfoTip text="Part of your driver profile — e.g. conservative vs aggressive. The coach factors this in." /></span>
         <input type="text" bind:value={settings.driver.risk_tolerance} onchange={saveConfig} />
       </div>
     </section>
@@ -222,7 +223,7 @@
     <section class="grp">
       <h3>LMU history</h3>
       <div class="row">
-        <span class="lbl">LMU dir</span>
+        <span class="lbl">LMU dir<InfoTip text="Folder where LMU stores UserData (result logs). Auto-detected; override if needed." /></span>
         <input type="text" bind:value={settings.lmu_dir} />
         {#if isTauri}
           <button type="button" onclick={browseLmuDir}>Browse…</button>
@@ -230,7 +231,7 @@
       </div>
       {#if browseStatus}<p class="status">{browseStatus}</p>{/if}
       <div class="row names">
-        <span class="lbl">Player names</span>
+        <span class="lbl">Player names<InfoTip text="Your in-game driver name(s), used to pick your own laps out of result logs." /></span>
         <ul>
           {#each settings.lmu_player_names as name, i (name + i)}
             <li>
@@ -258,11 +259,11 @@
     <section class="grp">
       <h3>Data</h3>
       <div class="row">
-        <span class="lbl">Data dir</span>
+        <span class="lbl">Data dir<InfoTip text="Where SimCoach stores its database, telemetry, and logs." /></span>
         <span class="val">{settings.data_dir}</span>
       </div>
       <div class="row">
-        <span class="lbl">Logging</span>
+        <span class="lbl">Logging<InfoTip text="Verbose adds DEBUG detail to the log file for troubleshooting." /></span>
         <select bind:value={settings.log_level} onchange={saveConfig}>
           <option value="INFO">Normal</option>
           <option value="DEBUG">Verbose</option>
