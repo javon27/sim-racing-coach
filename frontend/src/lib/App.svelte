@@ -30,7 +30,7 @@
   let lapsH = $state(280); // px; drives --laps-h on the rail
   let dragStartY = 0;
   let dragStartH = 0;
-  let draggingRail = false;
+  let draggingRail = $state(false);
   function railResizeDown(e: PointerEvent) {
     draggingRail = true;
     dragStartY = e.clientY;
