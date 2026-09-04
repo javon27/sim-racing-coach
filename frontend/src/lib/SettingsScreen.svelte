@@ -156,24 +156,6 @@
         <span class="lbl">Theme<InfoTip text="Light, dark, or follow your system setting." /></span>
         <button type="button" onclick={toggleTheme}>{THEME_LABELS[theme]}</button>
       </div>
-      <div class="row">
-        <span class="lbl">Corner naming<InfoTip text="Show corner names (Copse) or just numbers (Turn 9)." /></span>
-        <select bind:value={settings.corner_naming} onchange={saveConfig}>
-          <option value="names">Names</option>
-          <option value="numbers">Numbers</option>
-        </select>
-      </div>
-    </section>
-
-    <section class="grp">
-      <h3>Driving</h3>
-      <div class="row">
-        <span class="lbl">Input device<InfoTip text="Wheel or controller — the coach tailors driving cues to your input." /></span>
-        <select bind:value={settings.input_device} onchange={saveConfig}>
-          <option value="wheel">Wheel</option>
-          <option value="controller">Controller</option>
-        </select>
-      </div>
     </section>
 
     <section class="grp">
@@ -315,7 +297,7 @@
     height: 100%;
   }
   .settings-inner {
-    max-width: 680px;
+    max-width: 800px;
     margin: 0 auto;
     padding: 20px 26px;
   }
@@ -328,7 +310,7 @@
     background: var(--surface);
     border: 1px solid var(--line);
     border-radius: 12px;
-    padding: 14px 16px;
+    padding: 16px 18px;
     margin-bottom: 16px;
   }
   .grp h3 {
@@ -353,6 +335,11 @@
   .lbl {
     color: var(--muted);
     font-size: 13px;
+  }
+  .row > select,
+  .row > input[type="text"],
+  .row > input[type="password"] {
+    min-width: 200px;
   }
   .val {
     font-family: var(--mono);
