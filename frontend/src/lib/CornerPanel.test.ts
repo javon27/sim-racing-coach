@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/svelte";
-import { getLapAnalysis } from "./api";
+import { getLapAnalysis, getSettings } from "./api";
 import CornerPanel from "./CornerPanel.svelte";
 
 vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
-  return { ...actual, getLapAnalysis: vi.fn() };
+  return { ...actual, getLapAnalysis: vi.fn(), getSettings: vi.fn() };
 });
 
 const cornerFixture = {
@@ -29,6 +29,8 @@ const cornerFixture = {
 describe("CornerPanel", () => {
   beforeEach(() => {
     vi.mocked(getLapAnalysis).mockReset();
+    vi.mocked(getSettings).mockReset();
+    vi.mocked(getSettings).mockResolvedValue({ units: "metric" } as never);
   });
 
   afterEach(cleanup);
@@ -49,15 +51,16 @@ describe("CornerPanel", () => {
 
     expect(await screen.findByText(/T4 Mulsanne Corner/)).toBeTruthy();
     expect(screen.getByText("↱", { exact: false })).toBeTruthy();
-    const delta = await screen.findByText("+0.90s");
-    expect(delta.className).toContain("up");
+    // +0.9 km/h = carried MORE speed than best -> faster -> green (down class).
+    const delta = await screen.findByText("+0.9");
+    expect(delta.className).toContain("down");
     // Brake shown as metres BEFORE apex (apex_dist 1990 - brake_point 1980 = 10m),
     // not the raw distance from start/finish (1980m).
     expect(screen.getByText("10m")).toBeTruthy();
     expect(screen.queryByText("1980m")).toBeNull();
   });
 
-  it("renders a left-turn arrow and a down delta for a negative min_spd_delta", async () => {
+  it("renders a left-turn arrow and a red delta for a negative (slower) min_spd_delta", async () => {
     vi.mocked(getLapAnalysis).mockResolvedValue({
       lap_time: 216.0,
       corners: [{ ...cornerFixture, direction: "left", min_spd_delta: -0.2 }],
@@ -67,8 +70,9 @@ describe("CornerPanel", () => {
 
     expect(await screen.findByText(/T4 Mulsanne Corner/)).toBeTruthy();
     expect(screen.getByText("↰", { exact: false })).toBeTruthy();
-    const delta = await screen.findByText("-0.20s");
-    expect(delta.className).toContain("down");
+    // −0.2 km/h = less speed than best -> slower -> red (up class).
+    const delta = await screen.findByText("−0.2");
+    expect(delta.className).toContain("up");
   });
 
   it("shows a graceful no-analysis message when the fetch is rejected (e.g. a result-imported lap with no telemetry)", async () => {

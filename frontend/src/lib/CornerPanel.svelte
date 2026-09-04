@@ -1,10 +1,26 @@
 <script lang="ts">
-  import { getLapAnalysis, type CornerMetrics } from "./api";
+  import { onMount } from "svelte";
+  import { getLapAnalysis, getSettings, type CornerMetrics } from "./api";
 
   let { lapId }: { lapId: number | null } = $props();
 
   let corners: CornerMetrics[] = $state([]);
   let phase: "empty" | "loading" | "ok" | "error" = $state("empty");
+  let units: "metric" | "imperial" = $state("metric");
+
+  // Analysis speeds are km/h; convert for display + label the unit.
+  const spdUnit = $derived(units === "imperial" ? "mph" : "km/h");
+  function spd(v: number): number {
+    return units === "imperial" ? v * 0.621371 : v;
+  }
+
+  onMount(async () => {
+    try {
+      units = (await getSettings()).units;
+    } catch {
+      units = "metric";
+    }
+  });
 
   $effect(() => {
     const id = lapId;
@@ -31,10 +47,14 @@
     return direction === "left" ? "↰" : "↱";
   }
 
+  // min_spd_delta is a SPEED delta (this lap's min corner speed − your best lap's),
+  // in km/h. Positive = you carried MORE speed here = faster. Show it in the display
+  // unit with a sign, never a "s" (it isn't a time).
   function formatDelta(delta: number | null): string {
     if (delta === null) return "—";
-    const sign = delta > 0 ? "+" : "";
-    return `${sign}${delta.toFixed(2)}s`;
+    const v = spd(delta);
+    const sign = v > 0 ? "+" : v < 0 ? "−" : "";
+    return `${sign}${Math.abs(v).toFixed(1)}`;
   }
 
   // brake_point/apex_dist are absolute lap-distances; show the brake point the way
@@ -59,10 +79,10 @@
       <thead>
         <tr>
           <th>Corner</th>
-          <th>Min</th>
-          <th title="metres before apex">Brake</th>
-          <th>Trail</th>
-          <th>Δ best</th>
+          <th title="Minimum speed through the corner">Min {spdUnit}</th>
+          <th title="Where you get on the brakes, in metres before the apex">Brake</th>
+          <th title="Trail-braking: % of the corner you're still on the brakes past turn-in">Trail</th>
+          <th title="Your min corner speed vs your best lap ({spdUnit}). + / green = you carried more speed (faster); − / red = slower.">Δ best</th>
         </tr>
       </thead>
       <tbody>
@@ -71,13 +91,13 @@
             <td class="cname">
               <span class="dir">{dirArrow(c.direction)}</span>T{c.corner_no} {c.name}
             </td>
-            <td>{Number.isFinite(c.min_spd) ? c.min_spd.toFixed(0) : "—"}</td>
+            <td>{Number.isFinite(c.min_spd) ? spd(c.min_spd).toFixed(0) : "—"}</td>
             <td title="metres before apex">{brakeBeforeApex(c)}</td>
             <td>{(c.trailbrake_overlap * 100).toFixed(0)}%</td>
             <td
               class="delta"
-              class:up={c.min_spd_delta !== null && c.min_spd_delta > 0}
-              class:down={c.min_spd_delta !== null && c.min_spd_delta <= 0}
+              class:down={c.min_spd_delta !== null && c.min_spd_delta > 0}
+              class:up={c.min_spd_delta !== null && c.min_spd_delta < 0}
             >
               {formatDelta(c.min_spd_delta)}
             </td>
