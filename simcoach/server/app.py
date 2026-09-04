@@ -278,19 +278,30 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             # Blocking I/O (store.load, rest.get_setup) lives here, off the event
             # loop, so a hung LMU REST call can't freeze the whole server.
             record = None
-            if lap_id is not None:
-                try: record = app.state.store.load(lap_id)
+            eff_lap_id = lap_id
+            eff_session_id = session_id
+            if eff_lap_id is not None:
+                try: record = app.state.store.load(eff_lap_id)
                 except Exception: record = None
+            # Auto-anchor to the LIVE session when the client didn't pick a lap or
+            # session, so the coach already knows the current session + its latest
+            # lap without the driver having to click one (the auto-context goal).
+            latest = app.state.latest
+            if record is None and latest is not None:
+                record = latest["record"]
+                eff_lap_id = latest["lap_id"]
+            if eff_session_id is None and latest is not None:
+                eff_session_id = latest["record"].session_id
             setup = {}
             rest = _ensure_rest()
             if rest:
                 try: setup = rest.get_setup()
                 except Exception: setup = {}
             cmap = _map_for(record.track) if record is not None else _map_for(_live_track())
-            ctx = CoachContext(app.state.store, record=record, lap_id=lap_id, cmap=cmap,
+            ctx = CoachContext(app.state.store, record=record, lap_id=eff_lap_id, cmap=cmap,
                                setup=setup, on_track=record is not None,
                                allowed_adjustments=(legal_adjustments(setup) if setup else None),
-                               session_id=session_id)
+                               session_id=eff_session_id)
             car = ctx.car or "car"
 
             # Thread the chat's prior turns so the coach continues the conversation
@@ -329,7 +340,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             if terminal["type"] == "done" or text:
                 try:
                     chat_id = req.get("chat_id") or app.state.store.create_chat()
-                    app.state.store.save_chat(chat_id, ctx.session_id, ctx.track, ctx.car, lap_id,
+                    app.state.store.save_chat(chat_id, ctx.session_id, ctx.track, ctx.car, ctx.lap_id,
                                               question, text, ctx.tool_calls)
                     terminal["chat_id"] = chat_id
                 except Exception:

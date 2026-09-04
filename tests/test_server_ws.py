@@ -240,3 +240,29 @@ def test_ws_coach_no_history_for_new_chat(tmp_path):
                 break
 
     assert [m["content"] for m in fake.last_messages] == ["only question"]
+
+
+def test_ws_coach_auto_anchors_to_live_session(tmp_path, synthetic_lap):
+    # With no session_id/lap_id in the request, the coach must anchor to the LIVE
+    # session (app.state.latest) so it knows the current laps without the driver
+    # selecting one. Verify via the persisted chat's session stamp.
+    from simcoach.model_types import LapRecord
+
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    rec = LapRecord(**{**synthetic_lap.__dict__, "session_id": "live-s"})
+    lap_id = store.save(rec)
+    coach = Coach(FakeModel(reply="ok"), "simcoach/knowledge")
+    app = create_app(store, coach)
+    app.state.latest = {"record": rec, "lap_id": lap_id}
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "how's it going"})  # no session_id / lap_id
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"):
+                break
+
+    msgs = store.chat_messages(ev["chat_id"])
+    assert msgs[0]["session_id"] == "live-s"
+    assert msgs[0]["lap_id"] == lap_id

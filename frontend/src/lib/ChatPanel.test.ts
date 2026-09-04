@@ -39,28 +39,24 @@ describe("ChatPanel", () => {
 
   afterEach(cleanup);
 
-  it("loads and renders the most recent chat's history", async () => {
+  it("cold load starts an empty new chat (does NOT auto-open an old chat)", async () => {
+    // Past chats exist, but a fresh app load must NOT surprise the driver by
+    // opening one — it shows the empty new-chat state; the dropdown lists them.
     vi.mocked(getChats).mockResolvedValue([
       { chat_id: "c1", started: 1, last: 2, message_count: 1, tracks: "Le Mans" },
     ]);
     vi.mocked(getChatMessages).mockResolvedValue([
-      {
-        ts: 1,
-        session_id: "s1",
-        track: "Le Mans",
-        car: "Corvette",
-        lap_id: 9,
-        question: "where do I brake?",
-        answer: "Brake later into T3.",
-        tool_calls: null,
-      },
+      { ts: 1, session_id: "s1", track: "Le Mans", car: "Corvette", lap_id: 9,
+        question: "where do I brake?", answer: "Brake later into T3.", tool_calls: null },
     ]);
     const stream = new FakeStream();
 
     render(ChatPanel, { props: { stream } });
 
-    expect(await screen.findByText("where do I brake?")).toBeTruthy();
-    expect(await screen.findByText(/Brake later into T3\./)).toBeTruthy();
+    expect(await screen.findByText(/new chat — ask a question/i)).toBeTruthy();
+    expect(screen.queryByText("where do I brake?")).toBeNull();
+    // Past chat is still offered in the switcher for manual resume.
+    expect(await screen.findByRole("option", { name: /Le Mans/ })).toBeTruthy();
   });
 
   it("sends a question, then renders the live coach bubble as the stream fills in", async () => {
@@ -170,7 +166,7 @@ describe("ChatPanel", () => {
     ]);
     const stream = new FakeStream();
 
-    render(ChatPanel, { props: { stream } });
+    render(ChatPanel, { props: { stream, chatId: "c1" } });
     expect(await screen.findByText("old question")).toBeTruthy();
 
     await fireEvent.click(screen.getByRole("button", { name: /new chat/i }));
@@ -195,7 +191,7 @@ describe("ChatPanel", () => {
     );
     const stream = new FakeStream();
 
-    render(ChatPanel, { props: { stream } });
+    render(ChatPanel, { props: { stream, chatId: "c1" } });
     expect(await screen.findByText("lemans question")).toBeTruthy();
 
     const switcher = screen.getByRole("combobox", { name: /switch chat/i });

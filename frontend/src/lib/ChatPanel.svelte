@@ -123,23 +123,6 @@
     }
   }
 
-  // No chat pinned by the caller: show the most-recent chat, or an empty thread.
-  async function loadLatest() {
-    try {
-      const rows = await getChats();
-      chats = rows;
-      if (rows.length) {
-        await loadThread(rows[0].chat_id);
-      } else {
-        currentChatId = undefined;
-        messages = [];
-      }
-    } catch {
-      currentChatId = undefined;
-      messages = [];
-    }
-  }
-
   function newChat() {
     currentChatId = undefined;
     messages = [];
@@ -155,17 +138,16 @@
     return `${c.tracks || "Chat"} · ${when}`;
   }
 
-  // Follow the chatId prop: a pinned id opens that thread; null opens an empty
-  // new chat (a session that has no chat yet — don't show an unrelated latest);
-  // undefined falls back to the latest chat. Runs on mount (prop starts undefined).
+  // Follow the chatId prop: a pinned id opens that thread; otherwise (null = a
+  // session with no chat, or undefined = cold app load) start an EMPTY new chat.
+  // We don't auto-open an old chat — that surprised the driver at the start of a
+  // new session; the switcher dropdown still lets them resume any past chat.
   $effect(() => {
     const pinned = chatId;
     if (pinned) {
       loadThread(pinned);
-    } else if (pinned === null) {
-      newChat();
     } else {
-      loadLatest();
+      newChat();
     }
   });
 
