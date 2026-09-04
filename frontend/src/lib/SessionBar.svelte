@@ -49,6 +49,15 @@
   onDestroy(() => {
     if (pollTimer !== undefined) clearInterval(pollTimer);
   });
+
+  // Game connection state for the header indicator.
+  const gameStatus = $derived(
+    status?.on_track
+      ? { label: "On track", cls: "on" }
+      : status?.lmu_connected
+        ? { label: "Connected", cls: "idle" }
+        : { label: "LMU offline", cls: "off" },
+  );
 </script>
 
 <header class="bar">
@@ -61,6 +70,9 @@
     </div>
   {:else}
     <div class="brand"><span class="dot"></span><b>PIT WALL</b></div>
+    <div class="game-status {gameStatus.cls}">
+      <span class="ind"></span>{gameStatus.label}
+    </div>
     <div class="stat"><span class="k">Track</span><span class="v">{status?.track ?? "—"}</span></div>
     <div class="stat"><span class="k">Car</span><span class="v">{status?.car ?? "—"}</span></div>
     <div class="stat"><span class="k">Units</span><span class="v">{units ?? "—"}</span></div>
@@ -70,3 +82,34 @@
     <div class="stat"><span class="k">Tier</span><span class="v">—</span></div>
   {/if}
 </header>
+
+<style>
+  .game-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--display);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 3px 9px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+  }
+  .game-status .ind {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+  .game-status.on {
+    color: var(--good, #2ecc71);
+  }
+  .game-status.idle {
+    color: var(--muted, #888);
+  }
+  .game-status.off {
+    color: var(--bad, #e74c3c);
+  }
+</style>

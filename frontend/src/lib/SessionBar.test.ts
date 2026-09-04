@@ -43,6 +43,34 @@ describe("SessionBar", () => {
     expect(screen.getByText("metric")).toBeTruthy();
   });
 
+  it("shows the game connection status (On track / Connected / LMU offline)", async () => {
+    const settings = {
+      units: "metric" as const,
+      input_device: "wheel" as const,
+      model: "sonnet" as const,
+      corner_naming: "names" as const,
+      driver: { braking_style: null, balance_preference: null, risk_tolerance: null },
+      api_key_set: true,
+      data_dir: "x",
+      app_version: "0.1",
+      lmu_build: null,
+    };
+    vi.mocked(getSettings).mockResolvedValue(settings as never);
+
+    vi.mocked(getStatus).mockResolvedValue({
+      track: "Le Mans", car: "C8", on_track: true, has_map: true, lmu_connected: true,
+    } as never);
+    const { unmount } = render(SessionBar);
+    expect(await screen.findByText("On track")).toBeTruthy();
+    unmount();
+
+    vi.mocked(getStatus).mockResolvedValue({
+      track: null, car: null, on_track: false, has_map: false, lmu_connected: false,
+    } as never);
+    render(SessionBar);
+    expect(await screen.findByText("LMU offline")).toBeTruthy();
+  });
+
   it("retries through transient failures and eventually renders data", async () => {
     vi.mocked(getStatus)
       .mockRejectedValueOnce(new Error("network"))
