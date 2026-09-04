@@ -11,7 +11,9 @@
   }: {
     sessionId?: string;
     lapId?: number;
-    chatId?: string;
+    // undefined = show the latest chat; null = a session with no chat was opened
+    // (show an empty new chat); string = open that chat.
+    chatId?: string | null;
     stream?: {
       phase: CoachPhase;
       toolActivity: ToolActivity | null;
@@ -153,12 +155,15 @@
     return `${c.tracks || "Chat"} · ${when}`;
   }
 
-  // Follow the chatId prop: a pinned id opens that thread; undefined falls back
-  // to latest/empty. Runs on mount too (prop starts undefined).
+  // Follow the chatId prop: a pinned id opens that thread; null opens an empty
+  // new chat (a session that has no chat yet — don't show an unrelated latest);
+  // undefined falls back to the latest chat. Runs on mount (prop starts undefined).
   $effect(() => {
     const pinned = chatId;
     if (pinned) {
       loadThread(pinned);
+    } else if (pinned === null) {
+      newChat();
     } else {
       loadLatest();
     }

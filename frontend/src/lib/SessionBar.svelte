@@ -69,7 +69,7 @@
       <button type="button" onclick={load}>Retry</button>
     </div>
   {:else}
-    <div class="brand"><span class="dot"></span><b>PIT WALL</b></div>
+    <div class="brand"><span class="dot"></span><b>SIMCOACH</b></div>
     <div class="game-status {gameStatus.cls}">
       <span class="ind"></span>{gameStatus.label}
     </div>

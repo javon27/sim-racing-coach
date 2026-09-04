@@ -523,7 +523,7 @@ body {
   padding: 24px 26px 8px;
 }
 .thread {
-  max-width: 680px;
+  max-width: 820px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
@@ -547,6 +547,17 @@ body {
   background: var(--surface-2);
   color: var(--muted);
   border: 1px solid var(--line);
+}
+/* Right-align the driver's own messages, chat-app style. */
+.msg.you {
+  flex-direction: row-reverse;
+}
+.msg.you .bubble {
+  flex: 0 1 auto;
+  max-width: 78%;
+}
+.msg.you .bubble .name {
+  text-align: right;
 }
 .msg.coach .who {
   background: var(--accent);
@@ -640,7 +651,7 @@ body {
   background: var(--surface);
 }
 .composer .wrap {
-  max-width: 680px;
+  max-width: 820px;
   margin: 0 auto;
   display: flex;
   gap: 10px;

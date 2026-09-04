@@ -144,6 +144,23 @@ describe("ChatPanel", () => {
     expect(screen.queryByText("lemans question")).toBeNull();
   });
 
+  it("chatId=null (session with no chat) shows an empty new chat, not the latest", async () => {
+    // getChats has a recent chat, but a chatless session was opened (chatId=null),
+    // so the panel must NOT load that latest chat — it shows the empty new-chat state.
+    vi.mocked(getChats).mockResolvedValue([
+      { chat_id: "c1", started: 1, last: 2, message_count: 1, tracks: "Le Mans" },
+    ]);
+    vi.mocked(getChatMessages).mockResolvedValue([
+      { ts: 1, session_id: "s1", track: "Le Mans", car: "Corvette", lap_id: null, question: "old question", answer: "old answer", tool_calls: null },
+    ]);
+    const stream = new FakeStream();
+
+    render(ChatPanel, { props: { stream, chatId: null } });
+
+    expect(await screen.findByText(/new chat — ask a question/i)).toBeTruthy();
+    expect(screen.queryByText("old question")).toBeNull();
+  });
+
   it("+ New chat empties the thread and the next ask starts a fresh chat", async () => {
     vi.mocked(getChats).mockResolvedValue([
       { chat_id: "c1", started: 1, last: 2, message_count: 1, tracks: "Le Mans" },

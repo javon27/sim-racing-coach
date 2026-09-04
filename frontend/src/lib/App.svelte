@@ -16,7 +16,10 @@
   let selectedLapId: number | undefined = $state(undefined);
   let selectedSessionId: string | undefined = $state(undefined);
   let activeSessionId: string | undefined = $state(undefined);
-  let activeChatId: string | undefined = $state(undefined);
+  // undefined = no session context (ChatPanel shows the latest chat);
+  // null = a session was opened that has NO chat (show an empty new chat);
+  // string = open that specific chat.
+  let activeChatId: string | null | undefined = $state(undefined);
 
   function toggleTheme() {
     theme = nextTheme(theme);
@@ -30,12 +33,13 @@
     await tick();
     activeSessionId = sessionId;
     selectedSessionId = sessionId;
-    // Open the chat that discussed this session (undefined -> ChatPanel keeps
-    // showing latest/empty). Clear-then-set so re-selecting the same chat still
-    // registers as a prop change in ChatPanel.
+    // Open the chat that discussed this session. A session with NO chat resolves
+    // to null (empty new chat) — NOT undefined (which would fall back to "latest"
+    // and confusingly open an unrelated chat). Clear-then-set so re-selecting the
+    // same session still registers as a prop change in ChatPanel.
     activeChatId = undefined;
     await tick();
-    activeChatId = chatId;
+    activeChatId = chatId ?? null;
     screen = "coach";
   }
 </script>
