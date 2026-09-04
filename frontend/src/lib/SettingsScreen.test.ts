@@ -143,6 +143,18 @@ describe("SettingsScreen", () => {
     expect(await screen.findByText(/imported 7 sessions, 2 unmatched/i)).toBeTruthy();
   });
 
+  it("without Tauri, no Browse button and the LMU dir input is editable", async () => {
+    vi.mocked(getSettings).mockResolvedValue(baseSettings({ lmu_dir: "C:/lmu" }));
+
+    render(SettingsScreen);
+
+    const input = (await screen.findByDisplayValue("C:/lmu")) as HTMLInputElement;
+    expect(screen.queryByRole("button", { name: /browse/i })).toBeNull();
+
+    await fireEvent.input(input, { target: { value: "C:/other" } });
+    expect(input.value).toBe("C:/other");
+  });
+
   it("Reset confirms before calling clearData", async () => {
     vi.mocked(getSettings).mockResolvedValue(baseSettings());
     vi.mocked(clearData).mockResolvedValue({ cleared: true });

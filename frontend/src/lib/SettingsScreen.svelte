@@ -12,6 +12,9 @@
   import { nextTheme, applyTheme, THEME_LABELS, type ThemeMode } from "./theme";
 
   const THEME_KEY = "simcoach-theme";
+  const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+  let browseStatus: string | null = $state(null);
 
   let settings: SettingsResponse | null = $state(null);
   let phase: "loading" | "ok" | "error" = $state("loading");
@@ -97,6 +100,21 @@
 
   function saveLmuSettings() {
     saveConfig();
+  }
+
+  async function browseLmuDir() {
+    if (!settings) return;
+    browseStatus = null;
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const path = await open({ directory: true, multiple: false });
+      if (typeof path === "string") {
+        settings.lmu_dir = path;
+        saveConfig();
+      }
+    } catch (e) {
+      browseStatus = "Could not open folder picker.";
+    }
   }
 
   async function runImport() {
@@ -206,7 +224,11 @@
       <div class="row">
         <span class="lbl">LMU dir</span>
         <input type="text" bind:value={settings.lmu_dir} />
+        {#if isTauri}
+          <button type="button" onclick={browseLmuDir}>Browse…</button>
+        {/if}
       </div>
+      {#if browseStatus}<p class="status">{browseStatus}</p>{/if}
       <div class="row names">
         <span class="lbl">Player names</span>
         <ul>
