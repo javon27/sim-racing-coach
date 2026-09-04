@@ -169,12 +169,14 @@ class LapStore:
         telemetry_path = None
         try:
             with self._lock, self.conn:
+                def _sec(i):
+                    return record.sectors[i] if record.sectors and len(record.sectors) > i else None
                 cur = self.conn.execute(
                     "INSERT INTO laps (ts, sim, track, car, lap_time, valid, telemetry_path, "
-                    "phase, session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "phase, session_id, s1, s2, s3) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (record.timestamp, record.sim, record.track, record.car,
                      record.lap_time, int(record.valid), None,
-                     record.phase, record.session_id),
+                     record.phase, record.session_id, _sec(0), _sec(1), _sec(2)),
                 )
                 lap_id = cur.lastrowid
                 telemetry_path = os.path.join(self.data_dir, f"{lap_id}.npz")

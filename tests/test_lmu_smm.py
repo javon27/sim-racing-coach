@@ -18,11 +18,30 @@ from simcoach.lmu.rf2structs import (
 from simcoach.lmu.smm import (
     build_lap_record,
     compatibility_check,
+    compute_sectors,
     open_first_available,
     sample_from_telem,
     telemetry_is_sane,
     version_ok,
 )
+
+
+def test_compute_sectors_reconciling_values():
+    # mLastSector2 is cumulative (s1+s2); lap = 91.2
+    assert compute_sectors(30.1, 60.3, 91.2) == pytest.approx([30.1, 30.2, 30.9])
+
+
+def test_compute_sectors_bad_convention_returns_none():
+    # If mLastSector2 were ISOLATED (just s2 ~30, not cumulative ~60), it reads
+    # < s1, so the derived s2 = last_s2 - last_s1 goes negative -> guard rejects
+    # rather than store garbage.
+    assert compute_sectors(30.1, 29.0, 91.2) is None
+
+
+def test_compute_sectors_nonpositive_returns_none():
+    assert compute_sectors(0.0, 60.0, 91.0) is None          # s1 <= 0
+    assert compute_sectors(60.3, 30.1, 91.2) is None          # s2 <= 0 (s2 = -30.2)
+    assert compute_sectors(30.1, 91.2, 91.2) is None          # s3 <= 0
 
 
 def make_telem(**overrides) -> TelemInfoV01:

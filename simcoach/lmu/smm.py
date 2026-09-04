@@ -303,6 +303,28 @@ def session_id_for(track: str, car: str, online: bool) -> str:
     return f"{_slug(track)}--{_slug(car)}--{'online' if online else 'offline'}"
 
 
+def compute_sectors(
+    last_s1: float, last_s2: float, last_lap_time: float
+) -> list[float] | None:
+    """Split a completed lap into [s1, s2, s3], or None if the numbers don't
+    reconcile with the lap time.
+
+    # ponytail: mLastSector1 is s1 and mLastSector2 is CUMULATIVE (s1+s2) --
+    # the documented rF2/rF2SMMP convention. The real safety here is the all-
+    # positive check: if the convention is wrong (e.g. mLastSector2 is isolated
+    # s2, so it's < s1), a derived sector goes <= 0 and we store None rather than
+    # garbage. The sum-check is belt-and-suspenders (algebraically it always
+    # equals last_lap_time under this derivation) -- keep it so a future change
+    # to how s3 is sourced still has to reconcile. Live-verify on the rig.
+    """
+    s1 = last_s1
+    s2 = last_s2 - last_s1
+    s3 = last_lap_time - last_s2
+    if s1 > 0 and s2 > 0 and s3 > 0 and abs((s1 + s2 + s3) - last_lap_time) <= 0.5:
+        return [s1, s2, s3]
+    return None
+
+
 def build_lap_record(
     sim: str,
     track: str,
@@ -313,6 +335,7 @@ def build_lap_record(
     channels: dict[str, list[float]],
     phase: str | None = None,
     session_id: str | None = None,
+    sectors: list[float] | None = None,
 ) -> LapRecord | None:
     """Pure decision: turn a completed lap's raw fields into a LapRecord, or
     None if the lap shouldn't be stored.
@@ -334,6 +357,7 @@ def build_lap_record(
         channels={k: np.array(v) for k, v in channels.items()},
         phase=phase,
         session_id=session_id,
+        sectors=sectors,
     )
 
 
@@ -434,10 +458,14 @@ class LmuSource:
                     car = vt.mVehicleName.decode(errors="replace")
                     phase = session_phase(scoring.mScoringInfo.mSession)
                     session_id = session_id_for(track, car, _is_online(scoring))
+                    sectors = compute_sectors(
+                        player.mLastSector1, player.mLastSector2, lap_time
+                    )
                     record = build_lap_record(
                         sim="lmu", track=track, car=car, lap_time=lap_time,
                         invalidated=vt.mLapInvalidated, timestamp=time.time(),
                         channels=channels, phase=phase, session_id=session_id,
+                        sectors=sectors,
                     )
                     if record is not None:
                         committed_time = lap_time

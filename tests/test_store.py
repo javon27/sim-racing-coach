@@ -457,3 +457,22 @@ def test_is_ingested_and_mark_ingested_round_trip(tmp_path):
     # marking again (re-ingest after mtime change) updates cleanly, no crash
     s.mark_ingested("some/file.xml", 200.0)
     assert s.is_ingested("some/file.xml", 200.0) is True
+
+
+def test_save_persists_live_sectors(tmp_path, synthetic_lap):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    lap = LapRecord(**{**synthetic_lap.__dict__,
+                       "session_id": "s-sec", "sectors": [30.1, 30.2, 30.9]})
+    s.save(lap)
+    row = s.session_laps("s-sec")[0]
+    assert (row["s1"], row["s2"], row["s3"]) == (30.1, 30.2, 30.9)
+
+
+def test_save_without_sectors_writes_null(tmp_path, synthetic_lap):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    lap = LapRecord(**{**synthetic_lap.__dict__, "session_id": "s-none", "sectors": None})
+    s.save(lap)
+    row = s.session_laps("s-none")[0]
+    assert row["s1"] is None and row["s2"] is None and row["s3"] is None

@@ -13,3 +13,4 @@ class LapRecord:
     channels: dict[str, np.ndarray]
     phase: str | None = None
     session_id: str | None = None
+    sectors: list[float] | None = None
