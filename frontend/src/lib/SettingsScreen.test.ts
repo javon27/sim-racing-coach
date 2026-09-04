@@ -36,6 +36,7 @@ function baseSettings(overrides: Partial<SettingsResponse> = {}): SettingsRespon
     input_device: "wheel",
     model: "sonnet",
     corner_naming: "names",
+    log_level: "INFO",
     driver: { braking_style: null, balance_preference: null, risk_tolerance: null },
     api_key_set: false,
     data_dir: "C:/data",
@@ -82,6 +83,20 @@ describe("SettingsScreen", () => {
 
     expect(putSettings).toHaveBeenCalledWith(
       expect.objectContaining({ units: "imperial" })
+    );
+  });
+
+  it("switching to Verbose calls putSettings with log_level DEBUG", async () => {
+    vi.mocked(getSettings).mockResolvedValue(baseSettings({ log_level: "INFO" }));
+    vi.mocked(putSettings).mockResolvedValue(baseSettings({ log_level: "DEBUG" }));
+
+    render(SettingsScreen);
+
+    const select = await screen.findByDisplayValue("Normal");
+    await fireEvent.change(select, { target: { value: "DEBUG" } });
+
+    expect(putSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ log_level: "DEBUG" })
     );
   });
 

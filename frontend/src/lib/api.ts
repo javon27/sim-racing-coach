@@ -85,6 +85,7 @@ export interface SettingsResponse {
   input_device: "wheel" | "controller";
   model: "opus" | "sonnet" | "haiku";
   corner_naming: "names" | "numbers";
+  log_level: string;
   driver: DriverProfile;
   api_key_set: boolean;
   data_dir: string;

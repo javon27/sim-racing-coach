@@ -56,6 +56,7 @@
       driver: settings.driver,
       lmu_dir: settings.lmu_dir,
       lmu_player_names: settings.lmu_player_names,
+      log_level: settings.log_level,
     };
     putSettings(cfg).then((res) => {
       settings = res;
@@ -236,6 +237,13 @@
       <div class="row">
         <span class="lbl">Data dir</span>
         <span class="val">{settings.data_dir}</span>
+      </div>
+      <div class="row">
+        <span class="lbl">Logging</span>
+        <select bind:value={settings.log_level} onchange={saveConfig}>
+          <option value="INFO">Normal</option>
+          <option value="DEBUG">Verbose</option>
+        </select>
       </div>
       <div class="row">
         {#if confirmingReset}
