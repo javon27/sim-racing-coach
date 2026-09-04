@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import math
 import threading
+import time
 import urllib.parse
 from dataclasses import asdict
 
@@ -23,6 +24,7 @@ from ..model.factory import CoachUserError, make_model
 from ..tiers import legal_adjustments
 
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}  # port stripped before compare
+REST_PROBE_TTL = 2.0  # s: liveness probe rate cap so /status polling can't hammer LMU's REST
 FRONTEND_ORIGINS = ["http://localhost:5173", "http://tauri.localhost"]
 ALLOWED_ORIGIN_HOSTS = ALLOWED_HOSTS | {"tauri.localhost"}
 
@@ -67,6 +69,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     app.state.coach = coach
     app.state.cmap = cmap            # fallback map when no resolver is wired
     app.state.rest = rest            # cached live REST client once connected
+    app.state.rest_probed_at = 0.0   # time.monotonic() of the last liveness probe
     app.state.map_resolver = map_resolver  # (track) -> CornerMap | None
     app.state.rest_factory = rest_factory  # () -> LmuRest (probed on first use)
     app.state.cmaps = {}             # per-track CornerMap cache (only non-None cached)
@@ -89,12 +92,16 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         return app.state.cmap
 
     def _ensure_rest():
-        # Return a live LMU REST client, or None. Probes get_setup() every call so
-        # the status reflects a mid-session DISCONNECT (LMU closed) — not just the
-        # first connect — and clears the cached client on failure so a later
-        # reconnect re-probes cleanly.
-        # ponytail: one localhost probe per call; fine for a single-user desktop app.
+        # Return a live LMU REST client, or None. Probes get_setup() to reflect a
+        # mid-session DISCONNECT (LMU closed), not just the first connect, and clears
+        # the cached client on failure so a later reconnect re-probes. The probe is
+        # rate-capped to once per REST_PROBE_TTL so live /status polling can't turn
+        # into a per-poll (4s-timeout) REST call that saturates the threadpool if
+        # LMU hangs — a recently-probed connected client is trusted between windows.
+        now = time.monotonic()
         rest = app.state.rest
+        if rest is not None and (now - app.state.rest_probed_at) < REST_PROBE_TTL:
+            return rest
         if rest is None:
             if app.state.rest_factory is None:
                 return None
@@ -108,6 +115,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             app.state.rest = None
             return None
         app.state.rest = rest
+        app.state.rest_probed_at = now
         return rest
 
     def _live_track():

@@ -44,15 +44,20 @@ def test_build_app_lmu_running(tmp_path, monkeypatch, mem_keyring):
     assert tc.get("/status").json()["lmu_connected"] is True
 
 
-def test_status_lmu_connected_reflects_disconnect(tmp_path):
+def test_status_lmu_connected_reflects_disconnect(tmp_path, monkeypatch):
     # /status.lmu_connected must go back to False when LMU closes mid-session,
     # not stick True after the first successful connect (regression guard).
     from fastapi.testclient import TestClient
 
     from simcoach.coach import Coach
     from simcoach.model.fake import FakeModel
+    from simcoach.server import app as app_module
     from simcoach.server.app import create_app
     from simcoach.store import LapStore
+
+    # Probe on every call so the transition is observed synchronously (prod caps
+    # the probe rate via REST_PROBE_TTL; here we want each /status to re-probe).
+    monkeypatch.setattr(app_module, "REST_PROBE_TTL", 0.0)
 
     class FakeRest:
         alive = True
@@ -72,6 +77,33 @@ def test_status_lmu_connected_reflects_disconnect(tmp_path):
     assert tc.get("/status", headers={"host": "127.0.0.1"}).json()["lmu_connected"] is False
     FakeRest.alive = True
     assert tc.get("/status", headers={"host": "127.0.0.1"}).json()["lmu_connected"] is True
+
+
+def test_status_probe_is_rate_capped(tmp_path):
+    # Rapid /status polls must not each hit LMU's REST (threadpool-saturation guard):
+    # with the default REST_PROBE_TTL, a burst shares one liveness probe.
+    from fastapi.testclient import TestClient
+
+    from simcoach.coach import Coach
+    from simcoach.model.fake import FakeModel
+    from simcoach.server.app import create_app
+    from simcoach.store import LapStore
+
+    calls = {"n": 0}
+
+    class CountingRest:
+        def get_setup(self):
+            calls["n"] += 1
+            return {"x": 1}
+
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    coach = Coach(FakeModel(reply="ok"), "simcoach/knowledge")
+    app = create_app(store, coach, rest_factory=CountingRest)
+    tc = TestClient(app, base_url="http://127.0.0.1")
+
+    for _ in range(5):
+        tc.get("/status", headers={"host": "127.0.0.1"})
+    assert calls["n"] == 1  # one connect probe; the rest are served from cache
 
 
 def test_build_app_lmu_rest_failure_still_resolves_cmap(tmp_path, monkeypatch, mem_keyring):
