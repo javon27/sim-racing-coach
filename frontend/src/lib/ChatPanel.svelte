@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { CoachStream, type CoachPhase, type ToolActivity } from "./coach";
   import { getChats, getChatMessages, type ChatRow } from "./api";
 
@@ -187,13 +187,17 @@
     return unsubscribe;
   });
 
-  function send() {
+  async function send() {
     const q = question.trim();
     if (!q || waiting) return;
     messages = [...messages, { role: "you", text: q }];
     question = "";
     waiting = true;
     stream.ask(q, { sessionId, lapId, chatId: currentChatId });
+    // The user just acted — always snap their message into view, even if they'd
+    // scrolled up (the nearBottom effect above then follows the streamed reply).
+    await tick();
+    if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight;
   }
 
   function onKeydown(e: KeyboardEvent) {
