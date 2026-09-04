@@ -12,7 +12,10 @@ describe("CornerSetupTabs", () => {
   beforeEach(() => {
     vi.mocked(getLapAnalysis).mockReset();
     vi.mocked(getSetup).mockReset();
-    vi.mocked(getSetup).mockResolvedValue({ front_arb: "P3" });
+    // Real /setup shape: only isFreeSetting entries render (SetupPanel filters).
+    vi.mocked(getSetup).mockResolvedValue({
+      VM_FRONT_ANTISWAY: { isFreeSetting: true, stringValue: "P3" },
+    });
   });
 
   afterEach(cleanup);
@@ -28,11 +31,11 @@ describe("CornerSetupTabs", () => {
     render(CornerSetupTabs, { props: { lapId: null } });
 
     await fireEvent.click(screen.getByText("Setup"));
-    expect(await screen.findByText("front_arb")).toBeTruthy();
+    expect(await screen.findByText("Front Anti-roll Bar")).toBeTruthy();
     expect(screen.queryByText(/select a lap/i)).toBeNull();
 
     await fireEvent.click(screen.getByText("Corners"));
     expect(screen.getByText(/select a lap/i)).toBeTruthy();
-    expect(screen.queryByText("front_arb")).toBeNull();
+    expect(screen.queryByText("Front Anti-roll Bar")).toBeNull();
   });
 });
