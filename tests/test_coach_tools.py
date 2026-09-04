@@ -54,6 +54,32 @@ def test_session_status_and_recent_laps(tmp_path, synthetic_lap):
     assert f"lap {lap_id}:" in listing
 
 
+def test_recent_laps_use_in_session_phase_numbering(tmp_path, synthetic_lap):
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    ids = []
+    for ph, t in [("practice", 1.0), ("practice", 2.0), ("race", 3.0), ("race", 4.0)]:
+        ids.append(store.save(LapRecord(**{**synthetic_lap.__dict__,
+                                           "session_id": "s1", "phase": ph, "timestamp": t})))
+    ctx = CoachContext(
+        store,
+        record=LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1", "phase": "race"}),
+        lap_id=ids[-1], session_id="s1",
+    )
+    listing = ctx.list_recent_laps().lower()
+    # Named by per-phase in-session number, not the raw DB id.
+    for lbl in ("practice lap 1", "practice lap 2", "race lap 1", "race lap 2"):
+        assert lbl in listing
+    # No raw DB ids leak: ids 3 & 4 would show as "lap 3"/"lap 4" if raw ids were
+    # used, but per-phase numbering here only ever reaches "lap 2".
+    assert "lap 3" not in listing and "lap 4" not in listing
+
+    # Resolution maps those references back to the right lap.
+    assert ctx._resolve_lap("practice lap 1")[1] == ids[0]
+    assert ctx._resolve_lap("race 1")[1] == ids[2]
+    assert ctx._resolve_lap("2")[1] == ids[3]  # bare number -> current (race) phase
+
+
 def test_get_race_result_formats_and_falls_back(tmp_path, synthetic_lap):
     from simcoach.lmu.results import ResultLap, ResultSession
     ctx, store, _ = _ctx(tmp_path, synthetic_lap)

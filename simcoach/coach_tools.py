@@ -33,7 +33,9 @@ TOOLS = [
     {
         "name": "list_recent_laps",
         "description": "List recent laps for the current track/car (newest first) with "
-                       "lap id, time, and validity, so you can pick one to inspect.",
+                       "the lap's in-session number (per phase, e.g. 'race lap 3' — the "
+                       "same numbering the driver sees), time, and validity. Refer to laps "
+                       "by that number; never invent or cite a database id.",
         "input_schema": {
             "type": "object",
             "properties": {"limit": {"type": "integer",
@@ -48,7 +50,8 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {"which": {"type": "string",
-                                     "description": "'latest' (default), 'best', or a lap id."}},
+                                     "description": "'latest' (default), 'best', or an in-session "
+                                                    "lap number like 'race lap 3'."}},
         },
     },
     {
@@ -120,8 +123,37 @@ class CoachContext:
         self.session_id = session_id or (record.session_id if record else None)
         self.tool_calls: list = []   # (name, input) invoked this turn, for the chat log
         self._analysis_cache: dict = {}
+        self._lap_numbering_cache: tuple[dict, dict] | None = None
 
     # --- helpers ---------------------------------------------------------
+    def _lap_numbering(self) -> tuple[dict, dict]:
+        """Per-phase, in-session lap numbering matching the UI (laps numbered 1..N
+        within each phase, in ts order). Returns (label_by_id, id_by_ref):
+        label_by_id[lap_id] -> e.g. 'race lap 3'; id_by_ref maps textual refs the
+        model might use ('race 3', 'race lap 3', or a bare number in the current
+        phase) back to the DB lap_id. Cached per turn."""
+        if self._lap_numbering_cache is not None:
+            return self._lap_numbering_cache
+        label_by_id: dict[int, str] = {}
+        id_by_ref: dict[str, int] = {}
+        if self.session_id:
+            cur_phase = self.record.phase if self.record is not None else None
+            counts: dict = {}
+            for lap in self.store.session_laps(self.session_id):
+                ph = lap.get("phase")
+                counts[ph] = counts.get(ph, 0) + 1
+                n = counts[ph]
+                label_by_id[lap["id"]] = f"{ph} lap {n}" if ph else f"lap {n}"
+                if ph:
+                    id_by_ref[f"{ph} {n}".lower()] = lap["id"]
+                    id_by_ref[f"{ph} lap {n}".lower()] = lap["id"]
+                    if ph == cur_phase:
+                        id_by_ref[str(n)] = lap["id"]  # bare number -> current phase
+                else:
+                    id_by_ref[str(n)] = lap["id"]
+        self._lap_numbering_cache = (label_by_id, id_by_ref)
+        return self._lap_numbering_cache
+
     def _analysis_for(self, record, lap_id):
         if self.cmap is None:
             return None
@@ -144,7 +176,9 @@ class CoachContext:
         return self._analysis_for(self.record, self.lap_id)
 
     def _resolve_lap(self, which):
-        """which -> (record, lap_id). 'latest'/None -> current; 'best' or an id -> load it."""
+        """which -> (record, lap_id). 'latest'/None -> current; 'best' -> best lap;
+        an in-session lap reference ('race lap 3', 'race 3', or a bare number in the
+        current phase) -> that lap; a bare number falls back to a raw DB id."""
         which = (which or "latest").strip().lower()
         if which in ("latest", "current", ""):
             return self.record, self.lap_id
@@ -154,6 +188,14 @@ class CoachContext:
             best = self.store.best_lap(self.track, self.car)
             # best_lap returns the record; find its id via recent list match on time
             return best, None
+        # In-session per-phase reference (matches how laps are named to the driver).
+        _, id_by_ref = self._lap_numbering()
+        if which in id_by_ref:
+            lid = id_by_ref[which]
+            try:
+                return self.store.load(lid), lid
+            except Exception:
+                return None, None
         if which.isdigit():
             try:
                 return self.store.load(int(which)), int(which)
@@ -184,11 +226,16 @@ class CoachContext:
                                       session_id=self.session_id)
         if not rows:
             return "No laps stored for this session yet."
+        # Name laps by their in-session, per-phase number (what the driver sees in
+        # the UI), not the raw database id.
+        label_by_id, _ = self._lap_numbering()
         out = []
         for r in rows:
             valid = "valid" if r["valid"] else "INVALID"
-            phase = f" [{r['phase']}]" if r["phase"] else ""
-            out.append(f"lap {r['lap_id']}: {format_laptime(r['lap_time'])} {valid}{phase}")
+            label = label_by_id.get(r["lap_id"]) or (
+                f"lap {r['lap_id']}" + (f" [{r['phase']}]" if r["phase"] else "")
+            )
+            out.append(f"{label}: {format_laptime(r['lap_time'])} {valid}")
         return "\n".join(out)
 
     def get_lap_summary(self, which="latest"):
