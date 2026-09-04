@@ -15,19 +15,26 @@
   let selectedLapId: number | undefined = $state(undefined);
   let selectedSessionId: string | undefined = $state(undefined);
   let activeSessionId: string | undefined = $state(undefined);
+  let activeChatId: string | undefined = $state(undefined);
 
   function toggleTheme() {
     theme = nextTheme(theme);
     applyTheme(theme);
   }
 
-  async function handleSelectSession(sessionId: string) {
+  async function handleSelectSession(sessionId: string, chatId?: string) {
     // Clear then re-set so re-selecting the SAME session is a real prop change,
     // which re-arms LapList's review baseline (it may have snapped to live).
     activeSessionId = undefined;
     await tick();
     activeSessionId = sessionId;
     selectedSessionId = sessionId;
+    // Open the chat that discussed this session (undefined -> ChatPanel keeps
+    // showing latest/empty). Clear-then-set so re-selecting the same chat still
+    // registers as a prop change in ChatPanel.
+    activeChatId = undefined;
+    await tick();
+    activeChatId = chatId;
     screen = "coach";
   }
 </script>
@@ -92,7 +99,7 @@
             />
             <CornerSetupTabs lapId={selectedLapId ?? null} />
           </aside>
-          <ChatPanel lapId={selectedLapId} sessionId={selectedSessionId} />
+          <ChatPanel lapId={selectedLapId} sessionId={selectedSessionId} chatId={activeChatId} />
         </div>
       </div>
     </section>

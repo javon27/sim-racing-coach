@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, within } from "@testing-library/svelte";
-import { getSessions } from "./api";
+import { render, screen, fireEvent, cleanup, within, waitFor } from "@testing-library/svelte";
+import { getSessions, getSessionChats } from "./api";
 import SessionsScreen from "./SessionsScreen.svelte";
 
 function sessList(container: HTMLElement) {
@@ -9,7 +9,7 @@ function sessList(container: HTMLElement) {
 
 vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
-  return { ...actual, getSessions: vi.fn() };
+  return { ...actual, getSessions: vi.fn(), getSessionChats: vi.fn() };
 });
 
 const SESSIONS = [
@@ -21,6 +21,8 @@ const SESSIONS = [
 describe("SessionsScreen", () => {
   beforeEach(() => {
     vi.mocked(getSessions).mockReset();
+    vi.mocked(getSessionChats).mockReset();
+    vi.mocked(getSessionChats).mockResolvedValue([]);
   });
 
   afterEach(cleanup);
@@ -53,8 +55,11 @@ describe("SessionsScreen", () => {
     expect(list.getByText("Sebring")).toBeTruthy();
   });
 
-  it("fires onselectSession with the session id when a row is clicked", async () => {
+  it("fires onselectSession with the session id and its linked chat id when a row is clicked", async () => {
     vi.mocked(getSessions).mockResolvedValue(SESSIONS);
+    vi.mocked(getSessionChats).mockResolvedValue([
+      { chat_id: "chatA", started: 1, last: 5, message_count: 3, tracks: "Le Mans" },
+    ]);
     const onselectSession = vi.fn();
 
     const { container } = render(SessionsScreen, { props: { onselectSession } });
@@ -63,7 +68,21 @@ describe("SessionsScreen", () => {
     const row = container.querySelectorAll(".srow")[0] as HTMLElement;
     await fireEvent.click(row);
 
-    expect(onselectSession).toHaveBeenCalledWith("s1");
+    await waitFor(() => expect(onselectSession).toHaveBeenCalledWith("s1", "chatA"));
+    expect(getSessionChats).toHaveBeenCalledWith("s1");
+  });
+
+  it("passes chatId undefined when a session has no linked chat", async () => {
+    vi.mocked(getSessions).mockResolvedValue(SESSIONS);
+    vi.mocked(getSessionChats).mockResolvedValue([]);
+    const onselectSession = vi.fn();
+
+    const { container } = render(SessionsScreen, { props: { onselectSession } });
+    await within(sessList(container)).findByText("Sebring");
+
+    await fireEvent.click(container.querySelectorAll(".srow")[0] as HTMLElement);
+
+    await waitFor(() => expect(onselectSession).toHaveBeenCalledWith("s1", undefined));
   });
 
   it("shows an empty state when there are no sessions", async () => {

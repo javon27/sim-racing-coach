@@ -76,6 +76,7 @@ describe("ChatPanel", () => {
     expect(stream.ask).toHaveBeenCalledWith("where am I losing time?", {
       sessionId: "s1",
       lapId: 9,
+      chatId: undefined,
     });
 
     stream.phase = "tool";
@@ -122,6 +123,68 @@ describe("ChatPanel", () => {
     expect(stream.ask).not.toHaveBeenCalled();
 
     await fireEvent.keyDown(textarea, { key: "Enter" });
-    expect(stream.ask).toHaveBeenCalledWith("one", { sessionId: undefined, lapId: undefined });
+    expect(stream.ask).toHaveBeenCalledWith("one", { sessionId: undefined, lapId: undefined, chatId: undefined });
+  });
+
+  it("loads the thread named by the chatId prop", async () => {
+    vi.mocked(getChats).mockResolvedValue([
+      { chat_id: "c1", started: 1, last: 2, message_count: 1, tracks: "Le Mans" },
+      { chat_id: "c9", started: 3, last: 4, message_count: 1, tracks: "Spa" },
+    ]);
+    vi.mocked(getChatMessages).mockImplementation(async (id: string) =>
+      id === "c9"
+        ? [{ ts: 1, session_id: "s2", track: "Spa", car: "Ferrari", lap_id: null, question: "spa question", answer: "spa answer", tool_calls: null }]
+        : [{ ts: 1, session_id: "s1", track: "Le Mans", car: "Corvette", lap_id: null, question: "lemans question", answer: "lemans answer", tool_calls: null }],
+    );
+    const stream = new FakeStream();
+
+    render(ChatPanel, { props: { stream, chatId: "c9" } });
+
+    expect(await screen.findByText("spa question")).toBeTruthy();
+    expect(screen.queryByText("lemans question")).toBeNull();
+  });
+
+  it("+ New chat empties the thread and the next ask starts a fresh chat", async () => {
+    vi.mocked(getChats).mockResolvedValue([
+      { chat_id: "c1", started: 1, last: 2, message_count: 1, tracks: "Le Mans" },
+    ]);
+    vi.mocked(getChatMessages).mockResolvedValue([
+      { ts: 1, session_id: "s1", track: "Le Mans", car: "Corvette", lap_id: null, question: "old question", answer: "old answer", tool_calls: null },
+    ]);
+    const stream = new FakeStream();
+
+    render(ChatPanel, { props: { stream } });
+    expect(await screen.findByText("old question")).toBeTruthy();
+
+    await fireEvent.click(screen.getByRole("button", { name: /new chat/i }));
+    await waitFor(() => expect(screen.queryByText("old question")).toBeNull());
+    expect(screen.getByText(/new chat — ask a question/i)).toBeTruthy();
+
+    const textarea = screen.getByPlaceholderText(/ask your engineer/i);
+    await fireEvent.input(textarea, { target: { value: "brand new" } });
+    await fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    expect(stream.ask).toHaveBeenCalledWith("brand new", { sessionId: undefined, lapId: undefined, chatId: undefined });
+  });
+
+  it("the switcher loads the chosen thread", async () => {
+    vi.mocked(getChats).mockResolvedValue([
+      { chat_id: "c1", started: 1, last: 2, message_count: 1, tracks: "Le Mans" },
+      { chat_id: "c2", started: 3, last: 4, message_count: 1, tracks: "Spa" },
+    ]);
+    vi.mocked(getChatMessages).mockImplementation(async (id: string) =>
+      id === "c2"
+        ? [{ ts: 1, session_id: "s2", track: "Spa", car: "Ferrari", lap_id: null, question: "spa question", answer: "spa answer", tool_calls: null }]
+        : [{ ts: 1, session_id: "s1", track: "Le Mans", car: "Corvette", lap_id: null, question: "lemans question", answer: "lemans answer", tool_calls: null }],
+    );
+    const stream = new FakeStream();
+
+    render(ChatPanel, { props: { stream } });
+    expect(await screen.findByText("lemans question")).toBeTruthy();
+
+    const switcher = screen.getByRole("combobox", { name: /switch chat/i });
+    await fireEvent.change(switcher, { target: { value: "c2" } });
+
+    expect(await screen.findByText("spa question")).toBeTruthy();
+    expect(screen.queryByText("lemans question")).toBeNull();
   });
 });

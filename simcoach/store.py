@@ -289,6 +289,20 @@ class LapStore:
             keys = ("chat_id", "started", "last", "message_count", "tracks")
             return [dict(zip(keys, r)) for r in rows]
 
+    def chats_for_session(self, session_id: str) -> list[dict]:
+        """Chats that touched a race session — same shape as list_chats(), but
+        only chat_ids with ≥1 message stamped with this session_id. Newest
+        last-activity first, so callers can take [0] as the session's chat."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT chat_id, MIN(ts), MAX(ts), COUNT(*), "
+                "GROUP_CONCAT(DISTINCT track) FROM coach_chat "
+                "WHERE session_id = ? GROUP BY chat_id ORDER BY MAX(ts) DESC",
+                (session_id,),
+            ).fetchall()
+            keys = ("chat_id", "started", "last", "message_count", "tracks")
+            return [dict(zip(keys, r)) for r in rows]
+
     def chat_messages(self, chat_id: str) -> list[dict]:
         """Every Q&A exchange in a chat, oldest first."""
         with self._lock:

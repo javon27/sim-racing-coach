@@ -238,6 +238,25 @@ def test_new_chat_round_trip(tmp_path):
     assert msgs[1]["tool_calls"] == [{"t": "get_corner"}]
 
 
+def test_chats_for_session_only_matching_newest_first(tmp_path):
+    from simcoach.store import LapStore
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    # chatA touches s1; chatB touches s2 only; chatC touches s1 later.
+    a = store.create_chat()
+    store.save_chat(a, "s1", "Le Mans", "Corvette", None, "qa", "aa", ts=10.0)
+    b = store.create_chat()
+    store.save_chat(b, "s2", "Spa", "Ferrari", None, "qb", "ab", ts=20.0)
+    c = store.create_chat()
+    store.save_chat(c, "s1", "Imola", "Corvette", None, "qc", "ac", ts=30.0)
+
+    rows = store.chats_for_session("s1")
+    assert [r["chat_id"] for r in rows] == [c, a]  # newest last-activity first
+    assert all(r["chat_id"] != b for r in rows)
+    assert store.chats_for_session("s2") == store.chats_for_session("s2")
+    assert [r["chat_id"] for r in store.chats_for_session("s2")] == [b]
+    assert store.chats_for_session("nope") == []
+
+
 def test_migration_tolerates_duplicate_column(tmp_path):
     """Simulates a raced/partial v4->v5 upgrade: coach_chat already has
     chat_id but user_version is still 4. Opening the store (twice, to also

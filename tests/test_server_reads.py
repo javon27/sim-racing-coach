@@ -30,6 +30,15 @@ def test_chats_and_messages(tmp_path, synthetic_lap):
     assert msgs[0]["question"] == "q"
 
 
+def test_session_chats_endpoint(tmp_path, synthetic_lap):
+    app, lap_id, cid = _app(tmp_path, synthetic_lap)
+    c = _tc(app)
+    # _app saved a chat stamped session_id="s1".
+    rows = c.get("/sessions/s1/chats").json()
+    assert [r["chat_id"] for r in rows] == [cid]
+    assert c.get("/sessions/other/chats").json() == []
+
+
 def test_setup_empty_without_rest(tmp_path, synthetic_lap):
     app, *_ = _app(tmp_path, synthetic_lap)
     assert _tc(app).get("/setup").json() == {}

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, within } from "@testing-library/svelte";
+import { render, screen, fireEvent, cleanup, within, waitFor } from "@testing-library/svelte";
 import {
   getStatus,
   getSettings,
@@ -8,6 +8,7 @@ import {
   getLapAnalysis,
   getSetup,
   getChats,
+  getSessionChats,
 } from "./api";
 import App from "./App.svelte";
 
@@ -22,6 +23,7 @@ vi.mock("./api", async () => {
     getLapAnalysis: vi.fn(),
     getSetup: vi.fn(),
     getChats: vi.fn(),
+    getSessionChats: vi.fn(),
   };
 });
 
@@ -66,6 +68,7 @@ describe("Coach screen assembly", () => {
     vi.mocked(getLapAnalysis).mockResolvedValue({ lap_time: 216.0, corners: [] });
     vi.mocked(getSetup).mockResolvedValue({});
     vi.mocked(getChats).mockResolvedValue([]);
+    vi.mocked(getSessionChats).mockResolvedValue([]);
   });
 
   afterEach(cleanup);
@@ -120,8 +123,12 @@ describe("Coach screen assembly", () => {
     await fireEvent.click(sessionRow);
 
     // Back on the Coach screen, with laps loaded for the deep-linked session.
-    expect(nav.getByText("Coach").closest(".nav-item")?.classList.contains("on")).toBe(true);
+    // (selection resolves the linked chat first, so the switch is async.)
+    await waitFor(() =>
+      expect(nav.getByText("Coach").closest(".nav-item")?.classList.contains("on")).toBe(true),
+    );
     expect(await screen.findByText(/Lap 9/)).toBeTruthy();
     expect(vi.mocked(getSessionLaps)).toHaveBeenCalledWith("s1");
+    expect(vi.mocked(getSessionChats)).toHaveBeenCalledWith("s1");
   });
 });

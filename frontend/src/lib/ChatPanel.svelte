@@ -1,21 +1,24 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { CoachStream, type CoachPhase, type ToolActivity } from "./coach";
-  import { getChats, getChatMessages } from "./api";
+  import { getChats, getChatMessages, type ChatRow } from "./api";
 
   let {
     sessionId,
     lapId,
+    chatId,
     stream = new CoachStream(),
   }: {
     sessionId?: string;
     lapId?: number;
+    chatId?: string;
     stream?: {
       phase: CoachPhase;
       toolActivity: ToolActivity | null;
       answer: string;
+      chatId: string | null;
       error: string | null;
-      ask(question: string, opts: { sessionId?: string; lapId?: number }): void;
+      ask(question: string, opts: { sessionId?: string; lapId?: number; chatId?: string }): void;
       subscribe(run: (value: unknown) => void): () => void;
     };
   } = $props();
@@ -71,6 +74,10 @@
   }
 
   let messages: Msg[] = $state([]);
+  let chats: ChatRow[] = $state([]);
+  // The thread currently shown/appended to. undefined = a fresh, unsaved chat:
+  // the next ask sends no chat_id, and we adopt the id the server mints.
+  let currentChatId: string | undefined = $state(undefined);
   let question = $state("");
   let waiting = $state(false);
   let phase: CoachPhase = $state("idle");
@@ -90,11 +97,19 @@
     if (nearBottom) el.scrollTop = el.scrollHeight;
   });
 
-  async function loadHistory() {
+  async function refreshChats() {
     try {
-      const chats = await getChats();
-      if (chats.length === 0) return;
-      const rows = await getChatMessages(chats[0].chat_id);
+      chats = await getChats();
+    } catch {
+      // switcher stays with whatever it had
+    }
+  }
+
+  // Populate the thread from a chat's saved messages.
+  async function loadThread(id: string) {
+    currentChatId = id;
+    try {
+      const rows = await getChatMessages(id);
       const hist: Msg[] = [];
       for (const row of rows) {
         hist.push({ role: "you", text: row.question });
@@ -102,13 +117,57 @@
       }
       messages = hist;
     } catch {
-      // no history available yet - an empty thread is fine
+      messages = [];
     }
   }
 
+  // No chat pinned by the caller: show the most-recent chat, or an empty thread.
+  async function loadLatest() {
+    try {
+      const rows = await getChats();
+      chats = rows;
+      if (rows.length) {
+        await loadThread(rows[0].chat_id);
+      } else {
+        currentChatId = undefined;
+        messages = [];
+      }
+    } catch {
+      currentChatId = undefined;
+      messages = [];
+    }
+  }
+
+  function newChat() {
+    currentChatId = undefined;
+    messages = [];
+  }
+
+  function onSwitch(e: Event) {
+    const id = (e.target as HTMLSelectElement).value;
+    if (id) loadThread(id);
+  }
+
+  function chatLabel(c: ChatRow): string {
+    const when = new Date(c.last * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    return `${c.tracks || "Chat"} · ${when}`;
+  }
+
+  // Follow the chatId prop: a pinned id opens that thread; undefined falls back
+  // to latest/empty. Runs on mount too (prop starts undefined).
+  $effect(() => {
+    const pinned = chatId;
+    if (pinned) {
+      loadThread(pinned);
+    } else {
+      loadLatest();
+    }
+  });
+
   onMount(() => {
+    refreshChats();
     const unsubscribe = stream.subscribe((s) => {
-      const snap = s as { phase: CoachPhase; toolActivity: ToolActivity | null; answer: string; error: string | null };
+      const snap = s as { phase: CoachPhase; toolActivity: ToolActivity | null; answer: string; chatId: string | null; error: string | null };
       phase = snap.phase;
       toolActivity = snap.toolActivity;
       answer = snap.answer;
@@ -116,12 +175,15 @@
       if (snap.phase === "done") {
         messages = [...messages, { role: "coach", text: snap.answer }];
         waiting = false;
+        // Adopt the server's chat id so follow-ups append to this thread, and
+        // surface a newly-created chat in the switcher.
+        if (snap.chatId) currentChatId = snap.chatId;
+        refreshChats();
       } else if (snap.phase === "error") {
         messages = [...messages, { role: "coach", text: snap.error ?? "Something went wrong." }];
         waiting = false;
       }
     });
-    loadHistory();
     return unsubscribe;
   });
 
@@ -131,7 +193,7 @@
     messages = [...messages, { role: "you", text: q }];
     question = "";
     waiting = true;
-    stream.ask(q, { sessionId, lapId });
+    stream.ask(q, { sessionId, lapId, chatId: currentChatId });
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -149,8 +211,27 @@
 </script>
 
 <section class="chat">
+  <div class="chat-bar">
+    <select
+      class="chat-switch"
+      aria-label="Switch chat"
+      value={currentChatId ?? ""}
+      onchange={onSwitch}
+    >
+      {#if currentChatId == null}
+        <option value="">New chat</option>
+      {/if}
+      {#each chats as c (c.chat_id)}
+        <option value={c.chat_id}>{chatLabel(c)}</option>
+      {/each}
+    </select>
+    <button type="button" class="new-chat" onclick={newChat}>+ New chat</button>
+  </div>
   <div class="chat-scroll" bind:this={scrollEl}>
     <div class="thread">
+      {#if messages.length === 0 && !waiting}
+        <p class="chat-empty">New chat — ask a question</p>
+      {/if}
       {#each messages as m, i (i)}
         <div class="msg {m.role}">
           <div class="who">{m.role === "you" ? "YOU" : "⚑"}</div>
@@ -198,3 +279,49 @@
     <div class="hint">{lapId ? `Lap ${lapId} selected` : "Ask about your last lap or overall pace"}</div>
   </div>
 </section>
+
+<style>
+  .chat-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .chat-switch {
+    font-family: var(--body);
+    font-size: 12px;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 5px 9px;
+    max-width: 220px;
+    cursor: pointer;
+  }
+  .chat-switch:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .new-chat {
+    margin-left: auto;
+    font-family: var(--body);
+    font-size: 12px;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 5px 11px;
+    cursor: pointer;
+  }
+  .new-chat:hover {
+    border-color: var(--accent);
+  }
+  .chat-empty {
+    color: var(--faint);
+    font-family: var(--mono);
+    font-size: 12px;
+    text-align: center;
+    margin: 24px 0;
+  }
+</style>

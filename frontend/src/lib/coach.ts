@@ -14,6 +14,7 @@ export interface ToolActivity {
 export interface AskOptions {
   sessionId?: string;
   lapId?: number;
+  chatId?: string; // continue an existing thread; omit to start a new one (server mints the id)
 }
 
 // Svelte store contract (subscribe returns an unsubscribe fn, called immediately
@@ -50,7 +51,7 @@ export class CoachStream {
     this.#ws = ws;
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ question, session_id: opts.sessionId, lap_id: opts.lapId }));
+      ws.send(JSON.stringify({ question, session_id: opts.sessionId, lap_id: opts.lapId, chat_id: opts.chatId }));
     };
 
     ws.onmessage = (event: MessageEvent) => {

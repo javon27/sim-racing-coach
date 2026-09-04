@@ -144,6 +144,10 @@ export function getChats(): Promise<ChatRow[]> {
   return request<ChatRow[]>("/chats");
 }
 
+export function getSessionChats(sid: string): Promise<ChatRow[]> {
+  return request<ChatRow[]>(`/sessions/${sid}/chats`);
+}
+
 export function getChatMessages(chatId: string): Promise<ChatMessage[]> {
   return request<ChatMessage[]>(`/chats/${chatId}`);
 }

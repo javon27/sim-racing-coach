@@ -118,6 +118,10 @@ def create_app(store, coach, cmap=None, rest=None) -> FastAPI:
     def session_laps(sid: str):
         return store.session_laps(sid)
 
+    @app.get("/sessions/{sid}/chats")
+    def session_chats(sid: str):
+        return store.chats_for_session(sid)
+
     @app.get("/laps/{lap_id}/analysis")
     def lap_analysis(lap_id: int):
         if app.state.cmap is None:

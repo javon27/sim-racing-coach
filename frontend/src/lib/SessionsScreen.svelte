@@ -4,10 +4,22 @@
   // this builds against the real SessionRow shape (session_id, track, car,
   // laps, best, started, last) and filters/groups by track + car only.
   import { onMount } from "svelte";
-  import { getSessions, type SessionRow } from "./api";
+  import { getSessions, getSessionChats, type SessionRow } from "./api";
   import TrendChart from "./TrendChart.svelte";
 
-  let { onselectSession }: { onselectSession?: (sessionId: string) => void } = $props();
+  let { onselectSession }: { onselectSession?: (sessionId: string, chatId?: string) => void } = $props();
+
+  // Open a session: resolve its most-recent linked chat (if any) and hand both up.
+  async function selectSession(sessionId: string) {
+    let chatId: string | undefined;
+    try {
+      const linked = await getSessionChats(sessionId);
+      chatId = linked[0]?.chat_id;
+    } catch {
+      chatId = undefined;
+    }
+    onselectSession?.(sessionId, chatId);
+  }
 
   const ALL = "All";
 
@@ -135,7 +147,7 @@
           <p class="empty">No sessions match these filters.</p>
         {:else}
           {#each filtered as s (s.session_id)}
-            <div class="srow" role="button" tabindex="0" onclick={() => onselectSession?.(s.session_id)} onkeydown={(e) => e.key === "Enter" && onselectSession?.(s.session_id)}>
+            <div class="srow" role="button" tabindex="0" onclick={() => selectSession(s.session_id)} onkeydown={(e) => e.key === "Enter" && selectSession(s.session_id)}>
               <div class="d">{formatDate(s.started)}</div>
               <div class="tk">{s.track}<div class="ln"><small>{s.car}</small></div></div>
               <div class="lp">{s.laps} laps</div>
