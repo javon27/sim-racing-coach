@@ -178,7 +178,7 @@
   {:else if laps.length === 0}
     <p class="empty">No laps yet</p>
   {:else}
-    {#each groups as group (group.phase ?? "_")}
+    {#each groups as group, gi (gi)}
       {#if group.phase}
         <div class="phase-head">{phaseLabel(group.phase)}</div>
       {/if}

@@ -89,19 +89,26 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         return app.state.cmap
 
     def _ensure_rest():
-        # Lazily connect the LMU REST client: probe once per call while
-        # disconnected (cheap on localhost), then cache it for the process.
-        if app.state.rest:
-            return app.state.rest
-        if app.state.rest_factory is not None:
+        # Return a live LMU REST client, or None. Probes get_setup() every call so
+        # the status reflects a mid-session DISCONNECT (LMU closed) — not just the
+        # first connect — and clears the cached client on failure so a later
+        # reconnect re-probes cleanly.
+        # ponytail: one localhost probe per call; fine for a single-user desktop app.
+        rest = app.state.rest
+        if rest is None:
+            if app.state.rest_factory is None:
+                return None
             try:
-                r = app.state.rest_factory()
-                r.get_setup()  # probe: fails if LMU isn't reachable / on track
-                app.state.rest = r
-                return r
+                rest = app.state.rest_factory()
             except Exception:
                 return None
-        return None
+        try:
+            rest.get_setup()  # liveness probe
+        except Exception:
+            app.state.rest = None
+            return None
+        app.state.rest = rest
+        return rest
 
     def _live_track():
         # Current track: the latest captured lap's track, else the live SMM read.

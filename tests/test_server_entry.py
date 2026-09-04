@@ -44,6 +44,36 @@ def test_build_app_lmu_running(tmp_path, monkeypatch, mem_keyring):
     assert tc.get("/status").json()["lmu_connected"] is True
 
 
+def test_status_lmu_connected_reflects_disconnect(tmp_path):
+    # /status.lmu_connected must go back to False when LMU closes mid-session,
+    # not stick True after the first successful connect (regression guard).
+    from fastapi.testclient import TestClient
+
+    from simcoach.coach import Coach
+    from simcoach.model.fake import FakeModel
+    from simcoach.server.app import create_app
+    from simcoach.store import LapStore
+
+    class FakeRest:
+        alive = True
+
+        def get_setup(self):
+            if not FakeRest.alive:
+                raise RuntimeError("LMU closed")
+            return {"carClass": "GT3"}
+
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    coach = Coach(FakeModel(reply="ok"), "simcoach/knowledge")
+    app = create_app(store, coach, rest_factory=FakeRest)
+    tc = TestClient(app, base_url="http://127.0.0.1")
+
+    assert tc.get("/status", headers={"host": "127.0.0.1"}).json()["lmu_connected"] is True
+    FakeRest.alive = False
+    assert tc.get("/status", headers={"host": "127.0.0.1"}).json()["lmu_connected"] is False
+    FakeRest.alive = True
+    assert tc.get("/status", headers={"host": "127.0.0.1"}).json()["lmu_connected"] is True
+
+
 def test_build_app_lmu_rest_failure_still_resolves_cmap(tmp_path, monkeypatch, mem_keyring):
     monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
