@@ -26,6 +26,26 @@
     applyTheme(theme);
   }
 
+  // Draggable divider that grows/shrinks the lap list (its scroll area height).
+  let lapsH = $state(280); // px; drives --laps-h on the rail
+  let dragStartY = 0;
+  let dragStartH = 0;
+  let draggingRail = false;
+  function railResizeDown(e: PointerEvent) {
+    draggingRail = true;
+    dragStartY = e.clientY;
+    dragStartH = lapsH;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  }
+  function railResizeMove(e: PointerEvent) {
+    if (!draggingRail) return;
+    const max = typeof window !== "undefined" ? window.innerHeight * 0.7 : 700;
+    lapsH = Math.max(120, Math.min(dragStartH + (e.clientY - dragStartY), max));
+  }
+  function railResizeUp() {
+    draggingRail = false;
+  }
+
   async function handleSelectSession(sessionId: string, chatId?: string) {
     // Clear then re-set so re-selecting the SAME session is a real prop change,
     // which re-arms LapList's review baseline (it may have snapped to live).
@@ -95,7 +115,7 @@
         <SessionBar />
         <RaceStrip sessionId={selectedSessionId} />
         <div class="main">
-          <aside class="rail">
+          <aside class="rail" style="--laps-h: {lapsH}px">
             <LapList
               sessionId={activeSessionId}
               selectedLapId={selectedLapId ?? null}
@@ -104,6 +124,16 @@
                 selectedSessionId = detail.session_id;
               }}
             />
+            <div
+              class="rail-resizer"
+              class:dragging={draggingRail}
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="Resize lap list"
+              onpointerdown={railResizeDown}
+              onpointermove={railResizeMove}
+              onpointerup={railResizeUp}
+            ></div>
             <CornerSetupTabs lapId={selectedLapId ?? null} />
           </aside>
           <ChatPanel lapId={selectedLapId} sessionId={selectedSessionId} chatId={activeChatId} />

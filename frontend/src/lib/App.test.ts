@@ -39,6 +39,13 @@ describe("App shell", () => {
     expect(nav.getByText("Pit Wall")).toBeTruthy();
     expect(nav.getByText(/^Theme ·/)).toBeTruthy();
   });
+
+  it("has a draggable resizer for the lap pane", () => {
+    const { container } = render(App);
+    const resizer = container.querySelector(".rail-resizer");
+    expect(resizer).not.toBeNull();
+    expect(resizer!.getAttribute("role")).toBe("separator");
+  });
 });
 
 describe("Coach screen assembly", () => {
