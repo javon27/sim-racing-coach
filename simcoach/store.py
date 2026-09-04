@@ -12,7 +12,7 @@ import numpy as np
 
 from simcoach.model_types import LapRecord
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
@@ -51,7 +51,8 @@ CREATE TABLE IF NOT EXISTS laps (
     source TEXT DEFAULT 'live',
     s1 REAL,
     s2 REAL,
-    s3 REAL
+    s3 REAL,
+    position INTEGER
 );
 CREATE TABLE IF NOT EXISTS ingested_files (
     path TEXT PRIMARY KEY,
@@ -178,6 +179,12 @@ class LapStore:
                     "session_id TEXT PRIMARY KEY, position INTEGER, class_position INTEGER, "
                     "finish_status TEXT, incidents TEXT, penalties TEXT)"
                 )
+            if current_version < 9:
+                # v8 -> v9: per-lap live race position (mPlace), nullable. Existing
+                # rows stay NULL. Guard the ADD COLUMN like the s1/s2/s3 one.
+                cols = [r[1] for r in self.conn.execute("PRAGMA table_info(laps)")]
+                if cols and "position" not in cols:
+                    _add_column(self.conn, "laps", "position INTEGER")
         if current_version != SCHEMA_VERSION:
             self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self.conn.commit()
@@ -190,10 +197,12 @@ class LapStore:
                     return record.sectors[i] if record.sectors and len(record.sectors) > i else None
                 cur = self.conn.execute(
                     "INSERT INTO laps (ts, sim, track, car, lap_time, valid, telemetry_path, "
-                    "phase, session_id, s1, s2, s3) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "phase, session_id, s1, s2, s3, position) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (record.timestamp, record.sim, record.track, record.car,
                      record.lap_time, int(record.valid), None,
-                     record.phase, record.session_id, _sec(0), _sec(1), _sec(2)),
+                     record.phase, record.session_id, _sec(0), _sec(1), _sec(2),
+                     record.position),
                 )
                 lap_id = cur.lastrowid
                 telemetry_path = os.path.join(self.data_dir, f"{lap_id}.npz")
@@ -389,6 +398,27 @@ class LapStore:
             ).fetchall()
             keys = ("id", "lap_time", "valid", "ts", "s1", "s2", "s3", "phase")
             return [dict(zip(keys, r)) for r in rows]
+
+    def session_position_arc(self, session_id: str) -> dict | None:
+        """The session's live per-lap race-position arc, or None if no lap carried
+        a position. Lower place number = better, so best = min. Ordered by ts so
+        start/last are the first/last lap actually driven."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT position FROM laps WHERE session_id = ? AND position IS NOT NULL "
+                "ORDER BY ts",
+                (session_id,),
+            ).fetchall()
+        places = [r[0] for r in rows]
+        if not places:
+            return None
+        return {
+            "start": places[0],
+            "best": min(places),
+            "worst": max(places),
+            "last": places[-1],
+            "laps": len(places),
+        }
 
     def clear_all(self) -> None:
         """Wipe all persisted data: laps, setups, corner metrics, coach chat,

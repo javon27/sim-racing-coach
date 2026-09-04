@@ -20,10 +20,21 @@ from simcoach.lmu.smm import (
     compatibility_check,
     compute_sectors,
     open_first_available,
+    player_position,
     sample_from_telem,
     telemetry_is_sane,
     version_ok,
 )
+
+
+def test_player_position_positive_is_int():
+    assert player_position(5) == 5
+    assert player_position(1) == 1
+
+
+def test_player_position_zero_or_unset_is_none():
+    assert player_position(0) is None
+    assert player_position(None) is None
 
 
 def test_compute_sectors_reconciling_values():

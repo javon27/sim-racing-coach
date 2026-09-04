@@ -251,26 +251,34 @@ class CoachContext:
 
     def get_race_result(self):
         rr = self.store.race_session(self.session_id) if self.session_id else None
-        if not rr:
+        arc = self.store.session_position_arc(self.session_id) if self.session_id else None
+        if not rr and not arc:
             return ("No race result recorded for this session (practice/qualy, or not a "
                     "completed race).")
-        parts = []
-        if rr["position"] is not None:
-            parts.append(f"Finished P{rr['position']} overall")
-        if rr["class_position"] is not None:
-            parts.append(f"P{rr['class_position']} in class")
-        if rr["finish_status"]:
-            parts.append(f"status: {rr['finish_status']}")
-        lines = ["; ".join(parts) + "." if parts else "Race result recorded."]
-        incidents = rr["incidents"]
-        if incidents:
-            head = "; ".join(incidents[:3])
-            more = f" (+{len(incidents) - 3} more)" if len(incidents) > 3 else ""
-            lines.append(f"Incidents ({len(incidents)}): {head}{more}")
-        penalties = rr["penalties"]
-        if penalties:
-            texts = [str(p.get("text") or p) for p in penalties[:3]]
-            lines.append(f"Penalties ({len(penalties)}): {'; '.join(texts)}")
+        lines = []
+        if rr:
+            parts = []
+            if rr["position"] is not None:
+                parts.append(f"Finished P{rr['position']} overall")
+            if rr["class_position"] is not None:
+                parts.append(f"P{rr['class_position']} in class")
+            if rr["finish_status"]:
+                parts.append(f"status: {rr['finish_status']}")
+            lines.append("; ".join(parts) + "." if parts else "Race result recorded.")
+            incidents = rr["incidents"]
+            if incidents:
+                head = "; ".join(incidents[:3])
+                more = f" (+{len(incidents) - 3} more)" if len(incidents) > 3 else ""
+                lines.append(f"Incidents ({len(incidents)}): {head}{more}")
+            penalties = rr["penalties"]
+            if penalties:
+                texts = [str(p.get("text") or p) for p in penalties[:3]]
+                lines.append(f"Penalties ({len(penalties)}): {'; '.join(texts)}")
+        if arc:
+            lines.append(
+                f"In-race: started P{arc['start']}, as low as P{arc['worst']}, "
+                f"currently/finished P{arc['last']}."
+            )
         return "\n".join(lines)
 
     def get_setup(self):

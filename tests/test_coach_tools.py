@@ -77,6 +77,18 @@ def test_get_race_result_formats_and_falls_back(tmp_path, synthetic_lap):
     assert "No race result recorded" in ctx.get_race_result()
 
 
+def test_get_race_result_includes_live_arc(tmp_path, synthetic_lap):
+    from simcoach.model_types import LapRecord
+    ctx, store, _ = _ctx(tmp_path, synthetic_lap)
+    ctx.session_id = "arc-1"
+    # A live race with no result log yet: P5 -> P8 -> P10 -> P3.
+    for i, place in enumerate((5, 8, 10, 3)):
+        store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "arc-1",
+                                "timestamp": float(i), "position": place}))
+    out = ctx.get_race_result()
+    assert "started P5" in out and "as low as P10" in out and "P3" in out
+
+
 def test_no_lap_context_is_honest(tmp_path):
     store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
     ctx = CoachContext(store, track="spa", car="car", on_track=False)

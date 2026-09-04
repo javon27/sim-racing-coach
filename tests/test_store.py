@@ -507,3 +507,22 @@ def test_save_without_sectors_writes_null(tmp_path, synthetic_lap):
     s.save(lap)
     row = s.session_laps("s-none")[0]
     assert row["s1"] is None and row["s2"] is None and row["s3"] is None
+
+
+def test_save_persists_position_and_arc(tmp_path, synthetic_lap):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    # A race that ran P5 -> P8 -> P10 -> P3; distinct ts so ORDER BY ts is stable.
+    for i, place in enumerate((5, 8, 10, 3)):
+        s.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "race",
+                            "timestamp": float(i), "position": place}))
+    assert s.session_position_arc("race") == {
+        "start": 5, "best": 3, "worst": 10, "last": 3, "laps": 4,
+    }
+
+
+def test_session_position_arc_none_without_positions(tmp_path, synthetic_lap):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    s.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "prac", "position": None}))
+    assert s.session_position_arc("prac") is None

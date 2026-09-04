@@ -14,3 +14,4 @@ class LapRecord:
     phase: str | None = None
     session_id: str | None = None
     sectors: list[float] | None = None
+    position: int | None = None

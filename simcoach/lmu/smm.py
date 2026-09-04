@@ -325,6 +325,13 @@ def compute_sectors(
     return None
 
 
+def player_position(place) -> int | None:
+    """The player's live race position (mPlace) as a 1-based int, or None for the
+    0/unset sentinel LMU reports when not racing. Guards nonsensical values so a
+    stray 0 never lands in the store as a real position."""
+    return int(place) if place and place > 0 else None
+
+
 def build_lap_record(
     sim: str,
     track: str,
@@ -336,6 +343,7 @@ def build_lap_record(
     phase: str | None = None,
     session_id: str | None = None,
     sectors: list[float] | None = None,
+    position: int | None = None,
 ) -> LapRecord | None:
     """Pure decision: turn a completed lap's raw fields into a LapRecord, or
     None if the lap shouldn't be stored.
@@ -358,6 +366,7 @@ def build_lap_record(
         phase=phase,
         session_id=session_id,
         sectors=sectors,
+        position=position,
     )
 
 
@@ -461,11 +470,12 @@ class LmuSource:
                     sectors = compute_sectors(
                         player.mLastSector1, player.mLastSector2, lap_time
                     )
+                    position = player_position(player.mPlace)
                     record = build_lap_record(
                         sim="lmu", track=track, car=car, lap_time=lap_time,
                         invalidated=vt.mLapInvalidated, timestamp=time.time(),
                         channels=channels, phase=phase, session_id=session_id,
-                        sectors=sectors,
+                        sectors=sectors, position=position,
                     )
                     if record is not None:
                         committed_time = lap_time
