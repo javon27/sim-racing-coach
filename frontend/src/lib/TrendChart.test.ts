@@ -1,9 +1,25 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeAll } from "vitest";
 import { render, cleanup, fireEvent } from "@testing-library/svelte";
 import TrendChart from "./TrendChart.svelte";
 
+// The chart reads its scroll container's clientWidth to fill the width; jsdom
+// reports 0, so we stub it (ResizeObserver is absent in jsdom, but the chart
+// guards for that and falls back to a one-shot clientWidth read on mount).
+let mockClientWidth = 0;
+beforeAll(() => {
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get() {
+      return mockClientWidth;
+    },
+  });
+});
+
 describe("TrendChart", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    mockClientWidth = 0;
+  });
 
   it("renders an svg with one point per series entry", () => {
     const { container } = render(TrendChart, {
@@ -44,7 +60,7 @@ describe("TrendChart", () => {
     });
 
     const cx = [...container.querySelectorAll("circle")].map((c) => c.getAttribute("cx"));
-    // All three render at DIFFERENT x — they no longer collapse onto one date slot.
+    // All three render at DIFFERENT x — placed by their real timestamp.
     expect(new Set(cx).size).toBe(3);
   });
 
@@ -62,15 +78,62 @@ describe("TrendChart", () => {
     expect(container.querySelectorAll("circle").length).toBe(4);
   });
 
-  it("zoom-in widens the plot (more px per slot)", async () => {
+  it("zoom-in widens the plot (svg width grows)", async () => {
     const series = [
       { name: "Corvette Z06", points: [{ x: 1, label: "9/1", value: 216.5 }, { x: 2, label: "9/2", value: 214.0 }] },
     ];
-    const { container, getByLabelText } = render(TrendChart, { props: { series, gap: 64 } });
+    const { container, getByLabelText } = render(TrendChart, { props: { series } });
     const before = Number(container.querySelector("svg")!.getAttribute("width"));
     await fireEvent.click(getByLabelText("Zoom in"));
     const after = Number(container.querySelector("svg")!.getAttribute("width"));
     expect(after).toBeGreaterThan(before);
+  });
+
+  it("fills the container width at base zoom", () => {
+    mockClientWidth = 640;
+    const day = 86400;
+    const start = 1_725_000_000; // some unix-seconds instant
+    const { container } = render(TrendChart, {
+      props: {
+        series: [
+          {
+            name: "Corvette Z06",
+            points: [
+              { x: start, label: "d1", value: 216.5 },
+              { x: start + day, label: "d2", value: 215.0 },
+              { x: start + 2 * day, label: "d3", value: 214.2 },
+            ],
+          },
+        ],
+      },
+    });
+
+    const w = Number(container.querySelector("svg")!.getAttribute("width"));
+    // At base zoom the svg spans ~the container, not a tiny fixed width.
+    expect(Math.abs(w - 640)).toBeLessThan(2);
+  });
+
+  it("shows sub-day (HH:MM) time labels when zoomed into a single day", () => {
+    mockClientWidth = 640;
+    const start = 1_725_000_000;
+    const { container } = render(TrendChart, {
+      props: {
+        zoom: 200, // deep zoom over a ~1h span -> 30-min ticks
+        series: [
+          {
+            name: "Corvette Z06",
+            points: [
+              { x: start, label: "s1", value: 216.5 },
+              { x: start + 1800, label: "s2", value: 215.0 },
+              { x: start + 3600, label: "s3", value: 214.2 },
+            ],
+          },
+        ],
+      },
+    });
+
+    const labels = [...container.querySelectorAll("text.xlabel")].map((t) => t.textContent ?? "");
+    expect(labels.some((l) => /\d{1,2}:\d{2}/.test(l))).toBe(true);
   });
 
   it("shows a placeholder when there is less than one point", () => {
