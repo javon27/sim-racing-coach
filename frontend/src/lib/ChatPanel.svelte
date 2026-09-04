@@ -280,7 +280,6 @@
       ></textarea>
       <button type="button" class="send" onclick={send} disabled={waiting}>Send</button>
     </div>
-    <div class="hint">{lapId ? `Lap ${lapId} selected` : "Ask about your last lap or overall pace"}</div>
   </div>
 </section>
 

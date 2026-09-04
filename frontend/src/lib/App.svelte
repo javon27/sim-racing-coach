@@ -94,6 +94,7 @@
           <aside class="rail">
             <LapList
               sessionId={activeSessionId}
+              selectedLapId={selectedLapId ?? null}
               onselect={(detail) => {
                 selectedLapId = detail.lap_id;
                 selectedSessionId = detail.session_id;

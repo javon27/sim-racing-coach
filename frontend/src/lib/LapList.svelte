@@ -8,12 +8,14 @@
     retryDelayMs = 750,
     pollMs = 5000,
     sessionId = null,
+    selectedLapId = null,
   }: {
     onselect?: (detail: { lap_id: number; session_id: string }) => void;
     retryTries?: number;
     retryDelayMs?: number;
     pollMs?: number;
     sessionId?: string | null;
+    selectedLapId?: number | null;
   } = $props();
 
   let laps: LapRow[] = $state([]);
@@ -185,7 +187,14 @@
         <div class="phase-head">{phaseLabel(group.phase)}</div>
       {/if}
       {#each group.laps as lap, i (lap.id)}
-        <button type="button" class="lap" class:best={lap.id === bestId} onclick={() => select(lap.id)}>
+        <button
+          type="button"
+          class="lap"
+          class:best={lap.id === bestId}
+          class:selected={lap.id === selectedLapId}
+          aria-pressed={lap.id === selectedLapId}
+          onclick={() => select(lap.id)}
+        >
           <span class="n">Lap {i + 1}</span>
           <span class="t">{formatTime(lap.lap_time)}</span>
           <span class="flag">{lap.valid ? "" : "✗ inv"}</span>

@@ -84,16 +84,20 @@ describe("Coach screen assembly", () => {
     expect(screen.getByPlaceholderText(/ask your engineer/i)).toBeTruthy(); // chat composer
   });
 
-  it("flows a selected lap's id + session id into the corner panel and the chat hint", async () => {
+  it("flows a selected lap's id into the corner panel and highlights the row", async () => {
     render(App);
 
-    expect(screen.getByText(/ask about your last lap/i)).toBeTruthy();
-
     const lapRow = await screen.findByText("Lap 1");
+    const btn = lapRow.closest("button") as HTMLButtonElement;
+    expect(btn.getAttribute("aria-pressed")).toBe("false"); // not selected yet
+
     await fireEvent.click(lapRow);
 
-    expect(await screen.findByText("Lap 9 selected")).toBeTruthy();
+    // The clicked lap's real id (9) flows into the corner analysis...
     expect(vi.mocked(getLapAnalysis)).toHaveBeenCalledWith(9);
+    // ...and the row is highlighted as selected (no "Lap N selected" hint text).
+    await vi.waitFor(() => expect(btn.getAttribute("aria-pressed")).toBe("true"));
+    expect(btn.className).toContain("selected");
   });
 
   it("switches to the Sessions screen when the Sessions nav item is clicked", async () => {
