@@ -12,7 +12,7 @@ import numpy as np
 
 from simcoach.model_types import LapRecord
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
@@ -48,7 +48,10 @@ CREATE TABLE IF NOT EXISTS laps (
     telemetry_path TEXT,
     phase TEXT,
     session_id TEXT,
-    source TEXT DEFAULT 'live'
+    source TEXT DEFAULT 'live',
+    s1 REAL,
+    s2 REAL,
+    s3 REAL
 );
 CREATE TABLE IF NOT EXISTS ingested_files (
     path TEXT PRIMARY KEY,
@@ -149,6 +152,15 @@ class LapStore:
                 self.conn.execute(
                     "CREATE TABLE IF NOT EXISTS ingested_files (path TEXT PRIMARY KEY, mtime REAL)"
                 )
+            if current_version < 7:
+                # v6 -> v7: per-lap sector times (s1/s2/s3), nullable. Backfilled
+                # for result-log imports (which already parse sectors) and, later,
+                # live capture. Existing rows stay NULL.
+                cols = [r[1] for r in self.conn.execute("PRAGMA table_info(laps)")]
+                if cols:
+                    for c in ("s1", "s2", "s3"):
+                        if c not in cols:
+                            _add_column(self.conn, "laps", f"{c} REAL")
         if current_version != SCHEMA_VERSION:
             self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self.conn.commit()
@@ -352,10 +364,11 @@ class LapStore:
     def session_laps(self, session_id: str) -> list[dict]:
         with self._lock:
             rows = self.conn.execute(
-                "SELECT id, lap_time, valid, ts FROM laps WHERE session_id = ? ORDER BY ts",
+                "SELECT id, lap_time, valid, ts, s1, s2, s3 FROM laps "
+                "WHERE session_id = ? ORDER BY ts",
                 (session_id,),
             ).fetchall()
-            keys = ("id", "lap_time", "valid", "ts")
+            keys = ("id", "lap_time", "valid", "ts", "s1", "s2", "s3")
             return [dict(zip(keys, r)) for r in rows]
 
     def clear_all(self) -> None:
@@ -371,13 +384,18 @@ class LapStore:
     def save_result_session(self, rs, session_id: str) -> None:
         """Backfill a parsed LMU result-log session's laps into the laps
         table (source='result', no telemetry -- summary only)."""
+        def _sec(sectors, i):
+            return sectors[i] if sectors is not None and len(sectors) > i else None
+
         with self._lock, self.conn:
             self.conn.executemany(
                 "INSERT INTO laps (ts, sim, track, car, lap_time, valid, telemetry_path, "
-                "phase, session_id, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'result')",
+                "phase, session_id, source, s1, s2, s3) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'result', ?, ?, ?)",
                 [
                     (rs.date_ts, rs.sim, rs.track, rs.car, lap.lap_time, int(lap.valid),
-                     None, rs.session_type, session_id)
+                     None, rs.session_type, session_id,
+                     _sec(lap.sectors, 0), _sec(lap.sectors, 1), _sec(lap.sectors, 2))
                     for lap in rs.laps
                 ],
             )

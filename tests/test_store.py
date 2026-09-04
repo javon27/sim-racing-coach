@@ -378,6 +378,22 @@ def test_save_result_session_inserts_rows_queryable(tmp_path):
     assert any(sess["session_id"] == "result-abc" and sess["laps"] == 2 for sess in sessions)
 
 
+def test_save_result_session_persists_sectors(tmp_path):
+    from simcoach.lmu.results import ResultLap
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    rs = _fake_result_session(laps=[
+        ResultLap(lap_no=1, lap_time=91.2, sectors=[30.1, 30.2, 30.9], valid=True),
+        ResultLap(lap_no=2, lap_time=None, sectors=[], valid=False),  # DNF: no sectors -> NULLs
+    ])
+    s.save_result_session(rs, session_id="result-sec")
+
+    laps = {l["lap_time"]: l for l in s.session_laps("result-sec")}
+    assert (laps[91.2]["s1"], laps[91.2]["s2"], laps[91.2]["s3"]) == (30.1, 30.2, 30.9)
+    empty = next(l for l in s.session_laps("result-sec") if l["lap_time"] is None)
+    assert empty["s1"] is None and empty["s2"] is None and empty["s3"] is None
+
+
 def test_save_result_session_marks_invalid_laps(tmp_path):
     from simcoach.lmu.results import ResultLap
     from simcoach.store import LapStore

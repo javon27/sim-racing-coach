@@ -61,7 +61,8 @@ def test_session_laps(tmp_path, synthetic_lap):
     app, lap_id, cid = _app(tmp_path, synthetic_lap)
     rows = _tc(app).get("/sessions/s1/laps").json()
     assert rows == [{"id": lap_id, "lap_time": synthetic_lap.lap_time,
-                     "valid": 1, "ts": synthetic_lap.timestamp}]
+                     "valid": 1, "ts": synthetic_lap.timestamp,
+                     "s1": None, "s2": None, "s3": None}]
 
 
 def test_analysis_404_without_cmap(tmp_path, synthetic_lap):
