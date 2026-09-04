@@ -1,9 +1,11 @@
+import numpy as np
 from fastapi.testclient import TestClient
 from simcoach.server.app import create_app
 from simcoach.store import LapStore
 from simcoach.coach import Coach
 from simcoach.model.fake import FakeModel
 from simcoach.corners import CornerMap
+from simcoach.model_types import LapRecord
 
 
 def _app(tmp_path, synthetic_lap, cmap=None):
@@ -107,6 +109,37 @@ def test_analysis_404_missing_lap(tmp_path, synthetic_lap):
     app, lap_id, cid = _app(tmp_path, synthetic_lap, cmap=cmap)
     r = _tc(app).get("/laps/99999/analysis")
     assert r.status_code == 404
+
+
+def _pos_lap():
+    x = np.array([0.0, 100.0, 100.0, 0.0, 0.0])
+    z = np.array([0.0, 0.0, 100.0, 100.0, 0.0])
+    dist = np.array([0.0, 100.0, 200.0, 300.0, 400.0])
+    return LapRecord("lmu", "test_track", "test_car", 90.0, True, 0.0,
+                     {"pos_x": x, "pos_z": z, "lap_distance": dist})
+
+
+def test_map_with_pos_and_cmap(tmp_path):
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    lap_id = store.save(_pos_lap())
+    coach = Coach(FakeModel(), "simcoach/knowledge")
+    body = _tc(create_app(store, coach, cmap=cmap)).get(f"/laps/{lap_id}/map").json()
+    assert body["width"] == 1000
+    assert body["path"]
+    assert len(body["corners"]) == 2
+    assert body["corners"][0]["name"] == "Left Hairpin"
+
+
+def test_map_without_pos_channels_is_empty(tmp_path, synthetic_lap):
+    # synthetic_lap has no pos_x/pos_z -> {} per contract.
+    app, lap_id, cid = _app(tmp_path, synthetic_lap)
+    assert _tc(app).get(f"/laps/{lap_id}/map").json() == {}
+
+
+def test_map_unknown_lap_is_404(tmp_path, synthetic_lap):
+    app, *_ = _app(tmp_path, synthetic_lap)
+    assert _tc(app).get("/laps/99999/map").status_code == 404
 
 
 def test_setup_survives_rest_failure(tmp_path, synthetic_lap):

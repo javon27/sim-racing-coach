@@ -237,6 +237,10 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
         "lat_g": telem.mLocalAccel.x / 9.80665,
         "long_g": telem.mLocalAccel.z / 9.80665,
         "lap_distance": lap_dist,
+        # World position (horizontal plane; mPos.y is vertical) for track-map
+        # outline. Appended raw even if non-finite -- the map builder filters.
+        "pos_x": telem.mPos.x,
+        "pos_z": telem.mPos.z,
         "gear": float(telem.mGear),
         "rpm": telem.mEngineRPM,
         "abs_active": 1.0 if telem.mABSActive else 0.0,

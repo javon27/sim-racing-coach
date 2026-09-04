@@ -22,6 +22,7 @@ from ..coach_tools import CoachContext
 from ..lmu.ingest import ingest_all
 from ..model.factory import CoachUserError, make_model
 from ..tiers import legal_adjustments
+from ..trackmap import build_track_map
 
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}  # port stripped before compare
 REST_PROBE_TTL = 2.0  # s: liveness probe rate cap so /status polling can't hammer LMU's REST
@@ -207,6 +208,17 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             "lap_time": a.lap_time,
             "corners": [asdict(c) for c in a.corners],
         })
+
+    @app.get("/laps/{lap_id}/map")
+    def lap_map(lap_id: int):
+        try:
+            rec = store.load(lap_id)
+        except (KeyError, FileNotFoundError):
+            raise HTTPException(404, "lap not found")
+        # cmap may be None -> build_track_map yields corners: [] but still draws
+        # the path from telemetry.
+        cmap = _map_for(rec.track)
+        return _clean(build_track_map(rec.channels, cmap))
 
     @app.get("/setup")
     def setup():
