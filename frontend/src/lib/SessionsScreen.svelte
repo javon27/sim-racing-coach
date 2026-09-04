@@ -84,7 +84,9 @@
           points: filtered
             .filter((s) => s.car === car && s.best != null)
             .sort((a, b) => a.started - b.started)
-            .map((s) => ({ date: formatDate(s.started), value: s.best as number })),
+            // x = the session start timestamp so same-day sessions each get their
+            // own slot (spread out); label shows the date.
+            .map((s) => ({ x: s.started, label: formatDate(s.started), value: s.best as number })),
         })),
   );
 </script>
