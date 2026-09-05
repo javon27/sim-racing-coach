@@ -55,10 +55,10 @@ def test_sections_load_and_validate(tmp_path):
 
 
 def test_all_shipped_track_files_still_load():
-    files = glob.glob("simcoach/tracks/*.json")
-    assert len(files) >= 16
-    for f in files:
-        CornerMap.load(f)  # must not raise (back-compat)
+    # Whatever track JSONs ship must load (back-compat). The real map set is
+    # user-owned data cleared/rebuilt in the editor, so don't pin a count.
+    for f in glob.glob("simcoach/tracks/*.json"):
+        CornerMap.load(f)  # must not raise
 
 
 def test_analysis_multi_apex_per_apex_min_speeds():
