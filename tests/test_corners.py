@@ -165,22 +165,26 @@ def test_load_rejects_apex_outside_window(tmp_path):
     ]
     path = _write_track_json(tmp_path, corners)
 
-    with pytest.raises(ValueError, match="apex_dist"):
+    with pytest.raises(ValueError, match="apex"):
         CornerMap.load(path)
 
 
-def test_load_rejects_start_ge_end(tmp_path):
-    """CornerMap.load raises ValueError when start_dist >= end_dist (wrapped/degenerate window)."""
+def test_load_accepts_wrap_rejects_degenerate(tmp_path):
+    """start_dist > end_dist is a valid S/F-seam WRAP; only start == end is degenerate."""
     from simcoach.corners import CornerMap
 
-    corners = [
-        {"number": 1, "name": "Wrapped", "direction": "left",
-         "start_dist": 1200, "apex_dist": 1000, "end_dist": 800},
-    ]
-    path = _write_track_json(tmp_path, corners)
+    wrap = _write_track_json(tmp_path, [
+        {"number": 1, "name": "Seam", "direction": "left",
+         "start_dist": 1200, "apex_dist": 1300, "end_dist": 800},  # wraps; apex >= start
+    ])
+    assert CornerMap.load(wrap).corners[0].start_dist == 1200  # loads fine
 
-    with pytest.raises(ValueError, match="start_dist"):
-        CornerMap.load(path)
+    degen = _write_track_json(tmp_path, [
+        {"number": 1, "name": "Degen", "direction": "left",
+         "start_dist": 900, "apex_dist": 900, "end_dist": 900},
+    ])
+    with pytest.raises(ValueError, match="degenerate"):
+        CornerMap.load(degen)
 
 
 def test_verify_map_directions_flags_undetermined_corner(synthetic_lap):

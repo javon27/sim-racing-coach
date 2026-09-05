@@ -27,7 +27,7 @@ from ..coach_tools import CoachContext
 from ..lmu.ingest import ingest_all
 from ..model.factory import CoachUserError, make_model
 from ..tiers import legal_adjustments
-from ..corners import CornerMap
+from ..corners import CornerMap, in_window
 from ..ribbon import multi_signal_direction, reconstruct_surface, ribbon_to_screen
 from ..track_lookup import track_slug
 from ..trackmap import average_racing_line, build_track_map, direction_from_path
@@ -513,16 +513,19 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 raise HTTPException(422, f"corner {number}: non-finite window")
             start = min(max(start, 0.0), length)  # clamp client values into the track
             end = min(max(end, 0.0), length)
-            if not (start < apex < end):
-                raise HTTPException(422, f"corner {number}: require start_dist < apex_dist < end_dist")
+            # start > end is a valid S/F-seam WRAP; only start == end is degenerate.
+            if start == end:
+                raise HTTPException(422, f"corner {number}: start_dist == end_dist is degenerate")
+            if not in_window(apex, start, end):
+                raise HTTPException(422, f"corner {number}: apex_dist must be inside the window")
             direction = direction_from_path(path, dist, apex)  # server-derived, never client
-            # Optional multi-apex list; keep only finite apexes inside the window,
-            # else fall back to the single primary apex.
+            # Optional multi-apex list; keep only finite apexes inside the (wrap-aware)
+            # window, else fall back to the single primary apex.
             raw_apexes = c.get("apexes")
             apexes = [apex]
             if isinstance(raw_apexes, list):
                 kept = [float(a) for a in raw_apexes
-                        if isinstance(a, (int, float)) and math.isfinite(a) and start <= a <= end]
+                        if isinstance(a, (int, float)) and math.isfinite(a) and in_window(a, start, end)]
                 if kept:
                     apexes = sorted(round(a, 1) for a in kept)
             corners.append({

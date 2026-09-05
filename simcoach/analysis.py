@@ -3,7 +3,7 @@ from typing import Optional
 import numpy as np
 
 from simcoach.model_types import LapRecord
-from simcoach.corners import Corner, CornerMap, compute_direction
+from simcoach.corners import Corner, CornerMap, compute_direction, in_window
 
 
 @dataclass
@@ -90,7 +90,7 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
     label = corner.label or str(corner.number)
     apexes = list(corner.apexes) if corner.apexes else [corner.apex_dist]
 
-    mask = (dist >= corner.start_dist) & (dist <= corner.end_dist)
+    mask = in_window(dist, corner.start_dist, corner.end_dist)  # wrap-aware (S/F seam)
     idx = np.where(mask)[0]
 
     if idx.size == 0:
@@ -170,14 +170,19 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
     # Per-apex min speed: split the window at midpoints between consecutive apexes
     # (a double-apex corner reports a min for each apex, so the coach can advise on
     # both). apexes is the source of truth -- we don't auto-detect extra minima.
-    aps = [a for a in apexes if corner.start_dist <= a <= corner.end_dist] or [corner.apex_dist]
-    edges = [corner.start_dist] + [(aps[i] + aps[i + 1]) / 2 for i in range(len(aps) - 1)] + [corner.end_dist]
-    apex_min_speeds = []
-    for i in range(len(aps)):
-        seg = win_speed[(win_dist >= edges[i]) & (win_dist <= edges[i + 1])]
-        apex_min_speeds.append(
-            float(np.nanmin(seg)) if seg.size and not np.isnan(seg).all() else min_spd
-        )
+    aps = [a for a in apexes if in_window(a, corner.start_dist, corner.end_dist)] or [corner.apex_dist]
+    if corner.start_dist <= corner.end_dist and len(aps) > 1:
+        edges = [corner.start_dist] + [(aps[i] + aps[i + 1]) / 2 for i in range(len(aps) - 1)] + [corner.end_dist]
+        apex_min_speeds = []
+        for i in range(len(aps)):
+            seg = win_speed[(win_dist >= edges[i]) & (win_dist <= edges[i + 1])]
+            apex_min_speeds.append(
+                float(np.nanmin(seg)) if seg.size and not np.isnan(seg).all() else min_spd
+            )
+    else:
+        # Single-apex, or a wrapped window where a linear midpoint split is invalid:
+        # each apex just reports the window min.
+        apex_min_speeds = [min_spd] * len(aps)
 
     return CornerMetrics(
         corner_no=corner.number,

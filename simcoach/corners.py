@@ -10,6 +10,14 @@ from simcoach.model_types import LapRecord
 RIGHT_IS_POSITIVE = True
 
 
+def in_window(dist, start, end):
+    """Is `dist` (scalar or ndarray) inside a corner window? start > end WRAPS the
+    S/F seam: [start, length] u [0, end]. Works for floats and numpy arrays."""
+    if start <= end:
+        return (dist >= start) & (dist <= end)
+    return (dist >= start) | (dist <= end)
+
+
 @dataclass
 class Corner:
     """A single corner in a track map."""
@@ -48,23 +56,24 @@ class CornerMap:
     def load(cls, path: str) -> "CornerMap":
         """Load corner map from JSON file.
 
-        Raises ValueError if a corner's window is degenerate/wrapped
-        (start_dist >= end_dist) or its apex_dist falls outside
-        [start_dist, end_dist].
+        start_dist > end_dist is a valid S/F-seam WRAP (spans end-of-lap into the
+        next). Raises ValueError only if start == end (degenerate) or an apex
+        falls outside the (possibly wrapped) window.
         """
         with open(path) as f:
             data = json.load(f)
         corners = [Corner(**c) for c in data["corners"]]
         for c in corners:
-            if not (c.start_dist < c.end_dist):
+            if c.start_dist == c.end_dist:
                 raise ValueError(
-                    f"corner {c.number}: start_dist ({c.start_dist}) must be < end_dist ({c.end_dist})"
+                    f"corner {c.number}: start_dist == end_dist ({c.start_dist}) is degenerate"
                 )
-            if not (c.start_dist <= c.apex_dist <= c.end_dist):
-                raise ValueError(
-                    f"corner {c.number}: apex_dist ({c.apex_dist}) must be within "
-                    f"[start_dist, end_dist] ({c.start_dist}, {c.end_dist})"
-                )
+            for a in [c.apex_dist, *(c.apexes or [])]:
+                if not in_window(a, c.start_dist, c.end_dist):
+                    raise ValueError(
+                        f"corner {c.number}: apex {a} outside window "
+                        f"[{c.start_dist}, {c.end_dist}]"
+                    )
             if not c.label:                       # back-compat: label defaults to the number
                 c.label = str(c.number)
             if not c.apexes:                      # back-compat: single-apex default
@@ -72,9 +81,9 @@ class CornerMap:
         return cls(corners, _load_sections(data))
 
     def corner_at(self, dist: float) -> Optional[Corner]:
-        """Return the first corner whose [start_dist, end_dist] contains dist (inclusive boundaries)."""
+        """Return the first corner whose window contains dist (inclusive; wrap-aware)."""
         for corner in self.corners:
-            if corner.start_dist <= dist <= corner.end_dist:
+            if in_window(dist, corner.start_dist, corner.end_dist):
                 return corner
         return None
 
@@ -91,7 +100,7 @@ def compute_direction(record: LapRecord, start: float, end: float) -> str:
     lap_distance = record.channels["lap_distance"]
     steering = record.channels["steering"]
 
-    mask = (lap_distance >= start) & (lap_distance <= end)
+    mask = in_window(lap_distance, start, end)
 
     if not np.any(mask):
         raise ValueError(f"no telemetry in window [{start}, {end}]")
