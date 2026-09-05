@@ -104,6 +104,24 @@ class-colored dots. No extra map work needed then — it consumes this file.
 3. Review + red-team both lanes; full py + fe suites + build green.
 4. Later: sector live cross-check; Pit Wall consumer.
 
+## Increment: accurate corner windows (start_dist/end_dist) — 2026-09-04
+Problem: `analysis.py` computes EVERY per-corner metric (speeds, brake_point, throttle_point,
+trail-brake, peak brake/lat-g) only within `[start_dist, end_dist]` (`:86`), and `brake_point`
+is the first braking sample IN the window (`:137`) — so if `start_dist` falls after brake
+onset, the brake point is mis-detected. The editor sets `apex_dist` (drag) but not the window;
+added corners get a fixed ±2.5%-of-length default that's often too narrow on entry for heavy
+stops. User decision: **auto-derive the window from telemetry + allow manual override.**
+- BACKEND: extend the averaging to also produce averaged `brake`/`throttle`/`speed` on the
+  same distance grid as the path. New `derive_corner_window(dist, brake, throttle, apex, length)`
+  → `start` = brake onset scanning back from apex (brake rises above ~0.05 / throttle lifts),
+  `end` = throttle restored scanning forward (throttle back above ~0.9 / speed recovering);
+  clamp to [0,length], guarantee start<apex<end, small default window for flat-out kinks with
+  no braking; handle the closed-loop wrap. Use it in PUT/add when the client omits start/end;
+  RESPECT client-sent start/end (manual override), validated+clamped as today.
+- FRONTEND: draggable start & end handles per corner (snap to line via `dist[]`), plus a
+  highlighted line segment showing the window; added corners show the auto-derived window,
+  which the user can drag to adjust; Save sends the (possibly adjusted) start/end.
+
 ## Invariants preserved
 - Corners owned data; direction always machine-derived (now from path curvature) — no LLM,
   no hand-set direction. Names/numbers/apex position are the human-verified parts (this IS
