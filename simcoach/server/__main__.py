@@ -35,7 +35,8 @@ def build_app():
         return None
 
     app = create_app(store, coach, cmap=None, rest=None,
-                     map_resolver=_map_resolver, rest_factory=m.LmuRest)
+                     map_resolver=_map_resolver, rest_factory=m.LmuRest,
+                     tracks_dir=m.TRACKS_DIR)
 
     def _capture_forever():
         # Retries like simcoach.app.run_repl's capture thread: LMU may not be

@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 from fastapi.testclient import TestClient
 from simcoach.server.app import create_app
@@ -129,6 +131,125 @@ def test_map_with_pos_and_cmap(tmp_path):
     assert body["path"]
     assert len(body["corners"]) == 2
     assert body["corners"][0]["name"] == "Left Hairpin"
+
+
+def test_map_has_dist_and_corner_windows(tmp_path):
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    lap_id = store.save(_pos_lap())
+    coach = Coach(FakeModel(), "simcoach/knowledge")
+    body = _tc(create_app(store, coach, cmap=cmap)).get(f"/laps/{lap_id}/map").json()
+    assert len(body["dist"]) == len(body["path"])
+    assert "apex_dist" in body["corners"][0]
+    assert "start_dist" in body["corners"][0] and "end_dist" in body["corners"][0]
+    assert body["sectors"] == []  # no shipped file for test_track slug in tmp dir
+
+
+def _curve_lap(track, car, lap_time, valid=True, dx=0.0):
+    # An L-shaped line: +x from dist 0..200, then a LEFT turn to +z 200..400.
+    x = np.array([0.0, 100.0, 200.0, 200.0, 200.0]) + dx
+    z = np.array([0.0, 0.0, 0.0, 100.0, 200.0])
+    dist = np.array([0.0, 100.0, 200.0, 300.0, 400.0])
+    return LapRecord("lmu", track, car, lap_time, valid, 0.0,
+                     {"pos_x": x, "pos_z": z, "lap_distance": dist})
+
+
+def test_map_avg_averages_clean_laps(tmp_path):
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    a = store.save(_curve_lap("Curveland", "GT3", 90.0, dx=0.0))
+    store.save(_curve_lap("Curveland", "GT3", 90.5, dx=10.0))
+    store.save(_curve_lap("Curveland", "GT3", 200.0, dx=999.0))  # off lap -> excluded
+    coach = Coach(FakeModel(), "simcoach/knowledge")
+    app = create_app(store, coach, tracks_dir=str(tmp_path / "tracks"))
+    body = _tc(app).get(f"/laps/{a}/map?avg=1").json()
+    assert body["path"]  # averaged outline built
+    assert len(body["dist"]) == len(body["path"])
+
+
+def _curve_app(tmp_path):
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    lap_id = store.save(_curve_lap("Curveland", "GT3", 90.0, dx=0.0))
+    store.save(_curve_lap("Curveland", "GT3", 90.4, dx=8.0))
+    coach = Coach(FakeModel(), "simcoach/knowledge")
+    tracks = tmp_path / "tracks"
+    app = create_app(store, coach, tracks_dir=str(tracks))
+    return app, lap_id, tracks
+
+
+def test_put_map_saves_and_direction_is_server_derived(tmp_path):
+    app, lap_id, tracks = _curve_app(tmp_path)
+    c = _tc(app)
+    # Client sends a WRONG direction; the server must ignore it and derive "left"
+    # from the averaged path geometry (the corner turns +x -> +z at dist 200).
+    r = c.put(f"/laps/{lap_id}/map", json={
+        "corners": [{"number": 1, "name": "The Bend", "apex_dist": 200.0,
+                     "direction": "right"}],
+        "sectors": [150.0],
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["corners"][0]["direction"] == "left"
+    assert body["sectors"] == [150.0]
+    # File written and reloadable by CornerMap.load (back-compat shape).
+    saved = json.loads((tracks / "curveland.json").read_text())
+    assert saved["corners"][0]["direction"] == "left"
+    from simcoach.corners import CornerMap as CM
+    cm = CM.load(str(tracks / "curveland.json"))
+    assert cm.corners[0].name == "The Bend"
+    # GET avg reflects the saved corner.
+    got = c.get(f"/laps/{lap_id}/map?avg=1").json()
+    assert got["corners"][0]["name"] == "The Bend"
+
+
+def test_put_map_invalid_window_is_422(tmp_path):
+    app, lap_id, tracks = _curve_app(tmp_path)
+    r = _tc(app).put(f"/laps/{lap_id}/map", json={
+        "corners": [{"number": 1, "apex_dist": 200.0, "start_dist": 250.0, "end_dist": 260.0}],
+    })
+    assert r.status_code == 422
+    assert not (tracks / "curveland.json").exists()  # nothing written on validation failure
+
+
+def test_put_map_bad_sectors_is_422(tmp_path):
+    app, lap_id, _ = _curve_app(tmp_path)
+    r = _tc(app).put(f"/laps/{lap_id}/map", json={
+        "corners": [{"number": 1, "apex_dist": 200.0}],
+        "sectors": [300.0, 100.0],  # not increasing
+    })
+    assert r.status_code == 422
+
+
+def test_put_map_unknown_lap_is_404(tmp_path):
+    app, *_ = _curve_app(tmp_path)
+    r = _tc(app).put("/laps/99999/map", json={"corners": [{"number": 1, "apex_dist": 200.0}]})
+    assert r.status_code == 404
+
+
+def test_put_map_slug_cannot_escape_tracks_dir(tmp_path):
+    # A malicious track name is sanitized by track_slug to a safe stem; the file
+    # must land inside the tracks dir, never outside it.
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    lap_id = store.save(_curve_lap("../../../evil", "GT3", 90.0))
+    store.save(_curve_lap("../../../evil", "GT3", 90.3, dx=5.0))
+    coach = Coach(FakeModel(), "simcoach/knowledge")
+    tracks = tmp_path / "tracks"
+    app = create_app(store, coach, tracks_dir=str(tracks))
+    r = _tc(app).put(f"/laps/{lap_id}/map", json={"corners": [{"number": 1, "apex_dist": 200.0}]})
+    assert r.status_code == 200
+    written = list(tracks.glob("*.json"))
+    assert written and all(p.parent == tracks for p in written)
+    assert not (tmp_path / "evil.json").exists()  # did not escape
+
+
+def test_put_map_no_clean_laps_is_422(tmp_path):
+    # A lap with no position telemetry cannot yield an averaged outline.
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    lap_id = store.save(LapRecord("lmu", "Bare", "GT3", 90.0, True, 0.0,
+                                  {"lap_distance": np.arange(5.0)}))
+    coach = Coach(FakeModel(), "simcoach/knowledge")
+    app = create_app(store, coach, tracks_dir=str(tmp_path / "tracks"))
+    r = _tc(app).put(f"/laps/{lap_id}/map", json={"corners": [{"number": 1, "apex_dist": 2.0}]})
+    assert r.status_code == 422
 
 
 def test_map_without_pos_channels_is_empty(tmp_path, synthetic_lap):

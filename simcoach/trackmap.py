@@ -13,6 +13,101 @@ import numpy as np
 
 _MAX_PATH_POINTS = 300
 
+# World-coordinate handedness for turn-direction inference. The 2D cross product
+# of the incoming×outgoing segment vectors around an apex is signed; this pins
+# which sign is a LEFT turn in LMU's (pos_x, pos_z) ground plane. Chosen so the
+# standard math orientation (+x right, +z "up", counter-clockwise = left) reads
+# as left; test_direction_synthetic_left_right pins that meaning.
+#
+# ponytail: calibration knob. It could NOT be confirmed against real Monza
+# position telemetry -- no stored lap in this repo carries pos_x/pos_z yet
+# (position capture via smm.py is a parallel lane; the DB + all scratchpad
+# captures only hold speed/steering/lat_g/lap_distance). Confirm this sign
+# against a real captured Monza lap once pos_x/pos_z laps exist, using
+# test_direction_monza_real (currently skipped for want of that data).
+_LEFT_TURN_IS_CROSS_POSITIVE = True
+
+
+def average_racing_line(laps, bins: int = 500):
+    """Mean racing line over multiple laps, aligned on the lap_distance axis.
+
+    `laps` is a list of channel dicts, each with numpy `pos_x`, `pos_z`,
+    `lap_distance`. Each lap's (pos_x, pos_z) is resampled by linear
+    interpolation onto ONE shared distance grid 0..max_length, then averaged
+    per bin. LMU world coords share a fixed origin, so a plain per-bin mean is
+    the midline. Laps missing a channel or too short are skipped.
+
+    Returns (path_world=[[x,z],...], dist=[...]); ([], []) when nothing usable.
+    """
+    grids_x, grids_z = [], []
+    lengths = []
+    resampled = []
+    for ch in laps:
+        if not all(k in ch for k in ("pos_x", "pos_z", "lap_distance")):
+            continue
+        x = np.asarray(ch["pos_x"], dtype=float)
+        z = np.asarray(ch["pos_z"], dtype=float)
+        d = np.asarray(ch["lap_distance"], dtype=float)
+        n = min(len(x), len(z), len(d))
+        if n < 2:
+            continue
+        x, z, d = x[:n], z[:n], d[:n]
+        mask = np.isfinite(x) & np.isfinite(z) & np.isfinite(d)
+        if mask.sum() < 2:
+            continue
+        x, z, d = x[mask], z[mask], d[mask]
+        # np.interp needs strictly-increasing xp; lap_distance is monotonic by
+        # construction but sort defensively (cheap, and a reset would corrupt).
+        order = np.argsort(d, kind="stable")
+        d, x, z = d[order], x[order], z[order]
+        d, uniq = np.unique(d, return_index=True)  # drop duplicate-distance samples
+        x, z = x[uniq], z[uniq]
+        if len(d) < 2 or (d[-1] - d[0]) <= 0:
+            continue
+        resampled.append((d, x, z))
+        lengths.append(float(d[-1]))
+
+    if not resampled:
+        return [], []
+
+    max_length = max(lengths)
+    grid = np.linspace(0.0, max_length, bins)
+    for d, x, z in resampled:
+        grids_x.append(np.interp(grid, d, x))
+        grids_z.append(np.interp(grid, d, z))
+
+    mean_x = np.mean(grids_x, axis=0)
+    mean_z = np.mean(grids_z, axis=0)
+    path = [[round(float(a), 2), round(float(b), 2)] for a, b in zip(mean_x, mean_z)]
+    dist = [round(float(d), 2) for d in grid]
+    return path, dist
+
+
+def direction_from_path(path_world, dist, apex_dist, k: int = 3) -> str:
+    """Infer a corner's turn direction ("left"/"right") from path curvature at
+    the apex -- pure position geometry, honoring the CLAUDE.md invariant (never
+    LLM-guessed, never client-supplied). Finds the path point nearest apex_dist,
+    then signs the 2D cross product of the incoming and outgoing segment vectors
+    (k points either side for stability). Sign -> direction via the calibrated
+    _LEFT_TURN_IS_CROSS_POSITIVE constant.
+
+    Raises ValueError if the path is too short to sample around the apex.
+    """
+    pts = np.asarray(path_world, dtype=float)
+    d = np.asarray(dist, dtype=float)
+    if pts.ndim != 2 or pts.shape[0] < 3 or pts.shape[1] != 2 or len(d) != len(pts):
+        raise ValueError("path too short or malformed for direction inference")
+    idx = int(np.argmin(np.abs(d - apex_dist)))
+    # Clamp the window so before/after indices stay in range near the ends.
+    kk = max(1, min(k, idx, len(pts) - 1 - idx))
+    if kk < 1:
+        raise ValueError("apex too close to a path endpoint to infer direction")
+    vin = pts[idx] - pts[idx - kk]
+    vout = pts[idx + kk] - pts[idx]
+    cross = float(vin[0] * vout[1] - vin[1] * vout[0])
+    is_left = (cross > 0) == _LEFT_TURN_IS_CROSS_POSITIVE
+    return "left" if is_left else "right"
+
 
 def _finite_xz(channels: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
     """Return (x, z, dist) as finite-filtered float arrays, or None if position
@@ -32,11 +127,16 @@ def _finite_xz(channels: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray] | No
     return x[mask], z[mask], dist[mask]
 
 
-def build_track_map(channels: dict, corner_map, width: float = 1000) -> dict:
+def build_track_map(channels: dict, corner_map, width: float = 1000, sectors=None) -> dict:
     """Map world (pos_x, pos_z) -> a width x height screen box, preserving aspect
     ratio and flipping vertically so it reads naturally. Returns
-    {"width", "height", "path": [[x,y],...], "corners": [{number,name,direction,x,y}]}
-    or {} when there is no usable position data.
+    {"width", "height", "path": [[x,y],...], "dist": [d,...],
+     "corners": [{number,name,direction,x,y,apex_dist,start_dist,end_dist}],
+     "sectors": [d1,d2]} or {} when there is no usable position data.
+
+    `dist` is the lap_distance parallel to the downsampled screen `path` (same
+    length) -- the alignment key a replay/Pit-Wall overlay needs to map a
+    lap_distance to a screen point. `sectors` (optional) is passed through as-is.
 
     corner_map may be None or have an empty .corners list -> corners: [].
     """
@@ -64,12 +164,14 @@ def build_track_map(channels: dict, corner_map, width: float = 1000) -> dict:
         sy = height - (wz - zmin) * scale  # flip vertical
         return sx, sy
 
-    # Downsample the path for a light payload.
+    # Downsample the path for a light payload; keep lap_distance parallel to it.
     stride = max(1, math.ceil(len(x) / _MAX_PATH_POINTS))
     path = []
+    path_dist = []
     for i in range(0, len(x), stride):
         sx, sy = _to_screen(x[i], z[i])
         path.append([round(sx, 1), round(sy, 1)])
+        path_dist.append(round(float(dist[i]), 1))
 
     corners = []
     cm_corners = getattr(corner_map, "corners", None) or []
@@ -82,11 +184,16 @@ def build_track_map(channels: dict, corner_map, width: float = 1000) -> dict:
             "direction": c.direction,
             "x": round(sx, 1),
             "y": round(sy, 1),
+            "apex_dist": round(float(c.apex_dist), 1),
+            "start_dist": round(float(c.start_dist), 1),
+            "end_dist": round(float(c.end_dist), 1),
         })
 
     return {
         "width": round(out_w, 1),
         "height": round(height, 1),
         "path": path,
+        "dist": path_dist,
         "corners": corners,
+        "sectors": list(sectors) if sectors else [],
     }

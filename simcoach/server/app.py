@@ -5,11 +5,14 @@ the docs/openapi surface. Reuses store/coach/analysis unchanged."""
 from __future__ import annotations
 
 import asyncio
+import json
 import math
+import os
 import threading
 import time
 import urllib.parse
 from dataclasses import asdict
+from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse
@@ -22,7 +25,14 @@ from ..coach_tools import CoachContext
 from ..lmu.ingest import ingest_all
 from ..model.factory import CoachUserError, make_model
 from ..tiers import legal_adjustments
-from ..trackmap import build_track_map
+from ..corners import CornerMap
+from ..track_lookup import track_slug
+from ..trackmap import average_racing_line, build_track_map, direction_from_path
+
+# Shipped corner-map dir, resolved off the package (not cwd) so it's correct
+# wherever the sidecar is launched from. simcoach/server/app.py -> simcoach/tracks.
+_DEFAULT_TRACKS_DIR = Path(__file__).resolve().parent.parent / "tracks"
+_CLEAN_LAP_RATIO = 1.07  # keep laps within +7% of the track/car best (drop in/out/off laps)
 
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}  # port stripped before compare
 REST_PROBE_TTL = 2.0  # s: liveness probe rate cap so /status polling can't hammer LMU's REST
@@ -64,10 +74,12 @@ def _capture_loop(source, store, app_state) -> None:
         app_state.latest = {"record": lap, "lap_id": lap_id}
 
 
-def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_factory=None) -> FastAPI:
+def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_factory=None,
+               tracks_dir=None) -> FastAPI:
     app = FastAPI(title="SimCoach", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store = store
     app.state.coach = coach
+    app.state.tracks_dir = Path(tracks_dir) if tracks_dir else _DEFAULT_TRACKS_DIR
     app.state.cmap = cmap            # fallback map when no resolver is wired
     app.state.rest = rest            # cached live REST client once connected
     app.state.rest_probed_at = 0.0   # time.monotonic() of the last liveness probe
@@ -91,6 +103,90 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 app.state.cmaps[track] = m
             return m
         return app.state.cmap
+
+    def _track_file(track: str) -> Path:
+        # Resolve a track name to its shipped JSON path, and REJECT any path that
+        # escapes the tracks dir (defense in depth: track_slug already sanitizes
+        # to [a-z0-9_], but a save writes owned data, so verify containment).
+        slug = track_slug(track)
+        tracks_dir = app.state.tracks_dir.resolve()
+        p = (tracks_dir / f"{slug}.json").resolve()
+        if not slug or tracks_dir not in p.parents:
+            raise HTTPException(400, "invalid track")
+        return p
+
+    def _shipped_extras(track: str) -> dict:
+        # sectors/length from the shipped track file (if any) -- the map builder's
+        # passthrough. Missing file/keys -> {}. Never raises on a bad file.
+        try:
+            data = json.loads(_track_file(track).read_text())
+        except (OSError, ValueError, HTTPException):
+            return {}
+        out = {}
+        if isinstance(data.get("sectors"), list):
+            out["sectors"] = data["sectors"]
+        for k in ("length", "length_m"):
+            if isinstance(data.get(k), (int, float)):
+                out["length"] = float(data[k])
+                break
+        return out
+
+    def _clean_lap_channels(track: str, car: str) -> list[dict]:
+        # Channel dicts for full, clean laps of this track+car: skip laps with no
+        # telemetry (FileNotFoundError) or no position, drop in/out/off laps
+        # (lap_time > best * _CLEAN_LAP_RATIO) and partials (short lap_distance).
+        best = store.best_lap(track, car)
+        best_t = best.lap_time if best is not None else None
+        spans, recs = [], []
+        for lap_id in store.list_lap_ids(track, car):
+            try:
+                rec = store.load(lap_id)
+            except (KeyError, FileNotFoundError):
+                continue
+            ch = rec.channels
+            if "pos_x" not in ch or "pos_z" not in ch or "lap_distance" not in ch:
+                continue
+            if best_t is not None and rec.lap_time and rec.lap_time > best_t * _CLEAN_LAP_RATIO:
+                continue
+            ld = ch["lap_distance"]
+            if len(ld) < 2:
+                continue
+            spans.append(float(ld[-1]))
+            recs.append(ch)
+        if not recs:
+            return []
+        # Drop partials: keep laps whose distance span is >= 90% of the longest.
+        full = max(spans)
+        return [ch for ch, sp in zip(recs, spans) if sp >= 0.9 * full]
+
+    def _cmap_for_map(track):
+        # Corner map for the map endpoints: the injected resolver/cmap first, else
+        # load the shipped track file we own (so a just-saved edit is reflected
+        # even when no resolver is wired, e.g. tests / a fresh sidecar).
+        m = _map_for(track)
+        if m is not None:
+            return m
+        try:
+            return CornerMap.load(str(_track_file(track)))
+        except (OSError, ValueError, KeyError, HTTPException):
+            return None
+
+    def _map_payload(rec, avg: bool) -> dict:
+        cmap = _cmap_for_map(rec.track)
+        extras = _shipped_extras(rec.track)
+        sectors = extras.get("sectors")
+        if avg:
+            laps = _clean_lap_channels(rec.track, rec.car)
+            path, dist = average_racing_line(laps) if laps else ([], [])
+            if not path:
+                return {}
+            channels = {
+                "pos_x": [p[0] for p in path],
+                "pos_z": [p[1] for p in path],
+                "lap_distance": dist,
+            }
+            return _clean(build_track_map(channels, cmap, sectors=sectors))
+        return _clean(build_track_map(rec.channels, cmap, sectors=sectors))
 
     def _ensure_rest():
         # Return a live LMU REST client, or None. Probes get_setup() to reflect a
@@ -210,15 +306,105 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         })
 
     @app.get("/laps/{lap_id}/map")
-    def lap_map(lap_id: int):
+    def lap_map(lap_id: int, avg: int = 0):
+        # avg=0 (default): this lap's own outline. avg=1: the averaged racing
+        # line over all clean laps for the lap's track+car (the canonical/editor
+        # outline). cmap may be None -> corners: [] but the path still draws.
         try:
             rec = store.load(lap_id)
         except (KeyError, FileNotFoundError):
             raise HTTPException(404, "lap not found")
-        # cmap may be None -> build_track_map yields corners: [] but still draws
-        # the path from telemetry.
-        cmap = _map_for(rec.track)
-        return _clean(build_track_map(rec.channels, cmap))
+        return _map_payload(rec, avg=bool(avg))
+
+    @app.put("/laps/{lap_id}/map")
+    def save_lap_map(lap_id: int, body: dict = Body(...)):
+        # SAVE the editor's corner map + sectors as shipped owned data. Direction
+        # is ALWAYS re-derived from the averaged path geometry here (never trusted
+        # from the client) -- the CLAUDE.md corner-direction invariant.
+        try:
+            rec = store.load(lap_id)
+        except (KeyError, FileNotFoundError):
+            raise HTTPException(404, "lap not found")
+
+        laps = _clean_lap_channels(rec.track, rec.car)
+        path, dist = average_racing_line(laps) if laps else ([], [])
+        if not path:
+            raise HTTPException(422, "no clean laps with position telemetry to build an outline")
+        length = float(dist[-1])
+
+        raw_corners = body.get("corners")
+        if not isinstance(raw_corners, list) or not raw_corners:
+            raise HTTPException(422, "corners must be a non-empty list")
+
+        corners = []
+        seen_numbers = set()
+        for c in raw_corners:
+            if not isinstance(c, dict):
+                raise HTTPException(422, "each corner must be an object")
+            try:
+                number = int(c["number"])
+                apex = float(c["apex_dist"])
+            except (KeyError, TypeError, ValueError):
+                raise HTTPException(422, "corner requires integer number and numeric apex_dist")
+            name = str(c.get("name") or f"Turn {number}")
+            if not math.isfinite(apex) or not (0.0 <= apex <= length):
+                raise HTTPException(422, f"corner {number}: apex_dist out of range")
+            if number in seen_numbers:
+                raise HTTPException(422, f"duplicate corner number {number}")
+            seen_numbers.add(number)
+            # Default a window around the apex if start/end omitted, clamped to
+            # the track; ~2.5% of lap length either side is a sane default.
+            pad = max(20.0, length * 0.025)
+            start = c.get("start_dist")
+            end = c.get("end_dist")
+            start = float(start) if start is not None else max(0.0, apex - pad)
+            end = float(end) if end is not None else min(length, apex + pad)
+            if not (math.isfinite(start) and math.isfinite(end)):
+                raise HTTPException(422, f"corner {number}: non-finite window")
+            if not (start < apex < end):
+                raise HTTPException(422, f"corner {number}: require start_dist < apex_dist < end_dist")
+            direction = direction_from_path(path, dist, apex)  # server-derived, never client
+            corners.append({
+                "number": number, "name": name, "direction": direction,
+                "start_dist": round(start, 1), "apex_dist": round(apex, 1),
+                "end_dist": round(end, 1),
+            })
+        corners.sort(key=lambda c: c["apex_dist"])
+
+        sectors = body.get("sectors") or []
+        if not isinstance(sectors, list):
+            raise HTTPException(422, "sectors must be a list")
+        try:
+            sectors = [float(s) for s in sectors]
+        except (TypeError, ValueError):
+            raise HTTPException(422, "sectors must be numbers")
+        if any(not math.isfinite(s) or not (0.0 < s < length) for s in sectors):
+            raise HTTPException(422, "sector splits must be within (0, length)")
+        if any(a >= b for a, b in zip(sectors, sectors[1:])):
+            raise HTTPException(422, "sector splits must be strictly increasing")
+
+        out = {
+            "track": track_slug(rec.track),
+            "corners": corners,
+            "path": path,
+            "path_dist": dist,
+            "sectors": sectors,
+            "length": length,
+        }
+        # Atomic write (tmp + os.replace) so a crash mid-write never leaves a
+        # partial/corrupt owned-data file. _track_file rejects traversal.
+        target = _track_file(rec.track)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_suffix(".json.tmp")
+        try:
+            tmp.write_text(json.dumps(out, indent=2))
+            os.replace(tmp, target)
+        finally:
+            if tmp.exists():
+                tmp.unlink(missing_ok=True)
+        # Invalidate the cached corner map so re-reads pick up the edit.
+        app.state.cmaps.pop(rec.track, None)
+        return _map_payload(rec, avg=True)
 
     @app.get("/setup")
     def setup():
