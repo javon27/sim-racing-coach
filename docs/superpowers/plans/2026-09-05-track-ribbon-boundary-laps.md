@@ -51,6 +51,20 @@ grid) → smoother, more accurate edges the more laps you drive. So:
 - `/mapcapture/build` body: `{left: int[], right: int[]}` (buffer index lists) instead of single ints.
 NOT YET BUILT — fold into the ribbon build when driven on the rig.
 
+## Generalization: track-surface point cloud, not just 2 edges (user, 2026-09-05)
+Rather than strictly left-edge + right-edge laps, allow driving FREELY across the width (weave /
+back-and-forth) → capture a track-SURFACE point cloud of `(x, z, y)` samples. Reconstruct from it:
+- Bin samples by track-distance along a bootstrapped centerline (iterate: mean path → refine).
+- Project each sample onto the LOCAL LATERAL axis (perpendicular to centerline heading).
+- **Edges** = lateral min/max per station (the ENVELOPE — driving to the edges defines them).
+- **Elevation/camber** = fit `y` vs lateral offset per station → full cross-slope (banking AND
+  crown/camber), not just the 2-point bank angle from two edge laps.
+This SUPERSEDES strict 2-edge pairing (2 edge laps = the minimal envelope + 2-point bank; more/
+denser passes = truer edges + real camber). New algorithm piece = bootstrapping the centerline/
+lateral axis from the samples (chicken-and-egg: rough centerline → project → refine). More
+involved than nearest-point edge pairing — design/build when driven on the rig. The "N per edge,
+averaged" note above is the minimal case of this.
+
 ## Reconstruction (backend, pure fn + tested)
 Key wrinkle: the two laps have DIFFERENT lengths (inside is shorter), so DO NOT pair by raw
 `lap_distance`.
