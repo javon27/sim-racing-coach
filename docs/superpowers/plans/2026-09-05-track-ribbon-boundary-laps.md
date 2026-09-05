@@ -61,15 +61,31 @@ Key wrinkle: the two laps have DIFFERENT lengths (inside is shorter), so DO NOT 
 - Designate left/right boundary laps → build + preview the ribbon → place/verify corners on
   the centerline (reuse the existing corner editor: auto-detect + drag + rename + sectors).
 
-## Post-capture analysis pass (user decision)
-After the ribbon is reconstructed, run a deterministic pass over the geometry + captured
-telemetry that computes each corner's **apex** (min-speed / max-curvature), **braking zone**
-(brake onset → release), **entry/exit window**, and direction → a first-pass corner set the
-user reviews/edits. This IS the two-stage pipeline's feature-extraction step (reuses
-`mapbuild.detect_corners` + `analysis.py`), run as a batch after mapping capture rather than
-live. NOTE on wording: this is analysis OF the captured telemetry — not a physics/optimal-line
-SOLVER (computing the ideal racing line + apexes from track geometry alone is a much larger,
-separate build; flag it if that's wanted instead).
+## Post-capture solver pass — naive optimal line (user decision)
+After the ribbon is reconstructed, run a NAIVE physics/optimal-line solver over the track
+corridor (the two edges) to compute the ideal line + apexes + braking zones — independent of
+how the user drove. "Naive/quick is fine" (user); not a lap-time optimizer. New pure module
+`simcoach/raceline.py`:
+- **Corridor**: N stations across the track; each is a segment from left edge to right edge;
+  the line picks a lateral position α∈[0,1] per station.
+- **Line**: minimum-curvature via **elastic-band relaxation** — start at the centerline,
+  iteratively nudge each point to reduce local curvature, clamped within [left,right]. ~tens of
+  numpy lines, no QP/scipy solver.
+- **Speed profile**: friction-circle point-mass — `v_cap(s)=sqrt(µ·g·r(s))`, then a backward
+  pass (braking limit) + forward pass (accel limit). Apex = min-speed / max-curvature point;
+  braking zone = where the backward pass pulls speed below the cornering cap before the apex;
+  entry/exit window from that.
+- **Tunable car knobs** (physical, vary by car — ponytail hardware-calibration rule): one µ +
+  lat/long-g limits, GT3 defaults, adjustable. Not baked as universal truth.
+- **Telemetry refinement (user decision):** don't stop at physics defaults — calibrate the
+  knobs from captured laps (µ / lat-g limit from observed peak lat_g; brake/accel limits from
+  peak long_g), and nudge the solved apex/braking toward what the driver actually does (or blend
+  the solved line with the driven line). Physics-first, data-refined. Keep it naive; refinement
+  is a calibration step, not a re-solve.
+- Output = a first-pass corner set (apex/window/direction) the user reviews/edits in the editor.
+  Deterministic + pure → unit-testable (a circular-arc corridor → apex at the geometric apex,
+  constant corner speed). Falls back to physics defaults when no telemetry laps exist.
+- Depends on the ribbon (needs both edges), so it runs after reconstruction.
 
 ## Corner direction — inferred from ALL available data at placement (user decision)
 When a corner is placed (auto-detected or user-added), infer direction from every signal at the
