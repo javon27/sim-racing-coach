@@ -31,14 +31,32 @@
 </script>
 
 <script lang="ts">
-  import { getLapMap, saveLapMap, type TrackMap } from "./api";
+  import { onDestroy } from "svelte";
+  import {
+    getLapMap,
+    saveLapMap,
+    startMapCapture,
+    cancelMapCapture,
+    mapCaptureStatus,
+    buildRibbon,
+    saveRibbon,
+    type TrackMap,
+    type RibbonPreview,
+  } from "./api";
 
   let {
     lapId,
     open = false,
     onClose,
     onSaved,
-  }: { lapId: number; open?: boolean; onClose?: () => void; onSaved?: () => void } = $props();
+    pollMs = 2000,
+  }: {
+    lapId: number;
+    open?: boolean;
+    onClose?: () => void;
+    onSaved?: () => void;
+    pollMs?: number;
+  } = $props();
 
   type EditCorner = {
     number: number;
@@ -59,6 +77,121 @@
   // What the pointer is currently dragging: a corner index, a sector index, or nothing.
   let drag: { kind: "corner" | "sector"; i: number } | null = null;
   let addMode = $state(false);
+
+  // --- "(Re)generate map layout": guided mapping capture -> ribbon preview.
+  type GenPhase = "off" | "left" | "right" | "designate" | "building" | "preview";
+  let genPhase: GenPhase = $state("off");
+  let capLaps: { idx: number; samples: number; length: number }[] = $state([]);
+  let leftIdx: number | null = $state(null);
+  let rightIdx: number | null = $state(null);
+  let ribbon: RibbonPreview | null = $state(null);
+  let genErr: string | null = $state(null);
+  let pollTimer: ReturnType<typeof setInterval> | undefined;
+
+  function stopPoll() {
+    if (pollTimer !== undefined) clearInterval(pollTimer);
+    pollTimer = undefined;
+  }
+  function resetGen() {
+    stopPoll();
+    genPhase = "off";
+    capLaps = [];
+    leftIdx = null;
+    rightIdx = null;
+    ribbon = null;
+    genErr = null;
+  }
+
+  async function startGen() {
+    genErr = null;
+    try {
+      await startMapCapture();
+    } catch {
+      genErr = "Couldn't start mapping capture — is the sim running?";
+      return;
+    }
+    capLaps = [];
+    leftIdx = null;
+    rightIdx = null;
+    ribbon = null;
+    genPhase = "left";
+    stopPoll();
+    pollTimer = setInterval(pollGen, pollMs);
+  }
+
+  async function pollGen() {
+    try {
+      const s = await mapCaptureStatus();
+      capLaps = s.laps;
+      if (genPhase === "left" && s.laps.length >= 1) {
+        leftIdx = s.laps[0].idx;
+        genPhase = "right";
+      } else if (genPhase === "right" && s.laps.length >= 2) {
+        rightIdx = s.laps[1].idx;
+        stopPoll();
+        genPhase = "designate";
+      }
+    } catch {
+      /* transient poll failure — keep waiting */
+    }
+  }
+
+  async function buildGen() {
+    if (leftIdx == null || rightIdx == null) return;
+    genPhase = "building";
+    genErr = null;
+    try {
+      ribbon = await buildRibbon(leftIdx, rightIdx);
+      genPhase = "preview";
+    } catch {
+      genErr = "Couldn't reconstruct the ribbon from those laps.";
+      genPhase = "designate";
+    }
+  }
+
+  async function saveGen() {
+    saving = true;
+    genErr = null;
+    try {
+      await saveRibbon();
+      onSaved?.();
+      resetGen();
+      onClose?.();
+    } catch {
+      genErr = "Save failed.";
+    } finally {
+      saving = false;
+    }
+  }
+
+  async function cancelGen() {
+    stopPoll();
+    try {
+      await cancelMapCapture();
+    } catch {
+      /* best-effort — server drops the buffer on its own too */
+    }
+    resetGen();
+  }
+
+  onDestroy(stopPoll);
+
+  // Ribbon fill = left edge forward, right edge back, closed.
+  const ribbonBand = $derived.by(() => {
+    if (!ribbon) return "";
+    const l = ribbon.left.map(([x, y]) => `${x},${y}`).join(" L");
+    const r = [...ribbon.right].reverse().map(([x, y]) => `${x},${y}`).join(" L");
+    return `M${l} L${r} Z`;
+  });
+  const ru = $derived(ribbon ? Math.max(ribbon.width, ribbon.height) : 100);
+  const rpad = $derived(ru * 0.09);
+  const ribbonStart = $derived.by(() => {
+    if (!ribbon || ribbon.center.length < 2) return null;
+    const [x0, y0] = ribbon.center[0];
+    const j = Math.min(ribbon.center.length - 1, Math.max(1, Math.round(ribbon.center.length * 0.04)));
+    const [xj, yj] = ribbon.center[j];
+    return { x0, y0, xj, yj, ang: Math.atan2(yj - y0, xj - x0) };
+  });
 
   // Load the AVERAGED outline whenever the modal opens for a lap.
   let loadedFor = -1;
@@ -216,6 +349,7 @@
   }
 
   function close() {
+    if (genPhase !== "off") cancelGen();
     onClose?.();
   }
   function onKeydown(e: KeyboardEvent) {
@@ -241,7 +375,79 @@
         <button type="button" class="x" aria-label="Close" onclick={close}>×</button>
       </header>
 
-      {#if map}
+      {#if genPhase === "left" || genPhase === "right" || genPhase === "designate" || genPhase === "building"}
+        <div class="genpanel">
+          <h3>Generate map layout from boundary laps</h3>
+          {#if genPhase === "left"}
+            <p class="step"><b>Step 1 — LEFT edge.</b> Drive one slow lap hugging the <b>left</b>
+              boundary of the track. Waiting for a completed lap…</p>
+          {:else if genPhase === "right"}
+            <p class="step"><b>Left edge captured.</b> Step 2 — <b>RIGHT edge</b>. Drive a slow lap
+              hugging the <b>right</b> boundary. Waiting for a completed lap…</p>
+          {:else if genPhase === "building"}
+            <p class="step">Reconstructing the track ribbon…</p>
+          {:else}
+            <p class="step">Both edges captured. Confirm which buffered lap is which, then build.</p>
+            <label>Left edge lap
+              <select bind:value={leftIdx} aria-label="Left edge lap">
+                {#each capLaps as l (l.idx)}<option value={l.idx}>Lap {l.idx} · {l.samples} pts</option>{/each}
+              </select>
+            </label>
+            <label>Right edge lap
+              <select bind:value={rightIdx} aria-label="Right edge lap">
+                {#each capLaps as l (l.idx)}<option value={l.idx}>Lap {l.idx} · {l.samples} pts</option>{/each}
+              </select>
+            </label>
+            <button
+              type="button"
+              class="primary"
+              onclick={buildGen}
+              disabled={leftIdx == null || rightIdx == null || leftIdx === rightIdx}
+            >Build ribbon</button>
+          {/if}
+          {#if capLaps.length}<p class="cap">{capLaps.length} lap(s) buffered</p>{/if}
+        </div>
+      {:else if ribbon}
+        <div class="body">
+          <svg
+            viewBox="{-rpad} {-rpad} {ribbon.width + rpad * 2} {ribbon.height + rpad * 2}"
+            role="img"
+            aria-label="Reconstructed track ribbon"
+          >
+            <path d={ribbonBand} fill="var(--surface-2, #333)" stroke="var(--muted)" stroke-width={ru * 0.004} stroke-linejoin="round" />
+            <polyline
+              points={ribbon.center.map(([x, y]) => `${x},${y}`).join(" ")}
+              fill="none"
+              stroke="var(--muted)"
+              stroke-width={ru * 0.004}
+              stroke-dasharray="{ru * 0.02} {ru * 0.02}"
+            />
+            {#if ribbonStart}
+              {@const b = sfBar(ribbonStart.x0, ribbonStart.y0, ribbonStart.ang, ru * 0.03)}
+              <line x1={b.x1} y1={b.y1} x2={b.x2} y2={b.y2} stroke="var(--text)" stroke-width={ru * 0.008} />
+              <polygon points={arrow(ribbonStart.xj, ribbonStart.yj, ribbonStart.ang, ru * 0.05, ru * 0.028)} fill="var(--text)" />
+              <text class="sf" x={ribbonStart.x0} y={ribbonStart.y0 - ru * 0.04} font-size={ru * 0.032} fill="var(--text)" text-anchor="middle">S/F</text>
+            {/if}
+            {#each ribbon.corners as c (c.number)}
+              <circle cx={c.x} cy={c.y} r={ru * 0.014} fill="var(--accent)"><title>{c.name}</title></circle>
+              <text class="corner-lbl" x={c.x + ru * 0.016} y={c.y - ru * 0.016} font-size={ru * 0.03} fill="var(--accent)">T{c.number}</text>
+            {/each}
+          </svg>
+          <aside class="side">
+            <p class="hint">Reconstructed layout — review the corners, then Save. Rename/adjust with
+              the normal editor after saving.</p>
+            <ul class="corners">
+              {#each ribbon.corners as c (c.number)}
+                <li>
+                  <span class="num">T{c.number}</span>
+                  <span class="name-ro">{c.name || "—"}</span>
+                  <span class="dir" data-dir={c.direction}>{c.direction || "—"}</span>
+                </li>
+              {/each}
+            </ul>
+          </aside>
+        </div>
+      {:else if map}
         <div class="body">
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <svg
@@ -310,6 +516,7 @@
               {#if sectors.length === 0}
                 <button type="button" onclick={seedSectors}>Add sectors</button>
               {/if}
+              <button type="button" onclick={startGen}>(Re)generate map layout</button>
             </div>
             <ul class="corners">
               {#each corners as c, i (c.number)}
@@ -327,13 +534,23 @@
         <p class="msg">{error ?? "Loading…"}</p>
       {/if}
 
-      {#if error && map}<p class="msg err">{error}</p>{/if}
+      {#if error && map && genPhase === "off"}<p class="msg err">{error}</p>{/if}
+      {#if genErr}<p class="msg err">{genErr}</p>{/if}
 
       <footer>
-        <button type="button" onclick={close}>Cancel</button>
-        <button type="button" class="primary" disabled={saving || !map} onclick={save}>
-          {saving ? "Saving…" : "Save"}
-        </button>
+        {#if genPhase !== "off"}
+          <button type="button" onclick={cancelGen}>Cancel capture</button>
+          {#if genPhase === "preview"}
+            <button type="button" class="primary" disabled={saving} onclick={saveGen}>
+              {saving ? "Saving…" : "Save ribbon"}
+            </button>
+          {/if}
+        {:else}
+          <button type="button" onclick={close}>Cancel</button>
+          <button type="button" class="primary" disabled={saving || !map} onclick={save}>
+            {saving ? "Saving…" : "Save"}
+          </button>
+        {/if}
       </footer>
     </div>
   </div>
@@ -441,6 +658,43 @@
   button.primary {
     background: var(--accent);
     color: #000;
+  }
+  .genpanel {
+    padding: 20px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    max-width: 520px;
+  }
+  .genpanel h3 {
+    margin: 0;
+    font-size: 14px;
+  }
+  .genpanel .step {
+    margin: 0;
+    line-height: 1.5;
+  }
+  .genpanel label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--faint);
+  }
+  .genpanel .cap {
+    margin: 0;
+    font-size: 12px;
+    color: var(--faint);
+  }
+  .hint {
+    font-size: 12px;
+    color: var(--faint);
+    margin: 0 0 8px;
+  }
+  .name-ro {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 13px;
   }
   .msg {
     padding: 24px;

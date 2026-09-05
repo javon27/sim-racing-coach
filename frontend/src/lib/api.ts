@@ -198,6 +198,57 @@ export function saveLapMap(
   });
 }
 
+// --- Dedicated mapping capture (drive two boundary laps -> reconstruct a track ribbon).
+// These laps are NOT persisted to the store; they route to a transient buffer.
+export interface MapCaptureStatus {
+  active: boolean;
+  live_track: string | null;
+  laps: { idx: number; samples: number; length: number }[];
+}
+
+export interface RibbonPreview {
+  width: number;
+  height: number;
+  left: [number, number][];
+  right: [number, number][];
+  center: [number, number][];
+  corners: {
+    number: number;
+    name: string;
+    direction: string;
+    apex_dist: number;
+    start_dist: number;
+    end_dist: number;
+    x: number;
+    y: number;
+  }[];
+  sectors: number[];
+}
+
+export function startMapCapture(): Promise<{ active: boolean }> {
+  return request<{ active: boolean }>("/mapcapture/start", { method: "POST" });
+}
+
+export function cancelMapCapture(): Promise<{ active: boolean }> {
+  return request<{ active: boolean }>("/mapcapture/cancel", { method: "POST" });
+}
+
+export function mapCaptureStatus(): Promise<MapCaptureStatus> {
+  return request<MapCaptureStatus>("/mapcapture/status");
+}
+
+export function buildRibbon(left: number, right: number): Promise<RibbonPreview> {
+  return request<RibbonPreview>("/mapcapture/build", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ left, right }),
+  });
+}
+
+export function saveRibbon(): Promise<{ saved: boolean; slug: string }> {
+  return request<{ saved: boolean; slug: string }>("/mapcapture/save", { method: "POST" });
+}
+
 export function getChats(): Promise<ChatRow[]> {
   return request<ChatRow[]>("/chats");
 }

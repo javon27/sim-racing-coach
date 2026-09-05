@@ -1,11 +1,28 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/svelte";
-import { getLapMap, saveLapMap } from "./api";
+import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/svelte";
+import {
+  getLapMap,
+  saveLapMap,
+  startMapCapture,
+  cancelMapCapture,
+  mapCaptureStatus,
+  buildRibbon,
+  saveRibbon,
+} from "./api";
 import TrackMapEditor, { nearestPathIndex, nearestDistIndex } from "./TrackMapEditor.svelte";
 
 vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
-  return { ...actual, getLapMap: vi.fn(), saveLapMap: vi.fn() };
+  return {
+    ...actual,
+    getLapMap: vi.fn(),
+    saveLapMap: vi.fn(),
+    startMapCapture: vi.fn(),
+    cancelMapCapture: vi.fn(),
+    mapCaptureStatus: vi.fn(),
+    buildRibbon: vi.fn(),
+    saveRibbon: vi.fn(),
+  };
 });
 
 const fixture = {
@@ -118,5 +135,80 @@ describe("TrackMapEditor", () => {
       expect(c).toHaveProperty("number");
       expect(c).toHaveProperty("name");
     }
+  });
+});
+
+const ribbonFix = {
+  width: 100,
+  height: 60,
+  left: [[0, 0], [10, 10]] as [number, number][],
+  right: [[0, 20], [10, 30]] as [number, number][],
+  center: [[0, 10], [10, 20]] as [number, number][],
+  corners: [
+    { number: 1, name: "Turn 1", direction: "left", apex_dist: 50, start_dist: 40, end_dist: 60, x: 5, y: 15 },
+  ],
+  sectors: [] as number[],
+};
+
+describe("TrackMapEditor — (re)generate map layout", () => {
+  // Shared mutable status; tests push buffered laps to drive the poll progression.
+  const cap = { active: true, live_track: "Monza", laps: [] as { idx: number; samples: number; length: number }[] };
+
+  beforeEach(() => {
+    vi.mocked(getLapMap).mockReset().mockResolvedValue(fixture);
+    vi.mocked(saveLapMap).mockReset().mockResolvedValue(fixture);
+    vi.mocked(startMapCapture).mockReset().mockResolvedValue({ active: true });
+    vi.mocked(cancelMapCapture).mockReset().mockResolvedValue({ active: false });
+    vi.mocked(buildRibbon).mockReset().mockResolvedValue(ribbonFix);
+    vi.mocked(saveRibbon).mockReset().mockResolvedValue({ saved: true, slug: "monza" });
+    cap.laps = [];
+    vi.mocked(mapCaptureStatus).mockReset().mockImplementation(async () => ({ ...cap, laps: [...cap.laps] }));
+  });
+  afterEach(cleanup);
+
+  it("guides left->right capture, builds the ribbon, and saves it", async () => {
+    const onSaved = vi.fn();
+    const onClose = vi.fn();
+    render(TrackMapEditor, { props: { lapId: 7, open: true, onSaved, onClose, pollMs: 5 } });
+    await screen.findByText("First"); // editor loaded
+
+    await fireEvent.click(screen.getByText("(Re)generate map layout"));
+    expect(startMapCapture).toHaveBeenCalled();
+    await screen.findByText(/LEFT edge/i);
+
+    // First boundary lap buffered -> advance to the RIGHT edge step.
+    cap.laps = [{ idx: 0, samples: 500, length: 5000 }];
+    await screen.findByText(/RIGHT edge/i);
+
+    // Second lap buffered -> designation step with a Build button.
+    cap.laps = [
+      { idx: 0, samples: 500, length: 5000 },
+      { idx: 1, samples: 480, length: 4800 },
+    ];
+    const buildBtn = await screen.findByText("Build ribbon");
+    await fireEvent.click(buildBtn);
+
+    expect(buildRibbon).toHaveBeenCalledWith(0, 1);
+    // Preview renders the ribbon (filled band) + its solved corner.
+    const svg = (await screen.findByText("Save ribbon")).closest(".modal")!.querySelector("svg")!;
+    expect(svg.querySelector("path")).toBeTruthy(); // the band
+    expect(screen.getAllByText("T1").length).toBeGreaterThan(0); // svg label + list row
+
+    await fireEvent.click(screen.getByText("Save ribbon"));
+    await waitFor(() => expect(saveRibbon).toHaveBeenCalled());
+    expect(onSaved).toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("cancelling the capture calls cancelMapCapture and returns to the editor", async () => {
+    render(TrackMapEditor, { props: { lapId: 7, open: true, pollMs: 5 } });
+    await screen.findByText("First");
+
+    await fireEvent.click(screen.getByText("(Re)generate map layout"));
+    await screen.findByText(/LEFT edge/i);
+
+    await fireEvent.click(screen.getByText("Cancel capture"));
+    expect(cancelMapCapture).toHaveBeenCalled();
+    expect(await screen.findByText("First")).toBeTruthy(); // back in the normal editor
   });
 });
