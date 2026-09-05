@@ -163,8 +163,12 @@ def build_track_map(channels: dict, corner_map, width: float = 1000, sectors=Non
     x, z, dist = xz
     # Rotate about the centroid FIRST, then fit -- downstream bounds/corners all
     # use the rotated coords, so the map stays oriented and clip-free at any angle.
+    # Negate: _to_screen flips z (screen y-down), which mirrors rotation direction.
+    # Negating here makes a positive `rotation` read CLOCKWISE on screen, matching
+    # the editor's live SVG-rotate preview (SVG rotate() is CW-positive). Without
+    # this, the baked result spun opposite the preview (entered +74 showed as -74).
     if rotation:
-        x, z = rotate_xy(x, z, rotation, float(x.mean()), float(z.mean()))
+        x, z = rotate_xy(x, z, -rotation, float(x.mean()), float(z.mean()))
 
     xmin, xmax = float(x.min()), float(x.max())
     zmin, zmax = float(z.min()), float(z.max())

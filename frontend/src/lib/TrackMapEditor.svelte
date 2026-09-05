@@ -52,14 +52,12 @@
     onClose,
     onSaved,
     pollMs = 2000,
-    rotDebounceMs = 400,
   }: {
     lapId: number | null; // null = no lap yet (capture-only: generate/rebuild a map)
     open?: boolean;
     onClose?: () => void;
     onSaved?: () => void;
     pollMs?: number;
-    rotDebounceMs?: number;
   } = $props();
 
   type EditCorner = {
@@ -89,45 +87,16 @@
   let addSectionMode = $state(false);
 
   // Orientation control. `angle` is the target the user is dialing in; the live
-  // SVG preview rotates the fitted map by (angle - baked). Changing it persists
-  // (debounced) and merges ONLY the rebaked geometry back — never the corners.
-  // Net displayed orientation = baked(map.rotation) + preview(angle - map.rotation)
-  // = angle, so it always reads 1×, matching what the user entered.
+  // SVG preview rotates the fitted map by (angle - baked). `angle` is a PENDING
+  // edit — nudging only updates the live preview; it persists on Save (see save()),
+  // like corner/sector edits. Net displayed orientation = baked(map.rotation) +
+  // preview(angle - map.rotation) = angle, so it reads 1×, matching what's entered.
   let angle = $state(0);
-  let rotTimer: ReturnType<typeof setTimeout> | undefined;
   function rotateBy(d: number) {
     angle = (((angle + d + 180) % 360) + 360) % 360 - 180;
-    scheduleRotation();
   }
   function resetRotation() {
     angle = 0;
-    scheduleRotation();
-  }
-  function scheduleRotation() {
-    clearTimeout(rotTimer);
-    rotTimer = setTimeout(persistRotation, rotDebounceMs);
-  }
-  async function persistRotation() {
-    if (lapId == null || !map || angle === (map.rotation ?? 0)) return;
-    error = null;
-    try {
-      const res = await setMapRotation(lapId, angle);
-      // Non-destructive: take only the rebaked geometry; keep the user's edited
-      // corners/sectors/sections (markers re-project onto the new path via apex_dist).
-      map = {
-        ...map,
-        path: res.path,
-        dist: res.dist,
-        width: res.width,
-        height: res.height,
-        rotation: res.rotation ?? angle,
-      };
-      onSaved?.();
-    } catch {
-      error = "Rotation failed.";
-      // Revert to the baked angle so mapPreviewRot returns to 0 and drags realign.
-      if (map) angle = map.rotation ?? 0;
-    }
   }
 
   // --- "(Re)generate map layout": point-cloud capture -> ribbon preview.
@@ -233,7 +202,6 @@
 
   onDestroy(() => {
     stopPoll();
-    clearTimeout(rotTimer);
     // Unmount mid-capture -> tell the server to leave mapping mode, else real
     // laps keep buffering unsaved.
     if (genPhase !== "off") cancelMapCapture().catch(() => {});
@@ -478,6 +446,12 @@
     saving = true;
     error = null;
     try {
+      // Rotation is a pending edit too: bake a changed angle in first so the saved
+      // corners sit on the rebaked path, then persist the corner map (which
+      // preserves the just-written rotation).
+      if (map && angle !== (map.rotation ?? 0)) {
+        await setMapRotation(lapId, angle);
+      }
       const res = await saveLapMap(lapId, {
         corners: corners.map((c) => ({
           number: c.number,
@@ -527,7 +501,7 @@
         {#if map || ribbon}
           <div class="rot" role="group" aria-label="Rotate map">
             <button type="button" aria-label="Rotate 90° left" onclick={() => rotateBy(-90)}>⟲</button>
-            <input type="number" step="5" aria-label="Rotation degrees" bind:value={angle} oninput={scheduleRotation} />
+            <input type="number" step="5" aria-label="Rotation degrees" bind:value={angle} />
             <span>°</span>
             <button type="button" aria-label="Rotate 90° right" onclick={() => rotateBy(90)}>⟳</button>
             <button type="button" onclick={resetRotation}>0°</button>

@@ -62,6 +62,18 @@ def test_rotation_90_swaps_bounds_and_fits():
         assert 0 <= px <= m["width"] and 0 <= py <= m["height"]
 
 
+def test_rotation_positive_is_clockwise_on_screen():
+    # A point due EAST of the centroid should swing to the BOTTOM of the screen
+    # under a positive rotation (clockwise, y-down), matching the editor's live
+    # SVG-rotate preview. Guards the sign against re-inversion (entered +deg must
+    # not render as -deg).
+    ch = {"pos_x": np.array([0.0, 10.0]), "pos_z": np.array([0.0, 0.0]),
+          "lap_distance": np.array([0.0, 1.0])}
+    m = build_track_map(ch, CornerMap([]), width=1000, rotation=90)
+    far = m["path"][1]
+    assert far[1] > m["height"] / 2  # east -> bottom (clockwise), not top
+
+
 def test_rotation_moves_corner_but_keeps_it_in_box():
     cm = CornerMap([Corner(1, "T1", "right", 150, 200, 250)])
     a = build_track_map(_rect_channels(), cm, width=1000)

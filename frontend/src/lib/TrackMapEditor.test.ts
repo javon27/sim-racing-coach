@@ -351,7 +351,8 @@ describe("TrackMapEditor — (re)generate map layout", () => {
 describe("TrackMapEditor — rotation", () => {
   beforeEach(() => {
     vi.mocked(getLapMap).mockReset().mockResolvedValue({ ...fixture, rotation: 0 });
-    vi.mocked(setMapRotation).mockReset();
+    vi.mocked(setMapRotation).mockReset().mockResolvedValue({ ...fixture, rotation: 40 });
+    vi.mocked(saveLapMap).mockReset().mockResolvedValue({ ...fixture, rotation: 40 });
   });
   afterEach(cleanup);
 
@@ -362,52 +363,51 @@ describe("TrackMapEditor — rotation", () => {
     expect(screen.queryByText("Apply")).toBeNull();
   });
 
-  it("persists the ENTERED angle once (1x) — preview nets to identity, not 2x", async () => {
-    // Backend bakes once and echoes rotation=entered.
-    vi.mocked(setMapRotation).mockResolvedValue({ ...fixture, rotation: 40 });
-    const { container } = render(TrackMapEditor, { props: { lapId: 7, open: true, rotDebounceMs: 0 } });
+  it("nudging previews live but does NOT persist until Save (once, 1x)", async () => {
+    const { container } = render(TrackMapEditor, { props: { lapId: 7, open: true } });
     await screen.findByText("First");
 
     await fireEvent.input(screen.getByLabelText("Rotation degrees"), { target: { value: "40" } });
 
-    // Client sends exactly what the user entered (not 80).
+    // Live preview rotates by the entered angle (baked 0 + preview 40)...
+    const g = container.querySelector("g[transform]") as SVGGElement;
+    expect(g.getAttribute("transform")).toMatch(/^rotate\(40[,\s]/);
+    // ...but nothing is persisted until Save.
+    expect(setMapRotation).not.toHaveBeenCalled();
+
+    await fireEvent.click(screen.getByText("Save"));
+    await waitFor(() => expect(setMapRotation).toHaveBeenCalledWith(7, 40)); // once, on Save
+    expect(vi.mocked(setMapRotation).mock.calls.length).toBe(1);
+    expect(saveLapMap).toHaveBeenCalled();
+  });
+
+  it("Save persists the pending rotation AND the edited corners together", async () => {
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+
+    await fireEvent.input(screen.getAllByLabelText("Corner name")[0], { target: { value: "Zed" } });
+    await fireEvent.input(screen.getByLabelText("Rotation degrees"), { target: { value: "40" } });
+    await fireEvent.click(screen.getByText("Save"));
+
     await waitFor(() => expect(setMapRotation).toHaveBeenCalledWith(7, 40));
-    // After the rebaked geometry merges (rotation=40, angle=40) the preview group
-    // is identity — so displayed = baked(40) + 0 = 40, i.e. 1x.
-    await waitFor(() => {
-      const g = container.querySelector("g[transform]") as SVGGElement;
-      expect(g.getAttribute("transform")).toMatch(/^rotate\(0[,\s]/);
-    });
+    const [, body] = vi.mocked(saveLapMap).mock.calls[0];
+    expect(body.corners[0].name).toBe("Zed"); // edited corner saved on the same Save
   });
 
-  it("does not clobber in-progress corner edits when rotation persists", async () => {
-    vi.mocked(setMapRotation).mockResolvedValue({ ...fixture, rotation: 40 }); // server corners = First/Second
-    render(TrackMapEditor, { props: { lapId: 7, open: true, rotDebounceMs: 0 } });
+  it("does not persist rotation on Save when the angle is unchanged", async () => {
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
     await screen.findByText("First");
-
-    const nameInput = screen.getAllByLabelText("Corner name")[0] as HTMLInputElement;
-    await fireEvent.input(nameInput, { target: { value: "Zed" } });
-
-    await fireEvent.input(screen.getByLabelText("Rotation degrees"), { target: { value: "40" } });
-    await waitFor(() => expect(setMapRotation).toHaveBeenCalled());
-
-    // The edited name survives — rotation merged only the geometry, not corners.
-    expect((screen.getAllByLabelText("Corner name")[0] as HTMLInputElement).value).toBe("Zed");
+    await fireEvent.click(screen.getByText("Save"));
+    await waitFor(() => expect(saveLapMap).toHaveBeenCalled());
+    expect(setMapRotation).not.toHaveBeenCalled(); // angle == baked -> skip
   });
 
-  it("reverts the preview to identity when a rotation persist fails (drags realign)", async () => {
+  it("shows Save failed when persisting the rotation throws", async () => {
     vi.mocked(setMapRotation).mockRejectedValue(new Error("boom"));
-    const { container } = render(TrackMapEditor, { props: { lapId: 7, open: true, rotDebounceMs: 0 } });
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
     await screen.findByText("First");
-
     await fireEvent.input(screen.getByLabelText("Rotation degrees"), { target: { value: "40" } });
-    await waitFor(() => expect(setMapRotation).toHaveBeenCalled());
-
-    // On failure angle reverts to the baked rotation (0) → preview group is
-    // identity again, so drag hit-tests against the unrotated path still line up.
-    await waitFor(() => {
-      const g = container.querySelector("g[transform]") as SVGGElement;
-      expect(g.getAttribute("transform")).toMatch(/^rotate\(0[,\s]/);
-    });
+    await fireEvent.click(screen.getByText("Save"));
+    expect(await screen.findByText("Save failed.")).toBeTruthy();
   });
 });
