@@ -601,6 +601,33 @@ def test_coach_resolves_live_track_car_with_zero_stored_laps(tmp_path, monkeypat
     assert rows and rows[0]["track"] == "test_track" and rows[0]["car"]  # live-resolved
 
 
+def test_mapcapture_rebuild_offline_uses_newest_capture(tmp_path, monkeypatch):
+    from simcoach.lmu import smm
+    app, store = _map_app(tmp_path)
+    app.state.latest = {"record": _edge("MapTrack", 1, 100.0), "lap_id": 0}
+    app.state.map_buffer = [_edge("MapTrack", 1, 100.0), _edge("MapTrack", -1, 100.0)]
+    c = _tc(app)
+    c.post("/mapcapture/build", json={})
+    c.post("/mapcapture/save", json={})       # writes captures/maptrack.npz
+    # Go OFFLINE after a "restart": no live SMM, no selected/built state.
+    monkeypatch.setattr(smm, "read_session_track_car", lambda: None)
+    app.state.latest = None
+    app.state.last_ribbon = None
+    r = c.post("/mapcapture/rebuild", json={}).json()   # falls back to newest capture
+    assert r["left"] and len(r["center"]) == len(r["left"])
+
+
+def test_mapcapture_rebuild_corrupt_capture_is_422(tmp_path):
+    app, store = _map_app(tmp_path)
+    app.state.latest = {"record": _edge("MapTrack", 1, 100.0), "lap_id": 0}
+    app.state.map_buffer = [_edge("MapTrack", 1, 100.0), _edge("MapTrack", -1, 100.0)]
+    c = _tc(app)
+    c.post("/mapcapture/build", json={})
+    c.post("/mapcapture/save", json={})
+    (tmp_path / "data" / "captures" / "maptrack.npz").write_bytes(b"not an npz")  # corrupt
+    assert c.post("/mapcapture/rebuild", json={}).status_code == 422  # clean 422, not 500
+
+
 def test_mapcapture_rebuild_no_capture_is_422(tmp_path):
     app, _ = _map_app(tmp_path)
     app.state.latest = {"record": _edge("Nope", 1, 100.0), "lap_id": 0}

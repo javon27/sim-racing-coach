@@ -72,20 +72,34 @@ _POS_CHANNELS = ("pos_x", "pos_y", "pos_z", "lap_distance")
 
 def _save_cloud(path, laps) -> None:
     """Persist the raw mapping point cloud (pos_x/y/z + lap_distance per lap) so a
-    ribbon can be re-reconstructed after algorithm changes without re-driving."""
+    ribbon can be re-reconstructed after algorithm changes without re-driving.
+    Atomic (tmp + os.replace) so a crash mid-save can't leave a corrupt .npz."""
     path.parent.mkdir(parents=True, exist_ok=True)
     arrs = {f"lap{i}_{c}": np.asarray(ch[c]) for i, ch in enumerate(laps)
             for c in _POS_CHANNELS if c in ch}
-    np.savez_compressed(str(path), **arrs)
+    tmp = path.with_suffix(".npz.tmp")
+    try:
+        with open(tmp, "wb") as f:      # file handle: numpy won't append its own .npz
+            np.savez_compressed(f, **arrs)
+        os.replace(tmp, path)
+    except BaseException:
+        if tmp.exists():
+            tmp.unlink()
+        raise
 
 
 def _load_cloud(path) -> list[dict]:
-    z = np.load(str(path))
-    laps: dict = {}
-    for k in z.files:
-        i, c = k.split("_", 1)              # "lap3_lap_distance" -> ("lap3", "lap_distance")
-        laps.setdefault(i, {})[c] = z[k]
-    return [laps[i] for i in sorted(laps, key=lambda s: int(s[3:]))]
+    """Raw cloud back as a list of channel dicts, or [] if the file is corrupt/
+    unreadable (caller treats [] as 'no usable capture' -> clean 422, not a 500)."""
+    try:
+        z = np.load(str(path))
+        laps: dict = {}
+        for k in z.files:
+            i, c = k.split("_", 1)          # "lap3_lap_distance" -> ("lap3", "lap_distance")
+            laps.setdefault(i, {})[c] = z[k]
+        return [laps[i] for i in sorted(laps, key=lambda s: int(s[3:]))]
+    except Exception:
+        return []
 
 
 def _capture_loop(source, store, app_state) -> None:
@@ -172,7 +186,15 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     def _capture_path(track: str) -> Path:
         # Raw point cloud lives in app-data (store.data_dir), NOT the shipped tracks
         # dir -- large + per-user, one file per track (latest capture wins).
-        return Path(store.data_dir) / "captures" / f"{track_slug(track)}.npz"
+        slug = track_slug(track)
+        if not slug:  # guard like _track_file: never write captures/.npz
+            raise HTTPException(400, "invalid track")
+        return Path(store.data_dir) / "captures" / f"{slug}.npz"
+
+    def _newest_capture() -> Path | None:
+        d = Path(store.data_dir) / "captures"
+        files = list(d.glob("*.npz")) if d.exists() else []
+        return max(files, key=lambda p: p.stat().st_mtime) if files else None
 
     def _track_file_data(track: str) -> dict:
         # Parsed shipped track file, or {} if missing/unreadable. Never raises.
@@ -736,14 +758,23 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
 
     @app.post("/mapcapture/rebuild")
     def mapcapture_rebuild(body: dict = Body(...)):
-        # Re-reconstruct from a track's SAVED raw cloud -- no active capture needed.
+        # Re-reconstruct from a SAVED raw cloud -- no active capture needed. Resolve
+        # the target: explicit body {"slug"}, else live/selected track, else the
+        # NEWEST saved capture (so rebuild works OFFLINE after a sidecar restart).
+        slug = body.get("slug")
         track = _live_track() or (app.state.last_ribbon or {}).get("track")
-        if not track:
-            raise HTTPException(422, "no live/selected track")
-        path = _capture_path(track)
-        if not path.exists():
-            raise HTTPException(422, "no saved capture for this track")
+        if slug:
+            path = _capture_path(slug)
+        elif track:
+            path = _capture_path(track)
+        else:
+            path = _newest_capture()
+        if path is None or not path.exists():
+            raise HTTPException(422, "no saved capture available")
         laps = _load_cloud(path)
+        if not laps:
+            raise HTTPException(422, "saved capture is unreadable")
+        track = track or path.stem  # offline: take the track (slug) from the file name
         ribbon = reconstruct_surface(laps)
         if not ribbon:
             raise HTTPException(422, "saved capture lacks position telemetry")
