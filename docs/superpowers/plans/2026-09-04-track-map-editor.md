@@ -104,23 +104,39 @@ class-colored dots. No extra map work needed then — it consumes this file.
 3. Review + red-team both lanes; full py + fe suites + build green.
 4. Later: sector live cross-check; Pit Wall consumer.
 
-## Increment: accurate corner windows (start_dist/end_dist) — 2026-09-04
-Problem: `analysis.py` computes EVERY per-corner metric (speeds, brake_point, throttle_point,
-trail-brake, peak brake/lat-g) only within `[start_dist, end_dist]` (`:86`), and `brake_point`
-is the first braking sample IN the window (`:137`) — so if `start_dist` falls after brake
-onset, the brake point is mis-detected. The editor sets `apex_dist` (drag) but not the window;
-added corners get a fixed ±2.5%-of-length default that's often too narrow on entry for heavy
-stops. User decision: **auto-derive the window from telemetry + allow manual override.**
-- BACKEND: extend the averaging to also produce averaged `brake`/`throttle`/`speed` on the
-  same distance grid as the path. New `derive_corner_window(dist, brake, throttle, apex, length)`
-  → `start` = brake onset scanning back from apex (brake rises above ~0.05 / throttle lifts),
-  `end` = throttle restored scanning forward (throttle back above ~0.9 / speed recovering);
-  clamp to [0,length], guarantee start<apex<end, small default window for flat-out kinks with
-  no braking; handle the closed-loop wrap. Use it in PUT/add when the client omits start/end;
-  RESPECT client-sent start/end (manual override), validated+clamped as today.
-- FRONTEND: draggable start & end handles per corner (snap to line via `dist[]`), plus a
-  highlighted line segment showing the window; added corners show the auto-derived window,
-  which the user can drag to adjust; Save sends the (possibly adjusted) start/end.
+## Increment: corners computed from telemetry (auto-detect), manual = override — 2026-09-04
+User insight: we already generate the layout from telemetry, so we can COMPUTE apex, window,
+direction, brake point — the user shouldn't hand-place them. We have the pieces: `mapbuild.detect_corners`
+(apex from smoothed |steering| peaks + direction from steering sign) and `analysis.py` (brake
+point/speeds within a window). Multi-lap AVERAGING now feeds detection, so it's far more stable
+than the old single-lap version. `analysis.py` computes every per-corner metric only within
+`[start_dist,end_dist]` (`:86`), and `brake_point` is the first braking sample IN the window
+(`:137`) — so the window must span brake-onset→exit or the brake point is mis-detected. The old
+editor made the user drag the apex + used a fixed ±2.5% window (too narrow on heavy stops).
+
+New model — **auto-detect everything; manual is override/split/rename:**
+- BACKEND:
+  - Extend averaging to also produce averaged `speed`/`steering`/`brake`/`throttle` on the
+    same distance grid as the path (feeds detection + window + direction).
+  - `derive_corner_window(dist, brake, throttle, apex, length)` → `start`=brake onset scanning
+    back from apex, `end`=throttle restored scanning forward; clamp [0,length], start<apex<end,
+    small default for flat-out kinks, closed-loop wrap.
+  - Auto-detect corners from the averaged channels (reuse `detect_corners`) → each corner gets
+    apex + derived window + direction (curvature). `GET /laps/{id}/map`: corners = the track
+    file's saved corners if present, else the AUTO-DETECTED set (so opening the editor on an
+    un-mapped track shows a computed first pass).
+  - `GET /laps/{id}/corner?at=<dist>` → ONE computed corner {apex,start,end,direction} for
+    click-to-add (apex snapped to the local speed-min near the click). Keeps all telemetry
+    compute server-side (two-stage-pipeline invariant); the editor stays thin.
+  - PUT: when start/end omitted, auto-derive (not fixed ±%); RESPECT client-sent apex/start/end
+    (manual override); always re-derive direction from curvature.
+- FRONTEND:
+  - Editor seeds from the returned corners (detected when none saved) — user reviews/renames.
+  - "Add corner": click the line → `GET .../corner?at=dist` → insert the computed corner.
+  - Draggable apex + start + end handles (snap to line via `dist[]`) to override; show the
+    window as a highlighted line segment. Save sends the (possibly adjusted) corners.
+- CAVEATS (documented for the user): detection can merge tight chicanes / over-split — manual
+  split+add covers it; direction sign constant still rig-unverified.
 
 ## Invariants preserved
 - Corners owned data; direction always machine-derived (now from path curvature) — no LLM,
