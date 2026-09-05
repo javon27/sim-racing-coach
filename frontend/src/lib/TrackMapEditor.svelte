@@ -340,10 +340,19 @@
     const i = nearestPathIndex(map.path, vx, vy);
     const d = map.dist[i];
     switch (drag.kind) {
-      case "corner":
-        corners[drag.i].apex_dist = d;
-        corners[drag.i].apexes[0] = d; // primary apex stays synced to apex_dist
+      case "corner": {
+        // A corner has no separate start/end handles, so its window must follow the
+        // apex — otherwise dragging the apex out of a loaded corner's fixed window
+        // makes the save fail ("apex_dist must be inside the window"). Translate the
+        // window by the same delta so the apex stays put inside it.
+        const c = corners[drag.i];
+        const delta = d - c.apex_dist;
+        c.apex_dist = d;
+        c.apexes[0] = d; // primary apex stays synced to apex_dist
+        if (c.start_dist != null) c.start_dist += delta;
+        if (c.end_dist != null) c.end_dist += delta;
         break;
+      }
       case "apex":
         corners[drag.i].apexes[drag.ai!] = d;
         break;
