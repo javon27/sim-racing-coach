@@ -104,6 +104,17 @@ friction model — e.g. `v_cap = sqrt(g·r·(µ + tanθ)/(1 − µ·tanθ))` (cl
 so banked corners get their higher speed. Telemetry-calibrated lat_g independently reflects
 banking too. Flat track (θ≈0) reduces to the plain friction circle. Naive stays naive.
 
+## Display rotation (user decision) — QUEUED behind the ribbon lanes
+Telemetry maps come out in world orientation, not the conventional way a track is drawn. Add a
+per-track **`rotation`** (degrees, default 0) stored in `tracks/<slug>.json`, applied INSIDE the
+world→screen transform (rotate world x/z about the centroid before normalizing to the viewBox).
+That way every consumer renders the same orientation — map pane, editor, Pit Wall car dots,
+replay dot all apply the SAME rotation (it's part of the shared transform, not a per-view SVG
+tweak, so overlays placed by world position stay aligned). Editor gets a rotation control
+(90° buttons + fine nudge, or a slider) that saves the value. Back-compat: missing → 0.
+SEQUENCING: apply after the mapping-capture/ribbon backend + editor lanes land (they're editing
+the same screen-transform + editor files now) — don't pile onto mid-flight agents.
+
 ## Invariants preserved
 - Telemetry-derived, owned data; corners computed (not LLM/hand-guessed); two-stage pipeline;
   UI-agnostic core; storage split (ribbon summary in the track JSON, full-rate laps on disk).
