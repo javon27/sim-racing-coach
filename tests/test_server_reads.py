@@ -385,6 +385,81 @@ def test_status_has_map_reflects_canonical(tmp_path):
     assert _tc(app).get("/status").json()["has_map"] is False
 
 
+def _map_app(tmp_path):
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    coach = Coach(FakeModel(), "simcoach/knowledge")
+    app = create_app(store, coach, tracks_dir=str(tmp_path / "tracks"))
+    return app, store
+
+
+def _edge(track, zsign, dist_max):
+    x = np.array([0.0, 50.0, 100.0])
+    z = np.array([zsign * 5.0] * 3)
+    return LapRecord("lmu", track, "GT3", 90.0, True, 0.0,
+                     {"pos_x": x, "pos_z": z, "lap_distance": np.array([0.0, dist_max / 2, dist_max])})
+
+
+def test_mapcapture_start_buffers_laps_never_persists(tmp_path):
+    from simcoach.server.app import _capture_loop
+    app, store = _map_app(tmp_path)
+    c = _tc(app)
+    assert c.post("/mapcapture/start").json() == {"active": True}
+    assert app.state.mapping is True
+
+    laps = [_edge("MapTrack", 1, 100.0), _edge("MapTrack", -1, 100.0)]
+
+    class Src:
+        def laps(self):
+            return iter(laps)
+
+    _capture_loop(Src(), store, app.state)  # the daemon body, mapping ON
+    assert store.list_lap_ids("MapTrack", "GT3") == []   # NEVER persisted
+    assert len(app.state.map_buffer) == 2
+
+    st = c.get("/mapcapture/status").json()
+    assert st["active"] is True
+    assert [l["idx"] for l in st["laps"]] == [0, 1]
+    assert st["laps"][0]["samples"] == 3 and st["laps"][0]["length"] == 100.0
+
+    assert c.post("/mapcapture/cancel").json() == {"active": False}
+    assert app.state.mapping is False and app.state.map_buffer == []
+
+
+def test_mapcapture_build_returns_ribbon_shape(tmp_path):
+    app, _ = _map_app(tmp_path)
+    app.state.map_buffer = [_edge("MapTrack", 1, 100.0), _edge("MapTrack", -1, 100.0)]
+    body = _tc(app).post("/mapcapture/build", json={"left": 0, "right": 1}).json()
+    for k in ("width", "height", "left", "right", "center", "corners", "sectors"):
+        assert k in body
+    assert body["left"] and len(body["center"]) == len(body["left"])
+
+
+def test_mapcapture_build_bad_index_is_422(tmp_path):
+    app, _ = _map_app(tmp_path)
+    app.state.map_buffer = [_edge("MapTrack", 1, 100.0)]
+    assert _tc(app).post("/mapcapture/build", json={"left": 0, "right": 9}).status_code == 422
+
+
+def test_mapcapture_save_writes_track_json(tmp_path):
+    app, _ = _map_app(tmp_path)
+    app.state.latest = {"record": _edge("MapTrack", 1, 100.0), "lap_id": 0}  # live track
+    app.state.map_buffer = [_edge("MapTrack", 1, 100.0), _edge("MapTrack", -1, 100.0)]
+    c = _tc(app)
+    c.post("/mapcapture/build", json={"left": 0, "right": 1})
+    r = c.post("/mapcapture/save", json={}).json()
+    assert r == {"saved": True, "slug": "maptrack"}
+    saved = json.loads((tmp_path / "tracks" / "maptrack.json").read_text())
+    assert "ribbon" in saved and "path" in saved and "path_dist" in saved
+    # The saved file still loads as a corner map (back-compat with CornerMap.load).
+    CornerMap.load(str(tmp_path / "tracks" / "maptrack.json"))
+
+
+def test_mapcapture_save_without_build_is_422(tmp_path):
+    app, _ = _map_app(tmp_path)
+    app.state.latest = {"record": _edge("MapTrack", 1, 100.0), "lap_id": 0}
+    assert _tc(app).post("/mapcapture/save", json={}).status_code == 422
+
+
 def test_analysis_unanalyzable_is_422(tmp_path, synthetic_lap, monkeypatch):
     cmap = CornerMap.load("simcoach/tracks/test_track.json")
     app, lap_id, cid = _app(tmp_path, synthetic_lap, cmap=cmap)

@@ -27,6 +27,7 @@ from ..lmu.ingest import ingest_all
 from ..model.factory import CoachUserError, make_model
 from ..tiers import legal_adjustments
 from ..corners import CornerMap
+from ..ribbon import multi_signal_direction, reconstruct_ribbon, ribbon_to_screen
 from ..track_lookup import track_slug
 from ..trackmap import average_racing_line, build_track_map, direction_from_path
 
@@ -71,6 +72,11 @@ def _capture_loop(source, store, app_state) -> None:
     `source.laps()` is exhausted or raises -- the caller (build_app) wraps
     this in a retry loop so a real LMU source reconnects after a drop."""
     for lap in source.laps():
+        # Mapping mode: buffer boundary laps for ribbon reconstruction and NEVER
+        # persist them (no DB / sessions / lap-list / coach pollution).
+        if getattr(app_state, "mapping", False):
+            app_state.map_buffer.append(lap)
+            continue
         lap_id = store.save(lap)
         app_state.latest = {"record": lap, "lap_id": lap_id}
 
@@ -89,6 +95,9 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     app.state.cmaps = {}             # per-track CornerMap cache (only non-None cached)
     app.state.canon = {}             # per-(track,car) canonical map payload cache
     app.state.latest = None  # set by the capture thread (build_app): {"record", "lap_id"} | None
+    app.state.mapping = False        # mapping-capture mode: buffer laps, don't persist
+    app.state.map_buffer = []        # LapRecords captured while mapping (transient)
+    app.state.last_ribbon = None     # last built ribbon {world, corners, sectors} for save
 
     def _map_for(track):
         # Resolve a corner map for a specific track, following track changes.
@@ -116,6 +125,24 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         if not slug or tracks_dir not in p.parents:
             raise HTTPException(400, "invalid track")
         return p
+
+    def _write_track_json(track: str, out: dict) -> None:
+        # Atomic write (unique tmp + os.replace) so a crash mid-write never leaves
+        # a partial file and concurrent same-track writes don't clobber one tmp
+        # path. allow_nan=False hard-fails rather than emit invalid JSON.
+        # _track_file rejects traversal outside the tracks dir.
+        target = _track_file(track)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(out, indent=2, allow_nan=False)
+        fd, tmp = tempfile.mkstemp(dir=str(target.parent), suffix=".json.tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(payload)
+            os.replace(tmp, target)
+        except BaseException:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            raise
 
     def _track_file_data(track: str) -> dict:
         # Parsed shipped track file, or {} if missing/unreadable. Never raises.
@@ -448,26 +475,112 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             "sectors": sectors,
             "length": length,
         }
-        # Atomic write (unique tmp + os.replace) so a crash mid-write never
-        # leaves a partial file and concurrent same-track PUTs don't clobber one
-        # tmp path. allow_nan=False hard-fails rather than emit invalid JSON.
-        # _track_file rejects traversal.
-        target = _track_file(rec.track)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps(out, indent=2, allow_nan=False)
-        fd, tmp = tempfile.mkstemp(dir=str(target.parent), suffix=".json.tmp")
-        try:
-            with os.fdopen(fd, "w") as f:
-                f.write(payload)
-            os.replace(tmp, target)
-        except BaseException:
-            if os.path.exists(tmp):
-                os.unlink(tmp)
-            raise
+        _write_track_json(rec.track, out)
         # Invalidate cmap + canonical caches so the next GET returns the new
         # canonical map (now frozen into the file).
         _invalidate_canon(rec.track)
         return _canonical_map(rec.track, rec.car, force=False)
+
+    def _place_corners(ribbon, edge_channels):
+        # First-pass corners from the naive optimal-line solver over the corridor,
+        # placed on the centerline; direction is multi-signal (curvature + steering
+        # + lat_g). raceline.py is a parallel lane -- absent -> no corners yet.
+        try:
+            from .. import raceline
+        except ImportError:
+            return []
+        try:
+            # No telem= calibration: the slow boundary laps would under-read grip;
+            # GT3 defaults are the safer first pass (plan's documented fallback).
+            solved = raceline.solve_corners(ribbon["left"], ribbon["right"])
+        except Exception:
+            return []
+        # ponytail: solved apex_dist is metres along the (shorter) solved line, but
+        # we place markers against the centerline dist axis -- a few-% offset on a
+        # first-pass, user-draggable marker. Reconcile via station index if a
+        # consumer needs exact alignment.
+        length = ribbon["dist"][-1] if ribbon["dist"] else 0.0
+        out = []
+        for i, c in enumerate(solved):
+            apex = float(c["apex_dist"])
+            direction, confidence = multi_signal_direction(
+                ribbon["center"], ribbon["dist"], apex,
+                edge_channels=edge_channels, lap_length=length,
+            )
+            out.append({
+                "number": i + 1, "name": f"Turn {i + 1}", "direction": direction,
+                "apex_dist": round(apex, 1),
+                "start_dist": round(float(c["start_dist"]), 1),
+                "end_dist": round(float(c["end_dist"]), 1),
+                "confidence": confidence,
+            })
+        return out
+
+    @app.post("/mapcapture/start")
+    def mapcapture_start():
+        app.state.map_buffer = []
+        app.state.last_ribbon = None
+        app.state.mapping = True
+        return {"active": True}
+
+    @app.post("/mapcapture/cancel")
+    def mapcapture_cancel():
+        app.state.mapping = False
+        app.state.map_buffer = []
+        app.state.last_ribbon = None
+        return {"active": False}
+
+    @app.get("/mapcapture/status")
+    def mapcapture_status():
+        laps = []
+        for i, r in enumerate(app.state.map_buffer):
+            ld = r.channels.get("lap_distance")
+            n = len(ld) if ld is not None else 0
+            length = float(max(ld)) if n else 0.0
+            laps.append({"idx": i, "samples": n, "length": round(length, 1)})
+        return {"active": app.state.mapping, "live_track": _live_track(), "laps": laps}
+
+    @app.post("/mapcapture/build")
+    def mapcapture_build(body: dict = Body(...)):
+        buf = app.state.map_buffer
+        try:
+            li, ri = int(body["left"]), int(body["right"])
+            left_rec, right_rec = buf[li], buf[ri]
+        except (KeyError, TypeError, ValueError, IndexError):
+            raise HTTPException(422, "left/right must be valid buffer indices")
+        ribbon = reconstruct_ribbon(left_rec.channels, right_rec.channels)
+        if not ribbon:
+            raise HTTPException(422, "boundary laps lack position telemetry")
+        corners = _place_corners(ribbon, left_rec.channels)
+        sectors = _shipped_extras(_live_track() or "").get("sectors") or []
+        app.state.last_ribbon = {"world": ribbon, "corners": corners, "sectors": sectors}
+        return _clean(ribbon_to_screen(ribbon, corners, sectors))
+
+    @app.post("/mapcapture/save")
+    def mapcapture_save(body: dict = Body(default={})):
+        rib = app.state.last_ribbon
+        if not rib:
+            raise HTTPException(422, "no built ribbon to save")
+        track = _live_track()
+        if not track:
+            raise HTTPException(422, "no live track")
+        world = rib["world"]
+        # Strip to the CornerMap.load-compatible Corner shape (drops confidence
+        # etc.), so the saved file still loads unchanged.
+        keys = ("number", "name", "direction", "start_dist", "apex_dist", "end_dist")
+        corners = [{k: c[k] for k in keys} for c in rib["corners"]]
+        out = {
+            "track": track_slug(track),
+            "corners": corners,
+            "ribbon": {k: world[k] for k in ("left", "right", "center", "width")},
+            "path": world["center"],
+            "path_dist": world["dist"],
+            "sectors": rib["sectors"],
+            "length": world["dist"][-1] if world["dist"] else 0.0,
+        }
+        _write_track_json(track, out)
+        _invalidate_canon(track)
+        return {"saved": True, "slug": track_slug(track)}
 
     @app.get("/setup")
     def setup():
