@@ -174,7 +174,12 @@
     resetGen();
   }
 
-  onDestroy(stopPoll);
+  onDestroy(() => {
+    stopPoll();
+    // Unmount mid-capture -> tell the server to leave mapping mode, else real
+    // laps keep buffering unsaved.
+    if (genPhase !== "off") cancelMapCapture().catch(() => {});
+  });
 
   // Ribbon fill = left edge forward, right edge back, closed.
   const ribbonBand = $derived.by(() => {
@@ -198,6 +203,9 @@
   $effect(() => {
     if (!open || lapId == null) {
       loadedFor = -1;
+      // Hiding/unmounting mid-capture must not leave the server buffering real
+      // laps into mapping mode (silent data loss) — same teardown as the × button.
+      if (genPhase !== "off") cancelGen();
       return;
     }
     if (loadedFor === lapId) return;

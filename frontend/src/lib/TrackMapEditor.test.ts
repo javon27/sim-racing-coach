@@ -211,4 +211,24 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     expect(cancelMapCapture).toHaveBeenCalled();
     expect(await screen.findByText("First")).toBeTruthy(); // back in the normal editor
   });
+
+  it("cancels mapping mode on unmount while capturing (no silent buffering)", async () => {
+    const { unmount } = render(TrackMapEditor, { props: { lapId: 7, open: true, pollMs: 5 } });
+    await screen.findByText("First");
+    await fireEvent.click(screen.getByText("(Re)generate map layout"));
+    await screen.findByText(/LEFT edge/i);
+
+    unmount();
+    expect(cancelMapCapture).toHaveBeenCalled();
+  });
+
+  it("cancels mapping mode when open flips false while capturing", async () => {
+    const { rerender } = render(TrackMapEditor, { props: { lapId: 7, open: true, pollMs: 5 } });
+    await screen.findByText("First");
+    await fireEvent.click(screen.getByText("(Re)generate map layout"));
+    await screen.findByText(/LEFT edge/i);
+
+    await rerender({ lapId: 7, open: false });
+    await waitFor(() => expect(cancelMapCapture).toHaveBeenCalled());
+  });
 });
