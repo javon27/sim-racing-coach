@@ -156,19 +156,30 @@ export function getLapAnalysis(id: number): Promise<LapAnalysisResponse> {
   return request<LapAnalysisResponse>(`/laps/${id}/analysis`);
 }
 
+export type SectionKind = "straight" | "complex" | "section" | "drs";
+export interface Section {
+  name: string;
+  kind: SectionKind;
+  start_dist: number;
+  end_dist: number;
+}
+
 export interface TrackMap {
   width: number;
   height: number;
   path: [number, number][];
   dist: number[]; // lap_distance parallel to path (same length)
   sectors: number[]; // lap_distance of S1/S2 boundaries; [] when unset
+  sections: Section[]; // named distance spans (straights, complexes, DRS)
   corners: {
-    number: number;
+    number: number; // internal positional order key
+    label: string; // what the map shows (e.g. "8A"); defaults to str(number)
     name: string;
     direction: string;
     x: number;
     y: number;
-    apex_dist: number;
+    apex_dist: number; // primary apex
+    apexes: number[]; // all apexes (lap_distance); [apex_dist] when single
     start_dist: number;
     end_dist: number;
   }[];
@@ -190,15 +201,17 @@ export function setMapRotation(id: number, degrees: number): Promise<TrackMap> {
 // Server derives direction from geometry — never send it.
 export interface CornerEdit {
   number: number;
+  label: string;
   name: string;
   apex_dist: number;
+  apexes: number[];
   start_dist?: number;
   end_dist?: number;
 }
 
 export function saveLapMap(
   id: number,
-  body: { corners: CornerEdit[]; sectors: number[] },
+  body: { corners: CornerEdit[]; sectors: number[]; sections: Section[] },
 ): Promise<TrackMap> {
   return request<TrackMap>(`/laps/${id}/map`, {
     method: "PUT",
@@ -223,9 +236,11 @@ export interface RibbonPreview {
   center: [number, number][];
   corners: {
     number: number;
+    label?: string;
     name: string;
     direction: string;
     apex_dist: number;
+    apexes?: number[];
     start_dist: number;
     end_dist: number;
     x: number;

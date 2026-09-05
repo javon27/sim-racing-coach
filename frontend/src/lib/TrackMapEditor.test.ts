@@ -150,6 +150,43 @@ describe("TrackMapEditor", () => {
       expect(c).toHaveProperty("name");
     }
   });
+
+  it("edits a corner label and the map draws T{label}", async () => {
+    const { container } = render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+
+    await fireEvent.input(screen.getAllByLabelText("Corner label")[0], { target: { value: "8A" } });
+
+    const labels = [...container.querySelectorAll("text.corner-lbl")].map((e) => e.textContent);
+    expect(labels).toContain("T8A");
+  });
+
+  it("adds a second apex and saves both in the corner's apexes", async () => {
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+
+    await fireEvent.click(screen.getAllByLabelText("Add apex")[0]);
+    await fireEvent.click(screen.getByText("Save"));
+
+    const [, body] = vi.mocked(saveLapMap).mock.calls[0];
+    expect(body.corners[0].apexes).toHaveLength(2);
+    expect(body.corners[1].apexes).toHaveLength(1); // untouched corner stays single
+  });
+
+  it("adds + names a section that renders on the map and is saved", async () => {
+    const { container } = render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+
+    await fireEvent.click(screen.getByText("Add section"));
+    await fireEvent.input(screen.getByLabelText("Section name"), { target: { value: "Back Straight" } });
+
+    expect(container.querySelector("text.section-lbl")?.textContent).toBe("Back Straight");
+
+    await fireEvent.click(screen.getByText("Save"));
+    const [, body] = vi.mocked(saveLapMap).mock.calls[0];
+    expect(body.sections).toHaveLength(1);
+    expect(body.sections[0].name).toBe("Back Straight");
+  });
 });
 
 const ribbonFix = {

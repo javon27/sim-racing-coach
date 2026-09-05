@@ -61,22 +61,27 @@
 
   type EditCorner = {
     number: number;
+    label: string; // "" follows number; a typed value sticks
     name: string;
     direction: string;
     apex_dist: number;
+    apexes: number[];
     start_dist?: number;
     end_dist?: number;
   };
+  type Section = { name: string; kind: string; start_dist: number; end_dist: number };
 
   let map: TrackMap | null = $state(null);
   let corners: EditCorner[] = $state([]);
   let sectors: number[] = $state([]);
+  let sections: Section[] = $state([]);
   let saving = $state(false);
   let error: string | null = $state(null);
   let svgEl: SVGSVGElement | null = $state(null);
 
-  // What the pointer is currently dragging: a corner index, a sector index, or nothing.
-  let drag: { kind: "corner" | "sector"; i: number } | null = null;
+  // What the pointer is currently dragging. `ai` = apex index for kind "apex".
+  type DragKind = "corner" | "sector" | "apex" | "secstart" | "secend";
+  let drag: { kind: DragKind; i: number; ai?: number } | null = null;
   let addMode = $state(false);
 
   // Orientation control. `angle` is the target the user is dialing in; the live
@@ -255,14 +260,27 @@
     map = res;
     corners = res.corners.map((c) => ({
       number: c.number,
+      label: c.label ?? String(c.number),
       name: c.name,
       direction: c.direction,
       apex_dist: c.apex_dist,
+      apexes: c.apexes && c.apexes.length ? [...c.apexes] : [c.apex_dist],
       start_dist: c.start_dist,
       end_dist: c.end_dist,
     }));
     sectors = [...(res.sectors ?? [])];
+    sections = (res.sections ?? []).map((s) => ({ ...s }));
     angle = res.rotation ?? 0;
+  }
+
+  // Path slice + midpoint for a named section span (start_dist..end_dist).
+  function sectionSeg(s: Section) {
+    if (!map) return { pts: "", mid: [0, 0] as [number, number] };
+    const a = nearestDistIndex(map.dist, s.start_dist);
+    const b = nearestDistIndex(map.dist, s.end_dist);
+    const seg = map.path.slice(Math.min(a, b), Math.max(a, b) + 1);
+    const mid = seg.length ? seg[Math.floor(seg.length / 2)] : map.path[a];
+    return { pts: seg.map(([x, y]) => `${x},${y}`).join(" "), mid };
   }
 
   // Live preview delta: the fitted map already reflects its baked rotation, so
@@ -315,8 +333,24 @@
     const [vx, vy] = toViewBox(e.clientX, e.clientY);
     const i = nearestPathIndex(map.path, vx, vy);
     const d = map.dist[i];
-    if (drag.kind === "corner") corners[drag.i].apex_dist = d;
-    else sectors[drag.i] = d;
+    switch (drag.kind) {
+      case "corner":
+        corners[drag.i].apex_dist = d;
+        corners[drag.i].apexes[0] = d; // primary apex stays synced to apex_dist
+        break;
+      case "apex":
+        corners[drag.i].apexes[drag.ai!] = d;
+        break;
+      case "sector":
+        sectors[drag.i] = d;
+        break;
+      case "secstart":
+        sections[drag.i].start_dist = d;
+        break;
+      case "secend":
+        sections[drag.i].end_dist = d;
+        break;
+    }
   }
   function endDrag() {
     const wasCorner = drag?.kind === "corner";
@@ -331,9 +365,9 @@
       .sort((a, b) => a.apex_dist - b.apex_dist)
       .map((c, idx) => ({ ...c, number: idx + 1 }));
   }
-  function startDrag(kind: "corner" | "sector", i: number, e: PointerEvent) {
+  function startDrag(kind: DragKind, i: number, e: PointerEvent, ai?: number) {
     e.stopPropagation();
-    drag = { kind, i };
+    drag = { kind, i, ai };
     (e.target as Element).setPointerCapture?.(e.pointerId);
   }
 
@@ -345,7 +379,7 @@
     // becomes T2 (not appended as the highest number). Name defaults empty →
     // the map label shows T{number}; server falls back to "Turn N".
     const apex = map.dist[i];
-    corners = [...corners, { number: 0, name: "", direction: "", apex_dist: apex }];
+    corners = [...corners, { number: 0, label: "", name: "", direction: "", apex_dist: apex, apexes: [apex] }];
     renumber();
     // Prefill "Turn N" using the positional number renumber() just assigned.
     const added = corners.find((c) => c.apex_dist === apex && !c.name);
@@ -364,6 +398,26 @@
     sectors = [max / 3, (2 * max) / 3];
   }
 
+  // Double-apex: add/remove a second apex, snapped to the line just past the primary.
+  function addApex(i: number) {
+    if (!map) return;
+    const c = corners[i];
+    const j = Math.min(map.dist.length - 1, nearestDistIndex(map.dist, c.apex_dist) + Math.round(map.dist.length * 0.02));
+    c.apexes = [...c.apexes, map.dist[j]];
+  }
+  function removeApex(i: number, ai: number) {
+    corners[i].apexes = corners[i].apexes.filter((_, k) => k !== ai);
+  }
+
+  function addSection() {
+    if (!map) return;
+    const max = map.dist[map.dist.length - 1] || 0;
+    sections = [...sections, { name: "Section", kind: "section", start_dist: max * 0.25, end_dist: max * 0.5 }];
+  }
+  function removeSection(i: number) {
+    sections = sections.filter((_, k) => k !== i);
+  }
+
   async function save() {
     if (lapId == null) return;
     saving = true;
@@ -372,12 +426,15 @@
       const res = await saveLapMap(lapId, {
         corners: corners.map((c) => ({
           number: c.number,
+          label: c.label,
           name: c.name,
           apex_dist: c.apex_dist,
+          apexes: c.apexes,
           ...(c.start_dist != null ? { start_dist: c.start_dist } : {}),
           ...(c.end_dist != null ? { end_dist: c.end_dist } : {}),
         })),
         sectors,
+        sections,
       });
       applyMap(res);
       onSaved?.();
@@ -483,7 +540,7 @@
             {/if}
             {#each ribbon.corners as c (c.number)}
               <circle cx={c.x} cy={c.y} r={ru * 0.014} fill="var(--accent)"><title>{c.name}</title></circle>
-              <text class="corner-lbl" x={c.x + ru * 0.016} y={c.y - ru * 0.016} font-size={ru * 0.03} fill="var(--accent)">T{c.number}</text>
+              <text class="corner-lbl" x={c.x + ru * 0.016} y={c.y - ru * 0.016} font-size={ru * 0.03} fill="var(--accent)">T{c.label || c.number}</text>
             {/each}
             </g>
           </svg>
@@ -521,6 +578,17 @@
               stroke-linejoin="round"
               stroke-linecap="round"
             />
+            {#each sections as sec, i (i)}
+              {@const seg = sectionSeg(sec)}
+              {@const ps = ptAtDist(sec.start_dist)}
+              {@const pe = ptAtDist(sec.end_dist)}
+              <polyline class="section-band" points={seg.pts} fill="none" stroke="var(--good, #3a7)" stroke-width={u * 0.02} stroke-linecap="round" opacity="0.35" />
+              <text class="section-lbl" x={seg.mid[0]} y={seg.mid[1] - u * 0.022} font-size={u * 0.026} fill="var(--good, #3a7)" text-anchor="middle">{sec.name}</text>
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <circle class="sec-handle" cx={ps[0]} cy={ps[1]} r={u * 0.012} fill="var(--good, #3a7)" role="slider" aria-label="{sec.name} start" aria-valuenow={sec.start_dist} tabindex="-1" onpointerdown={(e) => startDrag("secstart", i, e)}><title>{sec.name} start</title></circle>
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <circle class="sec-handle" cx={pe[0]} cy={pe[1]} r={u * 0.012} fill="var(--good, #3a7)" role="slider" aria-label="{sec.name} end" aria-valuenow={sec.end_dist} tabindex="-1" onpointerdown={(e) => startDrag("secend", i, e)}><title>{sec.name} end</title></circle>
+            {/each}
             {#if startDir}
               {@const b = sfBar(startDir.x0, startDir.y0, startDir.ang, u * 0.03)}
               <line x1={b.x1} y1={b.y1} x2={b.x2} y2={b.y2} stroke="var(--text)" stroke-width={u * 0.008} />
@@ -545,21 +613,26 @@
               ><title>Sector split {i + 1}</title></rect>
             {/each}
             {#each corners as c, i (c.number)}
-              {@const p = ptAtDist(c.apex_dist)}
-              <!-- svelte-ignore a11y_no_static_element_interactions -->
-              <circle
-                class="marker"
-                cx={p[0]}
-                cy={p[1]}
-                r={u * 0.014}
-                fill="var(--accent)"
-                role="slider"
-                aria-label="{c.name} apex position"
-                aria-valuenow={c.apex_dist}
-                tabindex="-1"
-                onpointerdown={(e) => startDrag("corner", i, e)}
-              ><title>{c.name}</title></circle>
-              <text class="corner-lbl" x={p[0] + u * 0.016} y={p[1] - u * 0.016} font-size={u * 0.03} fill="var(--accent)">T{c.number}</text>
+              {#each c.apexes as ad, ai (ai)}
+                {@const p = ptAtDist(ad)}
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <circle
+                  class="marker"
+                  cx={p[0]}
+                  cy={p[1]}
+                  r={u * 0.014}
+                  fill={ai === 0 ? "var(--accent)" : "var(--bg, #1a1a1a)"}
+                  stroke="var(--accent)"
+                  stroke-width={ai === 0 ? 0 : u * 0.005}
+                  role="slider"
+                  aria-label="{c.name} apex {ai + 1}"
+                  aria-valuenow={ad}
+                  tabindex="-1"
+                  onpointerdown={(e) => startDrag(ai === 0 ? "corner" : "apex", i, e, ai)}
+                ><title>{c.name}</title></circle>
+              {/each}
+              {@const lp = ptAtDist(c.apex_dist)}
+              <text class="corner-lbl" x={lp[0] + u * 0.016} y={lp[1] - u * 0.016} font-size={u * 0.03} fill="var(--accent)">T{c.label || c.number}</text>
             {/each}
             </g>
           </svg>
@@ -572,18 +645,41 @@
               {#if sectors.length === 0}
                 <button type="button" onclick={seedSectors}>Add sectors</button>
               {/if}
+              <button type="button" onclick={addSection}>Add section</button>
               <button type="button" onclick={startGen}>(Re)generate map layout</button>
             </div>
             <ul class="corners">
               {#each corners as c, i (c.number)}
                 <li>
                   <span class="num" aria-label="Corner number">T{c.number}</span>
+                  <input class="lbl-in" bind:value={c.label} placeholder={String(c.number)} aria-label="Corner label" />
                   <input class="name" bind:value={c.name} aria-label="Corner name" />
                   <span class="dir" data-dir={c.direction}>{c.direction || "—"}</span>
+                  {#if c.apexes.length < 2}
+                    <button type="button" class="apex-btn" aria-label="Add apex" onclick={() => addApex(i)}>+apex</button>
+                  {:else}
+                    <button type="button" class="apex-btn" aria-label="Remove apex" onclick={() => removeApex(i, c.apexes.length - 1)}>−apex</button>
+                  {/if}
                   <button type="button" class="rm" aria-label="Remove corner" onclick={() => removeCorner(i)}>×</button>
                 </li>
               {/each}
             </ul>
+            {#if sections.length}
+              <ul class="sections">
+                {#each sections as s, i (i)}
+                  <li>
+                    <input class="name" bind:value={s.name} aria-label="Section name" />
+                    <select bind:value={s.kind} aria-label="Section kind">
+                      <option value="straight">straight</option>
+                      <option value="complex">complex</option>
+                      <option value="section">section</option>
+                      <option value="drs">drs</option>
+                    </select>
+                    <button type="button" class="rm" aria-label="Remove section" onclick={() => removeSection(i)}>×</button>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
           </aside>
         </div>
       {:else}
@@ -705,7 +801,32 @@
     padding: 3px 0;
   }
   .num {
+    width: 30px;
+    font-size: 12px;
+    color: var(--faint);
+  }
+  .lbl-in {
     width: 44px;
+    flex: none;
+  }
+  .apex-btn {
+    font-size: 11px;
+    flex: none;
+  }
+  .sec-handle {
+    cursor: grab;
+  }
+  .sections {
+    list-style: none;
+    margin: 8px 0 0;
+    padding: 8px 0 0;
+    border-top: 1px solid var(--muted);
+  }
+  .sections li {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 0;
   }
   .name {
     flex: 1 1 auto;
