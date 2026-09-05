@@ -540,6 +540,27 @@ def test_mapcapture_save_without_build_is_422(tmp_path):
     assert _tc(app).post("/mapcapture/save", json={}).status_code == 422
 
 
+def test_mapcapture_drops_degenerate_solver_corner(tmp_path, monkeypatch):
+    # A solver corner with a collapsed window (start==end) must be DROPPED, not
+    # written -- else CornerMap.load rejects the whole map on reload and EVERY
+    # detected corner vanishes (user re-adds them all). Regression for
+    # "detected corners are never saved".
+    from simcoach import raceline
+    monkeypatch.setattr(raceline, "solve_corners", lambda left, right, bank=None: [
+        {"apex_idx": 1, "start_idx": 0, "end_idx": 2},        # valid window -> kept
+        {"apex_idx": 100, "start_idx": 100, "end_idx": 100},  # collapsed -> dropped
+    ])
+    app, store = _map_app(tmp_path)
+    app.state.map_buffer = [_edge("MapTrack", 1, 100.0), _edge("MapTrack", -1, 100.0)]
+    c = _tc(app)
+    b = c.post("/mapcapture/build", json={}).json()
+    assert len(b["corners"]) == 1  # degenerate dropped before it can poison the map
+    assert c.post("/mapcapture/save", json={}).status_code == 200
+    lid = store.save(_edge("MapTrack", 1, 100.0))
+    got = c.get(f"/laps/{lid}/map").json()  # map LOADS (no degenerate) -> corner present
+    assert len(got["corners"]) == 1
+
+
 def test_mapcapture_detected_corners_reach_editor(tmp_path):
     # Corners detected at build survive save -> GET(avg=0) so the editor lists them.
     app, store = _map_app(tmp_path)

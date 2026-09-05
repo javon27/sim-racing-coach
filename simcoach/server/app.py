@@ -654,21 +654,29 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         length = dist[-1] if dist else 0.0
         n = len(dist)
         out = []
-        for i, c in enumerate(solved):
+        for c in solved:
             ai = int(c["apex_idx"]) % n
             si = int(c["start_idx"]) % n
             ei = int(c["end_idx"]) % n
+            sd, ed = round(dist[si], 1), round(dist[ei], 1)
+            # Drop a collapsed (zero-length) window: the solver can emit
+            # start==apex==end, and a degenerate corner makes CornerMap.load reject
+            # the WHOLE map on reload (so every corner vanishes and the user re-adds
+            # them all). start>end is a valid S/F wrap and is kept.
+            if sd == ed:
+                continue
             apex = dist[ai]
+            number = len(out) + 1  # contiguous numbering after any skips
             direction, confidence = multi_signal_direction(
                 ribbon["center"], dist, apex,
                 edge_channels=edge_channels, lap_length=length,
             )
             out.append({
-                "number": i + 1, "label": str(i + 1), "name": f"Turn {i + 1}",
+                "number": number, "label": str(number), "name": f"Turn {number}",
                 "direction": direction,
                 "apex_dist": round(apex, 1), "apexes": [round(apex, 1)],
-                "start_dist": round(dist[si], 1),
-                "end_dist": round(dist[ei], 1),
+                "start_dist": sd,
+                "end_dist": ed,
                 "confidence": confidence,
             })
         return out
