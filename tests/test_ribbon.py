@@ -92,7 +92,9 @@ def test_reconstruct_surface_smooths_weave_straight():
     # Two straight edges pin the envelope at ±5; a lap weaving edge-to-edge between
     # them would zigzag a per-bin-MEAN center, but the midpoint center + smoothing
     # keeps it straight. (This is the squiggle the user hit.)
-    x = np.linspace(0.0, 400.0, 400)
+    # Realistic scale (~1 km straight, 100 bins) so the distance-based smoothing
+    # half-window (~40 m) is a small fraction of the loop, as on a real track.
+    x = np.linspace(0.0, 1000.0, 400)
     edge_l = {"pos_x": x, "pos_z": np.full(400, 5.0), "lap_distance": x.copy()}
     edge_r = {"pos_x": x, "pos_z": np.full(400, -5.0), "lap_distance": x.copy()}
     # A weaving lap that DRIFTS across the width -- this pulls a per-bin MEAN center

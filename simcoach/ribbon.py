@@ -111,8 +111,13 @@ def _fill_nan(a: np.ndarray, period: float | None = None) -> np.ndarray:
     return a
 
 
-_SMOOTH_W = 5  # half-window (~5 bins ≈ 47 m on a 4.7 km/500-bin track): kills the
-#              # ~9 m squiggle, small vs any real corner radius.
+_SMOOTH_W = 5  # legacy default half-window (bins); reconstruct_surface now derives
+#              # a DISTANCE-based half-window (_SMOOTH_HALF_M) so it's the same on
+#              # every track. Only the bootstrap/bank defaults still fall back here.
+_SMOOTH_HALF_M = 40.0  # smoothing half-window in METRES. ~9 m squiggle << 40 m <<
+#                      # a real corner, and (unlike a fixed bin count) it doesn't
+#                      # balloon on a long track: the old 5-bin window was ~127 m on
+#                      # Monza, flattening the Rettifilo chicane into a gentle S.
 
 
 def _smooth(a: np.ndarray, w: int) -> np.ndarray:
@@ -143,7 +148,7 @@ def _lap_grid(x, z, d, max_len, bins):
     return _fill_nan(ex, period=bins), _fill_nan(ez, period=bins)
 
 
-def _bank_per_bin(X, Z, Y, members, ctr_x, ctr_z, lat_x, lat_z, bins):
+def _bank_per_bin(X, Z, Y, members, ctr_x, ctr_z, lat_x, lat_z, bins, w=_SMOOTH_W):
     """Cross-slope angle per bin from ALL samples: fit pos_y vs lateral offset.
     Positive = right (+lateral) edge higher (matches reconstruct_ribbon)."""
     bnk = np.full(bins, np.nan)
@@ -155,7 +160,7 @@ def _bank_per_bin(X, Z, Y, members, ctr_x, ctr_z, lat_x, lat_z, bins):
         yb, fin = Y[mm], np.isfinite(Y[mm])
         if fin.sum() >= 2 and np.ptp(off[fin]) > 1e-6:
             bnk[b] = np.arctan(np.polyfit(off[fin], yb[fin], 1)[0])
-    return _smooth(_fill_nan(bnk, period=bins), _SMOOTH_W)
+    return _smooth(_fill_nan(bnk, period=bins), w)
 
 
 def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
@@ -199,10 +204,14 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
     bi = np.clip(np.round(D / max_len * (bins - 1)).astype(int), 0, bins - 1)
     members = [np.where(bi == b)[0] for b in range(bins)]
 
+    # Distance-based smoothing half-window (bins), so it's ~_SMOOTH_HALF_M metres on
+    # EVERY track -- a fixed bin count over-smoothed long tracks (chicanes flattened).
+    sw = max(1, int(round(_SMOOTH_HALF_M * bins / max_len)))
+
     # Bootstrap centerline (mean of all), smooth, lateral from it.
     cx = np.array([X[mm].mean() if mm.size else np.nan for mm in members])
     cz = np.array([Z[mm].mean() if mm.size else np.nan for mm in members])
-    cx, cz = _smooth(_fill_nan(cx), _SMOOTH_W), _smooth(_fill_nan(cz), _SMOOTH_W)
+    cx, cz = _smooth(_fill_nan(cx), sw), _smooth(_fill_nan(cz), sw)
     lat_x, lat_z = _lateral(cx, cz)
 
     # Classify laps by mean lateral offset: most-negative = LEFT, most-positive =
@@ -214,8 +223,8 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
         li, ri = int(lap_means.argmin()), int(lap_means.argmax())
         a, b = slices[li]; lx, lz = _lap_grid(X[a:b], Z[a:b], D[a:b], max_len, bins)
         a, b = slices[ri]; rx, rz = _lap_grid(X[a:b], Z[a:b], D[a:b], max_len, bins)
-        lx, lz, rx, rz = (_smooth(lx, _SMOOTH_W), _smooth(lz, _SMOOTH_W),
-                          _smooth(rx, _SMOOTH_W), _smooth(rz, _SMOOTH_W))
+        lx, lz, rx, rz = (_smooth(lx, sw), _smooth(lz, sw),
+                          _smooth(rx, sw), _smooth(rz, sw))
         # Bound laps cross S/F mid-track, so the edges PINCH at the seam -> stitch
         # those bins closed-loop from neighbours (same seam guard as the fallback).
         wid = np.hypot(lx - rx, lz - rz)
@@ -228,7 +237,7 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
             for arr in (lx, lz, rx, rz):
                 arr[bad] = np.nan
                 arr[:] = _fill_nan(arr, period=bins)
-        ctr_x, ctr_z = _smooth((lx + rx) / 2.0, _SMOOTH_W), _smooth((lz + rz) / 2.0, _SMOOTH_W)
+        ctr_x, ctr_z = _smooth((lx + rx) / 2.0, sw), _smooth((lz + rz) / 2.0, sw)
         lat_x, lat_z = _lateral(ctr_x, ctr_z)
         wid = np.hypot(lx - rx, lz - rz)
     else:
@@ -248,7 +257,7 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
             for arr in (off_lo, off_hi):
                 arr[bad] = np.nan
                 arr[:] = _fill_nan(arr, period=bins)
-            off_lo, off_hi = _smooth(off_lo, _SMOOTH_W), _smooth(off_hi, _SMOOTH_W)
+            off_lo, off_hi = _smooth(off_lo, sw), _smooth(off_hi, sw)
             lx, lz = cx + off_lo * lat_x, cz + off_lo * lat_z
             rx, rz = cx + off_hi * lat_x, cz + off_hi * lat_z
             wid = off_hi - off_lo
@@ -257,7 +266,7 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
             wid = np.zeros(bins)
         ctr_x, ctr_z = (lx + rx) / 2.0, (lz + rz) / 2.0
 
-    bnk = _bank_per_bin(X, Z, Y, members, ctr_x, ctr_z, lat_x, lat_z, bins)
+    bnk = _bank_per_bin(X, Z, Y, members, ctr_x, ctr_z, lat_x, lat_z, bins, w=sw)
 
     def _round(a, n):  # non-finite (e.g. bank with no elevation) -> 0.0, JSON-safe
         return [round(float(v), n) if np.isfinite(v) else 0.0 for v in a]
