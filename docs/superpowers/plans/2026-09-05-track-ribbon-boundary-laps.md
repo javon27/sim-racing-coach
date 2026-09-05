@@ -22,12 +22,21 @@ the deferred "import user-built maps as canonical" item: a user's generated layo
 their app-data; a promote/export path makes it canonical. So the UI must be end-user usable
 (clear designation, preview, save), not a dev script.
 
-## Capture & designation
-- No new capture: position (`pos_x/pos_z` + `lap_distance`) is already recorded per lap.
-- The user drives ONE slow lap hugging the **left edge** and ONE hugging the **right edge**.
-- Designate them in the editor (DECISION — recommend): a picker "set as left edge / right
-  edge" over the session's laps. Store the chosen lap ids (or freeze the reconstructed ribbon
-  into the track file so the source laps aren't needed at runtime).
+## Capture & designation — a dedicated mapping-capture mode (user decision)
+Map generation lives INSIDE the Edit-map popup: a **"(Re)generate map layout"** button that
+**starts a dedicated mapping capture**. Critically, these laps MUST NOT pollute the user's
+records — they are NOT `store.save()`d, do NOT appear in the session/lap list, and never reach
+the coach. They route to a transient in-memory buffer used only to build the ribbon.
+- Guided flow (answers the earlier "how to designate left/right" question — no session-lap
+  picker needed): click "(Re)generate map layout" → record the **left-edge** lap → record the
+  **right-edge** lap → reconstruct + preview the ribbon in the editor → Save writes the ribbon
+  (+ corners) to `tracks/<slug>.json`. The raw mapping laps are discarded after reconstruction.
+- Capture channels already present: `pos_x/pos_y/pos_z` + `lap_distance` (elevation `pos_y`
+  added `6e3637a`); live sector boundaries are being added separately.
+- ARCHITECTURE: the capture layer needs a "mapping mode" path that yields laps WITHOUT
+  persisting to the store (distinct from the normal capture daemon that `store.save`s). The
+  server exposes start/stop mapping-capture + a build-ribbon-from-buffered-laps step; the editor
+  drives it and shows "recording left/right edge…" status.
 
 ## Reconstruction (backend, pure fn + tested)
 Key wrinkle: the two laps have DIFFERENT lengths (inside is shorter), so DO NOT pair by raw
@@ -57,15 +66,18 @@ Key wrinkle: the two laps have DIFFERENT lengths (inside is shorter), so DO NOT 
   UI-agnostic core; storage split (ribbon summary in the track JSON, full-rate laps on disk).
 
 ## Build order (SDD, fresh-context subagents, review+red-team per phase)
-1. Backend: `reconstruct_ribbon(left_channels, right_channels)` pure fn + storage + an endpoint
-   to build/save a ribbon from two designated laps. Tests (synthetic offset edges → straight
-   centerline + constant width; different-length laps pair correctly).
-2. Frontend: lap designation picker + ribbon render in the map view/editor.
+1. Backend — mapping-capture mode: a capture path that yields laps WITHOUT `store.save` +
+   start/stop control; `reconstruct_ribbon(left_channels, right_channels)` pure fn + build/save
+   a ribbon into the track file. Tests (synthetic offset edges → straight centerline + constant
+   width; different-length laps pair correctly; mapping laps never hit the store).
+2. Frontend — "(Re)generate map layout" button in the Edit-map popup: guided left→right capture
+   with status, ribbon preview, Save. Ribbon render in the map view.
 3. Review + red-team; full suites + build green.
-4. Later consumers: Pit Wall car dots; replay viewer (separate features that render on this ribbon).
+4. Later consumers: Pit Wall car dots; replay viewer (render on this ribbon).
 
 ## Open decisions for sign-off
-- Lap designation UI (recommend: editor picker "set as left/right edge").
+- ~~Lap designation~~ RESOLVED: dedicated in-editor mapping capture (left then right), laps not
+  persisted. No session-lap picker.
 - Pairing method to start with (recommend: normalized progress, refine to nearest-point).
 - Does the ribbon REPLACE the racing-line outline as canonical, or coexist (racing line shown
   as an optional overlay on the ribbon — useful for the coach/replay)? Recommend: ribbon is
