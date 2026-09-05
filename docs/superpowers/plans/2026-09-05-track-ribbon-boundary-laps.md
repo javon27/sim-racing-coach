@@ -96,6 +96,14 @@ unanimous and correct across Monza's 10 verified corners (lat_g has a physical c
 When the signals DISAGREE (low confidence), flag the corner for the user to eyeball rather than
 guessing. Still fully telemetry-derived / owned-data — never LLM or hand-set (invariant).
 
+## Banking (e.g. Daytona) — free from elevation + two edges (user decision)
+Banking = the outer edge is higher than the inner. We capture `pos_y` on BOTH boundary laps, so
+`reconstruct_ribbon` computes **bank angle θ(s) = atan((y_left − y_right) / width(s))** per
+station and includes it in the ribbon. The solver's corner-speed cap then uses a banked
+friction model — e.g. `v_cap = sqrt(g·r·(µ + tanθ)/(1 − µ·tanθ))` (clamp for stability) —
+so banked corners get their higher speed. Telemetry-calibrated lat_g independently reflects
+banking too. Flat track (θ≈0) reduces to the plain friction circle. Naive stays naive.
+
 ## Invariants preserved
 - Telemetry-derived, owned data; corners computed (not LLM/hand-guessed); two-stage pipeline;
   UI-agnostic core; storage split (ribbon summary in the track JSON, full-rate laps on disk).
