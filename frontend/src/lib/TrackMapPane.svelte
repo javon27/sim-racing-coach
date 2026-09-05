@@ -47,7 +47,7 @@
 
 <section class="map-pane" class:collapsed>
   {#if collapsed}
-    <button type="button" class="strip" aria-label="Show track map" onclick={toggle}>‹</button>
+    <button type="button" class="strip" aria-label="Show track map" onclick={toggle}><span class="cap">‹</span></button>
   {:else}
     <header>
       <h2>Track map</h2>
@@ -85,7 +85,7 @@
     overflow: auto;
   }
   .map-pane.collapsed {
-    width: 40px;
+    width: 20px;
     overflow: hidden;
   }
   header {
@@ -110,11 +110,31 @@
   .strip {
     width: 100%;
     height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     border: none;
     background: transparent;
     cursor: pointer;
-    color: var(--faint);
-    font-size: 16px;
+    padding: 0;
+  }
+  /* A prominent caret tab on the thin collapsed strip — easy to spot and click. */
+  .strip .cap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 48px;
+    border-radius: 6px;
+    background: var(--surface2, rgba(127, 127, 127, 0.14));
+    color: var(--muted);
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1;
+  }
+  .strip:hover .cap {
+    background: var(--accent-soft, rgba(127, 127, 127, 0.26));
+    color: var(--text);
   }
   .empty {
     color: var(--faint);
