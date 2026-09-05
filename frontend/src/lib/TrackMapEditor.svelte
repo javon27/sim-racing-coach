@@ -260,11 +260,18 @@
   // The fresh re-average/rebuild path is only "(Re)generate map layout" (mapcapture).
   let loadedFor = -1;
   $effect(() => {
-    if (!open || lapId == null) {
+    if (!open) {
       loadedFor = -1;
-      // Hiding/unmounting mid-capture must not leave the server buffering real
-      // laps into mapping mode (silent data loss) — same teardown as the × button.
+      // Closing mid-capture must not leave the server buffering real laps into
+      // mapping mode (silent data loss) — same teardown as the × button.
       if (genPhase !== "off") cancelGen();
+      return;
+    }
+    if (lapId == null) {
+      // Capture-only mode (fresh/unmapped track): no lap map to load. Return
+      // BEFORE reading genPhase so this effect doesn't re-run on genPhase changes
+      // and cancel the capture the instant startGen sets it to "capturing".
+      loadedFor = -1;
       return;
     }
     if (loadedFor === lapId) return;
