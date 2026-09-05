@@ -38,11 +38,31 @@ Today: `{ "corners": [{number, name, direction, start_dist, apex_dist, end_dist}
 - The world-coord `path` is what the Pit Wall normalizes live car positions against (same
   `pos_x/pos_z` space as scoring), so map + car dots share one frame.
 
+## Canonical outline = averaged over multiple laps (user requirement)
+A single lap wobbles; the shipped/canonical outline is the **mean racing line over clean
+laps**, which cancels per-lap noise and tightens corner-apex placement. Method (aligns on
+the `lap_distance` axis the store is already keyed on):
+- gather clean laps for the track/car (default: **all clean laps across the user's history**
+  for that track+car — these maps are shipped, so more laps = a more accurate track shape;
+  capped, e.g. most-recent N). Filter to FULL, valid laps (monotonic lap_distance to ~length,
+  no big resets — reuse `build_lap_record` validity; exclude in/out/off laps, e.g. lap_time
+  within a % of the session best).
+- resample each lap's `pos_x/pos_z` onto ONE shared distance grid (0..length, ~500 bins) by
+  linear interpolation on `lap_distance`.
+- **align frames** (laps can differ by a rigid offset/rotation? in LMU world coords they
+  share a fixed origin, so a plain per-bin mean is correct — verify on real laps; if an
+  offset shows, mean-center before averaging). Per-bin mean → the canonical `path` +
+  `path_dist`. New pure helper `average_racing_line(laps, bins=500) -> (path_world, dist)`
+  with a test (two synthetic offset laps average to the midline).
+- This **resolves the open "which lap" question**: none — it's the averaged line. The editor
+  still *shows* this averaged outline; Save persists it (+ corners + sectors) to the file.
+
 ## Backend
 1. `build_track_map(channels, corner_map, width)` — also emit `dist[]` (lap_distance parallel
    to the returned screen `path`) and per-corner `apex_dist/start_dist/end_dist`. Prefer a
-   **shipped `path`/`path_dist`** from the corner map when present; else derive from the lap
-   (today's behavior). Keep returning `{}` when neither is available.
+   **shipped `path`/`path_dist`** from the corner map when present; else derive from the
+   lap(s). For the per-lap Map tab, today's single-lap behavior is fine; the CANONICAL/editor
+   outline uses `average_racing_line` (above). Keep returning `{}` when nothing is available.
 2. `direction_from_path(path_world, path_dist, apex_dist)` — new pure helper: local turn sign
    from the cross product of the segments around the apex point. One calibration constant
    (screen/world handedness), pinned by a test asserting Monza's known directions.
