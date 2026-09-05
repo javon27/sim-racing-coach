@@ -37,6 +37,8 @@
   // Markers/labels sized in world units so they read the same on any track,
   // whatever its physical extent (build_track_map scales the wider axis to width).
   const u = $derived(map ? Math.max(map.width, map.height) : 100);
+  // Breathing room so the stroke + edge labels (S/F text, corner labels) aren't clipped.
+  const pad = $derived(u * 0.09);
 
   // Start/finish is the first path sample (lap_distance ~0); heading a few % in
   // gives the driving direction for the arrow.
@@ -64,7 +66,7 @@
   {#if lapId === null}
     <p class="empty">Select a lap to see the track map</p>
   {:else if map}
-    <svg viewBox="0 0 {map.width} {map.height}" style="width:100%;height:auto">
+    <svg viewBox="{-pad} {-pad} {map.width + pad * 2} {map.height + pad * 2}" style="width:100%;height:auto">
       <polyline
         {points}
         fill="none"

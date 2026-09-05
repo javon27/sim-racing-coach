@@ -101,6 +101,9 @@
   }
 
   const u = $derived(map ? Math.max(map.width, map.height) : 100);
+  // Breathing room so the stroke + edge markers/labels aren't clipped (viewBox-padded;
+  // the getScreenCTM pointer transform stays correct because it honors the viewBox).
+  const pad = $derived(u * 0.09);
 
   // World point on the racing line for a given lap_distance (for placing markers).
   function ptAtDist(d: number): [number, number] {
@@ -229,7 +232,7 @@
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <svg
             bind:this={svgEl}
-            viewBox="0 0 {map.width} {map.height}"
+            viewBox="{-pad} {-pad} {map.width + pad * 2} {map.height + pad * 2}"
             class:add={addMode}
             role="application"
             aria-label="Track map — drag corner and sector markers"
