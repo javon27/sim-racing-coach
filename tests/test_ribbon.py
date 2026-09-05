@@ -71,8 +71,52 @@ def test_reconstruct_surface_keeps_narrow_midlap_corner():
         return {"pos_x": x, "pos_z": z, "lap_distance": x.copy()}
 
     r = reconstruct_surface([pass_(o) for o in (-4.0, -1.0, 2.0, 5.0)], bins=50)
-    assert r["width"][25] < 1.0   # mid-lap corner stays narrow (not widened to ~9)
+    # Stitch stays seam-only: the mid narrow bin is NOT widened to the ~9 median
+    # (smoothing softens the sharp dip, but it's still clearly narrower).
+    assert r["width"][25] < 0.75 * r["width"][10]
     assert r["width"][10] > 5.0   # a straight bin keeps the full weave spread
+
+
+def _turns_deg(path):
+    # Signed per-vertex turn angles (interior only; no S/F wrap pair).
+    p = np.array(path, dtype=float)
+    v = np.diff(p, axis=0)
+    nxt = v[1:]
+    cur = v[:-1]
+    cross = cur[:, 0] * nxt[:, 1] - cur[:, 1] * nxt[:, 0]
+    dot = (cur * nxt).sum(1)
+    return np.degrees(np.arctan2(cross, dot))
+
+
+def test_reconstruct_surface_smooths_weave_straight():
+    # Two straight edges pin the envelope at ±5; a lap weaving edge-to-edge between
+    # them would zigzag a per-bin-MEAN center, but the midpoint center + smoothing
+    # keeps it straight. (This is the squiggle the user hit.)
+    x = np.linspace(0.0, 400.0, 400)
+    edge_l = {"pos_x": x, "pos_z": np.full(400, 5.0), "lap_distance": x.copy()}
+    edge_r = {"pos_x": x, "pos_z": np.full(400, -5.0), "lap_distance": x.copy()}
+    # A weaving lap that DRIFTS across the width -- this pulls a per-bin MEAN center
+    # off to a fake curve, but the envelope MIDPOINT (from the edges) stays straight.
+    weave = {"pos_x": x, "pos_z": np.linspace(-4.0, 4.0, 400), "lap_distance": x.copy()}
+    r = reconstruct_surface([edge_l, edge_r, weave], bins=100)
+    cz = np.array([p[1] for p in r["center"]])[10:-10]  # interior (wrap ends excluded)
+    # Center sits on the TRUE midline (z~0), NOT pulled toward the drifting weave
+    # (a per-bin MEAN center would reach ~±1.33 here) -- the midpoint fix.
+    assert np.abs(cz).max() < 0.6
+    assert np.abs(_turns_deg(r["center"])[10:-10]).mean() < 1.0   # straight stays straight
+    assert abs(r["width"][50] - 10.0) < 0.5                       # width = the true spread
+
+
+def test_reconstruct_surface_preserves_arc_curvature():
+    # A constant-radius CLOSED circle must keep its ~360 deg of turning, not be
+    # smoothed flat (a real track is a closed loop).
+    th = np.linspace(0.0, 2 * np.pi, 400, endpoint=False)
+    d = np.linspace(0.0, 2 * np.pi * 100.0, 400, endpoint=False)  # shared arc-length axis
+    laps = [{"pos_x": rr * np.cos(th), "pos_z": rr * np.sin(th), "lap_distance": d}
+            for rr in (98.0, 100.0, 102.0)]
+    r = reconstruct_surface(laps, bins=100)
+    total = abs(_turns_deg(r["center"]).sum())
+    assert 300.0 < total < 420.0   # curvature preserved (would be ~0 if flattened)
 
 
 def _edge(zconst, dist_max):

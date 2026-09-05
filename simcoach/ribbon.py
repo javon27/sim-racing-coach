@@ -111,6 +111,22 @@ def _fill_nan(a: np.ndarray, period: float | None = None) -> np.ndarray:
     return a
 
 
+_SMOOTH_W = 5  # half-window (~5 bins ≈ 47 m on a 4.7 km/500-bin track): kills the
+#              # ~9 m squiggle, small vs any real corner radius.
+
+
+def _smooth(a: np.ndarray, w: int) -> np.ndarray:
+    """Closed-loop (wrap) boxcar moving average, half-window w. Preserves length.
+
+    # ponytail: boxcar; a Savitzky-Golay local-quadratic fit preserves corner
+    # curvature slightly better -- upgrade if apexes read washed out.
+    """
+    if w < 1 or len(a) <= 2 * w:
+        return a
+    k = np.ones(2 * w + 1) / (2 * w + 1)
+    return np.convolve(np.concatenate([a[-w:], a, a[:w]]), k, mode="valid")
+
+
 def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
     """Reconstruct the track from a POINT CLOUD of free-driving passes (no left/right
     designation). Pools every lap's (pos_x, pos_z, pos_y, lap_distance), bins by
@@ -152,13 +168,18 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
     cz = np.array([Z[mm].mean() if mm.size else np.nan for mm in members])
     cx, cz = _fill_nan(cx), _fill_nan(cz)
 
-    # Tangent by centered finite diff (closed loop); lateral unit = tangent rot +90.
+    # SMOOTH the bootstrap centerline first, then take the tangent/lateral from it
+    # -- the per-bin mean jumps side-to-side with where the weaving lap sampled, so
+    # an unsmoothed center injects the dominant squiggle into everything downstream.
+    cx, cz = _smooth(cx, _SMOOTH_W), _smooth(cz, _SMOOTH_W)
     tx, tz = np.roll(cx, -1) - np.roll(cx, 1), np.roll(cz, -1) - np.roll(cz, 1)
     tn = np.hypot(tx, tz); tn[tn == 0] = 1.0
     lat_x, lat_z = -tz / tn, tx / tn
 
-    nan6 = lambda: np.full(bins, np.nan)
-    lx, lz, rx, rz, wid, bnk = nan6(), nan6(), nan6(), nan6(), nan6(), nan6()
+    # Per bin, keep only the lateral OFFSET envelope (scalars) + bank; edges are
+    # rebuilt on the smoothed normal, so they inherit the smooth center instead of
+    # jumping to raw sample xy.
+    off_lo, off_hi, bnk = np.full(bins, np.nan), np.full(bins, np.nan), np.full(bins, np.nan)
     cnt = np.zeros(bins)
     for b in range(bins):
         mm = members[b]
@@ -166,36 +187,36 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
         if mm.size == 0:
             continue
         off = (X[mm] - cx[b]) * lat_x[b] + (Z[mm] - cz[b]) * lat_z[b]
-        i_lo, i_hi = int(off.argmin()), int(off.argmax())
-        lx[b], lz[b] = X[mm][i_lo], Z[mm][i_lo]
-        rx[b], rz[b] = X[mm][i_hi], Z[mm][i_hi]
-        wid[b] = off[i_hi] - off[i_lo]
+        off_lo[b], off_hi[b] = off.min(), off.max()
         yb, fin = Y[mm], np.isfinite(Y[mm])
         if fin.sum() >= 2 and np.ptp(off[fin]) > 1e-6:
             bnk[b] = np.arctan(np.polyfit(off[fin], yb[fin], 1)[0])
 
-    # Seam + sparse stitching: a bin with <2 samples or an envelope clearly
-    # narrower than typical (the transitional S/F crossing, or a thin weave) is
-    # untrustworthy -> refill it closed-loop from neighbours across the wrap.
+    wid = off_hi - off_lo
     solid = (cnt >= 2) & np.isfinite(wid)
     med = float(np.median(wid[solid])) if solid.any() else 0.0
-    # Narrow-width stitch ONLY near the S/F seam (first/last ~3% of bins, the wrap
-    # region where the crossing collapses width). Elsewhere a narrow bin is a real
-    # tight corner (you weave less through it) -- stitch it only if it's SPARSE,
-    # never for being narrow, or we'd flatten genuine apexes.
+    # Stitch bad bins closed-loop: SPARSE anywhere, or NARROW only near the S/F seam
+    # (first/last ~3% -- the crossing collapses width there). A narrow mid-lap bin
+    # is a real tight corner (less weave), so it's kept, not flattened.
     seam = np.zeros(bins, dtype=bool)
     w = max(1, int(round(bins * 0.03)))
     seam[:w] = True; seam[-w:] = True
     bad = (cnt < 2) | (seam & (med > 0) & (wid < 0.5 * med))
-    if (~bad).any():  # need at least one trustworthy bin to stitch from
-        for arr in (lx, lz, rx, rz, wid, bnk):
+    if (~bad).any():
+        for arr in (off_lo, off_hi, bnk):
             arr[bad] = np.nan
             arr[:] = _fill_nan(arr, period=bins)
-        cx = _fill_nan(np.where(bad, np.nan, cx), period=bins)
-        cz = _fill_nan(np.where(bad, np.nan, cz), period=bins)
+        # Smooth the offset envelope + bank so straights stop squiggling; corner
+        # curvature (a sustained offset trend) survives a modest window.
+        off_lo, off_hi, bnk = _smooth(off_lo, _SMOOTH_W), _smooth(off_hi, _SMOOTH_W), _smooth(bnk, _SMOOTH_W)
+        lx, lz = cx + off_lo * lat_x, cz + off_lo * lat_z
+        rx, rz = cx + off_hi * lat_x, cz + off_hi * lat_z
+        wid = off_hi - off_lo
     else:  # single pass / no envelope anywhere -> degenerate: centerline, zero width
         lx, lz, rx, rz = cx.copy(), cz.copy(), cx.copy(), cz.copy()
-        wid[:] = 0.0; bnk[:] = 0.0
+        wid = np.zeros(bins); bnk = np.zeros(bins)
+    # Center = envelope MIDPOINT (consistent with the edges), not the sample mean.
+    ctr_x, ctr_z = (lx + rx) / 2.0, (lz + rz) / 2.0
 
     def _round(a, n):  # non-finite (e.g. bank with no elevation data) -> 0.0, JSON-safe
         return [round(float(v), n) if np.isfinite(v) else 0.0 for v in a]
@@ -203,7 +224,7 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
     return {
         "left": [list(p) for p in zip(_round(lx, 2), _round(lz, 2))],
         "right": [list(p) for p in zip(_round(rx, 2), _round(rz, 2))],
-        "center": [list(p) for p in zip(_round(cx, 2), _round(cz, 2))],
+        "center": [list(p) for p in zip(_round(ctr_x, 2), _round(ctr_z, 2))],
         "width": _round(wid, 2),
         "bank": _round(bnk, 4),
         "dist": _round(dist_grid, 2),
