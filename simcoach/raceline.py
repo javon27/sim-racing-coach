@@ -166,9 +166,11 @@ def solve_corners(left_edge, right_edge, car=CarParams(), telem=None, bank=None)
     long_g / speed) before solving; falls back to CarParams defaults when None.
 
     Corners are the speed minima of the solved line. For each returns
-    ``{apex_dist, start_dist, end_dist, min_speed}`` with distances measured
-    ALONG the solved line (metres from station 0); min_speed in m/s. start/end
-    are the flanking speed peaks (cruise before braking / after the corner).
+    ``{apex_idx, start_idx, end_idx, apex_dist, start_dist, end_dist,
+    min_speed}``. The *_idx values are station indices (aligned with the input
+    edges / ribbon dist arrays) -- use these for placement. The *_dist values
+    are metres ALONG the shorter solved line from station 0 (min_speed in m/s);
+    start/end are the flanking speed peaks (cruise before braking / after).
 
     # ponytail: a corner straddling the start/finish seam can report
     # start_dist > end_dist. Fine for v0.1 (corners live away from the seam);
@@ -197,6 +199,12 @@ def solve_corners(left_edge, right_edge, car=CarParams(), telem=None, bank=None)
             [i % n for i in range(start, (end if end >= start else end + n) + 1)]
         apex = min(idx, key=lambda i: v[i])
         corners.append({
+            # station indices: left_edge[i]/right_edge[i] are station-aligned with
+            # the ribbon centerline/dist arrays, so the backend can place corners
+            # via ribbon["dist"][apex_idx] (avoids the shorter solved-line offset).
+            "apex_idx": int(apex),
+            "start_idx": int(start),
+            "end_idx": int(end),
             "apex_dist": float(dist[apex]),
             "start_dist": float(dist[start]),
             "end_dist": float(dist[end]),

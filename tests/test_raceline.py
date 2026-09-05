@@ -78,11 +78,19 @@ def test_solve_corners_finds_the_two_arcs():
 
     car = CarParams()
     v_ref = np.sqrt(car.mu * car.g * 50.0)  # centerline arc speed, m/s
-    total = 0.0  # sanity: distinct, in-range windows
+    n = 160  # stadium: 40 bottom + 40 right-arc + 40 top + 40 left-arc
     for c in corners:
         assert 0.5 * v_ref < c["min_speed"] < 1.7 * v_ref
         assert c["start_dist"] != c["end_dist"]
         assert c["min_speed"] > 0.0
+        # station indices are valid and self-consistent with the dist values
+        for k in ("apex_idx", "start_idx", "end_idx"):
+            assert isinstance(c[k], int) and 0 <= c[k] < n
+
+    # the two apexes sit in the two arc index bands, not on the straights
+    apex_bands = sorted(c["apex_idx"] for c in corners)
+    assert 40 <= apex_bands[0] < 80    # right arc: stations 40..79
+    assert 120 <= apex_bands[1] < 160  # left arc: stations 120..159
 
 
 def test_banking_raises_corner_speed():
