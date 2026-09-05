@@ -127,7 +127,18 @@ export async function withRetry<T>(fn: () => Promise<T>, tries = 8, delayMs = 75
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, init);
   if (!res.ok) {
-    throw new Error(`API request failed: ${init?.method ?? "GET"} ${path} -> ${res.status}`);
+    // Surface the server's FastAPI {detail} so callers can show WHY (e.g. a 422
+    // validation reason) instead of a generic failure. Body may not be JSON.
+    let detail = "";
+    try {
+      const body = await res.json();
+      if (body && typeof body.detail === "string") detail = body.detail;
+    } catch {
+      /* non-JSON / empty body */
+    }
+    throw new Error(
+      `API request failed: ${init?.method ?? "GET"} ${path} -> ${res.status}${detail ? `: ${detail}` : ""}`,
+    );
   }
   return res.json() as Promise<T>;
 }

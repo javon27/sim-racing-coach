@@ -467,8 +467,11 @@
       });
       applyMap(res);
       onSaved?.();
-    } catch {
-      error = "Save failed.";
+    } catch (e) {
+      // Surface the server's reason (e.g. "corners must be a non-empty list")
+      // instead of a bare "Save failed" so the fix is obvious.
+      const m = /-> \d+: (.+)$/.exec(String((e as Error)?.message ?? ""));
+      error = m ? `Save failed — ${m[1]}` : "Save failed.";
     } finally {
       saving = false;
     }
