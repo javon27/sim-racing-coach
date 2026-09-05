@@ -54,7 +54,7 @@
     pollMs = 2000,
     rotDebounceMs = 400,
   }: {
-    lapId: number;
+    lapId: number | null; // null = no lap yet (capture-only: generate/rebuild a map)
     open?: boolean;
     onClose?: () => void;
     onSaved?: () => void;
@@ -716,8 +716,22 @@
             {/if}
           </aside>
         </div>
+      {:else if lapId != null && !error}
+        <p class="msg">Loading…</p>
       {:else}
-        <p class="msg">{error ?? "Loading…"}</p>
+        <!-- No map loaded (fresh/unmapped track): offer the capture flow directly so
+             the first map can be generated without an existing lap. -->
+        <div class="genpanel">
+          <h3>Generate map layout</h3>
+          <p class="step">No saved layout for this track yet. Drive the track surface
+            (weave across the full width) to generate one, or rebuild from a capture you
+            already recorded.</p>
+          <div class="tools">
+            <button type="button" class="primary" onclick={startGen}>(Re)generate map layout</button>
+            <button type="button" onclick={rebuildGen}>Rebuild from saved capture</button>
+          </div>
+          {#if error}<p class="msg err">{error}</p>{/if}
+        </div>
       {/if}
 
       {#if error && map && genPhase === "off"}<p class="msg err">{error}</p>{/if}

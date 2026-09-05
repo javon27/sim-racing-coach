@@ -52,9 +52,12 @@
     <header>
       <h2>Track map</h2>
       <div class="acts">
-        {#if lapId !== null}
-          <button type="button" onclick={() => (editing = true)}>Edit map</button>
-        {/if}
+        <!-- Always available: with a lap it edits the map; without one it opens the
+             capture flow so a fresh/unmapped track can be generated (uses the LIVE
+             track, no stored lap needed). -->
+        <button type="button" onclick={() => (editing = true)}>
+          {lapId !== null ? "Edit map" : "Generate map"}
+        </button>
         <button type="button" class="collapse" aria-label="Hide track map" onclick={toggle}>›</button>
       </div>
     </header>
@@ -62,15 +65,15 @@
       {#key mapNonce}
         <TrackMap {lapId} />
       {/key}
-      <TrackMapEditor
-        {lapId}
-        open={editing}
-        onClose={() => (editing = false)}
-        onSaved={() => (mapNonce += 1)}
-      />
     {:else}
-      <p class="empty">Select a session to see its track map</p>
+      <p class="empty">No map yet — “Generate map” records the live track and builds one.</p>
     {/if}
+    <TrackMapEditor
+      {lapId}
+      open={editing}
+      onClose={() => (editing = false)}
+      onSaved={() => (mapNonce += 1)}
+    />
   {/if}
 </section>
 

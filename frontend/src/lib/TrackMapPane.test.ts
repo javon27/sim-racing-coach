@@ -38,10 +38,17 @@ describe("TrackMapPane", () => {
 
   afterEach(cleanup);
 
-  it("shows the empty state with no session", () => {
+  it("shows the empty state with no session, but still offers Generate map", () => {
     render(TrackMapPane, { props: { sessionId: undefined } });
-    expect(screen.getByText(/select a session/i)).toBeTruthy();
+    expect(screen.getByText(/no map yet/i)).toBeTruthy();
+    expect(screen.getByText("Generate map")).toBeTruthy(); // capture entry with no lap
     expect(getSessionLaps).not.toHaveBeenCalled();
+  });
+
+  it("opens the capture editor from Generate map with no session", async () => {
+    render(TrackMapPane, { props: { sessionId: undefined } });
+    await fireEvent.click(screen.getByText("Generate map"));
+    expect(await screen.findByRole("dialog")).toBeTruthy();
   });
 
   it("resolves the session's first lap and renders its canonical map", async () => {
