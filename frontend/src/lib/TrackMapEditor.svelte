@@ -85,6 +85,7 @@
   type DragKind = "corner" | "sector" | "apex" | "secstart" | "secend";
   let drag: { kind: DragKind; i: number; ai?: number } | null = null;
   let addMode = $state(false);
+  let addSectionMode = $state(false);
 
   // Orientation control. `angle` is the target the user is dialing in; the live
   // SVG preview rotates the fitted map by (angle - baked). Changing it persists
@@ -393,17 +394,34 @@
   }
 
   function onSvgClick(e: PointerEvent) {
-    if (!addMode || !map) return;
+    if (!map || (!addMode && !addSectionMode)) return;
     const [vx, vy] = toViewBox(e.clientX, e.clientY);
-    const i = nearestPathIndex(map.path, vx, vy);
+    const clicked = map.dist[nearestPathIndex(map.path, vx, vy)];
+
+    if (addSectionMode) {
+      // Place a section spanning ±5% of lap length around the click, clamped.
+      const total = map.dist[map.dist.length - 1] || 0;
+      const half = total * 0.05;
+      sections = [
+        ...sections,
+        {
+          name: "Section",
+          kind: "section",
+          start_dist: Math.max(0, clicked - half),
+          end_dist: Math.min(total, clicked + half),
+        },
+      ];
+      addSectionMode = false;
+      return;
+    }
+
     // Insert in track order + renumber, so a corner added between T1 and T2
     // becomes T2 (not appended as the highest number). Name defaults empty →
     // the map label shows T{number}; server falls back to "Turn N".
-    const apex = map.dist[i];
-    corners = [...corners, { number: 0, label: "", name: "", direction: "", apex_dist: apex, apexes: [apex] }];
+    corners = [...corners, { number: 0, label: "", name: "", direction: "", apex_dist: clicked, apexes: [clicked] }];
     renumber();
     // Prefill "Turn N" using the positional number renumber() just assigned.
-    const added = corners.find((c) => c.apex_dist === apex && !c.name);
+    const added = corners.find((c) => c.apex_dist === clicked && !c.name);
     if (added) added.name = `Turn ${added.number}`;
     addMode = false;
   }
@@ -430,10 +448,10 @@
     corners[i].apexes = corners[i].apexes.filter((_, k) => k !== ai);
   }
 
-  function addSection() {
-    if (!map) return;
-    const max = map.dist[map.dist.length - 1] || 0;
-    sections = [...sections, { name: "Section", kind: "section", start_dist: max * 0.25, end_dist: max * 0.5 }];
+  // Enter add-section mode; the next click on the line places it (like add-corner).
+  function toggleAddSection() {
+    addSectionMode = !addSectionMode;
+    if (addSectionMode) addMode = false;
   }
   function removeSection(i: number) {
     sections = sections.filter((_, k) => k !== i);
@@ -582,7 +600,7 @@
           <svg
             bind:this={svgEl}
             viewBox="{-pad} {-pad} {map.width + pad * 2} {map.height + pad * 2}"
-            class:add={addMode}
+            class:add={addMode || addSectionMode}
             role="application"
             aria-label="Track map — drag corner and sector markers"
             onpointerdown={onSvgClick}
@@ -657,13 +675,15 @@
 
           <aside class="side">
             <div class="tools">
-              <button type="button" class:on={addMode} onclick={() => (addMode = !addMode)}>
+              <button type="button" class:on={addMode} onclick={() => { addMode = !addMode; if (addMode) addSectionMode = false; }}>
                 {addMode ? "Click the line…" : "Add corner"}
               </button>
               {#if sectors.length === 0}
                 <button type="button" onclick={seedSectors}>Add sectors</button>
               {/if}
-              <button type="button" onclick={addSection}>Add section</button>
+              <button type="button" class:on={addSectionMode} onclick={toggleAddSection}>
+                {addSectionMode ? "Click the line…" : "Add section"}
+              </button>
               <button type="button" onclick={startGen}>(Re)generate map layout</button>
             </div>
             <ul class="corners">

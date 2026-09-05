@@ -190,19 +190,23 @@ describe("TrackMapEditor", () => {
     expect(body.corners[1].apexes).toHaveLength(1); // untouched corner stays single
   });
 
-  it("adds + names a section that renders on the map and is saved", async () => {
+  it("add-section: enter mode, click the line to place a spanning section, name + save it", async () => {
     const { container } = render(TrackMapEditor, { props: { lapId: 7, open: true } });
     await screen.findByText("First");
 
+    // Enter add-mode (like add-corner), then click the line to place it.
     await fireEvent.click(screen.getByText("Add section"));
-    await fireEvent.input(screen.getByLabelText("Section name"), { target: { value: "Back Straight" } });
+    await fireEvent.pointerDown(container.querySelector("svg")!);
 
+    await fireEvent.input(screen.getByLabelText("Section name"), { target: { value: "Back Straight" } });
     expect(container.querySelector("text.section-lbl")?.textContent).toBe("Back Straight");
 
     await fireEvent.click(screen.getByText("Save"));
     const [, body] = vi.mocked(saveLapMap).mock.calls[0];
     expect(body.sections).toHaveLength(1);
     expect(body.sections[0].name).toBe("Back Straight");
+    // Span is a real range around the clicked point, not a zero/degenerate one.
+    expect(body.sections[0].end_dist).toBeGreaterThan(body.sections[0].start_dist);
   });
 });
 
