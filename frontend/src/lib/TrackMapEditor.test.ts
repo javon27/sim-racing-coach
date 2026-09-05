@@ -134,6 +134,17 @@ describe("TrackMapEditor", () => {
     expect(nums).toEqual(["T1", "T2", "T3"]);
   });
 
+  it("surfaces the server's 422 detail on a failed save", async () => {
+    vi.mocked(saveLapMap).mockRejectedValueOnce(
+      new Error("API request failed: PUT /laps/7/map -> 422: corners must be a non-empty list"),
+    );
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+
+    await fireEvent.click(screen.getByText("Save"));
+    expect(await screen.findByText(/corners must be a non-empty list/i)).toBeTruthy();
+  });
+
   it("saves corners + sectors without direction", async () => {
     render(TrackMapEditor, { props: { lapId: 7, open: true } });
     await screen.findByText("First");
