@@ -250,11 +250,20 @@ export interface RibbonPreview {
 }
 
 export function startMapCapture(): Promise<{ active: boolean }> {
-  return request<{ active: boolean }>("/mapcapture/start", { method: "POST" });
+  // Body required so the browser preflights (CSRF guard on the mutating route).
+  return request<{ active: boolean }>("/mapcapture/start", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({}),
+  });
 }
 
 export function cancelMapCapture(): Promise<{ active: boolean }> {
-  return request<{ active: boolean }>("/mapcapture/cancel", { method: "POST" });
+  return request<{ active: boolean }>("/mapcapture/cancel", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({}),
+  });
 }
 
 export function mapCaptureStatus(): Promise<MapCaptureStatus> {
@@ -270,7 +279,11 @@ export function buildRibbon(left: number, right: number): Promise<RibbonPreview>
 }
 
 export function saveRibbon(): Promise<{ saved: boolean; slug: string }> {
-  return request<{ saved: boolean; slug: string }>("/mapcapture/save", { method: "POST" });
+  return request<{ saved: boolean; slug: string }>("/mapcapture/save", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({}),
+  });
 }
 
 export function getChats(): Promise<ChatRow[]> {
