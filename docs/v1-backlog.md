@@ -137,3 +137,10 @@ tracks. VR-friendly via voice (ties to the voice/Pit-Wall vision — see memory
   driver profile. This IS the live-coaching mode of the 4-mode vision (voice-first, agentic,
   CrewChief-replacement). The corner map + ribbon + solver-derived apex/brake zones are the
   data foundation it consumes. Future; not scoped yet.
+
+## Track map pane: collapsed edge should vanish, leaving only the caret tab (2026-09-05, LOW)
+When the map pane is collapsed it still keeps a 20px border-left strip against the content. The
+user wants NO edge when collapsed — just the floating caret button tab to reopen the pane.
+Fix in `frontend/src/lib/TrackMapPane.svelte`: drop the `.map-pane.collapsed` width/border so the
+strip contributes no layout edge; render the reopen caret as an overlay tab (absolute/floating)
+rather than a bordered column. Low priority, cosmetic.
