@@ -99,6 +99,17 @@ def test_direction_too_short_raises():
         direction_from_path([[0.0, 0.0], [1.0, 1.0]], [0.0, 1.0], apex_dist=0.5)
 
 
+def test_direction_apex_at_endpoints_wraps():
+    # Closed CCW circle: every point is a LEFT turn. An apex in the first/last
+    # bin must wrap around the loop, not IndexError or misclassify.
+    ang = np.linspace(0.0, 2 * np.pi, 100, endpoint=False)
+    path = [[float(np.cos(a)), float(np.sin(a))] for a in ang]
+    dist = list(np.linspace(0.0, 990.0, 100))
+    assert direction_from_path(path, dist, apex_dist=0.0) == "left"
+    assert direction_from_path(path, dist, apex_dist=990.0) == "left"
+    assert direction_from_path(path, dist, apex_dist=500.0) == "left"
+
+
 def test_direction_monza_real():
     """Calibrate direction_from_path against Monza's 10 telemetry-verified
     directions. SKIPS until a captured Monza lap carries pos_x/pos_z -- no stored

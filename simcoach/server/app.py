@@ -8,6 +8,7 @@ import asyncio
 import json
 import math
 import os
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -335,6 +336,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         raw_corners = body.get("corners")
         if not isinstance(raw_corners, list) or not raw_corners:
             raise HTTPException(422, "corners must be a non-empty list")
+        if len(raw_corners) > 100:  # no real circuit exceeds ~30; cap blocks abuse
+            raise HTTPException(422, "too many corners")
 
         corners = []
         seen_numbers = set()
@@ -346,7 +349,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 apex = float(c["apex_dist"])
             except (KeyError, TypeError, ValueError):
                 raise HTTPException(422, "corner requires integer number and numeric apex_dist")
-            name = str(c.get("name") or f"Turn {number}")
+            name = str(c.get("name") or f"Turn {number}")[:80]  # cap: owned data + coach prompt
             if not math.isfinite(apex) or not (0.0 <= apex <= length):
                 raise HTTPException(422, f"corner {number}: apex_dist out of range")
             if number in seen_numbers:
@@ -361,6 +364,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             end = float(end) if end is not None else min(length, apex + pad)
             if not (math.isfinite(start) and math.isfinite(end)):
                 raise HTTPException(422, f"corner {number}: non-finite window")
+            start = min(max(start, 0.0), length)  # clamp client values into the track
+            end = min(max(end, 0.0), length)
             if not (start < apex < end):
                 raise HTTPException(422, f"corner {number}: require start_dist < apex_dist < end_dist")
             direction = direction_from_path(path, dist, apex)  # server-derived, never client
@@ -391,17 +396,22 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             "sectors": sectors,
             "length": length,
         }
-        # Atomic write (tmp + os.replace) so a crash mid-write never leaves a
-        # partial/corrupt owned-data file. _track_file rejects traversal.
+        # Atomic write (unique tmp + os.replace) so a crash mid-write never
+        # leaves a partial file and concurrent same-track PUTs don't clobber one
+        # tmp path. allow_nan=False hard-fails rather than emit invalid JSON.
+        # _track_file rejects traversal.
         target = _track_file(rec.track)
         target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_suffix(".json.tmp")
+        payload = json.dumps(out, indent=2, allow_nan=False)
+        fd, tmp = tempfile.mkstemp(dir=str(target.parent), suffix=".json.tmp")
         try:
-            tmp.write_text(json.dumps(out, indent=2))
+            with os.fdopen(fd, "w") as f:
+                f.write(payload)
             os.replace(tmp, target)
-        finally:
-            if tmp.exists():
-                tmp.unlink(missing_ok=True)
+        except BaseException:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            raise
         # Invalidate the cached corner map so re-reads pick up the edit.
         app.state.cmaps.pop(rec.track, None)
         return _map_payload(rec, avg=True)

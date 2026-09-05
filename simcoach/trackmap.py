@@ -73,11 +73,14 @@ def average_racing_line(laps, bins: int = 500):
     max_length = max(lengths)
     grid = np.linspace(0.0, max_length, bins)
     for d, x, z in resampled:
-        grids_x.append(np.interp(grid, d, x))
-        grids_z.append(np.interp(grid, d, z))
+        # NaN beyond each lap's own range so a short lap doesn't drag the mean's
+        # tail toward where it stopped; nanmean ignores those bins. The longest
+        # lap spans the whole grid, so no bin is ever all-NaN.
+        grids_x.append(np.interp(grid, d, x, left=np.nan, right=np.nan))
+        grids_z.append(np.interp(grid, d, z, left=np.nan, right=np.nan))
 
-    mean_x = np.mean(grids_x, axis=0)
-    mean_z = np.mean(grids_z, axis=0)
+    mean_x = np.nanmean(grids_x, axis=0)
+    mean_z = np.nanmean(grids_z, axis=0)
     path = [[round(float(a), 2), round(float(b), 2)] for a, b in zip(mean_x, mean_z)]
     dist = [round(float(d), 2) for d in grid]
     return path, dist
@@ -97,13 +100,14 @@ def direction_from_path(path_world, dist, apex_dist, k: int = 3) -> str:
     d = np.asarray(dist, dtype=float)
     if pts.ndim != 2 or pts.shape[0] < 3 or pts.shape[1] != 2 or len(d) != len(pts):
         raise ValueError("path too short or malformed for direction inference")
+    n = len(pts)
     idx = int(np.argmin(np.abs(d - apex_dist)))
-    # Clamp the window so before/after indices stay in range near the ends.
-    kk = max(1, min(k, idx, len(pts) - 1 - idx))
-    if kk < 1:
-        raise ValueError("apex too close to a path endpoint to infer direction")
-    vin = pts[idx] - pts[idx - kk]
-    vout = pts[idx + kk] - pts[idx]
+    # The path is a closed loop, so wrap the window with modulo indexing -- an
+    # apex in the first/last bin still gets neighbours either side (a plain clamp
+    # would collapse the window to zero and IndexError / misclassify there).
+    kk = min(k, n - 1)
+    vin = pts[idx] - pts[(idx - kk) % n]
+    vout = pts[(idx + kk) % n] - pts[idx]
     cross = float(vin[0] * vout[1] - vin[1] * vout[0])
     is_left = (cross > 0) == _LEFT_TURN_IS_CROSS_POSITIVE
     return "left" if is_left else "right"

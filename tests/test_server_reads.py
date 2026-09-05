@@ -219,6 +219,23 @@ def test_put_map_bad_sectors_is_422(tmp_path):
     assert r.status_code == 422
 
 
+def test_put_map_too_many_corners_is_422(tmp_path):
+    app, lap_id, _ = _curve_app(tmp_path)
+    corners = [{"number": i, "apex_dist": 100.0 + i} for i in range(101)]
+    r = _tc(app).put(f"/laps/{lap_id}/map", json={"corners": corners})
+    assert r.status_code == 422
+
+
+def test_put_map_caps_corner_name_length(tmp_path):
+    app, lap_id, tracks = _curve_app(tmp_path)
+    r = _tc(app).put(f"/laps/{lap_id}/map", json={
+        "corners": [{"number": 1, "name": "X" * 500, "apex_dist": 200.0}],
+    })
+    assert r.status_code == 200
+    saved = json.loads((tracks / "curveland.json").read_text())
+    assert len(saved["corners"][0]["name"]) == 80
+
+
 def test_put_map_unknown_lap_is_404(tmp_path):
     app, *_ = _curve_app(tmp_path)
     r = _tc(app).put("/laps/99999/map", json={"corners": [{"number": 1, "apex_dist": 200.0}]})
