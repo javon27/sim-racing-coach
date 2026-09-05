@@ -166,6 +166,50 @@ def test_map_avg_averages_clean_laps(tmp_path):
     assert len(body["dist"]) == len(body["path"])
 
 
+def test_map_is_canonical_for_lap_without_position(tmp_path):
+    # THE core bug: a lap with no pos_x/pos_z still returns the track's canonical
+    # map, built from OTHER position-captured laps of the same track+car.
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    store.save(_curve_lap("Curveland", "GT3", 90.0))          # pos lap (builds the map)
+    no_pos = store.save(LapRecord("lmu", "Curveland", "GT3", 90.2, True, 0.0,
+                                  {"lap_distance": np.arange(5.0)}))  # selected, no pos
+    coach = Coach(FakeModel(), "simcoach/knowledge")
+    app = create_app(store, coach, tracks_dir=str(tmp_path / "tracks"))
+    body = _tc(app).get(f"/laps/{no_pos}/map").json()
+    assert body.get("path")  # canonical outline present despite the lap having no pos
+
+
+def test_map_prefers_frozen_path_over_reaverage(tmp_path):
+    # A frozen path/path_dist in the track file is authoritative; the default GET
+    # uses it verbatim rather than re-averaging the driven laps.
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    lap_id = store.save(_curve_lap("Curveland", "GT3", 90.0))
+    coach = Coach(FakeModel(), "simcoach/knowledge")
+    tracks = tmp_path / "tracks"
+    tracks.mkdir()
+    # Frozen outline with a distinctive 5-point path_dist; re-averaging would
+    # produce a 500-bin (downsampled to ~300) dist array of a different length.
+    (tracks / "curveland.json").write_text(json.dumps({
+        "track": "curveland", "corners": [],
+        "path": [[0, 0], [1, 0], [2, 0], [2, 1], [2, 2]],
+        "path_dist": [0, 100, 200, 300, 400],
+    }))
+    app = create_app(store, coach, tracks_dir=str(tracks))
+    default = _tc(app).get(f"/laps/{lap_id}/map").json()
+    forced = _tc(app).get(f"/laps/{lap_id}/map?avg=1").json()
+    assert default["dist"] == [0.0, 100.0, 200.0, 300.0, 400.0]  # frozen used
+    assert len(forced["dist"]) != len(default["dist"])           # avg=1 re-averaged
+
+
+def test_map_cache_invalidated_after_put(tmp_path):
+    app, lap_id, tracks = _curve_app(tmp_path)
+    c = _tc(app)
+    c.get(f"/laps/{lap_id}/map")  # populate the canonical cache
+    c.put(f"/laps/{lap_id}/map", json={"corners": [{"number": 1, "name": "Fresh", "apex_dist": 200.0}]})
+    after = c.get(f"/laps/{lap_id}/map").json()  # must reflect the save, not the cache
+    assert [x["name"] for x in after["corners"]] == ["Fresh"]
+
+
 def _curve_app(tmp_path):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     lap_id = store.save(_curve_lap("Curveland", "GT3", 90.0, dx=0.0))
@@ -325,16 +369,20 @@ def test_analysis_resolves_map_per_track(tmp_path, synthetic_lap):
     assert c.get(f"/laps/{other_id}/analysis").status_code == 404
 
 
-def test_status_has_map_reflects_resolver(tmp_path, synthetic_lap):
-    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+def test_status_has_map_reflects_canonical(tmp_path):
+    # has_map = a canonical outline is available for the live track (a pos lap
+    # exists to average, or a frozen file) -- not merely a loaded CornerMap.
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    lap_id = store.save(synthetic_lap)
+    pos = store.save(_curve_lap("Curveland", "GT3", 90.0))
     coach = Coach(FakeModel(), "simcoach/knowledge")
-    resolver = lambda track: cmap if track == synthetic_lap.track else None
-    app = create_app(store, coach, map_resolver=resolver)
-    # Latest lap sets the live track -> has_map true for that track's map.
-    app.state.latest = {"record": synthetic_lap, "lap_id": lap_id}
+    app = create_app(store, coach, tracks_dir=str(tmp_path / "tracks"))
+    app.state.latest = {"record": store.load(pos), "lap_id": pos}
     assert _tc(app).get("/status").json()["has_map"] is True
+    # A track with only a no-position lap -> no canonical outline -> has_map False.
+    bare = store.save(LapRecord("lmu", "Bare", "GT3", 90.0, True, 0.0,
+                                {"lap_distance": np.arange(5.0)}))
+    app.state.latest = {"record": store.load(bare), "lap_id": bare}
+    assert _tc(app).get("/status").json()["has_map"] is False
 
 
 def test_analysis_unanalyzable_is_422(tmp_path, synthetic_lap, monkeypatch):

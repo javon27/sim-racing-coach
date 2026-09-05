@@ -1,3 +1,15 @@
+def _seed_pos_lap(store, track, car):
+    """Save one position-captured lap so the track has a canonical map outline."""
+    import numpy as np
+
+    from simcoach.model_types import LapRecord
+    x = np.array([0.0, 100.0, 200.0, 200.0, 200.0])
+    z = np.array([0.0, 0.0, 0.0, 100.0, 200.0])
+    d = np.array([0.0, 100.0, 200.0, 300.0, 400.0])
+    return store.save(LapRecord("lmu", track, car, 90.0, True, 0.0,
+                                {"pos_x": x, "pos_z": z, "lap_distance": d}))
+
+
 def test_build_app_offline_no_key(tmp_path, monkeypatch, mem_keyring):
     monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("SIMCOACH_MODEL_PROVIDER", raising=False)  # real default = anthropic
@@ -36,8 +48,10 @@ def test_build_app_lmu_running(tmp_path, monkeypatch, mem_keyring):
     app = build_app()
     # No boot-time resolution anymore: rest is lazy, map is per-track.
     assert app.state.rest is None
+    _seed_pos_lap(app.state.store, "test_track", "test_car")  # canonical map source
     tc = TestClient(app, base_url="http://127.0.0.1")
-    # Live SMM track drives has_map through the resolver; /setup lazily connects.
+    # Live SMM track + a position lap -> has_map (canonical outline available);
+    # /setup lazily connects.
     st = tc.get("/status").json()
     assert st["track"] == "test_track" and st["has_map"] is True
     assert tc.get("/setup").json() == {"carClass": "GT3"}
@@ -128,8 +142,10 @@ def test_build_app_lmu_rest_failure_still_resolves_cmap(tmp_path, monkeypatch, m
 
     from simcoach.server.__main__ import build_app
     app = build_app()
+    _seed_pos_lap(app.state.store, "test_track", "test_car")  # canonical map source
     tc = TestClient(app, base_url="http://127.0.0.1")
-    # Broken REST -> never connects; map still resolves per-track independently.
+    # Broken REST -> never connects; the canonical map still resolves per-track
+    # independently (from the position lap, not from REST).
     assert tc.get("/setup").json() == {}
     st = tc.get("/status").json()
     assert st["lmu_connected"] is False and st["has_map"] is True

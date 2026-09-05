@@ -87,6 +87,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     app.state.map_resolver = map_resolver  # (track) -> CornerMap | None
     app.state.rest_factory = rest_factory  # () -> LmuRest (probed on first use)
     app.state.cmaps = {}             # per-track CornerMap cache (only non-None cached)
+    app.state.canon = {}             # per-(track,car) canonical map payload cache
     app.state.latest = None  # set by the capture thread (build_app): {"record", "lap_id"} | None
 
     def _map_for(track):
@@ -116,13 +117,18 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             raise HTTPException(400, "invalid track")
         return p
 
-    def _shipped_extras(track: str) -> dict:
-        # sectors/length from the shipped track file (if any) -- the map builder's
-        # passthrough. Missing file/keys -> {}. Never raises on a bad file.
+    def _track_file_data(track: str) -> dict:
+        # Parsed shipped track file, or {} if missing/unreadable. Never raises.
         try:
             data = json.loads(_track_file(track).read_text())
+            return data if isinstance(data, dict) else {}
         except (OSError, ValueError, HTTPException):
             return {}
+
+    def _shipped_extras(track: str) -> dict:
+        # sectors/length from the shipped track file (if any) -- the map builder's
+        # passthrough. Missing file/keys -> {}.
+        data = _track_file_data(track)
         out = {}
         if isinstance(data.get("sectors"), list):
             out["sectors"] = data["sectors"]
@@ -172,22 +178,67 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         except (OSError, ValueError, KeyError, HTTPException):
             return None
 
-    def _map_payload(rec, avg: bool) -> dict:
-        cmap = _cmap_for_map(rec.track)
-        extras = _shipped_extras(rec.track)
-        sectors = extras.get("sectors")
-        if avg:
-            laps = _clean_lap_channels(rec.track, rec.car)
-            path, dist = average_racing_line(laps) if laps else ([], [])
-            if not path:
-                return {}
-            channels = {
-                "pos_x": [p[0] for p in path],
-                "pos_z": [p[1] for p in path],
-                "lap_distance": dist,
-            }
-            return _clean(build_track_map(channels, cmap, sectors=sectors))
-        return _clean(build_track_map(rec.channels, cmap, sectors=sectors))
+    def _any_pos_lap(track: str, car: str) -> bool:
+        # Cheap "does this track+car have ANY position-captured lap" (early-exit,
+        # for /status has_map) -- avoids averaging every clean lap just to poll.
+        for lap_id in store.list_lap_ids(track, car):
+            try:
+                ch = store.load(lap_id).channels
+            except (KeyError, FileNotFoundError):
+                continue
+            if "pos_x" in ch and "pos_z" in ch and "lap_distance" in ch:
+                return True
+        return False
+
+    def _canonical_outline(track: str, car: str, force_avg: bool):
+        # The track's canonical (path_world, dist): frozen file path first (unless
+        # forcing a re-average), else averaged over the track+car's own pos laps,
+        # else ([], []). The map is per-track owned data, NOT the selected lap.
+        if not force_avg:
+            data = _track_file_data(track)
+            p, pd = data.get("path"), data.get("path_dist")
+            if isinstance(p, list) and isinstance(pd, list) and p and len(p) == len(pd):
+                return p, pd
+        laps = _clean_lap_channels(track, car)
+        return average_racing_line(laps) if laps else ([], [])
+
+    def _has_canonical(track: str, car: str) -> bool:
+        if not track:
+            return False
+        if (track, car) in app.state.canon:
+            return True
+        data = _track_file_data(track)
+        p, pd = data.get("path"), data.get("path_dist")
+        if isinstance(p, list) and isinstance(pd, list) and p and len(p) == len(pd):
+            return True
+        return _any_pos_lap(track, car)
+
+    def _canonical_map(track: str, car: str, force: bool) -> dict:
+        # Build (and cache) the per-track canonical screen map. force=True bypasses
+        # the frozen file + cache to re-average freshly driven laps (editor use).
+        if not force:
+            cached = app.state.canon.get((track, car))
+            if cached is not None:
+                return cached
+        path, dist = _canonical_outline(track, car, force_avg=force)
+        if not path:
+            return {}  # no position data anywhere yet; don't cache (may appear later)
+        cmap = _cmap_for_map(track)
+        sectors = _shipped_extras(track).get("sectors")
+        channels = {
+            "pos_x": [pt[0] for pt in path],
+            "pos_z": [pt[1] for pt in path],
+            "lap_distance": dist,
+        }
+        payload = _clean(build_track_map(channels, cmap, sectors=sectors))
+        if not force:
+            app.state.canon[(track, car)] = payload
+        return payload
+
+    def _invalidate_canon(track: str) -> None:
+        app.state.cmaps.pop(track, None)
+        for key in [k for k in app.state.canon if k[0] == track]:
+            app.state.canon.pop(key, None)
 
     def _ensure_rest():
         # Return a live LMU REST client, or None. Probes get_setup() to reflect a
@@ -265,7 +316,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         return {
             "track": track, "car": car,
             "on_track": on_track,
-            "has_map": _map_for(track) is not None,
+            "has_map": _has_canonical(track, car),
             "lmu_connected": _ensure_rest() is not None,
             "session_id": session_id,
             "lap_id": lap_id,
@@ -308,14 +359,15 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
 
     @app.get("/laps/{lap_id}/map")
     def lap_map(lap_id: int, avg: int = 0):
-        # avg=0 (default): this lap's own outline. avg=1: the averaged racing
-        # line over all clean laps for the lap's track+car (the canonical/editor
-        # outline). cmap may be None -> corners: [] but the path still draws.
+        # The map is the track's CANONICAL layout, the same for every lap -- the
+        # lap_id only selects the track (+car). avg=0: frozen file, else averaged
+        # over the track's own pos laps (cached). avg=1: force a fresh re-average
+        # (editor, to pick up newly-driven laps before re-freezing).
         try:
             rec = store.load(lap_id)
         except (KeyError, FileNotFoundError):
             raise HTTPException(404, "lap not found")
-        return _map_payload(rec, avg=bool(avg))
+        return _canonical_map(rec.track, rec.car, force=bool(avg))
 
     @app.put("/laps/{lap_id}/map")
     def save_lap_map(lap_id: int, body: dict = Body(...)):
@@ -412,9 +464,10 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             if os.path.exists(tmp):
                 os.unlink(tmp)
             raise
-        # Invalidate the cached corner map so re-reads pick up the edit.
-        app.state.cmaps.pop(rec.track, None)
-        return _map_payload(rec, avg=True)
+        # Invalidate cmap + canonical caches so the next GET returns the new
+        # canonical map (now frozen into the file).
+        _invalidate_canon(rec.track)
+        return _canonical_map(rec.track, rec.car, force=False)
 
     @app.get("/setup")
     def setup():
