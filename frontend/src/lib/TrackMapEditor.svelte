@@ -51,12 +51,14 @@
     onClose,
     onSaved,
     pollMs = 2000,
+    rotDebounceMs = 400,
   }: {
     lapId: number;
     open?: boolean;
     onClose?: () => void;
     onSaved?: () => void;
     pollMs?: number;
+    rotDebounceMs?: number;
   } = $props();
 
   type EditCorner = {
@@ -85,24 +87,42 @@
   let addMode = $state(false);
 
   // Orientation control. `angle` is the target the user is dialing in; the live
-  // SVG preview rotates the already-fit map by (angle - baked). Apply bakes it
-  // server-side (rotate-then-fit) and applyMap resets the preview to identity.
+  // SVG preview rotates the fitted map by (angle - baked). Changing it persists
+  // (debounced) and merges ONLY the rebaked geometry back — never the corners.
+  // Net displayed orientation = baked(map.rotation) + preview(angle - map.rotation)
+  // = angle, so it always reads 1×, matching what the user entered.
   let angle = $state(0);
-  let rotating = $state(false);
+  let rotTimer: ReturnType<typeof setTimeout> | undefined;
   function rotateBy(d: number) {
     angle = (((angle + d + 180) % 360) + 360) % 360 - 180;
+    scheduleRotation();
   }
-  async function applyRotation() {
-    if (lapId == null) return;
-    rotating = true;
+  function resetRotation() {
+    angle = 0;
+    scheduleRotation();
+  }
+  function scheduleRotation() {
+    clearTimeout(rotTimer);
+    rotTimer = setTimeout(persistRotation, rotDebounceMs);
+  }
+  async function persistRotation() {
+    if (lapId == null || !map || angle === (map.rotation ?? 0)) return;
     error = null;
     try {
-      applyMap(await setMapRotation(lapId, angle));
+      const res = await setMapRotation(lapId, angle);
+      // Non-destructive: take only the rebaked geometry; keep the user's edited
+      // corners/sectors/sections (markers re-project onto the new path via apex_dist).
+      map = {
+        ...map,
+        path: res.path,
+        dist: res.dist,
+        width: res.width,
+        height: res.height,
+        rotation: res.rotation ?? angle,
+      };
       onSaved?.();
     } catch {
       error = "Rotation failed.";
-    } finally {
-      rotating = false;
     }
   }
 
@@ -204,6 +224,7 @@
 
   onDestroy(() => {
     stopPoll();
+    clearTimeout(rotTimer);
     // Unmount mid-capture -> tell the server to leave mapping mode, else real
     // laps keep buffering unsaved.
     if (genPhase !== "off") cancelMapCapture().catch(() => {});
@@ -472,13 +493,10 @@
         {#if map || ribbon}
           <div class="rot" role="group" aria-label="Rotate map">
             <button type="button" aria-label="Rotate 90° left" onclick={() => rotateBy(-90)}>⟲</button>
-            <input type="number" step="5" aria-label="Rotation degrees" bind:value={angle} />
+            <input type="number" step="5" aria-label="Rotation degrees" bind:value={angle} oninput={scheduleRotation} />
             <span>°</span>
             <button type="button" aria-label="Rotate 90° right" onclick={() => rotateBy(90)}>⟳</button>
-            <button type="button" onclick={() => (angle = 0)}>0°</button>
-            <button type="button" class="primary" disabled={rotating} onclick={applyRotation}>
-              {rotating ? "…" : "Apply"}
-            </button>
+            <button type="button" onclick={resetRotation}>0°</button>
           </div>
         {/if}
         <button type="button" class="x" aria-label="Close" onclick={close}>×</button>
@@ -540,7 +558,7 @@
             {/if}
             {#each ribbon.corners as c (c.number)}
               <circle cx={c.x} cy={c.y} r={ru * 0.014} fill="var(--accent)"><title>{c.name}</title></circle>
-              <text class="corner-lbl" x={c.x + ru * 0.016} y={c.y - ru * 0.016} font-size={ru * 0.03} fill="var(--accent)">T{c.label || c.number}</text>
+              <text class="corner-lbl" x={c.x + ru * 0.024} y={c.y - ru * 0.024} font-size={ru * 0.03} fill="var(--accent)" paint-order="stroke" stroke="var(--bg, #1a1a1a)" stroke-width={ru * 0.012} stroke-linejoin="round">T{c.label || c.number}</text>
             {/each}
             </g>
           </svg>
@@ -583,7 +601,7 @@
               {@const ps = ptAtDist(sec.start_dist)}
               {@const pe = ptAtDist(sec.end_dist)}
               <polyline class="section-band" points={seg.pts} fill="none" stroke="var(--good, #3a7)" stroke-width={u * 0.02} stroke-linecap="round" opacity="0.35" />
-              <text class="section-lbl" x={seg.mid[0]} y={seg.mid[1] - u * 0.022} font-size={u * 0.026} fill="var(--good, #3a7)" text-anchor="middle">{sec.name}</text>
+              <text class="section-lbl" x={seg.mid[0]} y={seg.mid[1] - u * 0.03} font-size={u * 0.026} fill="var(--good, #3a7)" text-anchor="middle" paint-order="stroke" stroke="var(--bg, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">{sec.name}</text>
               <!-- svelte-ignore a11y_no_static_element_interactions -->
               <circle class="sec-handle" cx={ps[0]} cy={ps[1]} r={u * 0.012} fill="var(--good, #3a7)" role="slider" aria-label="{sec.name} start" aria-valuenow={sec.start_dist} tabindex="-1" onpointerdown={(e) => startDrag("secstart", i, e)}><title>{sec.name} start</title></circle>
               <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -632,7 +650,7 @@
                 ><title>{c.name}</title></circle>
               {/each}
               {@const lp = ptAtDist(c.apex_dist)}
-              <text class="corner-lbl" x={lp[0] + u * 0.016} y={lp[1] - u * 0.016} font-size={u * 0.03} fill="var(--accent)">T{c.label || c.number}</text>
+              <text class="corner-lbl" x={lp[0] + u * 0.024} y={lp[1] - u * 0.024} font-size={u * 0.03} fill="var(--accent)" paint-order="stroke" stroke="var(--bg, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">T{c.label || c.number}</text>
             {/each}
             </g>
           </svg>

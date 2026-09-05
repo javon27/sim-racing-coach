@@ -286,23 +286,48 @@ describe("TrackMapEditor — (re)generate map layout", () => {
 
 describe("TrackMapEditor — rotation", () => {
   beforeEach(() => {
-    vi.mocked(getLapMap).mockReset().mockResolvedValue({ ...fixture, rotation: 45 });
-    vi.mocked(setMapRotation).mockReset().mockResolvedValue({ ...fixture, rotation: 90 });
+    vi.mocked(getLapMap).mockReset().mockResolvedValue({ ...fixture, rotation: 0 });
+    vi.mocked(setMapRotation).mockReset();
   });
   afterEach(cleanup);
 
-  it("shows the baked rotation, applies a new angle, and refreshes from the response", async () => {
+  it("shows the baked rotation and has no Apply button", async () => {
     render(TrackMapEditor, { props: { lapId: 7, open: true } });
     await screen.findByText("First");
+    expect((screen.getByLabelText("Rotation degrees") as HTMLInputElement).value).toBe("0");
+    expect(screen.queryByText("Apply")).toBeNull();
+  });
 
-    const input = screen.getByLabelText("Rotation degrees") as HTMLInputElement;
-    expect(input.value).toBe("45"); // current baked rotation
+  it("persists the ENTERED angle once (1x) — preview nets to identity, not 2x", async () => {
+    // Backend bakes once and echoes rotation=entered.
+    vi.mocked(setMapRotation).mockResolvedValue({ ...fixture, rotation: 40 });
+    const { container } = render(TrackMapEditor, { props: { lapId: 7, open: true, rotDebounceMs: 0 } });
+    await screen.findByText("First");
 
-    await fireEvent.click(screen.getByLabelText("Rotate 90° right")); // 45 -> 135
-    await fireEvent.click(screen.getByText("Apply"));
-    expect(setMapRotation).toHaveBeenCalledWith(7, 135);
+    await fireEvent.input(screen.getByLabelText("Rotation degrees"), { target: { value: "40" } });
 
-    // applyMap replaces the preview with the server-baked result (rotation 90).
-    await waitFor(() => expect(input.value).toBe("90"));
+    // Client sends exactly what the user entered (not 80).
+    await waitFor(() => expect(setMapRotation).toHaveBeenCalledWith(7, 40));
+    // After the rebaked geometry merges (rotation=40, angle=40) the preview group
+    // is identity — so displayed = baked(40) + 0 = 40, i.e. 1x.
+    await waitFor(() => {
+      const g = container.querySelector("g[transform]") as SVGGElement;
+      expect(g.getAttribute("transform")).toMatch(/^rotate\(0[,\s]/);
+    });
+  });
+
+  it("does not clobber in-progress corner edits when rotation persists", async () => {
+    vi.mocked(setMapRotation).mockResolvedValue({ ...fixture, rotation: 40 }); // server corners = First/Second
+    render(TrackMapEditor, { props: { lapId: 7, open: true, rotDebounceMs: 0 } });
+    await screen.findByText("First");
+
+    const nameInput = screen.getAllByLabelText("Corner name")[0] as HTMLInputElement;
+    await fireEvent.input(nameInput, { target: { value: "Zed" } });
+
+    await fireEvent.input(screen.getByLabelText("Rotation degrees"), { target: { value: "40" } });
+    await waitFor(() => expect(setMapRotation).toHaveBeenCalled());
+
+    // The edited name survives — rotation merged only the geometry, not corners.
+    expect((screen.getAllByLabelText("Corner name")[0] as HTMLInputElement).value).toBe("Zed");
   });
 });
