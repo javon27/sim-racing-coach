@@ -211,8 +211,15 @@ class CoachContext:
         on = "on track" if self.on_track else ("unknown" if self.on_track is None else "not on track")
         lap = "yes" if self.record is not None else "no lap captured yet"
         phase = self.record.phase if self.record else None
-        laps_txt = (f"this session: {n_sess}, all-time this track/car: {n_all}"
-                    if n_sess is not None else f"this track/car: {n_all} (no session split)")
+        # Current-phase count: "8 laps into the race" must be race laps, not the
+        # whole session (qualy + race). Grouped like _lap_numbering's counts[ph].
+        n_phase = (sum(1 for r in self.store.session_laps(self.session_id) if r.get("phase") == phase)
+                   if self.session_id and phase else None)
+        if n_sess is not None:
+            head = f"this {phase}: {n_phase}, " if n_phase is not None else ""
+            laps_txt = f"{head}session total: {n_sess}, all-time this track/car: {n_all}"
+        else:
+            laps_txt = f"this track/car: {n_all} (no session split)"
         return (f"Track: {self.track or 'unknown'} | Car: {self.car or 'unknown'} | "
                 f"Session type: {phase or 'unknown'} | State: {on} | Current lap: {lap} | "
                 f"Laps ({laps_txt}) | Reference (best) lap available: {'yes' if has_ref else 'no'}")

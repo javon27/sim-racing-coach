@@ -54,6 +54,23 @@ def test_session_status_and_recent_laps(tmp_path, synthetic_lap):
     assert f"lap {lap_id}:" in listing
 
 
+def test_session_status_uses_current_phase_lap_count(tmp_path, synthetic_lap):
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    laps = [("qualifying", 1.0), ("qualifying", 2.0)] + [("race", 3.0 + i) for i in range(6)]
+    for ph, t in laps:
+        store.save(LapRecord(**{**synthetic_lap.__dict__,
+                                "session_id": "s1", "phase": ph, "timestamp": t}))
+    ctx = CoachContext(
+        store,
+        record=LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1", "phase": "race"}),
+        session_id="s1", track=synthetic_lap.track, car=synthetic_lap.car,
+    )
+    status = ctx.get_session_status()
+    assert "this race: 6" in status          # phase count, not the 8 session total
+    assert "session total: 8" in status
+
+
 def test_recent_laps_use_in_session_phase_numbering(tmp_path, synthetic_lap):
     from simcoach.model_types import LapRecord
     store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
