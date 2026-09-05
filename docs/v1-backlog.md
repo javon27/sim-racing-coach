@@ -144,3 +144,11 @@ user wants NO edge when collapsed — just the floating caret button tab to reop
 Fix in `frontend/src/lib/TrackMapPane.svelte`: drop the `.map-pane.collapsed` width/border so the
 strip contributes no layout edge; render the reopen caret as an overlay tab (absolute/floating)
 rather than a bordered column. Low priority, cosmetic.
+
+## Corner detection under-counts on generated maps (2026-09-05)
+On a generated Algarve ribbon the solver produced ~4 corners vs the real 15 (user
+added the rest by hand). raceline.solve_corners / the curvature segmentation is
+under-segmenting — likely too-coarse smoothing or too-high a curvature threshold,
+merging adjacent corners. Improve corner segmentation (adaptive threshold, min-gap,
+per-apex splitting) so first-pass detection is closer to the true count. Manual add
+works as a fallback today. Medium priority — quality, not blocking.
