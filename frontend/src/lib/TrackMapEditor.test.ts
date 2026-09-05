@@ -151,14 +151,31 @@ describe("TrackMapEditor", () => {
     }
   });
 
-  it("edits a corner label and the map draws T{label}", async () => {
+  it("accepts a letter label (8A): text input, renders T8A, saves + survives round-trip", async () => {
     const { container } = render(TrackMapEditor, { props: { lapId: 7, open: true } });
     await screen.findByText("First");
 
-    await fireEvent.input(screen.getAllByLabelText("Corner label")[0], { target: { value: "8A" } });
+    const lbl = screen.getAllByLabelText("Corner label")[0] as HTMLInputElement;
+    expect(lbl.type).toBe("text"); // NOT number — must accept letters
 
+    await fireEvent.input(lbl, { target: { value: "8A" } });
+
+    // Map draws the label, not the positional number.
     const labels = [...container.querySelectorAll("text.corner-lbl")].map((e) => e.textContent);
     expect(labels).toContain("T8A");
+
+    // Saved payload carries the label; a backend that echoes it keeps T8A after save.
+    vi.mocked(saveLapMap).mockResolvedValueOnce({
+      ...fixture,
+      corners: fixture.corners.map((c, i) => (i === 0 ? { ...c, label: "8A" } : { ...c, label: String(c.number) })),
+    } as never);
+    await fireEvent.click(screen.getByText("Save"));
+
+    const [, body] = vi.mocked(saveLapMap).mock.calls[0];
+    expect(body.corners[0].label).toBe("8A");
+    await waitFor(() =>
+      expect([...container.querySelectorAll("text.corner-lbl")].map((e) => e.textContent)).toContain("T8A"),
+    );
   });
 
   it("adds a second apex and saves both in the corner's apexes", async () => {
