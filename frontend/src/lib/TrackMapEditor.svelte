@@ -239,7 +239,8 @@
     return { x0, y0, xj, yj, ang: Math.atan2(yj - y0, xj - x0) };
   });
 
-  // Load the AVERAGED outline whenever the modal opens for a lap.
+  // Open with the SAVED map (avg=0) — the frozen/canonical ribbon if one exists.
+  // The fresh re-average/rebuild path is only "(Re)generate map layout" (mapcapture).
   let loadedFor = -1;
   $effect(() => {
     if (!open || lapId == null) {
@@ -253,7 +254,7 @@
     loadedFor = lapId;
     const id = lapId;
     error = null;
-    getLapMap(id, true)
+    getLapMap(id)
       .then((res) => {
         if (loadedFor !== id) return;
         if ("path" in res && res.path.length > 0) applyMap(res);

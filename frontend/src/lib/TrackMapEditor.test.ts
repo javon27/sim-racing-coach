@@ -76,10 +76,10 @@ describe("TrackMapEditor", () => {
     expect(getLapMap).not.toHaveBeenCalled();
   });
 
-  it("fetches the averaged outline on open", async () => {
+  it("opens with the SAVED map (avg=0), not a re-average", async () => {
     render(TrackMapEditor, { props: { lapId: 7, open: true } });
     expect(await screen.findByText("First")).toBeTruthy();
-    expect(getLapMap).toHaveBeenCalledWith(7, true);
+    expect(getLapMap).toHaveBeenCalledWith(7); // no avg=1 — shows the frozen/canonical ribbon
   });
 
   it("shows direction read-only (no input to change it)", async () => {
