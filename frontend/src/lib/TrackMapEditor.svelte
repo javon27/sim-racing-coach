@@ -40,6 +40,7 @@
     cancelMapCapture,
     mapCaptureStatus,
     buildRibbon,
+    rebuildFromCapture,
     saveRibbon,
     type TrackMap,
     type RibbonPreview,
@@ -186,6 +187,22 @@
       genErr = "Couldn't reconstruct the ribbon from those laps.";
       genPhase = "capturing";
       pollTimer = setInterval(pollGen, pollMs);
+    }
+  }
+
+  // Re-run the reconstruction on the track's saved raw capture — no re-drive.
+  async function rebuildGen() {
+    genPhase = "building";
+    genErr = null;
+    ribbon = null;
+    try {
+      ribbon = await rebuildFromCapture();
+      genPhase = "preview";
+    } catch (e) {
+      genPhase = "off";
+      genErr = String(e).includes("422")
+        ? "No saved capture for this track — use (Re)generate to record one."
+        : "Rebuild failed.";
     }
   }
 
@@ -663,6 +680,7 @@
                 {addSectionMode ? "Click the line…" : "Add section"}
               </button>
               <button type="button" onclick={startGen}>(Re)generate map layout</button>
+              <button type="button" onclick={rebuildGen}>Rebuild from saved capture</button>
             </div>
             <ul class="corners">
               {#each corners as c, i (c.number)}

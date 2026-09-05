@@ -280,6 +280,15 @@ export function buildRibbon(): Promise<RibbonPreview> {
   });
 }
 
+// Re-reconstruct from the track's SAVED raw capture (no active capture / re-drive).
+export function rebuildFromCapture(): Promise<RibbonPreview> {
+  return request<RibbonPreview>("/mapcapture/rebuild", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({}),
+  });
+}
+
 export function saveRibbon(): Promise<{ saved: boolean; slug: string }> {
   return request<{ saved: boolean; slug: string }>("/mapcapture/save", {
     method: "POST",

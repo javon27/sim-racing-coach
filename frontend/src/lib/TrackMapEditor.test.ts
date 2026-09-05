@@ -8,6 +8,7 @@ import {
   cancelMapCapture,
   mapCaptureStatus,
   buildRibbon,
+  rebuildFromCapture,
   saveRibbon,
 } from "./api";
 import TrackMapEditor, { nearestPathIndex, nearestDistIndex } from "./TrackMapEditor.svelte";
@@ -23,6 +24,7 @@ vi.mock("./api", async () => {
     cancelMapCapture: vi.fn(),
     mapCaptureStatus: vi.fn(),
     buildRibbon: vi.fn(),
+    rebuildFromCapture: vi.fn(),
     saveRibbon: vi.fn(),
   };
 });
@@ -234,6 +236,7 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     vi.mocked(startMapCapture).mockReset().mockResolvedValue({ active: true });
     vi.mocked(cancelMapCapture).mockReset().mockResolvedValue({ active: false });
     vi.mocked(buildRibbon).mockReset().mockResolvedValue(ribbonFix);
+    vi.mocked(rebuildFromCapture).mockReset().mockResolvedValue(ribbonFix);
     vi.mocked(saveRibbon).mockReset().mockResolvedValue({ saved: true, slug: "monza" });
     cap.laps = [];
     vi.mocked(mapCaptureStatus).mockReset().mockImplementation(async () => ({ ...cap, laps: [...cap.laps] }));
@@ -304,6 +307,27 @@ describe("TrackMapEditor — (re)generate map layout", () => {
 
     await rerender({ lapId: 7, open: false });
     await waitFor(() => expect(cancelMapCapture).toHaveBeenCalled());
+  });
+
+  it("Rebuild from saved capture: calls rebuildFromCapture and previews the result", async () => {
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+
+    await fireEvent.click(screen.getByText("Rebuild from saved capture"));
+
+    expect(rebuildFromCapture).toHaveBeenCalled();
+    const svg = (await screen.findByText("Save ribbon")).closest(".modal")!.querySelector("svg")!;
+    expect(svg.querySelector("path")).toBeTruthy(); // the band
+    expect(screen.getAllByText("T1").length).toBeGreaterThan(0);
+  });
+
+  it("Rebuild shows a hint when there's no saved capture (422)", async () => {
+    vi.mocked(rebuildFromCapture).mockRejectedValue(new Error("API request failed: POST /mapcapture/rebuild -> 422"));
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+
+    await fireEvent.click(screen.getByText("Rebuild from saved capture"));
+    expect(await screen.findByText(/no saved capture for this track/i)).toBeTruthy();
   });
 });
 
