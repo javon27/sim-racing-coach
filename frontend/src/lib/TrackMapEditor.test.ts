@@ -88,6 +88,19 @@ describe("TrackMapEditor", () => {
     expect(container.querySelectorAll("li").length).toBe(2);
   });
 
+  it("renumbers corners sequentially by track order after add", async () => {
+    const { container } = render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+
+    await fireEvent.click(screen.getByText("Add corner"));
+    await fireEvent.pointerDown(container.querySelector("svg")!);
+
+    // A corner added anywhere renumbers the set 1..N in apex order — no gaps,
+    // no "T15" appended last.
+    const nums = [...container.querySelectorAll(".num")].map((e) => e.textContent);
+    expect(nums).toEqual(["T1", "T2", "T3"]);
+  });
+
   it("saves corners + sectors without direction", async () => {
     render(TrackMapEditor, { props: { lapId: 7, open: true } });
     await screen.findByText("First");

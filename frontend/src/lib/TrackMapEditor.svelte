@@ -150,7 +150,17 @@
     else sectors[drag.i] = d;
   }
   function endDrag() {
+    const wasCorner = drag?.kind === "corner";
     drag = null;
+    // Dragging a corner past another changes track order → renumber.
+    if (wasCorner) renumber();
+  }
+  // Corner number = position in track order (by apex_dist). Keeps T-labels
+  // sequential when corners are added between others or dragged past each other.
+  function renumber() {
+    corners = [...corners]
+      .sort((a, b) => a.apex_dist - b.apex_dist)
+      .map((c, idx) => ({ ...c, number: idx + 1 }));
   }
   function startDrag(kind: "corner" | "sector", i: number, e: PointerEvent) {
     e.stopPropagation();
@@ -162,13 +172,17 @@
     if (!addMode || !map) return;
     const [vx, vy] = toViewBox(e.clientX, e.clientY);
     const i = nearestPathIndex(map.path, vx, vy);
-    const n = corners.length ? Math.max(...corners.map((c) => c.number)) + 1 : 1;
-    corners.push({ number: n, name: `T${n}`, direction: "", apex_dist: map.dist[i] });
+    // Insert in track order + renumber, so a corner added between T1 and T2
+    // becomes T2 (not appended as the highest number). Name defaults empty →
+    // the map label shows T{number}; server falls back to "Turn N".
+    corners = [...corners, { number: 0, name: "", direction: "", apex_dist: map.dist[i] }];
+    renumber();
     addMode = false;
   }
 
   function removeCorner(i: number) {
-    corners.splice(i, 1);
+    corners = corners.filter((_, idx) => idx !== i);
+    renumber();
   }
 
   function seedSectors() {
@@ -300,12 +314,7 @@
             <ul class="corners">
               {#each corners as c, i (c.number)}
                 <li>
-                  <input
-                    type="number"
-                    class="num"
-                    bind:value={c.number}
-                    aria-label="Corner number"
-                  />
+                  <span class="num" aria-label="Corner number">T{c.number}</span>
                   <input class="name" bind:value={c.name} aria-label="Corner name" />
                   <span class="dir" data-dir={c.direction}>{c.direction || "—"}</span>
                   <button type="button" class="rm" aria-label="Remove corner" onclick={() => removeCorner(i)}>×</button>
