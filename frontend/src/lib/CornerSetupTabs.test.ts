@@ -14,6 +14,7 @@ describe("CornerSetupTabs", () => {
     vi.mocked(getSetup).mockReset();
     vi.mocked(getLapMap).mockReset();
     vi.mocked(getLapMap).mockResolvedValue({});
+    vi.mocked(getLapAnalysis).mockResolvedValue({ lap_time: 0, corners: [] });
     // Real /setup shape: only isFreeSetting entries render (SetupPanel filters).
     vi.mocked(getSetup).mockResolvedValue({
       VM_FRONT_ANTISWAY: { isFreeSetting: true, stringValue: "P3" },
@@ -46,5 +47,19 @@ describe("CornerSetupTabs", () => {
 
     await fireEvent.click(screen.getByText("Map"));
     expect(await screen.findByText(/select a lap to see the track map/i)).toBeTruthy();
+  });
+
+  it("has no Edit map button without a selected lap", async () => {
+    render(CornerSetupTabs, { props: { lapId: null } });
+    await fireEvent.click(screen.getByText("Map"));
+    expect(screen.queryByText("Edit map")).toBeNull();
+  });
+
+  it("opens the editor modal from the Map tab when a lap is selected", async () => {
+    render(CornerSetupTabs, { props: { lapId: 7 } });
+
+    await fireEvent.click(screen.getByText("Map"));
+    await fireEvent.click(screen.getByText("Edit map"));
+    expect(await screen.findByRole("dialog")).toBeTruthy();
   });
 });

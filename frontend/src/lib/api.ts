@@ -160,11 +160,42 @@ export interface TrackMap {
   width: number;
   height: number;
   path: [number, number][];
-  corners: { number: number; name: string; direction: string; x: number; y: number }[];
+  dist: number[]; // lap_distance parallel to path (same length)
+  sectors: number[]; // lap_distance of S1/S2 boundaries; [] when unset
+  corners: {
+    number: number;
+    name: string;
+    direction: string;
+    x: number;
+    y: number;
+    apex_dist: number;
+    start_dist: number;
+    end_dist: number;
+  }[];
 }
 
-export function getLapMap(id: number): Promise<TrackMap | Record<string, never>> {
-  return request<TrackMap | Record<string, never>>(`/laps/${id}/map`);
+export function getLapMap(id: number, avg?: boolean): Promise<TrackMap | Record<string, never>> {
+  return request<TrackMap | Record<string, never>>(`/laps/${id}/map${avg ? "?avg=1" : ""}`);
+}
+
+// Server derives direction from geometry — never send it.
+export interface CornerEdit {
+  number: number;
+  name: string;
+  apex_dist: number;
+  start_dist?: number;
+  end_dist?: number;
+}
+
+export function saveLapMap(
+  id: number,
+  body: { corners: CornerEdit[]; sectors: number[] },
+): Promise<TrackMap> {
+  return request<TrackMap>(`/laps/${id}/map`, {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(body),
+  });
 }
 
 export function getChats(): Promise<ChatRow[]> {
