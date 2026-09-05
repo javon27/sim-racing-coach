@@ -571,6 +571,29 @@ def test_mapcapture_save_persists_raw_capture_and_rebuild(tmp_path):
     assert r["left"] and len(r["center"]) == len(r["left"])
 
 
+def test_coach_resolves_live_track_car_with_zero_stored_laps(tmp_path, monkeypatch):
+    # In-garage: live LMU session, NO stored lap. The coach must still resolve the
+    # live track/car (+ map via resolve_context) instead of being context-blind.
+    from simcoach.lmu import smm
+    monkeypatch.setattr(smm, "read_session_track_car", lambda: ("test_track", "test_car"))
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))  # empty store
+    coach = Coach(FakeModel(reply="Focus on braking."), "simcoach/knowledge")
+    app = create_app(store, coach)  # default tracks_dir has test_track.json
+    c = _tc(app)
+    chat_id = None
+    with c.websocket_connect("/coach", headers={"host": "127.0.0.1",
+                                                 "origin": "http://127.0.0.1"}) as ws:
+        ws.send_json({"question": "what should I focus on here?"})
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"):
+                chat_id = ev.get("chat_id")
+                assert ev["type"] == "done"
+                break
+    rows = store.chat_messages(chat_id)
+    assert rows and rows[0]["track"] == "test_track" and rows[0]["car"]  # live-resolved
+
+
 def test_mapcapture_rebuild_no_capture_is_422(tmp_path):
     app, _ = _map_app(tmp_path)
     app.state.latest = {"record": _edge("Nope", 1, 100.0), "lap_id": 0}

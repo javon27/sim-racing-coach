@@ -834,9 +834,31 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             if rest:
                 try: setup = rest.get_setup()
                 except Exception: setup = {}
-            cmap = _map_for(record.track) if record is not None else _map_for(_live_track())
+            # Context source: a stored lap if we have one, else the LIVE session
+            # (in-garage / on track, zero laps yet) so the coach still knows the
+            # track/car/map and can answer before the first lap is captured.
+            live_track = live_car = None
+            if record is not None:
+                cmap = _map_for(record.track)
+                on_track = True
+            else:
+                cmap, on_track = None, False
+                try:
+                    from ..lmu.smm import read_session_track_car
+                    live = read_session_track_car()          # (track, vehicle) | None
+                except Exception:
+                    live = None
+                if live:
+                    on_track = True
+                    live_track, vehicle = live
+                    try:
+                        from .. import __main__ as _m  # resolve_context: map + car name (+ note)
+                        cmap, live_car, _ = _m.resolve_context(
+                            rest, str(app.state.tracks_dir), live_track, vehicle)
+                    except Exception:
+                        cmap, live_car = _map_for(live_track), vehicle
             ctx = CoachContext(app.state.store, record=record, lap_id=eff_lap_id, cmap=cmap,
-                               setup=setup, on_track=record is not None,
+                               setup=setup, track=live_track, car=live_car, on_track=on_track,
                                allowed_adjustments=(legal_adjustments(setup) if setup else None),
                                session_id=eff_session_id)
             car = ctx.car or "car"
