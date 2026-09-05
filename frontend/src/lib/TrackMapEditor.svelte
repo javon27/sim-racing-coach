@@ -427,7 +427,10 @@
   function seedSectors() {
     if (!map) return;
     const max = map.dist[map.dist.length - 1] || 0;
-    sectors = [max / 3, (2 * max) / 3];
+    // Prefer the game's REAL S1/S2 boundaries (captured from a lap); fall back to
+    // naive thirds only when none were captured. Keep just the in-range splits.
+    const real = (map.detected_sectors ?? []).filter((d) => d > 0 && d < max).sort((a, b) => a - b);
+    sectors = real.length ? real : [max / 3, (2 * max) / 3];
   }
 
   // Double-apex: add/remove a second apex, snapped to the line just past the primary.

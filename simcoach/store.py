@@ -284,6 +284,26 @@ class LapStore:
             ).fetchall()
             return [r[0] for r in rows]
 
+    def sector_bounds(self, track: str, car: str) -> list[float] | None:
+        """The game's real S1/S2 sector-boundary lap_distances for a track/car,
+        from the most recent lap that captured them (the boundaries are fixed per
+        track, so any lap's are the track's). None if no lap has them yet — used to
+        seed the map's sector splits at the real boundaries instead of naive thirds."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT sector_bounds FROM laps WHERE track = ? AND car = ? "
+                "AND sector_bounds IS NOT NULL ORDER BY id DESC LIMIT 1",
+                (track, car),
+            ).fetchall()
+        for (raw,) in rows:
+            try:
+                vals = [float(v) for v in json.loads(raw)]
+            except (TypeError, ValueError):
+                continue
+            if vals:
+                return vals
+        return None
+
     def recent_laps(self, track: str, car: str, limit: int = 10,
                     session_id: str | None = None) -> list[dict]:
         """Recent laps for a track/car (newest first) as lightweight rows — no

@@ -482,7 +482,12 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             rec = store.load(lap_id)
         except (KeyError, FileNotFoundError):
             raise HTTPException(404, "lap not found")
-        return _canonical_map(rec.track, rec.car, force=bool(avg))
+        m = _canonical_map(rec.track, rec.car, force=bool(avg))
+        if m:
+            # The game's real S1/S2 boundaries (if any lap captured them) so the
+            # editor can seed sector splits at the true positions, not thirds.
+            m = {**m, "detected_sectors": store.sector_bounds(rec.track, rec.car) or []}
+        return m
 
     @app.put("/laps/{lap_id}/map")
     def save_lap_map(lap_id: int, body: dict = Body(...)):

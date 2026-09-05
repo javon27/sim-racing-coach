@@ -19,6 +19,17 @@ def test_save_load_and_best(tmp_path, synthetic_lap):
     assert s.best_lap("test_track", "test_car").lap_time == 92.5
 
 
+def test_sector_bounds_from_latest_capturing_lap(tmp_path, synthetic_lap):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    assert s.sector_bounds("test_track", "test_car") is None      # none captured yet
+    s.save(LapRecord(**{**synthetic_lap.__dict__, "sector_bounds": None}))
+    s.save(LapRecord(**{**synthetic_lap.__dict__, "sector_bounds": [975.1, 2585.4]}))
+    s.save(LapRecord(**{**synthetic_lap.__dict__, "sector_bounds": None}))  # newer, no bounds
+    # Returns the most-recent lap that actually captured bounds, skipping None rows.
+    assert s.sector_bounds("test_track", "test_car") == [975.1, 2585.4]
+
+
 def test_save_is_atomic_on_failure(tmp_path, synthetic_lap):
     from simcoach.store import LapStore
     s = LapStore(str(tmp_path/"c.sqlite"), str(tmp_path/"data"))

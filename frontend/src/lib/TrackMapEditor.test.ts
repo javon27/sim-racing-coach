@@ -145,6 +145,16 @@ describe("TrackMapEditor", () => {
     expect(await screen.findByText(/corners must be a non-empty list/i)).toBeTruthy();
   });
 
+  it("Add sectors seeds the game's real boundaries when captured", async () => {
+    vi.mocked(getLapMap).mockResolvedValueOnce({ ...fixture, sectors: [], detected_sectors: [150, 250] });
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+    await fireEvent.click(screen.getByText("Add sectors"));
+    await fireEvent.click(screen.getByText("Save"));
+    const [, body] = vi.mocked(saveLapMap).mock.calls[0];
+    expect(body.sectors).toEqual([150, 250]); // real boundaries, not thirds (100,200)
+  });
+
   it("saves corners + sectors without direction", async () => {
     render(TrackMapEditor, { props: { lapId: 7, open: true } });
     await screen.findByText("First");

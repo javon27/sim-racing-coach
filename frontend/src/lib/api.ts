@@ -181,6 +181,7 @@ export interface TrackMap {
   path: [number, number][];
   dist: number[]; // lap_distance parallel to path (same length)
   sectors: number[]; // lap_distance of S1/S2 boundaries; [] when unset
+  detected_sectors?: number[]; // game's real S1/S2 boundary lap_distances (seed source)
   sections: Section[]; // named distance spans (straights, complexes, DRS)
   corners: {
     number: number; // internal positional order key
