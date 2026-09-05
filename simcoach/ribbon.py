@@ -111,9 +111,9 @@ def _fill_nan(a: np.ndarray, period: float | None = None) -> np.ndarray:
     return a
 
 
-_SMOOTH_W = 5  # legacy default half-window (bins); reconstruct_surface now derives
-#              # a DISTANCE-based half-window (_SMOOTH_HALF_M) so it's the same on
-#              # every track. Only the bootstrap/bank defaults still fall back here.
+_SMOOTH_W = 5  # legacy half-window (bins), now only _bank_per_bin's never-exercised
+#              # default param -- reconstruct_surface derives a DISTANCE-based window
+#              # (_SMOOTH_HALF_M) for EVERY _smooth call incl. the bootstrap and bank.
 _SMOOTH_HALF_M = 40.0  # smoothing half-window in METRES. ~9 m squiggle << 40 m <<
 #                      # a real corner, and (unlike a fixed bin count) it doesn't
 #                      # balloon on a long track: the old 5-bin window was ~127 m on

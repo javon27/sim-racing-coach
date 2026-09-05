@@ -143,8 +143,10 @@ def _runs(mask):
 
 
 def _smooth_closed(x, win):
-    """Closed-loop boxcar moving average (wrap the seam). win<=1 -> unchanged."""
-    if win <= 1:
+    """Closed-loop boxcar moving average (wrap the seam). Returns x unchanged when
+    the window can't be applied (win<=1, or the array too short to pad by `win` --
+    else the wrap-pad slice would return a wrong-length/empty array)."""
+    if win <= 1 or len(x) <= 2 * win:
         return x
     k = np.ones(win) / win
     pad = np.concatenate([x[-win:], x, x[:win]])
@@ -238,7 +240,7 @@ def _calibrate(car, telem):
 
 
 def solve_corners(left_edge, right_edge, car=CarParams(), telem=None, bank=None,
-                  kappa_min=0.002, min_prom=0.0008, smooth_win=7):
+                  kappa_min=0.002, min_prom=0.0008, smooth_m=60.0):
     """Detect a first-pass corner set from the reconstructed corridor.
 
     Apexes are CURVATURE maxima of the centerline (where the track bends), not
@@ -249,8 +251,10 @@ def solve_corners(left_edge, right_edge, car=CarParams(), telem=None, bank=None,
     ``min_speed`` (calibrated from ``telem`` peak lat_g/long_g when given).
 
     Tunables (calibrated against driver-verified maps -- Algarve/Imola/Monza,
-    avg F1 ~0.91): ``kappa_min`` 1/m curvature floor (~1/500 m radius), ``min_prom``
-    curvature prominence to split adjacent corners, ``smooth_win`` boxcar stations.
+    avg F1 ~0.94): ``kappa_min`` 1/m curvature floor (~1/500 m radius), ``min_prom``
+    curvature prominence to split adjacent corners, ``smooth_m`` curvature-smoothing
+    half-window in METRES (distance-based, so a long track like Le Mans isn't
+    over-smoothed the way a fixed bin count would be -- same fix as reconstruction).
 
     Each corner: ``{apex_idx, start_idx, end_idx, apex_dist, start_dist, end_dist,
     min_speed}``. The *_idx values are station indices aligned with the input
@@ -271,11 +275,14 @@ def solve_corners(left_edge, right_edge, car=CarParams(), telem=None, bank=None,
     _, line = min_curvature_line(left, right)
     v, _ = speed_profile(line, car.mu, car.g, car.a_brake, car.a_accel, bank=bank)
 
-    # Apex detection from centerline curvature.
-    kappa = _smooth_closed(_curvature(center), smooth_win)
+    # Apex detection from centerline curvature. Smoothing window is DISTANCE-based
+    # (bins vary with track length) so it's consistent across layouts; _smooth_closed
+    # no-ops safely if the array is too short for the window.
     seg = _seg_lengths(center)
     dist = _dist_along(center)
     length = float(dist[-1] + seg[-1])                # closed-loop total
+    sw = max(2, int(round(smooth_m / max(length, _EPS) * n)))
+    kappa = _smooth_closed(_curvature(center), sw)
     apexes = _detect_apexes(kappa, kappa_min, min_prom)
     max_half = max(1, int(round(80.0 / max(length, _EPS) * n)))  # window bound ~80 m/side
 
