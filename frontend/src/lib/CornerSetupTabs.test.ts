@@ -1,19 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/svelte";
-import { getLapAnalysis, getSetup, getLapMap } from "./api";
+import { getLapAnalysis, getSetup } from "./api";
 import CornerSetupTabs from "./CornerSetupTabs.svelte";
 
 vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
-  return { ...actual, getLapAnalysis: vi.fn(), getSetup: vi.fn(), getLapMap: vi.fn() };
+  return { ...actual, getLapAnalysis: vi.fn(), getSetup: vi.fn() };
 });
 
 describe("CornerSetupTabs", () => {
   beforeEach(() => {
     vi.mocked(getLapAnalysis).mockReset();
     vi.mocked(getSetup).mockReset();
-    vi.mocked(getLapMap).mockReset();
-    vi.mocked(getLapMap).mockResolvedValue({});
     vi.mocked(getLapAnalysis).mockResolvedValue({ lap_time: 0, corners: [] });
     // Real /setup shape: only isFreeSetting entries render (SetupPanel filters).
     vi.mocked(getSetup).mockResolvedValue({
@@ -42,24 +40,8 @@ describe("CornerSetupTabs", () => {
     expect(screen.queryByText("Front Anti-roll Bar")).toBeNull();
   });
 
-  it("shows the track map view when the Map tab is clicked", async () => {
+  it("no longer has a Map tab (the canonical map moved to the Coach right pane)", () => {
     render(CornerSetupTabs, { props: { lapId: null } });
-
-    await fireEvent.click(screen.getByText("Map"));
-    expect(await screen.findByText(/select a lap to see the track map/i)).toBeTruthy();
-  });
-
-  it("has no Edit map button without a selected lap", async () => {
-    render(CornerSetupTabs, { props: { lapId: null } });
-    await fireEvent.click(screen.getByText("Map"));
-    expect(screen.queryByText("Edit map")).toBeNull();
-  });
-
-  it("opens the editor modal from the Map tab when a lap is selected", async () => {
-    render(CornerSetupTabs, { props: { lapId: 7 } });
-
-    await fireEvent.click(screen.getByText("Map"));
-    await fireEvent.click(screen.getByText("Edit map"));
-    expect(await screen.findByRole("dialog")).toBeTruthy();
+    expect(screen.queryByText("Map")).toBeNull();
   });
 });

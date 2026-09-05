@@ -6,6 +6,7 @@
   import LapList from "./LapList.svelte";
   import ChatPanel from "./ChatPanel.svelte";
   import CornerSetupTabs from "./CornerSetupTabs.svelte";
+  import TrackMapPane from "./TrackMapPane.svelte";
   import SessionsScreen from "./SessionsScreen.svelte";
   import SettingsScreen from "./SettingsScreen.svelte";
 
@@ -137,6 +138,7 @@
             <CornerSetupTabs lapId={selectedLapId ?? null} />
           </aside>
           <ChatPanel lapId={selectedLapId} sessionId={selectedSessionId} chatId={activeChatId} />
+          <TrackMapPane sessionId={selectedSessionId} />
         </div>
       </div>
     </section>

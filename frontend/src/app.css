@@ -170,7 +170,7 @@ body {
 /* ---------- body: laps rail ---------- */
 .main {
   display: grid;
-  grid-template-columns: 340px 1fr;
+  grid-template-columns: 340px 1fr auto;
   min-height: 0;
 }
 .rail {
@@ -415,6 +415,9 @@ body {
     grid-template-columns: 1fr;
   }
   .rail {
+    display: none;
+  }
+  .map-pane {
     display: none;
   }
 }
