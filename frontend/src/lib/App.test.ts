@@ -95,16 +95,17 @@ describe("Coach screen assembly", () => {
     render(App);
 
     const lapRow = await screen.findByText("Lap 1");
-    const btn = lapRow.closest(".lap") as HTMLElement; // row is a role=button div now
-    expect(btn.getAttribute("aria-pressed")).toBe("false"); // not selected yet
+    const cell = lapRow.closest(".lap") as HTMLElement; // grid container keeps best/selected
+    const selectBtn = lapRow.closest(".lap-select") as HTMLElement; // left hit zone (real button)
+    expect(selectBtn.getAttribute("aria-pressed")).toBe("false"); // not selected yet
 
     await fireEvent.click(lapRow);
 
     // The clicked lap's real id (9) flows into the corner analysis...
     expect(vi.mocked(getLapAnalysis)).toHaveBeenCalledWith(9);
     // ...and the row is highlighted as selected (no "Lap N selected" hint text).
-    await vi.waitFor(() => expect(btn.getAttribute("aria-pressed")).toBe("true"));
-    expect(btn.className).toContain("selected");
+    await vi.waitFor(() => expect(selectBtn.getAttribute("aria-pressed")).toBe("true"));
+    expect(cell.className).toContain("selected");
   });
 
   it("switches to the Sessions screen when the Sessions nav item is clicked", async () => {

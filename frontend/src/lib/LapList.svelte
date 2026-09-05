@@ -230,41 +230,49 @@
             class="lap"
             class:best={lap.id === bestId}
             class:selected={lap.id === selectedLapId}
-            role="button"
-            tabindex="0"
-            aria-pressed={lap.id === selectedLapId}
-            onclick={() => select(lap.id)}
-            onkeydown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                select(lap.id);
-              }
-            }}
           >
-            <span class="n">
-              Lap {i + 1}
-              {#if sectors}
-                <span class="lapsec">
-                  {#each sectors as s}
-                    <i class={s.cls} title="{s.label} {s.delta}"></i>
-                  {/each}
-                </span>
-              {/if}
-            </span>
-            <span class="t">{formatTime(lap.lap_time)}</span>
-            <span class="flag">{lap.valid ? "" : "✗ inv"}</span>
             {#if sectors}
+              <!-- Left hit zone: select the lap. -->
               <button
                 type="button"
-                class="chev"
+                class="lap-select"
+                aria-pressed={lap.id === selectedLapId}
+                onclick={() => select(lap.id)}
+              >
+                <span class="n">
+                  Lap {i + 1}
+                  <span class="lapsec">
+                    {#each sectors as s}
+                      <i class={s.cls} title="{s.label} {s.delta}"></i>
+                    {/each}
+                  </span>
+                </span>
+              </button>
+              <!-- Right hit zone (whole rest of the row): toggle sector detail. -->
+              <button
+                type="button"
+                class="lap-expand"
                 aria-label="Toggle sector detail"
                 aria-expanded={open}
-                onclick={(e) => {
-                  e.stopPropagation();
-                  toggleDetail(lap.id);
-                }}
+                onclick={() => toggleDetail(lap.id)}
               >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6" /></svg>
+                <span class="t">{formatTime(lap.lap_time)}</span>
+                <span class="flag">{lap.valid ? "" : "✗ inv"}</span>
+                <span class="chev">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6" /></svg>
+                </span>
+              </button>
+            {:else}
+              <!-- No sectors: nothing to expand, so the whole row selects. -->
+              <button
+                type="button"
+                class="lap-select full"
+                aria-pressed={lap.id === selectedLapId}
+                onclick={() => select(lap.id)}
+              >
+                <span class="n">Lap {i + 1}</span>
+                <span class="t">{formatTime(lap.lap_time)}</span>
+                <span class="flag">{lap.valid ? "" : "✗ inv"}</span>
               </button>
             {/if}
           </div>

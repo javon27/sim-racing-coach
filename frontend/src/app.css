@@ -283,18 +283,39 @@ body {
 }
 .lap {
   display: grid;
-  grid-template-columns: 1fr auto auto auto;
-  align-items: center;
+  grid-template-columns: 1fr auto;
+  align-items: stretch;
   gap: 10px;
   padding: 9px 10px;
   border-radius: 9px;
-  cursor: pointer;
   width: 100%;
+}
+/* Two sibling hit zones inside a row (no nested buttons). Both reset to look
+   like plain row content; each stretches to full row height for a large target. */
+.lap-select,
+.lap-expand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   background: none;
   border: none;
+  padding: 0;
+  margin: 0;
   font: inherit;
   color: inherit;
   text-align: left;
+  cursor: pointer;
+}
+.lap-select {
+  min-width: 0;
+} /* let the Lap N + bars column shrink */
+.lap-expand {
+  gap: 8px;
+  justify-content: flex-end;
+}
+.lap-select.full {
+  grid-column: 1 / -1;
+  justify-content: space-between;
 }
 .lapwrap:not(.open) .lap:hover {
   background: var(--surface-2);

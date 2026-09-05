@@ -89,19 +89,19 @@ describe("LapList", () => {
     const wraps = container.querySelectorAll(".lapwrap");
     expect(wraps[1].classList.contains("open")).toBe(false);
 
-    const chev = wraps[1].querySelector(".chev") as HTMLButtonElement;
-    expect(chev.getAttribute("aria-expanded")).toBe("false");
-    await fireEvent.click(chev);
+    const toggle = wraps[1].querySelector(".lap-expand") as HTMLButtonElement;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    await fireEvent.click(toggle);
 
     expect(wraps[1].classList.contains("open")).toBe(true);
-    expect(chev.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
     const cells = wraps[1].querySelectorAll(".seccell .sv");
     expect(cells[0].textContent).toBe("+0.50");
     expect(cells[1].textContent).toBe("−0.50");
     expect(cells[2].textContent).toBe("+0.50");
   });
 
-  it("row click still selects the lap even though a chevron button now nests in the row", async () => {
+  it("left zone selects the lap; the right zone toggles detail without selecting", async () => {
     vi.mocked(getStatus).mockResolvedValue(status("S1", 6));
     vi.mocked(getSessionLaps).mockResolvedValue([
       { id: 9, lap_time: 91.2, valid: 1, ts: 100, s1: 30.0, s2: 30.5, s3: 30.0 },
@@ -111,16 +111,33 @@ describe("LapList", () => {
     const { container } = render(LapList, { props: { onselect } });
     await screen.findByText("Lap 1");
 
-    const row = container.querySelector(".lap") as HTMLElement;
-    await fireEvent.click(row);
+    const selectZone = container.querySelector(".lap-select") as HTMLElement;
+    await fireEvent.click(selectZone);
     expect(onselect).toHaveBeenCalledWith({ lap_id: 9, session_id: "S1" });
 
-    // Clicking the chevron toggles detail without selecting.
+    // The right (expand) zone toggles detail without selecting.
     onselect.mockClear();
-    const chev = container.querySelector(".chev") as HTMLButtonElement;
-    await fireEvent.click(chev);
+    const toggle = container.querySelector(".lap-expand") as HTMLButtonElement;
+    await fireEvent.click(toggle);
     expect(onselect).not.toHaveBeenCalled();
     expect(container.querySelector(".lapwrap")!.classList.contains("open")).toBe(true);
+  });
+
+  it("a lap with no sectors makes the whole row select (no expand zone)", async () => {
+    vi.mocked(getStatus).mockResolvedValue(status("S1", 6));
+    vi.mocked(getSessionLaps).mockResolvedValue([
+      { id: 9, lap_time: 216.0, valid: 1, ts: 100, s1: null, s2: null, s3: null },
+    ]);
+
+    const onselect = vi.fn();
+    const { container } = render(LapList, { props: { onselect } });
+    await screen.findByText("Lap 1");
+
+    expect(container.querySelector(".lap-expand")).toBeNull();
+    const selectZone = container.querySelector(".lap-select.full") as HTMLElement;
+    expect(selectZone).not.toBeNull();
+    await fireEvent.click(selectZone);
+    expect(onselect).toHaveBeenCalledWith({ lap_id: 9, session_id: "S1" });
   });
 
   it("groups laps by phase with per-phase numbering that restarts each phase", async () => {
