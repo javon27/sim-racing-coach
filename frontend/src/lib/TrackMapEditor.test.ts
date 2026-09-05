@@ -107,6 +107,18 @@ describe("TrackMapEditor", () => {
     expect(container.querySelectorAll("li").length).toBe(2);
   });
 
+  it("prefills an added corner's name with Turn N", async () => {
+    const { container } = render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+
+    await fireEvent.click(screen.getByText("Add corner"));
+    await fireEvent.pointerDown(container.querySelector("svg")!);
+
+    // jsdom has no CTM -> click maps to apex_dist 0 -> renumbers to T1 -> "Turn 1".
+    const names = [...container.querySelectorAll("input.name")].map((el) => (el as HTMLInputElement).value);
+    expect(names).toContain("Turn 1");
+  });
+
   it("renumbers corners sequentially by track order after add", async () => {
     const { container } = render(TrackMapEditor, { props: { lapId: 7, open: true } });
     await screen.findByText("First");

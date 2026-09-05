@@ -344,8 +344,12 @@
     // Insert in track order + renumber, so a corner added between T1 and T2
     // becomes T2 (not appended as the highest number). Name defaults empty →
     // the map label shows T{number}; server falls back to "Turn N".
-    corners = [...corners, { number: 0, name: "", direction: "", apex_dist: map.dist[i] }];
+    const apex = map.dist[i];
+    corners = [...corners, { number: 0, name: "", direction: "", apex_dist: apex }];
     renumber();
+    // Prefill "Turn N" using the positional number renumber() just assigned.
+    const added = corners.find((c) => c.apex_dist === apex && !c.name);
+    if (added) added.name = `Turn ${added.number}`;
     addMode = false;
   }
 
