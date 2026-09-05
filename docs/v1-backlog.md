@@ -169,3 +169,26 @@ works as a fallback today. Medium priority — quality, not blocking.
 - NIT: reconstruct_surface bins bound laps by d/global-max-len, so a shorter
   bound lap's top bins go empty + wrap-interpolated; a stray overshoot/out-lap in
   the buffer would thin the edges (no clean-lap filter on the mapping buffer).
+
+## Ribbon consumers: replay overlay + 3D track viewer (2026-09-05)
+The reconstructed ribbon is the shared foundation for two future viewers. Both
+can REUSE the persisted raw captures (`<data_dir>/captures/<slug>.npz`, pos_x/y/z
++ lap_distance per lap) — no re-driving — via the existing /mapcapture/rebuild path.
+
+- REPLAY overlay (à la Coach Dave Delta): the ribbon is the track canvas; each
+  lap's actual driven line comes from the per-lap RACE telemetry
+  (`telemetry/<lap_id>.npz`, full-rate, keyed on lap_distance), NOT the mapping
+  captures. GAP to close: expose the world->screen transform params
+  (xmin/zmin/scale/rotation/centroid) or a world->screen mapping endpoint, so a
+  lap's world (x,z) samples project onto the same ribbon transform. build_track_map
+  currently bakes+returns screen coords but not the raw params. lap_distance
+  alignment + shared transform (incl. rotation) already satisfy the rest.
+- 3D track viewer: the ribbon has plan-view geometry (center/edges/width) + per-
+  station BANK (cross-slope), but NOT the longitudinal elevation profile, so it'd
+  render flat-but-banked (no hills). GAP: add a per-station center elevation
+  (fit pos_y vs lap_distance) to the reconstruct_surface output. pos_y is already
+  captured and flows through reconstruction — it's an output+fit addition, and can
+  be recomputed from saved captures on Rebuild (no re-drive). Then each station has
+  x, z, y_center, width, bank -> enough to extrude a 3D banked ribbon mesh.
+  Note: only tracks with a saved <slug>.npz get 3D from captures; tracks mapped
+  before raw-capture-persist would need one re-drive to record the cloud.
