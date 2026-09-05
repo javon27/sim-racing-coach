@@ -45,6 +45,22 @@ New `sections` array in `tracks/<slug>.json`:
 - New "Sections" affordance: add/name/place/remove named sections (straights + complexes),
   drag start/end handles, choose kind; render their names on the map.
 
+## Multi-apex corners (user: coach must understand a double-apex)
+Andretti Hairpin stays a single T2 label, but it's a DOUBLE-APEX — the coach needs to know so
+it advises correctly (sacrifice the first apex, rotate for the second, etc.). "Double-apex" is
+a TELEMETRY fact (two speed minima within the corner window), not an LLM guess → invariant-safe.
+- **Data:** a corner gains `apexes: number[]` (lap_distances), defaulting to `[apex_dist]` for
+  single-apex; a double-apex carries two. `apex_dist` stays the primary (first/dominant apex)
+  for back-compat.
+- **Detection:** the post-capture solver / analysis finds N local speed minima inside the
+  corner window → seeds `apexes`. The editor lets the user confirm/add/remove an apex within a
+  corner (human verification).
+- **Analysis (`analysis.py`):** for a multi-apex corner, compute per-apex metrics (min speed at
+  each apex, the between-apex behavior).
+- **Coach:** the corner summary/tool exposes apex count + per-apex speeds; prompt guidance to
+  give double-apex-appropriate advice. Coach still only RECEIVES the geometry as fact.
+- Single-apex corners are unchanged (`apexes=[apex_dist]`).
+
 ## Invariants preserved
 - Direction still computed from telemetry; labels/names/sections are user annotation on top of
   owned geometry. Two-stage pipeline, storage split untouched.
