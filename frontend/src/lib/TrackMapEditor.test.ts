@@ -240,7 +240,7 @@ describe("TrackMapEditor — (re)generate map layout", () => {
   });
   afterEach(cleanup);
 
-  it("guides left->right capture, builds the ribbon, and saves it", async () => {
+  it("point-cloud capture: build with no designation, preview, and save", async () => {
     const onSaved = vi.fn();
     const onClose = vi.fn();
     render(TrackMapEditor, { props: { lapId: 7, open: true, onSaved, onClose, pollMs: 5 } });
@@ -248,21 +248,21 @@ describe("TrackMapEditor — (re)generate map layout", () => {
 
     await fireEvent.click(screen.getByText("(Re)generate map layout"));
     expect(startMapCapture).toHaveBeenCalled();
-    await screen.findByText(/LEFT edge/i);
+    await screen.findByText(/full track width/i);
 
-    // First boundary lap buffered -> advance to the RIGHT edge step.
-    cap.laps = [{ idx: 0, samples: 500, length: 5000 }];
-    await screen.findByText(/RIGHT edge/i);
+    // Build is disabled until at least one lap is buffered.
+    const buildBtn = await screen.findByText("Build");
+    expect((buildBtn as HTMLButtonElement).disabled).toBe(true);
 
-    // Second lap buffered -> designation step with a Build button.
     cap.laps = [
       { idx: 0, samples: 500, length: 5000 },
       { idx: 1, samples: 480, length: 4800 },
     ];
-    const buildBtn = await screen.findByText("Build ribbon");
-    await fireEvent.click(buildBtn);
+    await waitFor(() => expect((screen.getByText("Build") as HTMLButtonElement).disabled).toBe(false));
 
-    expect(buildRibbon).toHaveBeenCalledWith(0, 1);
+    await fireEvent.click(screen.getByText("Build"));
+    expect(buildRibbon).toHaveBeenCalledWith(); // no left/right args
+
     // Preview renders the ribbon (filled band) + its solved corner.
     const svg = (await screen.findByText("Save ribbon")).closest(".modal")!.querySelector("svg")!;
     expect(svg.querySelector("path")).toBeTruthy(); // the band
@@ -279,7 +279,7 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     await screen.findByText("First");
 
     await fireEvent.click(screen.getByText("(Re)generate map layout"));
-    await screen.findByText(/LEFT edge/i);
+    await screen.findByText(/full track width/i);
 
     await fireEvent.click(screen.getByText("Cancel capture"));
     expect(cancelMapCapture).toHaveBeenCalled();
@@ -290,7 +290,7 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     const { unmount } = render(TrackMapEditor, { props: { lapId: 7, open: true, pollMs: 5 } });
     await screen.findByText("First");
     await fireEvent.click(screen.getByText("(Re)generate map layout"));
-    await screen.findByText(/LEFT edge/i);
+    await screen.findByText(/full track width/i);
 
     unmount();
     expect(cancelMapCapture).toHaveBeenCalled();
@@ -300,7 +300,7 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     const { rerender } = render(TrackMapEditor, { props: { lapId: 7, open: true, pollMs: 5 } });
     await screen.findByText("First");
     await fireEvent.click(screen.getByText("(Re)generate map layout"));
-    await screen.findByText(/LEFT edge/i);
+    await screen.findByText(/full track width/i);
 
     await rerender({ lapId: 7, open: false });
     await waitFor(() => expect(cancelMapCapture).toHaveBeenCalled());

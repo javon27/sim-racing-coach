@@ -129,12 +129,12 @@
     }
   }
 
-  // --- "(Re)generate map layout": guided mapping capture -> ribbon preview.
-  type GenPhase = "off" | "left" | "right" | "designate" | "building" | "preview";
+  // --- "(Re)generate map layout": point-cloud capture -> ribbon preview.
+  // Drive across the full track width (weave to both edges) over any number of
+  // laps, then Build reconstructs the surface from the whole point cloud.
+  type GenPhase = "off" | "capturing" | "building" | "preview";
   let genPhase: GenPhase = $state("off");
   let capLaps: { idx: number; samples: number; length: number }[] = $state([]);
-  let leftIdx: number | null = $state(null);
-  let rightIdx: number | null = $state(null);
   let ribbon: RibbonPreview | null = $state(null);
   let genErr: string | null = $state(null);
   let pollTimer: ReturnType<typeof setInterval> | undefined;
@@ -147,8 +147,6 @@
     stopPoll();
     genPhase = "off";
     capLaps = [];
-    leftIdx = null;
-    rightIdx = null;
     ribbon = null;
     genErr = null;
   }
@@ -162,41 +160,32 @@
       return;
     }
     capLaps = [];
-    leftIdx = null;
-    rightIdx = null;
     ribbon = null;
-    genPhase = "left";
+    genPhase = "capturing";
     stopPoll();
     pollTimer = setInterval(pollGen, pollMs);
   }
 
   async function pollGen() {
     try {
-      const s = await mapCaptureStatus();
-      capLaps = s.laps;
-      if (genPhase === "left" && s.laps.length >= 1) {
-        leftIdx = s.laps[0].idx;
-        genPhase = "right";
-      } else if (genPhase === "right" && s.laps.length >= 2) {
-        rightIdx = s.laps[1].idx;
-        stopPoll();
-        genPhase = "designate";
-      }
+      capLaps = (await mapCaptureStatus()).laps;
     } catch {
       /* transient poll failure — keep waiting */
     }
   }
 
   async function buildGen() {
-    if (leftIdx == null || rightIdx == null) return;
+    if (capLaps.length < 1) return;
+    stopPoll();
     genPhase = "building";
     genErr = null;
     try {
-      ribbon = await buildRibbon(leftIdx, rightIdx);
+      ribbon = await buildRibbon();
       genPhase = "preview";
     } catch {
       genErr = "Couldn't reconstruct the ribbon from those laps.";
-      genPhase = "designate";
+      genPhase = "capturing";
+      pollTimer = setInterval(pollGen, pollMs);
     }
   }
 
@@ -522,35 +511,21 @@
         <button type="button" class="x" aria-label="Close" onclick={close}>×</button>
       </header>
 
-      {#if genPhase === "left" || genPhase === "right" || genPhase === "designate" || genPhase === "building"}
+      {#if genPhase === "capturing" || genPhase === "building"}
         <div class="genpanel">
-          <h3>Generate map layout from boundary laps</h3>
-          {#if genPhase === "left"}
-            <p class="step"><b>Step 1 — LEFT edge.</b> Drive one slow lap hugging the <b>left</b>
-              boundary of the track. Waiting for a completed lap…</p>
-          {:else if genPhase === "right"}
-            <p class="step"><b>Left edge captured.</b> Step 2 — <b>RIGHT edge</b>. Drive a slow lap
-              hugging the <b>right</b> boundary. Waiting for a completed lap…</p>
-          {:else if genPhase === "building"}
-            <p class="step">Reconstructing the track ribbon…</p>
+          <h3>Generate map layout</h3>
+          {#if genPhase === "building"}
+            <p class="step">Reconstructing the track surface…</p>
           {:else}
-            <p class="step">Both edges captured. Confirm which buffered lap is which, then build.</p>
-            <label>Left edge lap
-              <select bind:value={leftIdx} aria-label="Left edge lap">
-                {#each capLaps as l (l.idx)}<option value={l.idx}>Lap {l.idx} · {l.samples} pts</option>{/each}
-              </select>
-            </label>
-            <label>Right edge lap
-              <select bind:value={rightIdx} aria-label="Right edge lap">
-                {#each capLaps as l (l.idx)}<option value={l.idx}>Lap {l.idx} · {l.samples} pts</option>{/each}
-              </select>
-            </label>
+            <p class="step">Drive across the full track width (weave to both edges) for as many laps
+              as you like, then Build. Two laps is the minimum; more/denser passes give truer edges
+              and camber.</p>
             <button
               type="button"
               class="primary"
               onclick={buildGen}
-              disabled={leftIdx == null || rightIdx == null || leftIdx === rightIdx}
-            >Build ribbon</button>
+              disabled={capLaps.length < 1}
+            >Build</button>
           {/if}
           {#if capLaps.length}<p class="cap">{capLaps.length} lap(s) buffered</p>{/if}
         </div>
@@ -902,13 +877,6 @@
   .genpanel .step {
     margin: 0;
     line-height: 1.5;
-  }
-  .genpanel label {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    font-size: 12px;
-    color: var(--faint);
   }
   .genpanel .cap {
     margin: 0;

@@ -270,11 +270,13 @@ export function mapCaptureStatus(): Promise<MapCaptureStatus> {
   return request<MapCaptureStatus>("/mapcapture/status");
 }
 
-export function buildRibbon(left: number, right: number): Promise<RibbonPreview> {
+// Reconstructs the surface from the whole captured point cloud (no left/right
+// designation). JSON_HEADERS kept for the CSRF preflight.
+export function buildRibbon(): Promise<RibbonPreview> {
   return request<RibbonPreview>("/mapcapture/build", {
     method: "POST",
     headers: JSON_HEADERS,
-    body: JSON.stringify({ left, right }),
+    body: JSON.stringify({}),
   });
 }
 
