@@ -476,6 +476,35 @@ def test_mapcapture_build_empty_buffer_is_422(tmp_path):
     assert _tc(app).post("/mapcapture/build", json={}).status_code == 422  # nothing captured
 
 
+def test_mapcapture_build_single_pass_is_422(tmp_path):
+    app, _ = _map_app(tmp_path)
+    app.state.map_buffer = [_edge("MapTrack", 1, 100.0)]  # only one pass
+    assert _tc(app).post("/mapcapture/build", json={}).status_code == 422
+
+
+def test_put_map_preserves_saved_ribbon(tmp_path):
+    # After a ribbon save, a corner-name edit must keep the ribbon + its centerline
+    # (not revert path to the racing-line average).
+    app, store = _map_app(tmp_path)
+    tracks = tmp_path / "tracks"
+    app.state.latest = {"record": _edge("MapTrack", 1, 100.0), "lap_id": 0}
+    app.state.map_buffer = [_edge("MapTrack", 1, 100.0), _edge("MapTrack", -1, 100.0)]
+    c = _tc(app)
+    c.post("/mapcapture/build", json={})
+    c.post("/mapcapture/save", json={})
+    saved = json.loads((tracks / "maptrack.json").read_text())
+    center = saved["path"]
+    assert "ribbon" in saved
+
+    lid = store.save(_edge("MapTrack", 1, 100.0))
+    r = c.put(f"/laps/{lid}/map", json={"corners": [{"number": 1, "name": "Edited", "apex_dist": 50.0}]})
+    assert r.status_code == 200
+    after = json.loads((tracks / "maptrack.json").read_text())
+    assert "ribbon" in after                 # ribbon preserved across the edit
+    assert after["path"] == center           # centerline kept, not re-averaged
+    assert after["corners"][0]["name"] == "Edited"
+
+
 def test_mapcapture_build_returns_ribbon_shape(tmp_path):
     # Whole-buffer point cloud, no left/right designation.
     app, _ = _map_app(tmp_path)

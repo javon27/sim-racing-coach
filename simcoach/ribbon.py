@@ -77,10 +77,11 @@ def reconstruct_ribbon(left_channels: dict, right_channels: dict, bins: int = 50
     width = np.hypot(lx - rx, lz - rz)
     seg = np.hypot(np.diff(cx), np.diff(cz))
     dist = np.concatenate([[0.0], np.cumsum(seg)])
-    # Bank angle from elevation: outer edge higher than inner -> banked. atan2
-    # handles width->0. Missing pos_y on either edge -> flat (all zeros).
+    # Bank from elevation. Convention MATCHES reconstruct_surface: positive = the
+    # RIGHT edge is higher (surface fits y vs +lateral offset). atan2 handles
+    # width->0; missing pos_y -> flat. Sign still rig-unverified on a banked track.
     if ly is not None and ry is not None:
-        bank = np.arctan2(ly - ry, np.maximum(width, 1e-9))
+        bank = np.arctan2(ry - ly, np.maximum(width, 1e-9))
     else:
         bank = np.zeros(len(grid))
 
@@ -178,7 +179,14 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
     # untrustworthy -> refill it closed-loop from neighbours across the wrap.
     solid = (cnt >= 2) & np.isfinite(wid)
     med = float(np.median(wid[solid])) if solid.any() else 0.0
-    bad = (cnt < 2) | (med > 0) & (wid < 0.5 * med)
+    # Narrow-width stitch ONLY near the S/F seam (first/last ~3% of bins, the wrap
+    # region where the crossing collapses width). Elsewhere a narrow bin is a real
+    # tight corner (you weave less through it) -- stitch it only if it's SPARSE,
+    # never for being narrow, or we'd flatten genuine apexes.
+    seam = np.zeros(bins, dtype=bool)
+    w = max(1, int(round(bins * 0.03)))
+    seam[:w] = True; seam[-w:] = True
+    bad = (cnt < 2) | (seam & (med > 0) & (wid < 0.5 * med))
     if (~bad).any():  # need at least one trustworthy bin to stitch from
         for arr in (lx, lz, rx, rz, wid, bnk):
             arr[bad] = np.nan

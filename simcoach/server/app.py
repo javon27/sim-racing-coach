@@ -437,10 +437,19 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         except (KeyError, FileNotFoundError):
             raise HTTPException(404, "lap not found")
 
-        laps = _clean_lap_channels(rec.track, rec.car)
-        path, dist = average_racing_line(laps) if laps else ([], [])
-        if not path:
-            raise HTTPException(422, "no clean laps with position telemetry to build an outline")
+        # If the track already has a reconstructed ribbon, its centerline IS the
+        # canonical geometry -- keep it (and re-derive direction on it), don't
+        # revert path to the racing-line average on a corner/label/section edit.
+        existing = _track_file_data(rec.track)
+        keep_ribbon = existing.get("ribbon")
+        ep, epd = existing.get("path"), existing.get("path_dist")
+        if keep_ribbon and isinstance(ep, list) and ep and isinstance(epd, list) and len(ep) == len(epd):
+            path, dist = ep, epd
+        else:
+            laps = _clean_lap_channels(rec.track, rec.car)
+            path, dist = average_racing_line(laps) if laps else ([], [])
+            if not path:
+                raise HTTPException(422, "no clean laps with position telemetry to build an outline")
         length = float(dist[-1])
 
         raw_corners = body.get("corners")
@@ -520,6 +529,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             "length": length,
             "rotation": _track_rotation(rec.track),  # preserve existing rotation
         }
+        if keep_ribbon:
+            out["ribbon"] = keep_ribbon  # keep the reconstructed surface across edits
         _write_track_json(rec.track, out)
         # Invalidate cmap + canonical caches so the next GET returns the new
         # canonical map (now frozen into the file).
@@ -634,8 +645,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # Reconstruct from the ENTIRE buffer as a point cloud -- no left/right
         # designation. Body {} (Body(...) still required for the CSRF preflight).
         buf = app.state.map_buffer
-        if not buf:
-            raise HTTPException(422, "no mapping laps captured yet")
+        if len(buf) < 2:
+            raise HTTPException(422, "need at least 2 passes across the width")
         ribbon = reconstruct_surface([r.channels for r in buf])
         if not ribbon:
             raise HTTPException(422, "mapping laps lack position telemetry")

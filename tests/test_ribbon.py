@@ -50,15 +50,29 @@ def test_reconstruct_surface_stitches_sparse_seam():
     # Two edge passes that hug ±5 in the middle but CONVERGE to ~0 at S/F (the
     # transitional crossing) -> the seam bins are narrow. Closed-loop stitching
     # must refill them from neighbours so the ribbon stays continuous.
-    def edge(sign, n=400):
+    def edge(sign, n=800):
         x = np.linspace(0.0, 400.0, n)
-        z = np.where((x >= 40) & (x <= 360), sign * 5.0, 0.0)  # edge mid-lap, crossing at S/F
+        z = np.where((x >= 12) & (x <= 388), sign * 5.0, 0.0)  # ~3% crossing at S/F
         return {"pos_x": x, "pos_z": z, "lap_distance": x.copy()}
 
     r = reconstruct_surface([edge(1), edge(-1)], bins=50)
     assert abs(r["width"][25] - 10.0) < 1.0   # mid-lap full width
     assert r["width"][0] > 5.0                # seam bin stitched, not the ~0 crossing
     assert r["width"][-1] > 5.0
+
+
+def test_reconstruct_surface_keeps_narrow_midlap_corner():
+    # Passes spread on the straights but converge to one line in a mid-lap band
+    # (a tight corner). That bin is narrow but WELL-SAMPLED and NOT at the seam,
+    # so it must stay narrow -- not stitched/widened (that would flatten the apex).
+    def pass_(off, n=400):
+        x = np.linspace(0.0, 400.0, n)
+        z = np.where((x >= 180) & (x <= 220), 0.0, off)  # everyone takes the same corner line
+        return {"pos_x": x, "pos_z": z, "lap_distance": x.copy()}
+
+    r = reconstruct_surface([pass_(o) for o in (-4.0, -1.0, 2.0, 5.0)], bins=50)
+    assert r["width"][25] < 1.0   # mid-lap corner stays narrow (not widened to ~9)
+    assert r["width"][10] > 5.0   # a straight bin keeps the full weave spread
 
 
 def _edge(zconst, dist_max):
@@ -91,7 +105,8 @@ def test_reconstruct_ribbon_bank_from_elevation():
     left = {**_edge(5.0, 100.0), "pos_y": np.full(3, 2.0)}
     right = {**_edge(-5.0, 100.0), "pos_y": np.zeros(3)}
     ribbon = reconstruct_ribbon(left, right, bins=5)
-    expected = np.arctan2(2.0, 10.0)
+    # Convention: positive = RIGHT higher. Here LEFT is higher -> negative.
+    expected = np.arctan2(-2.0, 10.0)
     assert all(abs(b - expected) < 1e-3 for b in ribbon["bank"])  # bank stored at 4 dp
 
 
