@@ -106,6 +106,14 @@ REMAINING on the editor (deferred, not blockers):
 - [ ] **Direction real-data verify** (rig-gated) — `_LEFT_TURN_IS_CROSS_POSITIVE` pinned by synthetic test + indirect lat_g/steering check; `test_direction_monza_real` SKIPPED (no stored lap has `pos_x/pos_z` yet — capture started `2a43826`). RISK: shipped directions could be globally inverted until confirmed on a real pos lap.
 - [ ] **Manual portrait-track drag check** — CTM pointer transform isn't unit-testable in jsdom; one manual drag on a portrait track (world zrange>xrange) confirms letterbox snapping.
 
+## Startup: blank window flash on the wrong monitor (2026-09-04, LOW)
+On launch a blank white window flashes on the PRIMARY monitor before the saved window
+position/state loads on the secondary monitor. Cause: Tauri creates the window VISIBLE at the
+default position, then tauri-plugin-window-state moves it to the saved spot → visible flash.
+Fix: set the window `visible: false` in `src-tauri/tauri.conf.json`, then `show()` after the
+window-state position is restored AND the frontend has painted (an app-ready event), OR show a
+splash screen during load. Rust/Tauri shell change. Low priority.
+
 ## Future feature: track corner trainer (2026-09-04)
 As the user drives, call out the corner NAME in real time — overlay and/or voice — from our
 corner map (`corner_at(lap_distance) → name`, already exists). A learning aid for unfamiliar
