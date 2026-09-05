@@ -85,6 +85,18 @@ def test_solve_corners_finds_the_two_arcs():
         assert c["min_speed"] > 0.0
 
 
+def test_banking_raises_corner_speed():
+    left, right = _annulus()  # constant-radius corner
+    _, line = min_curvature_line(left, right, iterations=2000)
+    v_flat, _ = speed_profile(line, 1.5, 9.81, 14.0, 9.0)
+    bank = np.full(len(line), np.radians(20.0))  # 20 deg positive bank
+    v_banked, _ = speed_profile(line, 1.5, 9.81, 14.0, 9.0, bank=bank)
+    assert v_banked.mean() > v_flat.mean()
+    # bank=None and bank=zeros must match the flat case exactly
+    v_zero, _ = speed_profile(line, 1.5, 9.81, 14.0, 9.0, bank=np.zeros(len(line)))
+    assert np.allclose(v_zero, v_flat)
+
+
 def test_telem_calibration_raises_corner_speed_cap():
     left, right, _ = _stadium_edges()
     base = solve_corners(left, right)  # defaults: mu = 1.5

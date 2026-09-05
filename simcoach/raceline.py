@@ -81,12 +81,14 @@ def min_curvature_line(left_edge, right_edge, iterations=300, relax=0.2):
     return alpha, left + alpha[:, None] * lateral
 
 
-def speed_profile(line, mu, g, a_brake, a_accel):
+def speed_profile(line, mu, g, a_brake, a_accel, bank=None):
     """Friction-circle point-mass speed profile over a closed line.
 
-    Cornering cap v_cap = sqrt(mu*g / kappa), then a backward pass limiting
-    braking to a_brake and a forward pass limiting accel to a_accel. Two loops
-    around so the limits propagate across the start/finish seam.
+    Cornering cap v_cap = sqrt(g*r*(mu + tanθ)/(1 - mu*tanθ)) where r = 1/kappa
+    and θ is the per-station bank angle (radians); flat (bank None/zeros) reduces
+    to sqrt(mu*g*r). Then a backward pass limiting braking to a_brake and a
+    forward pass limiting accel to a_accel. Two loops around so the limits
+    propagate across the start/finish seam.
 
     Returns (v, curvature), both shape (N,). v in m/s, curvature in 1/m.
     # ponytail: simple longitudinal caps, not a true traction-budget friction
@@ -97,7 +99,12 @@ def speed_profile(line, mu, g, a_brake, a_accel):
     n = len(line)
     kappa = _curvature(line)
     seg = _seg_lengths(line)                         # seg[i] = dist from i to i+1
-    v = np.sqrt(mu * g / np.maximum(kappa, _EPS))    # cornering cap
+    r = 1.0 / np.maximum(kappa, _EPS)
+    tan_t = np.zeros(n) if bank is None else np.tan(np.asarray(bank, dtype=float))
+    # banked friction-circle cap; clamp denominator when mu*tanθ -> 1 (grip
+    # dominated by banking, cap would blow up) to a large but finite value.
+    denom = np.maximum(1.0 - mu * tan_t, 1e-3)
+    v = np.sqrt(g * r * (mu + tan_t) / denom)        # cornering cap
 
     for _ in range(2):
         for i in range(n - 1, -1, -1):               # backward: brake into i from i+1
@@ -152,7 +159,7 @@ def _calibrate(car, telem):
     return replace(car, mu=mu, a_brake=a_brake, a_accel=a_accel)
 
 
-def solve_corners(left_edge, right_edge, car=CarParams(), telem=None):
+def solve_corners(left_edge, right_edge, car=CarParams(), telem=None, bank=None):
     """Solve the line + speed profile and return a first-pass corner set.
 
     Optionally calibrates ``car`` from ``telem`` (a channels dict with lat_g /
@@ -171,7 +178,7 @@ def solve_corners(left_edge, right_edge, car=CarParams(), telem=None):
         car = _calibrate(car, telem)
 
     alpha, line = min_curvature_line(left_edge, right_edge)
-    v, kappa = speed_profile(line, car.mu, car.g, car.a_brake, car.a_accel)
+    v, kappa = speed_profile(line, car.mu, car.g, car.a_brake, car.a_accel, bank=bank)
     dist = _dist_along(line)
 
     # A corner = a contiguous region where speed drops well below cruise. The
