@@ -142,6 +142,84 @@ def _runs(mask):
     return runs
 
 
+def _smooth_closed(x, win):
+    """Closed-loop boxcar moving average (wrap the seam). win<=1 -> unchanged."""
+    if win <= 1:
+        return x
+    k = np.ones(win) / win
+    pad = np.concatenate([x[-win:], x, x[:win]])
+    return np.convolve(pad, k, "same")[win:-win]
+
+
+def _split_run_apexes(kv, min_prom):
+    """Apex offsets within one curvature run (1D values kv). Local maxima whose
+    separating valley is shallower than min_prom are MERGED (one corner); a valley
+    with real prominence SPLITS (e.g. a chicane's two apexes). A flat plateau (a
+    long constant-radius sweeper) has no prominent valley -> a single centered apex,
+    so it isn't chopped into several corners."""
+    m = len(kv)
+    if m == 1:
+        return [0]
+    maxima = [i for i in range(m)
+              if kv[i] >= kv[i - 1 if i > 0 else 0] and kv[i] >= kv[i + 1 if i < m - 1 else m - 1]]
+    if not maxima:
+        return [int(np.argmax(kv))]
+    groups = [[maxima[0]]]
+    for mi in maxima[1:]:
+        prev = groups[-1][-1]
+        valley = float(np.min(kv[prev:mi + 1]))
+        if min(kv[prev], kv[mi]) - valley >= min_prom:
+            groups.append([mi])                       # prominent valley -> new corner
+        else:
+            groups[-1].append(mi)                     # same corner
+    out = []
+    for g in groups:
+        peak = max(kv[i] for i in g)
+        flat = [i for i in g if kv[i] >= peak - 1e-9]  # center a plateau's apex
+        out.append(flat[len(flat) // 2])
+    return out
+
+
+def _detect_apexes(kappa, kappa_min, min_prom):
+    """Apex stations: contiguous runs of kappa >= kappa_min (closed loop), each
+    split into corners by curvature prominence. Detects a corner wherever the track
+    bends -- fast corners included -- while keeping a sustained arc as one."""
+    n = len(kappa)
+    apexes: list[int] = []
+    for start, end in _runs(kappa >= kappa_min):
+        seg = [start] if start == end else \
+            [i % n for i in range(start, (end if end >= start else end + n) + 1)]
+        kv = np.array([kappa[i] for i in seg])
+        for off in _split_run_apexes(kv, min_prom):
+            apexes.append(seg[off])
+    return sorted(set(apexes))
+
+
+def _corner_window(kappa, apex, n, max_half):
+    """Entry/exit stations: walk out from the apex to the flanking curvature valleys
+    (while curvature is non-increasing), bounded to max_half stations each side.
+    Guarantees at least a +-1 window so the corner is never zero-length."""
+    si = apex
+    for _ in range(max_half):
+        p = (si - 1) % n
+        if kappa[p] <= kappa[si] and p != apex:
+            si = p
+        else:
+            break
+    ei = apex
+    for _ in range(max_half):
+        q = (ei + 1) % n
+        if kappa[q] <= kappa[ei] and q != apex:
+            ei = q
+        else:
+            break
+    if si == apex:
+        si = (apex - 1) % n
+    if ei == apex:
+        ei = (apex + 1) % n
+    return si, ei
+
+
 def _calibrate(car, telem):
     """Calibrate mu/a_brake/a_accel from observed telemetry peaks (g-unit channels)."""
     lat = np.abs(np.asarray(telem.get("lat_g", []), dtype=float))
@@ -159,56 +237,59 @@ def _calibrate(car, telem):
     return replace(car, mu=mu, a_brake=a_brake, a_accel=a_accel)
 
 
-def solve_corners(left_edge, right_edge, car=CarParams(), telem=None, bank=None):
-    """Solve the line + speed profile and return a first-pass corner set.
+def solve_corners(left_edge, right_edge, car=CarParams(), telem=None, bank=None,
+                  kappa_min=0.002, min_prom=0.0008, smooth_win=7):
+    """Detect a first-pass corner set from the reconstructed corridor.
 
-    Optionally calibrates ``car`` from ``telem`` (a channels dict with lat_g /
-    long_g / speed) before solving; falls back to CarParams defaults when None.
+    Apexes are CURVATURE maxima of the centerline (where the track bends), not
+    speed minima -- so fast corners (small speed drop) are found and adjacent
+    corners a single speed threshold would merge stay separate, while a sustained
+    constant-radius arc stays one corner (prominence split, not fixed spacing). A
+    speed profile over the min-curvature line still supplies each corner's
+    ``min_speed`` (calibrated from ``telem`` peak lat_g/long_g when given).
 
-    Corners are the speed minima of the solved line. For each returns
-    ``{apex_idx, start_idx, end_idx, apex_dist, start_dist, end_dist,
-    min_speed}``. The *_idx values are station indices (aligned with the input
-    edges / ribbon dist arrays) -- use these for placement. The *_dist values
-    are metres ALONG the shorter solved line from station 0 (min_speed in m/s);
-    start/end are the flanking speed peaks (cruise before braking / after).
+    Tunables (calibrated against driver-verified maps -- Algarve/Imola/Monza,
+    avg F1 ~0.91): ``kappa_min`` 1/m curvature floor (~1/500 m radius), ``min_prom``
+    curvature prominence to split adjacent corners, ``smooth_win`` boxcar stations.
 
-    # ponytail: a corner straddling the start/finish seam can report
-    # start_dist > end_dist. Fine for v0.1 (corners live away from the seam);
-    # normalise against total line length if a consumer needs monotonic windows.
+    Each corner: ``{apex_idx, start_idx, end_idx, apex_dist, start_dist, end_dist,
+    min_speed}``. The *_idx values are station indices aligned with the input
+    edges / ribbon dist arrays -- use these for placement. start>end is a valid
+    S/F-seam wrap; the window is never zero-length.
     """
     if telem is not None:
         car = _calibrate(car, telem)
 
-    alpha, line = min_curvature_line(left_edge, right_edge)
-    v, kappa = speed_profile(line, car.mu, car.g, car.a_brake, car.a_accel, bank=bank)
-    dist = _dist_along(line)
-
-    # A corner = a contiguous region where speed drops well below cruise. The
-    # threshold (halfway between the slowest and fastest point) is robust to the
-    # discretization ripple in v that trips up raw local-minima detection.
-    v_lo, v_hi = float(v.min()), float(v.max())
-    if v_hi - v_lo < 1e-6:                        # constant speed -> no distinct corner
+    left = np.asarray(left_edge, dtype=float)
+    right = np.asarray(right_edge, dtype=float)
+    n = len(left)
+    if n < 3:
         return []
-    threshold = v_lo + 0.5 * (v_hi - v_lo)
+    center = 0.5 * (left + right)
+
+    # Speed profile on the min-curvature line -> per-corner min_speed (bank-aware).
+    _, line = min_curvature_line(left, right)
+    v, _ = speed_profile(line, car.mu, car.g, car.a_brake, car.a_accel, bank=bank)
+
+    # Apex detection from centerline curvature.
+    kappa = _smooth_closed(_curvature(center), smooth_win)
+    seg = _seg_lengths(center)
+    dist = _dist_along(center)
+    length = float(dist[-1] + seg[-1])                # closed-loop total
+    apexes = _detect_apexes(kappa, kappa_min, min_prom)
+    max_half = max(1, int(round(80.0 / max(length, _EPS) * n)))  # window bound ~80 m/side
 
     corners = []
-    for start, end in _runs(v < threshold):
-        # apex = slowest station in the run (walk the run, wrapping the seam)
-        n = len(line)
-        idx = [start] if start == end else \
-            [i % n for i in range(start, (end if end >= start else end + n) + 1)]
-        apex = min(idx, key=lambda i: v[i])
+    for i in apexes:
+        si, ei = _corner_window(kappa, i, n, max_half)
         corners.append({
-            # station indices: left_edge[i]/right_edge[i] are station-aligned with
-            # the ribbon centerline/dist arrays, so the backend can place corners
-            # via ribbon["dist"][apex_idx] (avoids the shorter solved-line offset).
-            "apex_idx": int(apex),
-            "start_idx": int(start),
-            "end_idx": int(end),
-            "apex_dist": float(dist[apex]),
-            "start_dist": float(dist[start]),
-            "end_dist": float(dist[end]),
-            "min_speed": float(v[apex]),
+            "apex_idx": int(i),
+            "start_idx": int(si),
+            "end_idx": int(ei),
+            "apex_dist": float(dist[i]),
+            "start_dist": float(dist[si]),
+            "end_dist": float(dist[ei]),
+            "min_speed": float(v[i]),
         })
 
     corners.sort(key=lambda c: c["apex_dist"])

@@ -1,11 +1,27 @@
 import numpy as np
 
+import numpy as np
+
 from simcoach.raceline import (
     CarParams,
     min_curvature_line,
     speed_profile,
     solve_corners,
+    _split_run_apexes,
 )
+
+
+def test_split_run_apexes_prominence():
+    # Two bumps with a DEEP valley between -> two apexes (a chicane).
+    kv = np.array([0.0, 0.01, 0.0, 0.01, 0.0])
+    assert len(_split_run_apexes(kv, min_prom=0.005)) == 2
+    # Same two bumps but a SHALLOW valley (< prominence) -> merged to one corner.
+    kv2 = np.array([0.0, 0.01, 0.009, 0.01, 0.0])
+    assert len(_split_run_apexes(kv2, min_prom=0.005)) == 1
+    # A flat plateau (constant-radius sweeper) -> one apex, centered.
+    flat = np.full(9, 0.02)
+    out = _split_run_apexes(flat, min_prom=0.005)
+    assert out == [4]  # single apex at the plateau centre
 
 
 # --- synthetic corridors (world coords, closed loop, paired by station) ---
