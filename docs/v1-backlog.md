@@ -106,6 +106,15 @@ REMAINING on the editor (deferred, not blockers):
 - [ ] **Direction real-data verify** (rig-gated) — `_LEFT_TURN_IS_CROSS_POSITIVE` pinned by synthetic test + indirect lat_g/steering check; `test_direction_monza_real` SKIPPED (no stored lap has `pos_x/pos_z` yet — capture started `2a43826`). RISK: shipped directions could be globally inverted until confirmed on a real pos lap.
 - [ ] **Manual portrait-track drag check** — CTM pointer transform isn't unit-testable in jsdom; one manual drag on a portrait track (world zrange>xrange) confirms letterbox snapping.
 
+## Ribbon-preview rotation not persisted on first Save (2026-09-05, LOW)
+Review finding: in the fresh-ribbon flow the preview rotates by the dialed `angle`, but
+`mapcapture_save` (app.py ~665) writes `rotation: _track_rotation(track)` (the pre-existing
+value), not the dialed `angle` — so a rotation set during a first-time ribbon preview is shown
+but lost on Save (reappears only after a later `POST /laps/{id}/rotation`). Fix: thread the
+dialed rotation into `saveRibbon`/`mapcapture_save`. Cosmetic; ribbon-first-save only.
+(Also INFO, no action: analysis.py multi-apex midpoint boundary is inclusive both sides
+[min-only, no effect]; a hand-edited file with UNSORTED apexes falls back gracefully — save/solver always sort.)
+
 ## Startup: blank window flash on the wrong monitor (2026-09-04, LOW)
 On launch a blank white window flashes on the PRIMARY monitor before the saved window
 position/state loads on the secondary monitor. Cause: Tauri creates the window VISIBLE at the
