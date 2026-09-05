@@ -8,6 +8,7 @@
 
   let activeTab: "corners" | "setup" | "map" = $state("corners");
   let editing = $state(false);
+  let mapNonce = $state(0); // bump to force TrackMap to re-fetch after an edit save
 </script>
 
 <div class="tabs">
@@ -49,9 +50,16 @@
     <div class="map-actions">
       <button type="button" onclick={() => (editing = true)}>Edit map</button>
     </div>
-    <TrackMapEditor lapId={lapId} open={editing} onClose={() => (editing = false)} />
+    <TrackMapEditor
+      lapId={lapId}
+      open={editing}
+      onClose={() => (editing = false)}
+      onSaved={() => (mapNonce += 1)}
+    />
   {/if}
-  <TrackMap {lapId} />
+  {#key mapNonce}
+    <TrackMap {lapId} />
+  {/key}
 {/if}
 
 <style>

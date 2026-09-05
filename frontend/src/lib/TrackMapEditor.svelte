@@ -37,7 +37,8 @@
     lapId,
     open = false,
     onClose,
-  }: { lapId: number; open?: boolean; onClose?: () => void } = $props();
+    onSaved,
+  }: { lapId: number; open?: boolean; onClose?: () => void; onSaved?: () => void } = $props();
 
   type EditCorner = {
     number: number;
@@ -124,13 +125,17 @@
     return `${x + dx * len},${y + dy * len} ${x + px * wid},${y + py * wid} ${x - px * wid},${y - py * wid}`;
   }
 
-  // Pointer client coords -> viewBox coords. viewBox is 0 0 width height with
-  // preserveAspectRatio meet, so the fitted box scales uniformly.
+  // Pointer client coords -> viewBox coords via the SVG's own CTM, which
+  // accounts for preserveAspectRatio letterboxing (portrait tracks are taller
+  // than the fitted box). jsdom has no CTM, so guard for null.
   function toViewBox(clientX: number, clientY: number): [number, number] {
-    if (!svgEl || !map) return [0, 0];
-    const r = svgEl.getBoundingClientRect();
-    if (!r.width || !r.height) return [0, 0];
-    return [((clientX - r.left) / r.width) * map.width, ((clientY - r.top) / r.height) * map.height];
+    const ctm = svgEl?.getScreenCTM?.();
+    if (!svgEl || !ctm) return [0, 0];
+    const pt = svgEl.createSVGPoint();
+    pt.x = clientX;
+    pt.y = clientY;
+    const v = pt.matrixTransform(ctm.inverse());
+    return [v.x, v.y];
   }
 
   function onPointerMove(e: PointerEvent) {
@@ -185,6 +190,7 @@
         sectors,
       });
       applyMap(res);
+      onSaved?.();
     } catch {
       error = "Save failed.";
     } finally {
