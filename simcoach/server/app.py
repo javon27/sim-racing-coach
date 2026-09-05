@@ -27,7 +27,7 @@ from ..lmu.ingest import ingest_all
 from ..model.factory import CoachUserError, make_model
 from ..tiers import legal_adjustments
 from ..corners import CornerMap
-from ..ribbon import multi_signal_direction, reconstruct_ribbon, ribbon_to_screen
+from ..ribbon import multi_signal_direction, reconstruct_surface, ribbon_to_screen
 from ..track_lookup import track_slug
 from ..trackmap import average_racing_line, build_track_map, direction_from_path
 
@@ -631,29 +631,25 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
 
     @app.post("/mapcapture/build")
     def mapcapture_build(body: dict = Body(...)):
+        # Reconstruct from the ENTIRE buffer as a point cloud -- no left/right
+        # designation. Body {} (Body(...) still required for the CSRF preflight).
         buf = app.state.map_buffer
-        try:
-            li, ri = int(body["left"]), int(body["right"])
-        except (KeyError, TypeError, ValueError):
-            raise HTTPException(422, "left/right must be integers")
-        # Reject negatives (Python would wrap buf[-1]) and left==right (degenerate
-        # zero-width ribbon).
-        if not (0 <= li < len(buf) and 0 <= ri < len(buf)) or li == ri:
-            raise HTTPException(422, "left/right must be distinct valid buffer indices")
-        left_rec, right_rec = buf[li], buf[ri]
-        ribbon = reconstruct_ribbon(left_rec.channels, right_rec.channels)
+        if not buf:
+            raise HTTPException(422, "no mapping laps captured yet")
+        ribbon = reconstruct_surface([r.channels for r in buf])
         if not ribbon:
-            raise HTTPException(422, "boundary laps lack position telemetry")
-        corners = _place_corners(ribbon, left_rec.channels)
-        extras = _track_file_data(left_rec.track)
+            raise HTTPException(422, "mapping laps lack position telemetry")
+        track = buf[0].track
+        corners = _place_corners(ribbon, buf[0].channels)
+        extras = _track_file_data(track)
         sectors = extras.get("sectors") or []
         sections = extras.get("sections") or []
-        # Pin the track from the buffered lap NOW: the sim may change track between
-        # build and save, and the geometry belongs to this lap's track.
+        # Pin the track from the buffered laps NOW: the sim may change track between
+        # build and save, and the geometry belongs to this track.
         app.state.last_ribbon = {"world": ribbon, "corners": corners, "sectors": sectors,
-                                 "sections": sections, "track": left_rec.track}
+                                 "sections": sections, "track": track}
         return _clean(ribbon_to_screen(ribbon, corners, sectors,
-                                       rotation=_track_rotation(left_rec.track), sections=sections))
+                                       rotation=_track_rotation(track), sections=sections))
 
     @app.post("/mapcapture/save")
     def mapcapture_save(body: dict = Body(...)):

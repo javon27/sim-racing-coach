@@ -97,6 +97,97 @@ def reconstruct_ribbon(left_channels: dict, right_channels: dict, bins: int = 50
     }
 
 
+def _fill_nan(a: np.ndarray) -> np.ndarray:
+    """Linear-interpolate NaN gaps (sparse/empty bins) from finite neighbours."""
+    idx = np.arange(len(a))
+    good = np.isfinite(a)
+    if good.sum() == 0:
+        return a
+    a = a.copy()
+    a[~good] = np.interp(idx[~good], idx[good], a[good])
+    return a
+
+
+def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
+    """Reconstruct the track from a POINT CLOUD of free-driving passes (no left/right
+    designation). Pools every lap's (pos_x, pos_z, pos_y, lap_distance), bins by
+    lap_distance, bootstraps a centerline (per-bin mean), then takes the lateral
+    ENVELOPE per bin. Returns the same shape as reconstruct_ribbon
+    {left, right, center, width, bank, dist}, or {} with no usable data.
+
+    # ponytail: one-pass centerline (no refine-iterate) + nearest-bin assignment +
+    # O(bins*N) per-bin loop -- naive/quick, fine for a few passes; a refine loop
+    # and vectorized binning are the upgrade if accuracy/scale demands. bank sign
+    # follows a fixed perpendicular convention -- rig-verify on a real banked track.
+    """
+    xs, zs, ys, ds = [], [], [], []
+    for ch in laps:
+        if not all(k in ch for k in ("pos_x", "pos_z", "lap_distance")):
+            continue
+        x = np.asarray(ch["pos_x"], dtype=float)
+        z = np.asarray(ch["pos_z"], dtype=float)
+        d = np.asarray(ch["lap_distance"], dtype=float)
+        y = np.asarray(ch["pos_y"], dtype=float) if "pos_y" in ch else np.full(len(x), np.nan)
+        n = min(len(x), len(z), len(d), len(y))
+        m = np.isfinite(x[:n]) & np.isfinite(z[:n]) & np.isfinite(d[:n])
+        if m.sum() < 1:
+            continue
+        xs.append(x[:n][m]); zs.append(z[:n][m]); ys.append(y[:n][m]); ds.append(d[:n][m])
+    if not xs:
+        return {}
+    X, Z, Y, D = np.concatenate(xs), np.concatenate(zs), np.concatenate(ys), np.concatenate(ds)
+    max_len = float(D.max())
+    if len(X) < 2 or max_len <= 0:
+        return {}
+
+    dist_grid = np.linspace(0.0, max_len, bins)
+    bi = np.clip(np.round(D / max_len * (bins - 1)).astype(int), 0, bins - 1)
+    members = [np.where(bi == b)[0] for b in range(bins)]
+
+    # Bootstrap centerline = per-bin mean (x, z); fill empty bins by interpolation.
+    cx = np.array([X[mm].mean() if mm.size else np.nan for mm in members])
+    cz = np.array([Z[mm].mean() if mm.size else np.nan for mm in members])
+    cx, cz = _fill_nan(cx), _fill_nan(cz)
+
+    # Tangent by centered finite diff (closed loop); lateral unit = tangent rot +90.
+    tx, tz = np.roll(cx, -1) - np.roll(cx, 1), np.roll(cz, -1) - np.roll(cz, 1)
+    tn = np.hypot(tx, tz); tn[tn == 0] = 1.0
+    lat_x, lat_z = -tz / tn, tx / tn
+
+    left, right, center, width, bank = [], [], [], [], []
+    for b in range(bins):
+        mm = members[b]
+        cpt = [cx[b], cz[b]]
+        if mm.size == 0:
+            left.append(cpt); right.append(cpt); center.append(cpt)
+            width.append(0.0); bank.append(0.0)
+            continue
+        off = (X[mm] - cx[b]) * lat_x[b] + (Z[mm] - cz[b]) * lat_z[b]
+        i_lo, i_hi = int(off.argmin()), int(off.argmax())
+        left.append([X[mm][i_lo], Z[mm][i_lo]])
+        right.append([X[mm][i_hi], Z[mm][i_hi]])
+        center.append(cpt)
+        width.append(float(off[i_hi] - off[i_lo]))
+        yb = Y[mm]
+        fin = np.isfinite(yb)
+        if fin.sum() >= 2 and np.ptp(off[fin]) > 1e-6:
+            bank.append(float(np.arctan(np.polyfit(off[fin], yb[fin], 1)[0])))
+        else:
+            bank.append(0.0)
+
+    def _pair(p):
+        return [round(float(p[0]), 2), round(float(p[1]), 2)]
+
+    return {
+        "left": [_pair(p) for p in left],
+        "right": [_pair(p) for p in right],
+        "center": [_pair(p) for p in center],
+        "width": [round(w, 2) for w in width],
+        "bank": [round(b, 4) for b in bank],
+        "dist": [round(float(d), 2) for d in dist_grid],
+    }
+
+
 def _edge_mean(channels: dict, name: str, apex_progress: float, half: float) -> float | None:
     """Mean of an edge lap's channel over a window around a corner, located by
     normalized progress (the edge lap's own lap_distance axis differs from the

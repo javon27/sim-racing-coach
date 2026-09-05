@@ -4,8 +4,46 @@ import pytest
 from simcoach.ribbon import (
     multi_signal_direction,
     reconstruct_ribbon,
+    reconstruct_surface,
     ribbon_to_screen,
 )
+
+
+def _pass(zoff, yconst=None, n=200):
+    # A straight free-driving pass along +x at lateral offset zoff (+ optional height).
+    x = np.linspace(0.0, 400.0, n)
+    ch = {"pos_x": x, "pos_z": np.full(n, zoff), "lap_distance": x.copy()}
+    if yconst is not None:
+        ch["pos_y"] = np.full(n, yconst)
+    return ch
+
+
+def test_reconstruct_surface_straight_envelope():
+    # Several passes spread across a straight -> flat center, width = spread, bank~0.
+    laps = [_pass(z, 0.0) for z in (-4.0, -1.0, 2.0, 5.0)]
+    r = reconstruct_surface(laps, bins=50)
+    # centerline ~ mean offset ((-4-1+2+5)/4 = 0.5); width ~ spread (5 - -4 = 9).
+    mid = r["width"][len(r["width"]) // 2]
+    assert abs(mid - 9.0) < 0.5
+    assert all(abs(b) < 1e-6 for b in r["bank"])          # flat -> no bank
+    assert len(r["left"]) == len(r["right"]) == len(r["center"]) == 50
+
+
+def test_reconstruct_surface_bank_from_higher_outer_edge():
+    # Outer edge (positive lateral offset) is higher -> non-zero bank from the fit.
+    laps = [_pass(-4.0, 0.0), _pass(0.0, 0.5), _pass(4.0, 1.0)]  # y rises with +offset
+    r = reconstruct_surface(laps, bins=50)
+    mid = len(r["bank"]) // 2
+    assert abs(r["bank"][mid]) > 0.05      # detects the cross-slope
+
+
+def test_reconstruct_surface_single_pass_no_crash():
+    r = reconstruct_surface([_pass(0.0, 0.0)], bins=50)
+    assert r["center"] and all(w == 0.0 for w in r["width"])  # degenerate width, no crash
+
+
+def test_reconstruct_surface_empty_is_empty():
+    assert reconstruct_surface([{"lap_distance": np.arange(3.0)}]) == {}
 
 
 def _edge(zconst, dist_max):

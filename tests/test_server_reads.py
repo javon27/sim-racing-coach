@@ -471,27 +471,19 @@ def test_mapcapture_buffer_is_capped(tmp_path):
     assert len(app.state.map_buffer) == _MAP_BUFFER_MAX  # bounded, keeps last N
 
 
-def test_mapcapture_build_rejects_negative_and_equal_indices(tmp_path):
+def test_mapcapture_build_empty_buffer_is_422(tmp_path):
     app, _ = _map_app(tmp_path)
-    app.state.map_buffer = [_edge("MapTrack", 1, 100.0), _edge("MapTrack", -1, 100.0)]
-    c = _tc(app)
-    assert c.post("/mapcapture/build", json={"left": -1, "right": 0}).status_code == 422
-    assert c.post("/mapcapture/build", json={"left": 1, "right": 1}).status_code == 422
+    assert _tc(app).post("/mapcapture/build", json={}).status_code == 422  # nothing captured
 
 
 def test_mapcapture_build_returns_ribbon_shape(tmp_path):
+    # Whole-buffer point cloud, no left/right designation.
     app, _ = _map_app(tmp_path)
     app.state.map_buffer = [_edge("MapTrack", 1, 100.0), _edge("MapTrack", -1, 100.0)]
-    body = _tc(app).post("/mapcapture/build", json={"left": 0, "right": 1}).json()
+    body = _tc(app).post("/mapcapture/build", json={}).json()
     for k in ("width", "height", "left", "right", "center", "corners", "sectors"):
         assert k in body
     assert body["left"] and len(body["center"]) == len(body["left"])
-
-
-def test_mapcapture_build_bad_index_is_422(tmp_path):
-    app, _ = _map_app(tmp_path)
-    app.state.map_buffer = [_edge("MapTrack", 1, 100.0)]
-    assert _tc(app).post("/mapcapture/build", json={"left": 0, "right": 9}).status_code == 422
 
 
 def test_mapcapture_save_writes_track_json(tmp_path):
@@ -499,7 +491,7 @@ def test_mapcapture_save_writes_track_json(tmp_path):
     app.state.latest = {"record": _edge("MapTrack", 1, 100.0), "lap_id": 0}  # live track
     app.state.map_buffer = [_edge("MapTrack", 1, 100.0), _edge("MapTrack", -1, 100.0)]
     c = _tc(app)
-    c.post("/mapcapture/build", json={"left": 0, "right": 1})
+    c.post("/mapcapture/build", json={})
     # Sim changed track between build and save -> save must use the BUILT track.
     app.state.latest = {"record": _edge("OtherTrack", 1, 100.0), "lap_id": 1}
     r = c.post("/mapcapture/save", json={}).json()
