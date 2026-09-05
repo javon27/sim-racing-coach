@@ -15,6 +15,7 @@ import urllib.parse
 from dataclasses import asdict
 from pathlib import Path
 
+import numpy as np
 from fastapi import Body, FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse
 from starlette.middleware.cors import CORSMiddleware
@@ -64,6 +65,27 @@ def _clean(v):
     if isinstance(v, list):
         return [_clean(x) for x in v]
     return v
+
+
+_POS_CHANNELS = ("pos_x", "pos_y", "pos_z", "lap_distance")
+
+
+def _save_cloud(path, laps) -> None:
+    """Persist the raw mapping point cloud (pos_x/y/z + lap_distance per lap) so a
+    ribbon can be re-reconstructed after algorithm changes without re-driving."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    arrs = {f"lap{i}_{c}": np.asarray(ch[c]) for i, ch in enumerate(laps)
+            for c in _POS_CHANNELS if c in ch}
+    np.savez_compressed(str(path), **arrs)
+
+
+def _load_cloud(path) -> list[dict]:
+    z = np.load(str(path))
+    laps: dict = {}
+    for k in z.files:
+        i, c = k.split("_", 1)              # "lap3_lap_distance" -> ("lap3", "lap_distance")
+        laps.setdefault(i, {})[c] = z[k]
+    return [laps[i] for i in sorted(laps, key=lambda s: int(s[3:]))]
 
 
 def _capture_loop(source, store, app_state) -> None:
@@ -146,6 +168,11 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             if os.path.exists(tmp):
                 os.unlink(tmp)
             raise
+
+    def _capture_path(track: str) -> Path:
+        # Raw point cloud lives in app-data (store.data_dir), NOT the shipped tracks
+        # dir -- large + per-user, one file per track (latest capture wins).
+        return Path(store.data_dir) / "captures" / f"{track_slug(track)}.npz"
 
     def _track_file_data(track: str) -> dict:
         # Parsed shipped track file, or {} if missing/unreadable. Never raises.
@@ -655,10 +682,11 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         extras = _track_file_data(track)
         sectors = extras.get("sectors") or []
         sections = extras.get("sections") or []
-        # Pin the track from the buffered laps NOW: the sim may change track between
-        # build and save, and the geometry belongs to this track.
+        # Pin the track + raw laps NOW: the sim may change track between build and
+        # save, and save persists the raw cloud for later rebuilds.
+        raw = [{c: r.channels[c] for c in _POS_CHANNELS if c in r.channels} for r in buf]
         app.state.last_ribbon = {"world": ribbon, "corners": corners, "sectors": sectors,
-                                 "sections": sections, "track": track}
+                                 "sections": sections, "track": track, "laps": raw}
         return _clean(ribbon_to_screen(ribbon, corners, sectors,
                                        rotation=_track_rotation(track), sections=sections))
 
@@ -688,8 +716,34 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             "rotation": _track_rotation(track),  # preserve any existing rotation
         }
         _write_track_json(track, out)
+        # Persist the raw point cloud (app-data, not the repo tracks dir) so the
+        # ribbon can be rebuilt after algorithm changes with no re-drive.
+        if rib.get("laps"):
+            _save_cloud(_capture_path(track), rib["laps"])
         _invalidate_canon(track)
         return {"saved": True, "slug": track_slug(track)}
+
+    @app.post("/mapcapture/rebuild")
+    def mapcapture_rebuild(body: dict = Body(...)):
+        # Re-reconstruct from a track's SAVED raw cloud -- no active capture needed.
+        track = _live_track() or (app.state.last_ribbon or {}).get("track")
+        if not track:
+            raise HTTPException(422, "no live/selected track")
+        path = _capture_path(track)
+        if not path.exists():
+            raise HTTPException(422, "no saved capture for this track")
+        laps = _load_cloud(path)
+        ribbon = reconstruct_surface(laps)
+        if not ribbon:
+            raise HTTPException(422, "saved capture lacks position telemetry")
+        corners = _place_corners(ribbon, laps[0])
+        extras = _track_file_data(track)
+        sectors = extras.get("sectors") or []
+        sections = extras.get("sections") or []
+        app.state.last_ribbon = {"world": ribbon, "corners": corners, "sectors": sectors,
+                                 "sections": sections, "track": track, "laps": laps}
+        return _clean(ribbon_to_screen(ribbon, corners, sectors,
+                                       rotation=_track_rotation(track), sections=sections))
 
     @app.get("/setup")
     def setup():

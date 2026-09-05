@@ -127,19 +127,53 @@ def _smooth(a: np.ndarray, w: int) -> np.ndarray:
     return np.convolve(np.concatenate([a[-w:], a, a[:w]]), k, mode="valid")
 
 
-def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
-    """Reconstruct the track from a POINT CLOUD of free-driving passes (no left/right
-    designation). Pools every lap's (pos_x, pos_z, pos_y, lap_distance), bins by
-    lap_distance, bootstraps a centerline (per-bin mean), then takes the lateral
-    ENVELOPE per bin. Returns the same shape as reconstruct_ribbon
-    {left, right, center, width, bank, dist}, or {} with no usable data.
+def _lateral(cx: np.ndarray, cz: np.ndarray):
+    """Unit lateral (perpendicular to the centered-diff tangent, rot +90), closed loop."""
+    tx, tz = np.roll(cx, -1) - np.roll(cx, 1), np.roll(cz, -1) - np.roll(cz, 1)
+    tn = np.hypot(tx, tz); tn[tn == 0] = 1.0
+    return -tz / tn, tx / tn
 
-    # ponytail: one-pass centerline (no refine-iterate) + nearest-bin assignment +
-    # O(bins*N) per-bin loop -- naive/quick, fine for a few passes; a refine loop
-    # and vectorized binning are the upgrade if accuracy/scale demands. bank sign
-    # follows a fixed perpendicular convention -- rig-verify on a real banked track.
+
+def _lap_grid(x, z, d, max_len, bins):
+    """Resample one lap's (x, z) onto the shared lap_distance grid (per-bin mean),
+    empty bins filled closed-loop."""
+    bi = np.clip(np.round(d / max_len * (bins - 1)).astype(int), 0, bins - 1)
+    ex = np.array([x[bi == b].mean() if np.any(bi == b) else np.nan for b in range(bins)])
+    ez = np.array([z[bi == b].mean() if np.any(bi == b) else np.nan for b in range(bins)])
+    return _fill_nan(ex, period=bins), _fill_nan(ez, period=bins)
+
+
+def _bank_per_bin(X, Z, Y, members, ctr_x, ctr_z, lat_x, lat_z, bins):
+    """Cross-slope angle per bin from ALL samples: fit pos_y vs lateral offset.
+    Positive = right (+lateral) edge higher (matches reconstruct_ribbon)."""
+    bnk = np.full(bins, np.nan)
+    for b in range(bins):
+        mm = members[b]
+        if mm.size == 0:
+            continue
+        off = (X[mm] - ctr_x[b]) * lat_x[b] + (Z[mm] - ctr_z[b]) * lat_z[b]
+        yb, fin = Y[mm], np.isfinite(Y[mm])
+        if fin.sum() >= 2 and np.ptp(off[fin]) > 1e-6:
+            bnk[b] = np.arctan(np.polyfit(off[fin], yb[fin], 1)[0])
+    return _smooth(_fill_nan(bnk, period=bins), _SMOOTH_W)
+
+
+def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
+    """Reconstruct the track from free-driving passes. The two BOUND laps (most-
+    negative / most-positive mean lateral offset) build the EDGES; in-between
+    weaving laps only contribute elevation across the width. Returns
+    {left, right, center, width, bank, dist} (world), or {} with no usable data.
+
+    Falls back to the lateral-envelope of all samples when laps can't be cleanly
+    classified (all similar mean offset). bank fits pos_y vs offset over ALL
+    samples (that's what the weave is for).
+
+    # ponytail: nearest-bin assignment + O(bins*N) loops -- naive, fine for a few
+    # passes. bank sign is a fixed perpendicular convention -- rig-verify on a
+    # real banked track.
     """
-    xs, zs, ys, ds = [], [], [], []
+    xs, zs, ys, ds, slices = [], [], [], [], []
+    start = 0
     for ch in laps:
         if not all(k in ch for k in ("pos_x", "pos_z", "lap_distance")):
             continue
@@ -151,7 +185,9 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
         m = np.isfinite(x[:n]) & np.isfinite(z[:n]) & np.isfinite(d[:n])
         if m.sum() < 1:
             continue
+        cnt = int(m.sum())
         xs.append(x[:n][m]); zs.append(z[:n][m]); ys.append(y[:n][m]); ds.append(d[:n][m])
+        slices.append((start, start + cnt)); start += cnt
     if not xs:
         return {}
     X, Z, Y, D = np.concatenate(xs), np.concatenate(zs), np.concatenate(ys), np.concatenate(ds)
@@ -163,62 +199,67 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
     bi = np.clip(np.round(D / max_len * (bins - 1)).astype(int), 0, bins - 1)
     members = [np.where(bi == b)[0] for b in range(bins)]
 
-    # Bootstrap centerline = per-bin mean (x, z); fill empty bins by interpolation.
+    # Bootstrap centerline (mean of all), smooth, lateral from it.
     cx = np.array([X[mm].mean() if mm.size else np.nan for mm in members])
     cz = np.array([Z[mm].mean() if mm.size else np.nan for mm in members])
-    cx, cz = _fill_nan(cx), _fill_nan(cz)
+    cx, cz = _smooth(_fill_nan(cx), _SMOOTH_W), _smooth(_fill_nan(cz), _SMOOTH_W)
+    lat_x, lat_z = _lateral(cx, cz)
 
-    # SMOOTH the bootstrap centerline first, then take the tangent/lateral from it
-    # -- the per-bin mean jumps side-to-side with where the weaving lap sampled, so
-    # an unsmoothed center injects the dominant squiggle into everything downstream.
-    cx, cz = _smooth(cx, _SMOOTH_W), _smooth(cz, _SMOOTH_W)
-    tx, tz = np.roll(cx, -1) - np.roll(cx, 1), np.roll(cz, -1) - np.roll(cz, 1)
-    tn = np.hypot(tx, tz); tn[tn == 0] = 1.0
-    lat_x, lat_z = -tz / tn, tx / tn
-
-    # Per bin, keep only the lateral OFFSET envelope (scalars) + bank; edges are
-    # rebuilt on the smoothed normal, so they inherit the smooth center instead of
-    # jumping to raw sample xy.
-    off_lo, off_hi, bnk = np.full(bins, np.nan), np.full(bins, np.nan), np.full(bins, np.nan)
-    cnt = np.zeros(bins)
-    for b in range(bins):
-        mm = members[b]
-        cnt[b] = mm.size
-        if mm.size == 0:
-            continue
-        off = (X[mm] - cx[b]) * lat_x[b] + (Z[mm] - cz[b]) * lat_z[b]
-        off_lo[b], off_hi[b] = off.min(), off.max()
-        yb, fin = Y[mm], np.isfinite(Y[mm])
-        if fin.sum() >= 2 and np.ptp(off[fin]) > 1e-6:
-            bnk[b] = np.arctan(np.polyfit(off[fin], yb[fin], 1)[0])
-
-    wid = off_hi - off_lo
-    solid = (cnt >= 2) & np.isfinite(wid)
-    med = float(np.median(wid[solid])) if solid.any() else 0.0
-    # Stitch bad bins closed-loop: SPARSE anywhere, or NARROW only near the S/F seam
-    # (first/last ~3% -- the crossing collapses width there). A narrow mid-lap bin
-    # is a real tight corner (less weave), so it's kept, not flattened.
-    seam = np.zeros(bins, dtype=bool)
-    w = max(1, int(round(bins * 0.03)))
-    seam[:w] = True; seam[-w:] = True
-    bad = (cnt < 2) | (seam & (med > 0) & (wid < 0.5 * med))
-    if (~bad).any():
-        for arr in (off_lo, off_hi, bnk):
-            arr[bad] = np.nan
-            arr[:] = _fill_nan(arr, period=bins)
-        # Smooth the offset envelope + bank so straights stop squiggling; corner
-        # curvature (a sustained offset trend) survives a modest window.
-        off_lo, off_hi, bnk = _smooth(off_lo, _SMOOTH_W), _smooth(off_hi, _SMOOTH_W), _smooth(bnk, _SMOOTH_W)
-        lx, lz = cx + off_lo * lat_x, cz + off_lo * lat_z
-        rx, rz = cx + off_hi * lat_x, cz + off_hi * lat_z
+    # Classify laps by mean lateral offset: most-negative = LEFT, most-positive =
+    # RIGHT, the rest weave (elevation only). Edges from the bound laps directly.
+    off_all = (X - cx[bi]) * lat_x[bi] + (Z - cz[bi]) * lat_z[bi]
+    lap_means = np.array([off_all[a:b].mean() for a, b in slices])
+    total_spread = float(np.ptp(off_all))
+    if len(slices) >= 2 and total_spread > 0 and np.ptp(lap_means) > 0.2 * total_spread:
+        li, ri = int(lap_means.argmin()), int(lap_means.argmax())
+        a, b = slices[li]; lx, lz = _lap_grid(X[a:b], Z[a:b], D[a:b], max_len, bins)
+        a, b = slices[ri]; rx, rz = _lap_grid(X[a:b], Z[a:b], D[a:b], max_len, bins)
+        lx, lz, rx, rz = (_smooth(lx, _SMOOTH_W), _smooth(lz, _SMOOTH_W),
+                          _smooth(rx, _SMOOTH_W), _smooth(rz, _SMOOTH_W))
+        # Bound laps cross S/F mid-track, so the edges PINCH at the seam -> stitch
+        # those bins closed-loop from neighbours (same seam guard as the fallback).
+        wid = np.hypot(lx - rx, lz - rz)
+        med = float(np.median(wid))
+        seam = np.zeros(bins, dtype=bool)
+        w = max(1, int(round(bins * 0.03)))
+        seam[:w] = True; seam[-w:] = True
+        bad = seam & (med > 0) & (wid < 0.5 * med)
+        if bad.any() and (~bad).any():
+            for arr in (lx, lz, rx, rz):
+                arr[bad] = np.nan
+                arr[:] = _fill_nan(arr, period=bins)
+        ctr_x, ctr_z = _smooth((lx + rx) / 2.0, _SMOOTH_W), _smooth((lz + rz) / 2.0, _SMOOTH_W)
+        lat_x, lat_z = _lateral(ctr_x, ctr_z)
+        wid = np.hypot(lx - rx, lz - rz)
+    else:
+        # Fallback: lateral ENVELOPE of all samples (min/max offset per bin), with
+        # seam/sparse stitching, edges rebuilt on the smoothed normal.
+        cnt = np.array([mm.size for mm in members])
+        off_lo = np.array([off_all[mm].min() if mm.size else np.nan for mm in members])
+        off_hi = np.array([off_all[mm].max() if mm.size else np.nan for mm in members])
         wid = off_hi - off_lo
-    else:  # single pass / no envelope anywhere -> degenerate: centerline, zero width
-        lx, lz, rx, rz = cx.copy(), cz.copy(), cx.copy(), cz.copy()
-        wid = np.zeros(bins); bnk = np.zeros(bins)
-    # Center = envelope MIDPOINT (consistent with the edges), not the sample mean.
-    ctr_x, ctr_z = (lx + rx) / 2.0, (lz + rz) / 2.0
+        solid = (cnt >= 2) & np.isfinite(wid)
+        med = float(np.median(wid[solid])) if solid.any() else 0.0
+        seam = np.zeros(bins, dtype=bool)
+        w = max(1, int(round(bins * 0.03)))
+        seam[:w] = True; seam[-w:] = True
+        bad = (cnt < 2) | (seam & (med > 0) & (wid < 0.5 * med))
+        if (~bad).any():
+            for arr in (off_lo, off_hi):
+                arr[bad] = np.nan
+                arr[:] = _fill_nan(arr, period=bins)
+            off_lo, off_hi = _smooth(off_lo, _SMOOTH_W), _smooth(off_hi, _SMOOTH_W)
+            lx, lz = cx + off_lo * lat_x, cz + off_lo * lat_z
+            rx, rz = cx + off_hi * lat_x, cz + off_hi * lat_z
+            wid = off_hi - off_lo
+        else:  # single pass / no envelope -> degenerate centerline, zero width
+            lx, lz, rx, rz = cx.copy(), cz.copy(), cx.copy(), cz.copy()
+            wid = np.zeros(bins)
+        ctr_x, ctr_z = (lx + rx) / 2.0, (lz + rz) / 2.0
 
-    def _round(a, n):  # non-finite (e.g. bank with no elevation data) -> 0.0, JSON-safe
+    bnk = _bank_per_bin(X, Z, Y, members, ctr_x, ctr_z, lat_x, lat_z, bins)
+
+    def _round(a, n):  # non-finite (e.g. bank with no elevation) -> 0.0, JSON-safe
         return [round(float(v), n) if np.isfinite(v) else 0.0 for v in a]
 
     return {

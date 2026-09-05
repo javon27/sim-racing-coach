@@ -107,6 +107,23 @@ def test_reconstruct_surface_smooths_weave_straight():
     assert abs(r["width"][50] - 10.0) < 0.5                       # width = the true spread
 
 
+def test_reconstruct_surface_edges_from_bound_laps():
+    # left-hug + right-hug + a weave that SPIKES past the left bound mid-lap. Edges
+    # must come from the BOUND laps (left stays ~-5), not the all-sample envelope
+    # (which would grab the -8 spike).
+    x = np.linspace(0.0, 400.0, 400)
+    left = {"pos_x": x, "pos_z": np.full(400, -5.0), "lap_distance": x.copy()}
+    right = {"pos_x": x, "pos_z": np.full(400, 5.0), "lap_distance": x.copy()}
+    wz = np.zeros(400); wz[(x >= 200) & (x <= 210)] = -8.0  # ran wide once
+    weave = {"pos_x": x, "pos_z": wz, "lap_distance": x.copy()}
+    r = reconstruct_surface([left, weave, right], bins=100)
+    lz = np.array([p[1] for p in r["left"]])[10:-10]
+    assert lz.min() > -6.0                       # bound lap, not the -8 weave spike
+    assert abs(r["width"][50] - 10.0) < 1.0      # edges = the two bounds (~10 apart)
+    cz = np.array([p[1] for p in r["center"]])[10:-10]
+    assert np.abs(cz).max() < 0.6                # center = midpoint of the bounds
+
+
 def test_reconstruct_surface_preserves_arc_curvature():
     # A constant-radius CLOSED circle must keep its ~360 deg of turning, not be
     # smoothed flat (a real track is a closed loop).

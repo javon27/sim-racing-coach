@@ -537,6 +537,46 @@ def test_mapcapture_save_without_build_is_422(tmp_path):
     assert _tc(app).post("/mapcapture/save", json={}).status_code == 422
 
 
+def test_mapcapture_detected_corners_reach_editor(tmp_path):
+    # Corners detected at build survive save -> GET(avg=0) so the editor lists them.
+    app, store = _map_app(tmp_path)
+    app.state.latest = {"record": _edge("MapTrack", 1, 100.0), "lap_id": 0}
+    app.state.map_buffer = [_edge("MapTrack", 1, 100.0), _edge("MapTrack", -1, 100.0)]
+    c = _tc(app)
+    c.post("/mapcapture/build", json={})
+    # Stand in for what solve_corners detected on the clean edges.
+    app.state.last_ribbon["corners"] = [{"number": 1, "label": "1", "name": "Turn 1",
+                                         "direction": "left", "apex_dist": 50.0,
+                                         "apexes": [50.0], "start_dist": 40.0, "end_dist": 60.0}]
+    c.post("/mapcapture/save", json={})
+    lid = store.save(_edge("MapTrack", 1, 100.0))
+    got = c.get(f"/laps/{lid}/map").json()
+    assert [x["name"] for x in got["corners"]] == ["Turn 1"]
+
+
+def test_mapcapture_save_persists_raw_capture_and_rebuild(tmp_path):
+    app, store = _map_app(tmp_path)
+    app.state.latest = {"record": _edge("MapTrack", 1, 100.0), "lap_id": 0}
+    app.state.map_buffer = [_edge("MapTrack", 1, 100.0), _edge("MapTrack", -1, 100.0)]
+    c = _tc(app)
+    c.post("/mapcapture/build", json={})
+    c.post("/mapcapture/save", json={})
+    cap = tmp_path / "data" / "captures" / "maptrack.npz"
+    assert cap.exists()
+    z = np.load(str(cap))
+    assert any(k.endswith("pos_x") for k in z.files)  # raw cloud written
+    # Rebuild from the saved cloud with NO active capture -> a fresh ribbon.
+    app.state.map_buffer = []
+    r = c.post("/mapcapture/rebuild", json={}).json()
+    assert r["left"] and len(r["center"]) == len(r["left"])
+
+
+def test_mapcapture_rebuild_no_capture_is_422(tmp_path):
+    app, _ = _map_app(tmp_path)
+    app.state.latest = {"record": _edge("Nope", 1, 100.0), "lap_id": 0}
+    assert _tc(app).post("/mapcapture/rebuild", json={}).status_code == 422
+
+
 def test_rotation_persists_and_reflected(tmp_path):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     lid = store.save(_curve_lap("Rot", "GT3", 90.0))
