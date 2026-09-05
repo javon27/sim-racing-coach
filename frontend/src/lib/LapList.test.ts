@@ -51,6 +51,17 @@ describe("LapList", () => {
     expect(onselect).toHaveBeenCalledWith({ lap_id: 9, session_id: "S1" });
   });
 
+  it("clicked session: renders laps immediately even if /status is slow/failing (fast path)", async () => {
+    // A deep-linked/clicked session must not be gated on the (live-LMU) /status call.
+    vi.mocked(getStatus).mockRejectedValue(new Error("status slow"));
+    vi.mocked(getSessionLaps).mockResolvedValue([{ id: 42, lap_time: 90.0, valid: 1, ts: 100 }]);
+
+    render(LapList, { props: { sessionId: "S2" } });
+
+    expect(await screen.findByText("Lap 1")).toBeTruthy();
+    expect(vi.mocked(getSessionLaps)).toHaveBeenCalledWith("S2");
+  });
+
   it("renders per-sector delta bars colored vs the fastest lap, omits them when null", async () => {
     vi.mocked(getStatus).mockResolvedValue(status("S1", 6));
     // Reference = fastest lap with sectors = lap9 (91.2s): S1 30.0, S2 30.5, S3 30.0.

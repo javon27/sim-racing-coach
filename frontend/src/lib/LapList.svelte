@@ -110,13 +110,30 @@
 
   async function load() {
     phase = "connecting";
+    // Fast path: a clicked/deep-linked session — render its laps IMMEDIATELY via a
+    // single indexed query, without gating on the (live-LMU, possibly slow) /status
+    // call that fetchLatest does first. fetchLatest still runs after to set the live
+    // baseline + start polling; it re-fetches the same rows (no flicker).
+    if (reviewTarget !== null) {
+      try {
+        const l = await getSessionLaps(reviewTarget);
+        laps = l;
+        bestId = bestIdOf(l);
+        currentSessionId = reviewTarget;
+        phase = "ok";
+      } catch {
+        /* fall through to the retry path below */
+      }
+    }
     try {
       await withRetry(fetchLatest, retryTries, retryDelayMs);
       phase = "ok";
       startPolling();
     } catch {
-      laps = [];
-      phase = "unreachable";
+      if (reviewTarget === null) {
+        laps = [];
+        phase = "unreachable";
+      }
     }
   }
 
