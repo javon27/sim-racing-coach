@@ -61,6 +61,14 @@ a TELEMETRY fact (two speed minima within the corner window), not an LLM guess �
   give double-apex-appropriate advice. Coach still only RECEIVES the geometry as fact.
 - Single-apex corners are unchanged (`apexes=[apex_dist]`).
 
+## Future consideration: point features (sausage kerbs, etc.) — NOT now
+User flagged (explicitly not to build yet): the ability to mark track FEATURES like sausage
+kerbs. These are POINT / small-zone markers (vs `sections` which are named spans): a `features`
+array `{kind: "sausage_kerb"|"kerb"|"bump"|"drs"|…, dist: number, side?: "left"|"right"|"apex",
+name?}`. Coach receives them as facts ("sausage kerb on the exit of T6 — don't run wide");
+editor places them by dist+side; rendered as small markers. Completes the annotation model
+(corners + sections/spans + point features). Deferred — design when needed.
+
 ## Invariants preserved
 - Direction still computed from telemetry; labels/names/sections are user annotation on top of
   owned geometry. Two-stage pipeline, storage split untouched.
