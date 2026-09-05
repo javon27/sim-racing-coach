@@ -21,9 +21,13 @@ def test_track_slug(live, expected):
     assert track_slug(live) == expected
 
 
-def test_gp_and_national_resolve_to_different_maps():
-    gp = resolve_track_map("Silverstone Grand Prix Circuit - ELMS", "simcoach/tracks")
-    nat = resolve_track_map("Silverstone National Circuit", "simcoach/tracks")
+def test_gp_and_national_resolve_to_different_maps(tmp_path):
+    # Distinct layout names -> distinct slug files. Uses tmp fixtures rather than
+    # shipped maps (real track JSONs are user-owned data, cleared/rebuilt in the editor).
+    (tmp_path / "silverstone_grand_prix_circuit.json").write_text("{}")
+    (tmp_path / "silverstone_national_circuit.json").write_text("{}")
+    gp = resolve_track_map("Silverstone Grand Prix Circuit - ELMS", str(tmp_path))
+    nat = resolve_track_map("Silverstone National Circuit", str(tmp_path))
     assert gp is not None and gp.stem == "silverstone_grand_prix_circuit"
     assert nat is not None and nat.stem == "silverstone_national_circuit"
     assert gp != nat
