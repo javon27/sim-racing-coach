@@ -39,6 +39,38 @@ def test_square_path_normalized_into_box():
                                "apex_dist": 200.0, "start_dist": 150.0, "end_dist": 250.0}
 
 
+def _rect_channels():
+    # 2:1 rectangle (wider than tall) so a 90 deg rotation is observable.
+    x = np.array([0.0, 200.0, 200.0, 0.0, 0.0])
+    z = np.array([0.0, 0.0, 100.0, 100.0, 0.0])
+    dist = np.array([0.0, 200.0, 500.0, 700.0, 900.0])
+    return {"pos_x": x, "pos_z": z, "lap_distance": dist}
+
+
+def test_rotation_default_zero_unchanged():
+    m = build_track_map(_rect_channels(), CornerMap([]), width=1000)
+    assert m["rotation"] == 0.0
+    assert m["width"] == 1000 and m["height"] == 500  # 2:1, unrotated
+
+
+def test_rotation_90_swaps_bounds_and_fits():
+    m = build_track_map(_rect_channels(), CornerMap([]), width=1000, rotation=90)
+    assert m["rotation"] == 90.0
+    # rotate-then-fit: the wide axis becomes the tall one -> width/height swap.
+    assert m["width"] == 500 and m["height"] == 1000
+    for px, py in m["path"]:              # everything still fits the box (no clip)
+        assert 0 <= px <= m["width"] and 0 <= py <= m["height"]
+
+
+def test_rotation_moves_corner_but_keeps_it_in_box():
+    cm = CornerMap([Corner(1, "T1", "right", 150, 200, 250)])
+    a = build_track_map(_rect_channels(), cm, width=1000)
+    b = build_track_map(_rect_channels(), cm, width=1000, rotation=90)
+    assert (b["corners"][0]["x"], b["corners"][0]["y"]) != (a["corners"][0]["x"], a["corners"][0]["y"])
+    assert 0 <= b["corners"][0]["x"] <= b["width"]
+    assert 0 <= b["corners"][0]["y"] <= b["height"]
+
+
 def test_dist_parallel_to_path():
     m = build_track_map(_square_channels(), CornerMap([]), width=1000)
     assert len(m["dist"]) == len(m["path"])

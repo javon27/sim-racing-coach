@@ -486,6 +486,30 @@ def test_mapcapture_save_without_build_is_422(tmp_path):
     assert _tc(app).post("/mapcapture/save", json={}).status_code == 422
 
 
+def test_rotation_persists_and_reflected(tmp_path):
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    lid = store.save(_curve_lap("Rot", "GT3", 90.0))
+    store.save(_curve_lap("Rot", "GT3", 90.3, dx=8.0))
+    coach = Coach(FakeModel(), "simcoach/knowledge")
+    tracks = tmp_path / "tracks"
+    c = _tc(create_app(store, coach, tracks_dir=str(tracks)))
+    assert c.get(f"/laps/{lid}/map").json()["rotation"] == 0.0
+    # 450 normalizes to 90; response is the refreshed rotated map.
+    assert c.post(f"/laps/{lid}/rotation", json={"degrees": 450}).json()["rotation"] == 90.0
+    assert json.loads((tracks / "rot.json").read_text())["rotation"] == 90.0
+    assert c.get(f"/laps/{lid}/map").json()["rotation"] == 90.0  # cache invalidated
+
+
+def test_rotation_csrf_and_validation(tmp_path):
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    lid = store.save(_curve_lap("Rot", "GT3", 90.0))
+    coach = Coach(FakeModel(), "simcoach/knowledge")
+    c = _tc(create_app(store, coach, tracks_dir=str(tmp_path / "tracks")))
+    assert c.post(f"/laps/{lid}/rotation").status_code == 422             # no body (CSRF)
+    assert c.post(f"/laps/{lid}/rotation", json={"degrees": "x"}).status_code == 422
+    assert c.post("/laps/99999/rotation", json={"degrees": 10}).status_code == 404
+
+
 def test_analysis_unanalyzable_is_422(tmp_path, synthetic_lap, monkeypatch):
     cmap = CornerMap.load("simcoach/tracks/test_track.json")
     app, lap_id, cid = _app(tmp_path, synthetic_lap, cmap=cmap)

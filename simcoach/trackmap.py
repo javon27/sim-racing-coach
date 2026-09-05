@@ -131,7 +131,20 @@ def _finite_xz(channels: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray] | No
     return x[mask], z[mask], dist[mask]
 
 
-def build_track_map(channels: dict, corner_map, width: float = 1000, sectors=None) -> dict:
+def rotate_xy(x, z, degrees, cx, cz):
+    """Rotate world (x, z) points by `degrees` about (cx, cz). Used to bake a
+    per-track display rotation into the world->screen transform BEFORE fitting,
+    so the map renders the conventional way and still fits the box at any angle."""
+    if not degrees:
+        return x, z
+    t = math.radians(degrees)
+    ct, st = math.cos(t), math.sin(t)
+    dx, dz = x - cx, z - cz
+    return cx + dx * ct - dz * st, cz + dx * st + dz * ct
+
+
+def build_track_map(channels: dict, corner_map, width: float = 1000, sectors=None,
+                    rotation: float = 0.0) -> dict:
     """Map world (pos_x, pos_z) -> a width x height screen box, preserving aspect
     ratio and flipping vertically so it reads naturally. Returns
     {"width", "height", "path": [[x,y],...], "dist": [d,...],
@@ -148,6 +161,10 @@ def build_track_map(channels: dict, corner_map, width: float = 1000, sectors=Non
     if xz is None:
         return {}
     x, z, dist = xz
+    # Rotate about the centroid FIRST, then fit -- downstream bounds/corners all
+    # use the rotated coords, so the map stays oriented and clip-free at any angle.
+    if rotation:
+        x, z = rotate_xy(x, z, rotation, float(x.mean()), float(z.mean()))
 
     xmin, xmax = float(x.min()), float(x.max())
     zmin, zmax = float(z.min()), float(z.max())
@@ -200,4 +217,5 @@ def build_track_map(channels: dict, corner_map, width: float = 1000, sectors=Non
         "dist": path_dist,
         "corners": corners,
         "sectors": list(sectors) if sectors else [],
+        "rotation": round(float(rotation), 1),
     }

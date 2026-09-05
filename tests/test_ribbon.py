@@ -115,5 +115,18 @@ def test_ribbon_to_screen_shape_and_corner_placement():
     assert screen["sectors"] == [33.0]
 
 
+def test_ribbon_to_screen_rotation_swaps_bounds():
+    # Elongated ribbon along +x; 90 deg rotation swaps the fitted box and stays
+    # aligned/clip-free.
+    ribbon = reconstruct_ribbon(_edge(5.0, 100.0), _edge(-5.0, 100.0))
+    flat = ribbon_to_screen(ribbon, [])
+    rot = ribbon_to_screen(ribbon, [], rotation=90)
+    assert flat["rotation"] == 0.0 and rot["rotation"] == 90.0
+    assert flat["width"] > flat["height"]        # wide unrotated
+    assert rot["height"] > rot["width"]          # tall after 90 deg
+    for x, y in rot["center"]:
+        assert 0 <= x <= rot["width"] and 0 <= y <= rot["height"]
+
+
 def test_ribbon_to_screen_empty_ribbon():
     assert ribbon_to_screen({}, []) == {}

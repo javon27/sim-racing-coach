@@ -155,6 +155,11 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         except (OSError, ValueError, HTTPException):
             return {}
 
+    def _track_rotation(track: str) -> float:
+        # Per-track display rotation (degrees), 0 if unset/invalid (back-compat).
+        r = _track_file_data(track).get("rotation", 0.0)
+        return float(r) if isinstance(r, (int, float)) else 0.0
+
     def _shipped_extras(track: str) -> dict:
         # sectors/length from the shipped track file (if any) -- the map builder's
         # passthrough. Missing file/keys -> {}.
@@ -260,7 +265,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             "pos_z": [pt[1] for pt in path],
             "lap_distance": dist,
         }
-        payload = _clean(build_track_map(channels, cmap, sectors=sectors))
+        payload = _clean(build_track_map(channels, cmap, sectors=sectors,
+                                         rotation=_track_rotation(track)))
         if not force:
             app.state.canon[(track, car)] = payload
         return payload
@@ -477,10 +483,33 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             "path_dist": dist,
             "sectors": sectors,
             "length": length,
+            "rotation": _track_rotation(rec.track),  # preserve existing rotation
         }
         _write_track_json(rec.track, out)
         # Invalidate cmap + canonical caches so the next GET returns the new
         # canonical map (now frozen into the file).
+        _invalidate_canon(rec.track)
+        return _canonical_map(rec.track, rec.car, force=False)
+
+    @app.post("/laps/{lap_id}/rotation")
+    def set_rotation(lap_id: int, body: dict = Body(...)):
+        # Persist a per-track display rotation (degrees). Body required -> preflight
+        # (CSRF), like the mapcapture routes. Merges into the track JSON so corners/
+        # path survive.
+        try:
+            rec = store.load(lap_id)
+        except (KeyError, FileNotFoundError):
+            raise HTTPException(404, "lap not found")
+        try:
+            degrees = float(body["degrees"])
+        except (KeyError, TypeError, ValueError):
+            raise HTTPException(422, "degrees must be a number")
+        if not math.isfinite(degrees):
+            raise HTTPException(422, "degrees must be finite")
+        data = _track_file_data(rec.track)
+        data.setdefault("corners", [])  # keep the file CornerMap.load-compatible
+        data["rotation"] = degrees % 360.0
+        _write_track_json(rec.track, data)
         _invalidate_canon(rec.track)
         return _canonical_map(rec.track, rec.car, force=False)
 
@@ -572,7 +601,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # build and save, and the geometry belongs to this lap's track.
         app.state.last_ribbon = {"world": ribbon, "corners": corners,
                                  "sectors": sectors, "track": left_rec.track}
-        return _clean(ribbon_to_screen(ribbon, corners, sectors))
+        return _clean(ribbon_to_screen(ribbon, corners, sectors,
+                                       rotation=_track_rotation(left_rec.track)))
 
     @app.post("/mapcapture/save")
     def mapcapture_save(body: dict = Body(...)):
@@ -595,6 +625,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             "path_dist": world["dist"],
             "sectors": rib["sectors"],
             "length": world["dist"][-1] if world["dist"] else 0.0,
+            "rotation": _track_rotation(track),  # preserve any existing rotation
         }
         _write_track_json(track, out)
         _invalidate_canon(track)

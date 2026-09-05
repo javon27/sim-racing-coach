@@ -11,7 +11,11 @@ def _tc(tmp_path):
     return TestClient(app, base_url="http://127.0.0.1")
 
 
-def test_status_offline_shape(tmp_path):
+def test_status_offline_shape(tmp_path, monkeypatch):
+    # Force the offline case: on a dev box with LMU actually running, /status reads
+    # live SMM and would report the real session (has_map True for a mapped track).
+    from simcoach.lmu import smm
+    monkeypatch.setattr(smm, "read_session_track_car", lambda: None)
     r = _tc(tmp_path).get("/status")
     assert r.status_code == 200
     b = r.json()

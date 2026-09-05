@@ -12,7 +12,7 @@ from __future__ import annotations
 import numpy as np
 
 from simcoach.corners import RIGHT_IS_POSITIVE
-from simcoach.trackmap import direction_from_path
+from simcoach.trackmap import direction_from_path, rotate_xy
 
 
 def _resample_progress(channels: dict, grid: np.ndarray):
@@ -142,14 +142,23 @@ def multi_signal_direction(center, dist, apex_dist, edge_channels=None,
     return direction, confidence
 
 
-def ribbon_to_screen(ribbon: dict, corners: list, sectors=None, width: float = 1000) -> dict:
+def ribbon_to_screen(ribbon: dict, corners: list, sectors=None, width: float = 1000,
+                     rotation: float = 0.0) -> dict:
     """Normalize the world ribbon (+ corners placed on the centerline) into one
     width x height screen box, aspect-preserved and vertically flipped, so left,
     right, center and the car-dot overlays all share one frame. Mirrors
-    trackmap.build_track_map's transform."""
+    trackmap.build_track_map's transform (rotate about the shared centroid first,
+    then fit)."""
     if not ribbon:
         return {}
     allpts = np.array(ribbon["left"] + ribbon["right"] + ribbon["center"], dtype=float)
+    if rotation:  # rotate every polyline about ONE shared centroid so they stay aligned
+        cx0, cz0 = float(allpts[:, 0].mean()), float(allpts[:, 1].mean())
+        rot = {k: [list(p) for p in zip(*rotate_xy(
+            np.array([q[0] for q in ribbon[k]]), np.array([q[1] for q in ribbon[k]]),
+            rotation, cx0, cz0))] for k in ("left", "right", "center")}
+        ribbon = {**ribbon, **rot}
+        allpts = np.array(ribbon["left"] + ribbon["right"] + ribbon["center"], dtype=float)
     xmin, xmax = float(allpts[:, 0].min()), float(allpts[:, 0].max())
     zmin, zmax = float(allpts[:, 1].min()), float(allpts[:, 1].max())
     xrange, zrange = xmax - xmin, zmax - zmin
@@ -182,4 +191,5 @@ def ribbon_to_screen(ribbon: dict, corners: list, sectors=None, width: float = 1
         "center": _screen(center),
         "corners": scorners,
         "sectors": list(sectors) if sectors else [],
+        "rotation": round(float(rotation), 1),
     }
