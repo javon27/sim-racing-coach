@@ -542,7 +542,20 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         if not math.isfinite(degrees):
             raise HTTPException(422, "degrees must be finite")
         data = _track_file_data(rec.track)
-        data.setdefault("corners", [])  # keep the file CornerMap.load-compatible
+        if not data.get("corners"):
+            # No per-track JSON yet: carry the RESOLVED corners (fallback cmap /
+            # auto-detect) into the file so persisting rotation can't zero them.
+            cmap = _cmap_for_map(rec.track)
+            data["corners"] = [
+                {"number": c.number, "label": c.label or str(c.number), "name": c.name,
+                 "direction": c.direction, "start_dist": c.start_dist,
+                 "apex_dist": c.apex_dist, "end_dist": c.end_dist,
+                 "apexes": c.apexes or [c.apex_dist]}
+                for c in (getattr(cmap, "corners", None) or [])
+            ]
+            secs = getattr(cmap, "sections", None)
+            if secs and "sections" not in data:
+                data["sections"] = secs
         data["rotation"] = degrees % 360.0
         _write_track_json(rec.track, data)
         _invalidate_canon(rec.track)

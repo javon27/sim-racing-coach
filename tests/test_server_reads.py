@@ -530,6 +530,26 @@ def test_rotation_persists_and_reflected(tmp_path):
     assert c.get(f"/laps/{lid}/map").json()["rotation"] == 90.0  # cache invalidated
 
 
+def test_rotation_preserves_resolved_corners_when_no_file(tmp_path):
+    # Corners come from a resolved cmap (no per-track JSON yet). Rotating must NOT
+    # write an empty-corner file and vanish them.
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    lid = store.save(_curve_lap("test_track", "GT3", 90.0))
+    store.save(_curve_lap("test_track", "GT3", 90.3, dx=8.0))
+    coach = Coach(FakeModel(), "simcoach/knowledge")
+    tracks = tmp_path / "tracks"
+    resolver = lambda t: cmap if t == "test_track" else None
+    c = _tc(create_app(store, coach, tracks_dir=str(tracks), map_resolver=resolver))
+    n = len(cmap.corners)
+    assert n > 0
+    r = c.post(f"/laps/{lid}/rotation", json={"degrees": 90}).json()
+    assert r["rotation"] == 90.0
+    assert len(r["corners"]) == n  # corners survived the rotation write
+    saved = json.loads((tracks / "test_track.json").read_text())
+    assert len(saved["corners"]) == n
+
+
 def test_rotation_csrf_and_validation(tmp_path):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     lid = store.save(_curve_lap("Rot", "GT3", 90.0))
