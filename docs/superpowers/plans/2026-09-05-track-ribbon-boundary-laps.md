@@ -61,6 +61,25 @@ Key wrinkle: the two laps have DIFFERENT lengths (inside is shorter), so DO NOT 
 - Designate left/right boundary laps → build + preview the ribbon → place/verify corners on
   the centerline (reuse the existing corner editor: auto-detect + drag + rename + sectors).
 
+## Post-capture analysis pass (user decision)
+After the ribbon is reconstructed, run a deterministic pass over the geometry + captured
+telemetry that computes each corner's **apex** (min-speed / max-curvature), **braking zone**
+(brake onset → release), **entry/exit window**, and direction → a first-pass corner set the
+user reviews/edits. This IS the two-stage pipeline's feature-extraction step (reuses
+`mapbuild.detect_corners` + `analysis.py`), run as a batch after mapping capture rather than
+live. NOTE on wording: this is analysis OF the captured telemetry — not a physics/optimal-line
+SOLVER (computing the ideal racing line + apexes from track geometry alone is a much larger,
+separate build; flag it if that's wanted instead).
+
+## Corner direction — inferred from ALL available data at placement (user decision)
+When a corner is placed (auto-detected or user-added), infer direction from every signal at the
+apex and require agreement: **centerline/racing-line curvature + steering sign + lat_g sign**.
+This is more robust than the lone path-curvature cross-product (whose sign constant was
+rig-unverified) — and it largely RETIRES that risk: the backend already found steering+lat_g
+unanimous and correct across Monza's 10 verified corners (lat_g has a physical cornering sign).
+When the signals DISAGREE (low confidence), flag the corner for the user to eyeball rather than
+guessing. Still fully telemetry-derived / owned-data — never LLM or hand-set (invariant).
+
 ## Invariants preserved
 - Telemetry-derived, owned data; corners computed (not LLM/hand-guessed); two-stage pipeline;
   UI-agnostic core; storage split (ribbon summary in the track JSON, full-rate laps on disk).
