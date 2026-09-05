@@ -35,6 +35,7 @@
   import {
     getLapMap,
     saveLapMap,
+    setMapRotation,
     startMapCapture,
     cancelMapCapture,
     mapCaptureStatus,
@@ -77,6 +78,28 @@
   // What the pointer is currently dragging: a corner index, a sector index, or nothing.
   let drag: { kind: "corner" | "sector"; i: number } | null = null;
   let addMode = $state(false);
+
+  // Orientation control. `angle` is the target the user is dialing in; the live
+  // SVG preview rotates the already-fit map by (angle - baked). Apply bakes it
+  // server-side (rotate-then-fit) and applyMap resets the preview to identity.
+  let angle = $state(0);
+  let rotating = $state(false);
+  function rotateBy(d: number) {
+    angle = (((angle + d + 180) % 360) + 360) % 360 - 180;
+  }
+  async function applyRotation() {
+    if (lapId == null) return;
+    rotating = true;
+    error = null;
+    try {
+      applyMap(await setMapRotation(lapId, angle));
+      onSaved?.();
+    } catch {
+      error = "Rotation failed.";
+    } finally {
+      rotating = false;
+    }
+  }
 
   // --- "(Re)generate map layout": guided mapping capture -> ribbon preview.
   type GenPhase = "off" | "left" | "right" | "designate" | "building" | "preview";
@@ -239,7 +262,12 @@
       end_dist: c.end_dist,
     }));
     sectors = [...(res.sectors ?? [])];
+    angle = res.rotation ?? 0;
   }
+
+  // Live preview delta: the fitted map already reflects its baked rotation, so
+  // only rotate by the difference. Ribbon is fresh/unbaked -> rotate by `angle`.
+  const mapPreviewRot = $derived(angle - (map?.rotation ?? 0));
 
   const u = $derived(map ? Math.max(map.width, map.height) : 100);
   // Breathing room so the stroke + edge markers/labels aren't clipped (viewBox-padded;
@@ -380,6 +408,18 @@
     <div class="modal" role="dialog" tabindex="-1" aria-modal="true" aria-label="Edit track map" onclick={(e) => e.stopPropagation()}>
       <header>
         <h2>Edit track map</h2>
+        {#if map || ribbon}
+          <div class="rot" role="group" aria-label="Rotate map">
+            <button type="button" aria-label="Rotate 90° left" onclick={() => rotateBy(-90)}>⟲</button>
+            <input type="number" step="5" aria-label="Rotation degrees" bind:value={angle} />
+            <span>°</span>
+            <button type="button" aria-label="Rotate 90° right" onclick={() => rotateBy(90)}>⟳</button>
+            <button type="button" onclick={() => (angle = 0)}>0°</button>
+            <button type="button" class="primary" disabled={rotating} onclick={applyRotation}>
+              {rotating ? "…" : "Apply"}
+            </button>
+          </div>
+        {/if}
         <button type="button" class="x" aria-label="Close" onclick={close}>×</button>
       </header>
 
@@ -422,6 +462,7 @@
             role="img"
             aria-label="Reconstructed track ribbon"
           >
+            <g transform="rotate({angle}, {ribbon.width / 2}, {ribbon.height / 2})">
             <path d={ribbonBand} fill="var(--surface-2, #333)" stroke="var(--muted)" stroke-width={ru * 0.004} stroke-linejoin="round" />
             <polyline
               points={ribbon.center.map(([x, y]) => `${x},${y}`).join(" ")}
@@ -440,6 +481,7 @@
               <circle cx={c.x} cy={c.y} r={ru * 0.014} fill="var(--accent)"><title>{c.name}</title></circle>
               <text class="corner-lbl" x={c.x + ru * 0.016} y={c.y - ru * 0.016} font-size={ru * 0.03} fill="var(--accent)">T{c.number}</text>
             {/each}
+            </g>
           </svg>
           <aside class="side">
             <p class="hint">Reconstructed layout — review the corners, then Save. Rename/adjust with
@@ -466,6 +508,7 @@
             aria-label="Track map — drag corner and sector markers"
             onpointerdown={onSvgClick}
           >
+            <g transform="rotate({mapPreviewRot}, {map.width / 2}, {map.height / 2})">
             <polyline
               points={map.path.map(([x, y]) => `${x},${y}`).join(" ")}
               fill="none"
@@ -514,6 +557,7 @@
               ><title>{c.name}</title></circle>
               <text class="corner-lbl" x={p[0] + u * 0.016} y={p[1] - u * 0.016} font-size={u * 0.03} fill="var(--accent)">T{c.number}</text>
             {/each}
+            </g>
           </svg>
 
           <aside class="side">
@@ -602,6 +646,15 @@
   header h2 {
     margin: 0;
     font-size: 15px;
+    margin-right: auto;
+  }
+  .rot {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .rot input {
+    width: 56px;
   }
   .body {
     display: flex;

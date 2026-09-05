@@ -3,6 +3,7 @@ import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/sv
 import {
   getLapMap,
   saveLapMap,
+  setMapRotation,
   startMapCapture,
   cancelMapCapture,
   mapCaptureStatus,
@@ -17,6 +18,7 @@ vi.mock("./api", async () => {
     ...actual,
     getLapMap: vi.fn(),
     saveLapMap: vi.fn(),
+    setMapRotation: vi.fn(),
     startMapCapture: vi.fn(),
     cancelMapCapture: vi.fn(),
     mapCaptureStatus: vi.fn(),
@@ -230,5 +232,28 @@ describe("TrackMapEditor — (re)generate map layout", () => {
 
     await rerender({ lapId: 7, open: false });
     await waitFor(() => expect(cancelMapCapture).toHaveBeenCalled());
+  });
+});
+
+describe("TrackMapEditor — rotation", () => {
+  beforeEach(() => {
+    vi.mocked(getLapMap).mockReset().mockResolvedValue({ ...fixture, rotation: 45 });
+    vi.mocked(setMapRotation).mockReset().mockResolvedValue({ ...fixture, rotation: 90 });
+  });
+  afterEach(cleanup);
+
+  it("shows the baked rotation, applies a new angle, and refreshes from the response", async () => {
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+
+    const input = screen.getByLabelText("Rotation degrees") as HTMLInputElement;
+    expect(input.value).toBe("45"); // current baked rotation
+
+    await fireEvent.click(screen.getByLabelText("Rotate 90° right")); // 45 -> 135
+    await fireEvent.click(screen.getByText("Apply"));
+    expect(setMapRotation).toHaveBeenCalledWith(7, 135);
+
+    // applyMap replaces the preview with the server-baked result (rotation 90).
+    await waitFor(() => expect(input.value).toBe("90"));
   });
 });

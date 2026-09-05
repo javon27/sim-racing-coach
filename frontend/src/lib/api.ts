@@ -172,10 +172,19 @@ export interface TrackMap {
     start_dist: number;
     end_dist: number;
   }[];
+  rotation?: number; // baked orientation in degrees (server rotate-then-fit)
 }
 
 export function getLapMap(id: number, avg?: boolean): Promise<TrackMap | Record<string, never>> {
   return request<TrackMap | Record<string, never>>(`/laps/${id}/map${avg ? "?avg=1" : ""}`);
+}
+
+export function setMapRotation(id: number, degrees: number): Promise<TrackMap> {
+  return request<TrackMap>(`/laps/${id}/rotation`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ degrees }),
+  });
 }
 
 // Server derives direction from geometry — never send it.
