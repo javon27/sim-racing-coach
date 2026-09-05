@@ -61,13 +61,22 @@ a TELEMETRY fact (two speed minima within the corner window), not an LLM guess �
   give double-apex-appropriate advice. Coach still only RECEIVES the geometry as fact.
 - Single-apex corners are unchanged (`apexes=[apex_dist]`).
 
-## Future consideration: point features (sausage kerbs, etc.) — NOT now
-User flagged (explicitly not to build yet): the ability to mark track FEATURES like sausage
-kerbs. These are POINT / small-zone markers (vs `sections` which are named spans): a `features`
-array `{kind: "sausage_kerb"|"kerb"|"bump"|"drs"|…, dist: number, side?: "left"|"right"|"apex",
-name?}`. Coach receives them as facts ("sausage kerb on the exit of T6 — don't run wide");
-editor places them by dist+side; rendered as small markers. Completes the annotation model
-(corners + sections/spans + point features). Deferred — design when needed.
+## Future consideration: track NOTES, not rendered features — NOT now
+User flagged (not to build yet): marking things like sausage kerbs. Refined direction: model
+these as **track notes (text the coach reads), not geometry drawn on the layout.** Lighter, and
+it reuses an existing seam — the coach already loads per-track knowledge notes
+(`simcoach/knowledge/<track>.md`). Options when built: (a) free-form per-track notes (extend
+the existing markdown notes), and/or (b) a short `note` string ANCHORED to a corner (in the
+corner map) or a distance, surfaced with that corner's summary ("sausage kerb on T6 exit —
+don't run wide"). No map markers, no `features` geometry. Coach receives notes as facts
+(invariant-safe — human-authored track knowledge, not LLM-inferred). Deferred — design when needed.
+
+## The split: bounded zones = geometry, point advice = notes (user)
+Things with REAL BOUNDARIES → geometry (the `sections`/zones model — add `kind:"drs"` for DRS
+zones alongside straight/complex; also programmatically useful, e.g. where DRS deployment is
+legal). POINT advice → track notes (sausage kerbs, bumps). So a DRS zone is a bounded `section`;
+a sausage kerb is a note. (LMU/WEC cars don't run DRS, but this matters for Assetto Corsa +
+future sims — the zones model already covers it via `kind`.)
 
 ## Invariants preserved
 - Direction still computed from telemetry; labels/names/sections are user annotation on top of
