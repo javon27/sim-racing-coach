@@ -97,14 +97,16 @@ def reconstruct_ribbon(left_channels: dict, right_channels: dict, bins: int = 50
     }
 
 
-def _fill_nan(a: np.ndarray) -> np.ndarray:
-    """Linear-interpolate NaN gaps (sparse/empty bins) from finite neighbours."""
+def _fill_nan(a: np.ndarray, period: float | None = None) -> np.ndarray:
+    """Interpolate NaN gaps (sparse/empty bins) from finite neighbours. With
+    `period` the fill wraps closed-loop, so a bad S/F-seam bin (index 0 / last)
+    is stitched from bins on the OTHER side of the start/finish line."""
     idx = np.arange(len(a))
     good = np.isfinite(a)
     if good.sum() == 0:
         return a
     a = a.copy()
-    a[~good] = np.interp(idx[~good], idx[good], a[good])
+    a[~good] = np.interp(idx[~good], idx[good], a[good], period=period)
     return a
 
 
@@ -154,37 +156,49 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
     tn = np.hypot(tx, tz); tn[tn == 0] = 1.0
     lat_x, lat_z = -tz / tn, tx / tn
 
-    left, right, center, width, bank = [], [], [], [], []
+    nan6 = lambda: np.full(bins, np.nan)
+    lx, lz, rx, rz, wid, bnk = nan6(), nan6(), nan6(), nan6(), nan6(), nan6()
+    cnt = np.zeros(bins)
     for b in range(bins):
         mm = members[b]
-        cpt = [cx[b], cz[b]]
+        cnt[b] = mm.size
         if mm.size == 0:
-            left.append(cpt); right.append(cpt); center.append(cpt)
-            width.append(0.0); bank.append(0.0)
             continue
         off = (X[mm] - cx[b]) * lat_x[b] + (Z[mm] - cz[b]) * lat_z[b]
         i_lo, i_hi = int(off.argmin()), int(off.argmax())
-        left.append([X[mm][i_lo], Z[mm][i_lo]])
-        right.append([X[mm][i_hi], Z[mm][i_hi]])
-        center.append(cpt)
-        width.append(float(off[i_hi] - off[i_lo]))
-        yb = Y[mm]
-        fin = np.isfinite(yb)
+        lx[b], lz[b] = X[mm][i_lo], Z[mm][i_lo]
+        rx[b], rz[b] = X[mm][i_hi], Z[mm][i_hi]
+        wid[b] = off[i_hi] - off[i_lo]
+        yb, fin = Y[mm], np.isfinite(Y[mm])
         if fin.sum() >= 2 and np.ptp(off[fin]) > 1e-6:
-            bank.append(float(np.arctan(np.polyfit(off[fin], yb[fin], 1)[0])))
-        else:
-            bank.append(0.0)
+            bnk[b] = np.arctan(np.polyfit(off[fin], yb[fin], 1)[0])
 
-    def _pair(p):
-        return [round(float(p[0]), 2), round(float(p[1]), 2)]
+    # Seam + sparse stitching: a bin with <2 samples or an envelope clearly
+    # narrower than typical (the transitional S/F crossing, or a thin weave) is
+    # untrustworthy -> refill it closed-loop from neighbours across the wrap.
+    solid = (cnt >= 2) & np.isfinite(wid)
+    med = float(np.median(wid[solid])) if solid.any() else 0.0
+    bad = (cnt < 2) | (med > 0) & (wid < 0.5 * med)
+    if (~bad).any():  # need at least one trustworthy bin to stitch from
+        for arr in (lx, lz, rx, rz, wid, bnk):
+            arr[bad] = np.nan
+            arr[:] = _fill_nan(arr, period=bins)
+        cx = _fill_nan(np.where(bad, np.nan, cx), period=bins)
+        cz = _fill_nan(np.where(bad, np.nan, cz), period=bins)
+    else:  # single pass / no envelope anywhere -> degenerate: centerline, zero width
+        lx, lz, rx, rz = cx.copy(), cz.copy(), cx.copy(), cz.copy()
+        wid[:] = 0.0; bnk[:] = 0.0
+
+    def _round(a, n):  # non-finite (e.g. bank with no elevation data) -> 0.0, JSON-safe
+        return [round(float(v), n) if np.isfinite(v) else 0.0 for v in a]
 
     return {
-        "left": [_pair(p) for p in left],
-        "right": [_pair(p) for p in right],
-        "center": [_pair(p) for p in center],
-        "width": [round(w, 2) for w in width],
-        "bank": [round(b, 4) for b in bank],
-        "dist": [round(float(d), 2) for d in dist_grid],
+        "left": [list(p) for p in zip(_round(lx, 2), _round(lz, 2))],
+        "right": [list(p) for p in zip(_round(rx, 2), _round(rz, 2))],
+        "center": [list(p) for p in zip(_round(cx, 2), _round(cz, 2))],
+        "width": _round(wid, 2),
+        "bank": _round(bnk, 4),
+        "dist": _round(dist_grid, 2),
     }
 
 

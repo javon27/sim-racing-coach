@@ -46,6 +46,21 @@ def test_reconstruct_surface_empty_is_empty():
     assert reconstruct_surface([{"lap_distance": np.arange(3.0)}]) == {}
 
 
+def test_reconstruct_surface_stitches_sparse_seam():
+    # Two edge passes that hug ±5 in the middle but CONVERGE to ~0 at S/F (the
+    # transitional crossing) -> the seam bins are narrow. Closed-loop stitching
+    # must refill them from neighbours so the ribbon stays continuous.
+    def edge(sign, n=400):
+        x = np.linspace(0.0, 400.0, n)
+        z = np.where((x >= 40) & (x <= 360), sign * 5.0, 0.0)  # edge mid-lap, crossing at S/F
+        return {"pos_x": x, "pos_z": z, "lap_distance": x.copy()}
+
+    r = reconstruct_surface([edge(1), edge(-1)], bins=50)
+    assert abs(r["width"][25] - 10.0) < 1.0   # mid-lap full width
+    assert r["width"][0] > 5.0                # seam bin stitched, not the ~0 crossing
+    assert r["width"][-1] > 5.0
+
+
 def _edge(zconst, dist_max):
     # A straight edge along +x at constant z, over its own lap_distance range.
     return {
