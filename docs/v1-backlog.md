@@ -152,3 +152,20 @@ under-segmenting — likely too-coarse smoothing or too-high a curvature thresho
 merging adjacent corners. Improve corner segmentation (adaptive threshold, min-gap,
 per-apex splitting) so first-pass detection is closer to the true count. Manual add
 works as a fallback today. Medium priority — quality, not blocking.
+
+## Ribbon review — deferred findings (2026-09-05, from 60c72c2 review)
+- MEDIUM: edge classification takes the single most-extreme lap per side
+  (ribbon.py argmin/argmax of per-lap mean lateral offset), so a lopsided weave
+  lap that spends more time on one side than the dedicated edge lap can be picked
+  as the boundary. The <20%-spread fallback only covers "all laps similar", not
+  this case. Fix idea: use the lateral ENVELOPE (per-station min/max across all
+  laps) for the edge rather than one lap's path, or let the user designate edge
+  laps. (Algarve came out well, so not currently biting.)
+- LOW: rebuilt corners lose direction corroboration — the saved raw cloud is
+  position-only (pos_x/y/z + lap_distance), so on /rebuild there's no steering/
+  lat_g to vote → confidence forced "high" even for corners the live build
+  flagged low/mismatched. Curvature still authoritative; only the confidence
+  label regresses. Persist steering/lat_g in the cloud to restore it.
+- NIT: reconstruct_surface bins bound laps by d/global-max-len, so a shorter
+  bound lap's top bins go empty + wrap-interpolated; a stray overshoot/out-lap in
+  the buffer would thin the edges (no clean-lap filter on the mapping buffer).
