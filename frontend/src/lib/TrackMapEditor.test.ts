@@ -194,11 +194,13 @@ describe("TrackMapEditor", () => {
     const { container } = render(TrackMapEditor, { props: { lapId: 7, open: true } });
     await screen.findByText("First");
 
-    // Enter add-mode (like add-corner), then click the line to place it.
+    // Click "Add section" to enter add-section mode, then a pointerdown on the
+    // svg places a section at the clicked point (click-to-place, like add-corner).
     await fireEvent.click(screen.getByText("Add section"));
     await fireEvent.pointerDown(container.querySelector("svg")!);
 
-    await fireEvent.input(screen.getByLabelText("Section name"), { target: { value: "Back Straight" } });
+    // findBy* — the sections list renders reactively after the click.
+    await fireEvent.input(await screen.findByLabelText("Section name"), { target: { value: "Back Straight" } });
     expect(container.querySelector("text.section-lbl")?.textContent).toBe("Back Straight");
 
     await fireEvent.click(screen.getByText("Save"));
@@ -350,5 +352,21 @@ describe("TrackMapEditor — rotation", () => {
 
     // The edited name survives — rotation merged only the geometry, not corners.
     expect((screen.getAllByLabelText("Corner name")[0] as HTMLInputElement).value).toBe("Zed");
+  });
+
+  it("reverts the preview to identity when a rotation persist fails (drags realign)", async () => {
+    vi.mocked(setMapRotation).mockRejectedValue(new Error("boom"));
+    const { container } = render(TrackMapEditor, { props: { lapId: 7, open: true, rotDebounceMs: 0 } });
+    await screen.findByText("First");
+
+    await fireEvent.input(screen.getByLabelText("Rotation degrees"), { target: { value: "40" } });
+    await waitFor(() => expect(setMapRotation).toHaveBeenCalled());
+
+    // On failure angle reverts to the baked rotation (0) → preview group is
+    // identity again, so drag hit-tests against the unrotated path still line up.
+    await waitFor(() => {
+      const g = container.querySelector("g[transform]") as SVGGElement;
+      expect(g.getAttribute("transform")).toMatch(/^rotate\(0[,\s]/);
+    });
   });
 });

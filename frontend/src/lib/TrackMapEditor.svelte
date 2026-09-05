@@ -124,6 +124,8 @@
       onSaved?.();
     } catch {
       error = "Rotation failed.";
+      // Revert to the baked angle so mapPreviewRot returns to 0 and drags realign.
+      if (map) angle = map.rotation ?? 0;
     }
   }
 
