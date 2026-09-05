@@ -105,3 +105,14 @@ REMAINING on the editor (deferred, not blockers):
 - [ ] **Import user-built maps as canonical/shipped** (user: "once i've built them, we can import them as canonical into the app") — the editor's PUT writes `tracks/<slug>.json` off the install dir; needs a clean path to PROMOTE maps the user builds (in their runtime/app-data) into the packaged canonical set (repo `simcoach/tracks/`). Design: export/import of a track-map file, or a "promote to canonical" action. Not started.
 - [ ] **Direction real-data verify** (rig-gated) — `_LEFT_TURN_IS_CROSS_POSITIVE` pinned by synthetic test + indirect lat_g/steering check; `test_direction_monza_real` SKIPPED (no stored lap has `pos_x/pos_z` yet — capture started `2a43826`). RISK: shipped directions could be globally inverted until confirmed on a real pos lap.
 - [ ] **Manual portrait-track drag check** — CTM pointer transform isn't unit-testable in jsdom; one manual drag on a portrait track (world zrange>xrange) confirms letterbox snapping.
+
+## Future feature: track corner trainer (2026-09-04)
+As the user drives, call out the corner NAME in real time — overlay and/or voice — from our
+corner map (`corner_at(lap_distance) → name`, already exists). A learning aid for unfamiliar
+tracks. VR-friendly via voice (ties to the voice/Pit-Wall vision — see memory
+[[pit-wall-voice-vision]]). Cheap first cut: on-track position → current/next corner name.
+- **Extends into live on-track coaching** (user): beyond names, live per-corner cues as you
+  approach (brake reference, gear, "trail less here") drawn from the per-corner metrics +
+  driver profile. This IS the live-coaching mode of the 4-mode vision (voice-first, agentic,
+  CrewChief-replacement). The corner map + ribbon + solver-derived apex/brake zones are the
+  data foundation it consumes. Future; not scoped yet.
