@@ -12,24 +12,45 @@ from __future__ import annotations
 import numpy as np
 
 from simcoach.corners import RIGHT_IS_POSITIVE
-from simcoach.trackmap import _finite_xz, direction_from_path
+from simcoach.trackmap import direction_from_path
 
 
 def _resample_progress(channels: dict, grid: np.ndarray):
-    """(x, z) resampled onto a shared progress grid t in [0,1], or None if the
-    lap lacks usable position data."""
-    xz = _finite_xz(channels)
-    if xz is None:
+    """(x, z, y) resampled onto a shared progress grid t in [0,1], or None if the
+    lap lacks usable position data. y is None when pos_y (elevation) is absent."""
+    if "pos_x" not in channels or "pos_z" not in channels:
         return None
-    x, z, d = xz
+    x = np.asarray(channels["pos_x"], dtype=float)
+    z = np.asarray(channels["pos_z"], dtype=float)
+    d = np.asarray(channels.get("lap_distance", np.arange(len(x))), dtype=float)
+    has_y = "pos_y" in channels
+    y = np.asarray(channels["pos_y"], dtype=float) if has_y else None
+    n = min(len(x), len(z), len(d), len(y) if has_y else len(x))
+    if n < 2:
+        return None
+    x, z, d = x[:n], z[:n], d[:n]
+    mask = np.isfinite(x) & np.isfinite(z) & np.isfinite(d)
+    if has_y:
+        y = y[:n]
+        mask &= np.isfinite(y)
+    if mask.sum() < 2:
+        return None
+    x, z, d = x[mask], z[mask], d[mask]
+    if has_y:
+        y = y[mask]
     order = np.argsort(d, kind="stable")
     d, x, z = d[order], x[order], z[order]
+    if has_y:
+        y = y[order]
     d, uniq = np.unique(d, return_index=True)  # np.interp needs strictly-increasing xp
     x, z = x[uniq], z[uniq]
+    if has_y:
+        y = y[uniq]
     if len(d) < 2 or d[-1] <= d[0]:
         return None
     t = (d - d[0]) / (d[-1] - d[0])
-    return np.interp(grid, t, x), np.interp(grid, t, z)
+    ry = np.interp(grid, t, y) if has_y else None
+    return np.interp(grid, t, x), np.interp(grid, t, z), ry
 
 
 def reconstruct_ribbon(left_channels: dict, right_channels: dict, bins: int = 500) -> dict:
@@ -42,12 +63,18 @@ def reconstruct_ribbon(left_channels: dict, right_channels: dict, bins: int = 50
     right = _resample_progress(right_channels, grid)
     if left is None or right is None:
         return {}
-    lx, lz = left
-    rx, rz = right
+    lx, lz, ly = left
+    rx, rz, ry = right
     cx, cz = (lx + rx) / 2.0, (lz + rz) / 2.0
     width = np.hypot(lx - rx, lz - rz)
     seg = np.hypot(np.diff(cx), np.diff(cz))
     dist = np.concatenate([[0.0], np.cumsum(seg)])
+    # Bank angle from elevation: outer edge higher than inner -> banked. atan2
+    # handles width->0. Missing pos_y on either edge -> flat (all zeros).
+    if ly is not None and ry is not None:
+        bank = np.arctan2(ly - ry, np.maximum(width, 1e-9))
+    else:
+        bank = np.zeros(len(grid))
 
     def _pairs(xs, zs):
         return [[round(float(a), 2), round(float(b), 2)] for a, b in zip(xs, zs)]
@@ -57,6 +84,7 @@ def reconstruct_ribbon(left_channels: dict, right_channels: dict, bins: int = 50
         "right": _pairs(rx, rz),
         "center": _pairs(cx, cz),
         "width": [round(float(w), 2) for w in width],
+        "bank": [round(float(b), 4) for b in bank],
         "dist": [round(float(d), 2) for d in dist],
     }
 

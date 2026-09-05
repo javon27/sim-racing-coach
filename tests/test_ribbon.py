@@ -33,6 +33,20 @@ def test_reconstruct_ribbon_pairs_by_progress_not_distance():
     assert all(abs(w - 10.0) < 1e-6 for w in ribbon["width"])
 
 
+def test_reconstruct_ribbon_bank_from_elevation():
+    # Left edge 2m higher than right, 10m apart -> bank atan(2/10) at each station.
+    left = {**_edge(5.0, 100.0), "pos_y": np.full(3, 2.0)}
+    right = {**_edge(-5.0, 100.0), "pos_y": np.zeros(3)}
+    ribbon = reconstruct_ribbon(left, right, bins=5)
+    expected = np.arctan2(2.0, 10.0)
+    assert all(abs(b - expected) < 1e-3 for b in ribbon["bank"])  # bank stored at 4 dp
+
+
+def test_reconstruct_ribbon_flat_when_no_elevation():
+    ribbon = reconstruct_ribbon(_edge(5.0, 100.0), _edge(-5.0, 100.0), bins=5)
+    assert ribbon["bank"] == [0.0] * 5  # no pos_y -> flat
+
+
 def test_reconstruct_ribbon_missing_pos_is_empty():
     assert reconstruct_ribbon({"lap_distance": np.arange(3.0)}, _edge(-5.0, 100.0)) == {}
 

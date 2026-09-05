@@ -492,7 +492,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         try:
             # No telem= calibration: the slow boundary laps would under-read grip;
             # GT3 defaults are the safer first pass (plan's documented fallback).
-            solved = raceline.solve_corners(ribbon["left"], ribbon["right"])
+            solved = raceline.solve_corners(ribbon["left"], ribbon["right"],
+                                            bank=ribbon.get("bank"))
         except Exception:
             return []
         # ponytail: solved apex_dist is metres along the (shorter) solved line, but
@@ -572,7 +573,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         out = {
             "track": track_slug(track),
             "corners": corners,
-            "ribbon": {k: world[k] for k in ("left", "right", "center", "width")},
+            "ribbon": {k: world[k] for k in ("left", "right", "center", "width", "bank")},
             "path": world["center"],
             "path_dist": world["dist"],
             "sectors": rib["sectors"],
