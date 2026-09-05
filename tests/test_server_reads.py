@@ -432,7 +432,7 @@ def _edge(track, zsign, dist_max):
                      {"pos_x": x, "pos_z": z, "lap_distance": np.array([0.0, dist_max / 2, dist_max])})
 
 
-def test_mapcapture_start_buffers_laps_never_persists(tmp_path):
+def test_mapcapture_start_buffers_and_persists_laps(tmp_path):
     from simcoach.server.app import _capture_loop
     app, store = _map_app(tmp_path)
     c = _tc(app)
@@ -448,8 +448,10 @@ def test_mapcapture_start_buffers_laps_never_persists(tmp_path):
             return iter(laps)
 
     _capture_loop(Src(), store, app.state)  # the daemon body, mapping ON
-    assert store.list_lap_ids("MapTrack", "GT3") == []   # NEVER persisted
-    assert len(app.state.map_buffer) == 2
+    ids = store.list_lap_ids("MapTrack", "GT3")
+    assert len(ids) == 2                                   # persisted (editable laps)
+    assert all(store.load(i).phase == "mapping" for i in ids)  # tagged
+    assert len(app.state.map_buffer) == 2                 # AND buffered for the ribbon
 
     st = c.get("/mapcapture/status").json()
     assert st["active"] is True
@@ -647,6 +649,32 @@ def test_mapcapture_rebuild_corrupt_capture_is_422(tmp_path):
     c.post("/mapcapture/save", json={})
     (tmp_path / "data" / "captures" / "maptrack.npz").write_bytes(b"not an npz")  # corrupt
     assert c.post("/mapcapture/rebuild", json={}).status_code == 422  # clean 422, not 500
+
+
+def test_mapping_laps_persisted_tagged_and_excluded_from_best(tmp_path):
+    import types
+    from simcoach.server.app import _capture_loop
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    app_state = types.SimpleNamespace(mapping=True, map_buffer=[], latest=None)
+    fast_mapping = _edge("MapTrack", 1, 100.0)   # LapRecord, valid, lap_time 90.0
+
+    class Src:
+        def laps(self):
+            return iter([fast_mapping])
+
+    _capture_loop(Src(), store, app_state)
+    ids = store.list_lap_ids("MapTrack", "GT3")
+    assert ids and app_state.map_buffer           # persisted AND buffered
+    assert store.load(ids[0]).phase == "mapping"  # tagged
+    assert app_state.latest is not None           # /status + lap list see it live
+
+    # A SLOWER real lap (95) is the reference best -- the FASTER mapping lap (90)
+    # is excluded, proving the guard (not just "slow laps never win").
+    store.save(LapRecord("lmu", "MapTrack", "GT3", 95.0, True, 1.0,
+                         {"pos_x": np.zeros(3), "pos_z": np.zeros(3),
+                          "lap_distance": np.array([0.0, 50.0, 100.0])}, phase="race"))
+    best = store.best_lap("MapTrack", "GT3")
+    assert best is not None and best.phase == "race" and best.lap_time == 95.0
 
 
 def test_mapcapture_rebuild_no_capture_is_422(tmp_path):

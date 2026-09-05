@@ -255,8 +255,11 @@ class LapStore:
     def best_lap(self, track: str, car: str, exclude_lap_id: int | None = None,
                  phase: str | None = None, session_id: str | None = None) -> LapRecord | None:
         with self._lock:
+            # Exclude mapping-capture laps (slow weave/boundary laps) so a fresh
+            # track with only mapping laps doesn't pick one as the reference best.
             query = ("SELECT id FROM laps WHERE track = ? AND car = ? AND valid = 1 "
-                     "AND telemetry_path IS NOT NULL")
+                     "AND telemetry_path IS NOT NULL "
+                     "AND (phase IS NULL OR phase != 'mapping')")
             params: list = [track, car]
             if exclude_lap_id is not None:
                 query += " AND id != ?"

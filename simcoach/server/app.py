@@ -109,13 +109,13 @@ def _capture_loop(source, store, app_state) -> None:
     `source.laps()` is exhausted or raises -- the caller (build_app) wraps
     this in a retry loop so a real LMU source reconnects after a drop."""
     for lap in source.laps():
-        # Mapping mode: buffer boundary laps for ribbon reconstruction and NEVER
-        # persist them (no DB / sessions / lap-list / coach pollution). Cap the
-        # buffer so mapping mode left on can't grow it unbounded (keep last N).
+        # Mapping mode: buffer the lap for ribbon reconstruction AND persist it,
+        # tagged phase="mapping" so it gives an immediately-editable lap + shows in
+        # the session/lap list, but best_lap excludes it from coaching signals.
         if getattr(app_state, "mapping", False):
             app_state.map_buffer.append(lap)
             del app_state.map_buffer[:-_MAP_BUFFER_MAX]
-            continue
+            lap.phase = "mapping"
         lap_id = store.save(lap)
         app_state.latest = {"record": lap, "lap_id": lap_id}
 
