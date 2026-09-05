@@ -403,7 +403,9 @@ def test_mapcapture_start_buffers_laps_never_persists(tmp_path):
     from simcoach.server.app import _capture_loop
     app, store = _map_app(tmp_path)
     c = _tc(app)
-    assert c.post("/mapcapture/start").json() == {"active": True}
+    # JSON body required (CSRF guard) -- a bodyless POST is rejected.
+    assert c.post("/mapcapture/start").status_code == 422
+    assert c.post("/mapcapture/start", json={}).json() == {"active": True}
     assert app.state.mapping is True
 
     laps = [_edge("MapTrack", 1, 100.0), _edge("MapTrack", -1, 100.0)]
@@ -421,8 +423,30 @@ def test_mapcapture_start_buffers_laps_never_persists(tmp_path):
     assert [l["idx"] for l in st["laps"]] == [0, 1]
     assert st["laps"][0]["samples"] == 3 and st["laps"][0]["length"] == 100.0
 
-    assert c.post("/mapcapture/cancel").json() == {"active": False}
+    assert c.post("/mapcapture/cancel", json={}).json() == {"active": False}
     assert app.state.mapping is False and app.state.map_buffer == []
+
+
+def test_mapcapture_buffer_is_capped(tmp_path):
+    from simcoach.server.app import _MAP_BUFFER_MAX, _capture_loop
+    app, store = _map_app(tmp_path)
+    app.state.mapping = True
+    laps = [_edge("MapTrack", 1, 100.0) for _ in range(_MAP_BUFFER_MAX + 5)]
+
+    class Src:
+        def laps(self):
+            return iter(laps)
+
+    _capture_loop(Src(), store, app.state)
+    assert len(app.state.map_buffer) == _MAP_BUFFER_MAX  # bounded, keeps last N
+
+
+def test_mapcapture_build_rejects_negative_and_equal_indices(tmp_path):
+    app, _ = _map_app(tmp_path)
+    app.state.map_buffer = [_edge("MapTrack", 1, 100.0), _edge("MapTrack", -1, 100.0)]
+    c = _tc(app)
+    assert c.post("/mapcapture/build", json={"left": -1, "right": 0}).status_code == 422
+    assert c.post("/mapcapture/build", json={"left": 1, "right": 1}).status_code == 422
 
 
 def test_mapcapture_build_returns_ribbon_shape(tmp_path):
@@ -446,6 +470,8 @@ def test_mapcapture_save_writes_track_json(tmp_path):
     app.state.map_buffer = [_edge("MapTrack", 1, 100.0), _edge("MapTrack", -1, 100.0)]
     c = _tc(app)
     c.post("/mapcapture/build", json={"left": 0, "right": 1})
+    # Sim changed track between build and save -> save must use the BUILT track.
+    app.state.latest = {"record": _edge("OtherTrack", 1, 100.0), "lap_id": 1}
     r = c.post("/mapcapture/save", json={}).json()
     assert r == {"saved": True, "slug": "maptrack"}
     saved = json.loads((tmp_path / "tracks" / "maptrack.json").read_text())

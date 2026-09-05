@@ -47,6 +47,23 @@ def test_reconstruct_ribbon_flat_when_no_elevation():
     assert ribbon["bank"] == [0.0] * 5  # no pos_y -> flat
 
 
+def test_reconstruct_ribbon_nearest_point_pairing():
+    # Two parallel straight edges 2m apart (true width 2). The right edge's
+    # lap_distance is DISTORTED (a huge last segment) so equal-progress pairing
+    # would cut a diagonal and inflate width; nearest-point pairing gives ~2.
+    left = {
+        "pos_x": np.linspace(0.0, 10.0, 11), "pos_z": np.zeros(11),
+        "lap_distance": np.linspace(0.0, 10.0, 11),
+    }
+    right = {
+        "pos_x": np.linspace(0.0, 10.0, 11), "pos_z": np.full(11, 2.0),
+        "lap_distance": np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 100.0]),
+    }
+    ribbon = reconstruct_ribbon(left, right)  # default bins: dense enough to pair
+    assert all(abs(w - 2.0) < 0.2 for w in ribbon["width"])            # ~true width
+    assert all(abs(p[1] - 1.0) < 0.2 for p in ribbon["center"])       # midline z~1
+
+
 def test_reconstruct_ribbon_missing_pos_is_empty():
     assert reconstruct_ribbon({"lap_distance": np.arange(3.0)}, _edge(-5.0, 100.0)) == {}
 

@@ -35,6 +35,7 @@ from ..trackmap import average_racing_line, build_track_map, direction_from_path
 # wherever the sidecar is launched from. simcoach/server/app.py -> simcoach/tracks.
 _DEFAULT_TRACKS_DIR = Path(__file__).resolve().parent.parent / "tracks"
 _CLEAN_LAP_RATIO = 1.07  # keep laps within +7% of the track/car best (drop in/out/off laps)
+_MAP_BUFFER_MAX = 8      # cap mapping-mode buffer (need only 2 edges; keep last N)
 
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}  # port stripped before compare
 REST_PROBE_TTL = 2.0  # s: liveness probe rate cap so /status polling can't hammer LMU's REST
@@ -73,9 +74,11 @@ def _capture_loop(source, store, app_state) -> None:
     this in a retry loop so a real LMU source reconnects after a drop."""
     for lap in source.laps():
         # Mapping mode: buffer boundary laps for ribbon reconstruction and NEVER
-        # persist them (no DB / sessions / lap-list / coach pollution).
+        # persist them (no DB / sessions / lap-list / coach pollution). Cap the
+        # buffer so mapping mode left on can't grow it unbounded (keep last N).
         if getattr(app_state, "mapping", False):
             app_state.map_buffer.append(lap)
+            del app_state.map_buffer[:-_MAP_BUFFER_MAX]
             continue
         lap_id = store.save(lap)
         app_state.latest = {"record": lap, "lap_id": lap_id}
@@ -496,36 +499,43 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                                             bank=ribbon.get("bank"))
         except Exception:
             return []
-        # ponytail: solved apex_dist is metres along the (shorter) solved line, but
-        # we place markers against the centerline dist axis -- a few-% offset on a
-        # first-pass, user-draggable marker. Reconcile via station index if a
-        # consumer needs exact alignment.
-        length = ribbon["dist"][-1] if ribbon["dist"] else 0.0
+        # Place on the centerline by the solver's STATION INDICES (apex_idx/etc),
+        # so distances are exactly the centerline dist axis -- no solved-vs-center
+        # axis offset baked into the saved file.
+        dist = ribbon["dist"]
+        length = dist[-1] if dist else 0.0
+        n = len(dist)
         out = []
         for i, c in enumerate(solved):
-            apex = float(c["apex_dist"])
+            ai = int(c["apex_idx"]) % n
+            si = int(c["start_idx"]) % n
+            ei = int(c["end_idx"]) % n
+            apex = dist[ai]
             direction, confidence = multi_signal_direction(
-                ribbon["center"], ribbon["dist"], apex,
+                ribbon["center"], dist, apex,
                 edge_channels=edge_channels, lap_length=length,
             )
             out.append({
                 "number": i + 1, "name": f"Turn {i + 1}", "direction": direction,
                 "apex_dist": round(apex, 1),
-                "start_dist": round(float(c["start_dist"]), 1),
-                "end_dist": round(float(c["end_dist"]), 1),
+                "start_dist": round(dist[si], 1),
+                "end_dist": round(dist[ei], 1),
                 "confidence": confidence,
             })
         return out
 
+    # Body(...) forces an application/json content-type, so these bodyless POSTs
+    # stop being CORS "simple requests" -- the browser must preflight, which the
+    # origin allowlist blocks (CSRF guard for the mapping-mode toggle).
     @app.post("/mapcapture/start")
-    def mapcapture_start():
+    def mapcapture_start(body: dict = Body(...)):
         app.state.map_buffer = []
         app.state.last_ribbon = None
         app.state.mapping = True
         return {"active": True}
 
     @app.post("/mapcapture/cancel")
-    def mapcapture_cancel():
+    def mapcapture_cancel(body: dict = Body(...)):
         app.state.mapping = False
         app.state.map_buffer = []
         app.state.last_ribbon = None
@@ -546,25 +556,32 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         buf = app.state.map_buffer
         try:
             li, ri = int(body["left"]), int(body["right"])
-            left_rec, right_rec = buf[li], buf[ri]
-        except (KeyError, TypeError, ValueError, IndexError):
-            raise HTTPException(422, "left/right must be valid buffer indices")
+        except (KeyError, TypeError, ValueError):
+            raise HTTPException(422, "left/right must be integers")
+        # Reject negatives (Python would wrap buf[-1]) and left==right (degenerate
+        # zero-width ribbon).
+        if not (0 <= li < len(buf) and 0 <= ri < len(buf)) or li == ri:
+            raise HTTPException(422, "left/right must be distinct valid buffer indices")
+        left_rec, right_rec = buf[li], buf[ri]
         ribbon = reconstruct_ribbon(left_rec.channels, right_rec.channels)
         if not ribbon:
             raise HTTPException(422, "boundary laps lack position telemetry")
         corners = _place_corners(ribbon, left_rec.channels)
-        sectors = _shipped_extras(_live_track() or "").get("sectors") or []
-        app.state.last_ribbon = {"world": ribbon, "corners": corners, "sectors": sectors}
+        sectors = _shipped_extras(left_rec.track).get("sectors") or []
+        # Pin the track from the buffered lap NOW: the sim may change track between
+        # build and save, and the geometry belongs to this lap's track.
+        app.state.last_ribbon = {"world": ribbon, "corners": corners,
+                                 "sectors": sectors, "track": left_rec.track}
         return _clean(ribbon_to_screen(ribbon, corners, sectors))
 
     @app.post("/mapcapture/save")
-    def mapcapture_save(body: dict = Body(default={})):
+    def mapcapture_save(body: dict = Body(...)):
         rib = app.state.last_ribbon
         if not rib:
             raise HTTPException(422, "no built ribbon to save")
-        track = _live_track()
+        track = rib.get("track")
         if not track:
-            raise HTTPException(422, "no live track")
+            raise HTTPException(422, "no track for the built ribbon")
         world = rib["world"]
         # Strip to the CornerMap.load-compatible Corner shape (drops confidence
         # etc.), so the saved file still loads unchanged.

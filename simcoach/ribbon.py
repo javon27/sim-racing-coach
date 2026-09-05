@@ -65,6 +65,14 @@ def reconstruct_ribbon(left_channels: dict, right_channels: dict, bins: int = 50
         return {}
     lx, lz, ly = left
     rx, rz, ry = right
+    # Pair each left station with its NEAREST right point (a true cross-section),
+    # not the equal-progress point -- equal progress cuts a diagonal at asymmetric
+    # corners, inflating width and skewing bank/the solver corridor.
+    # ponytail: O(bins^2) broadcast (~fine at 500); can pick a wrong point where a
+    # track nearly touches itself -- acceptable for v0.1 layouts.
+    j = np.argmin((lx[:, None] - rx[None, :]) ** 2 + (lz[:, None] - rz[None, :]) ** 2, axis=1)
+    rx, rz = rx[j], rz[j]
+    ry = ry[j] if ry is not None else None
     cx, cz = (lx + rx) / 2.0, (lz + rz) / 2.0
     width = np.hypot(lx - rx, lz - rz)
     seg = np.hypot(np.diff(cx), np.diff(cz))
