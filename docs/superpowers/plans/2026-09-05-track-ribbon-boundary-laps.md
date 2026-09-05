@@ -14,6 +14,14 @@ geometry** (edges + centerline + width) from our OWN telemetry. No game assets, 
    the spec's deferred **replay-overlay** seam; full-rate telemetry keyed on the lap-distance
    axis (an architecture invariant) is exactly the alignment key it needs.
 
+## Shipped, user-facing tool (not just a dev tool)
+This whole flow — drive boundary laps → designate → reconstruct ribbon → place/verify corners
+→ save — ships **in the app** so end-users can generate layouts for tracks we DON'T ship (and
+Assetto Corsa tracks once AC support lands). Same tool we use to build the shipped set. Ties to
+the deferred "import user-built maps as canonical" item: a user's generated layout lives in
+their app-data; a promote/export path makes it canonical. So the UI must be end-user usable
+(clear designation, preview, save), not a dev script.
+
 ## Capture & designation
 - No new capture: position (`pos_x/pos_z` + `lap_distance`) is already recorded per lap.
 - The user drives ONE slow lap hugging the **left edge** and ONE hugging the **right edge**.
