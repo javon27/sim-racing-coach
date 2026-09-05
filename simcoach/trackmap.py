@@ -201,11 +201,13 @@ def build_track_map(channels: dict, corner_map, width: float = 1000, sectors=Non
         sx, sy = _to_screen(x[idx], z[idx])
         corners.append({
             "number": c.number,
+            "label": c.label or str(c.number),
             "name": c.name,
             "direction": c.direction,
             "x": round(sx, 1),
             "y": round(sy, 1),
             "apex_dist": round(float(c.apex_dist), 1),
+            "apexes": [round(float(a), 1) for a in (c.apexes or [c.apex_dist])],
             "start_dist": round(float(c.start_dist), 1),
             "end_dist": round(float(c.end_dist), 1),
         })
@@ -217,5 +219,6 @@ def build_track_map(channels: dict, corner_map, width: float = 1000, sectors=Non
         "dist": path_dist,
         "corners": corners,
         "sectors": list(sectors) if sectors else [],
+        "sections": getattr(corner_map, "sections", None) or [],
         "rotation": round(float(rotation), 1),
     }

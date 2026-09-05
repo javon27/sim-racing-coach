@@ -143,7 +143,7 @@ def multi_signal_direction(center, dist, apex_dist, edge_channels=None,
 
 
 def ribbon_to_screen(ribbon: dict, corners: list, sectors=None, width: float = 1000,
-                     rotation: float = 0.0) -> dict:
+                     rotation: float = 0.0, sections=None) -> dict:
     """Normalize the world ribbon (+ corners placed on the centerline) into one
     width x height screen box, aspect-preserved and vertically flipped, so left,
     right, center and the car-dot overlays all share one frame. Mirrors
@@ -191,5 +191,6 @@ def ribbon_to_screen(ribbon: dict, corners: list, sectors=None, width: float = 1
         "center": _screen(center),
         "corners": scorners,
         "sectors": list(sectors) if sectors else [],
+        "sections": list(sections) if sections else [],
         "rotation": round(float(rotation), 1),
     }

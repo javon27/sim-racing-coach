@@ -31,10 +31,12 @@ def format_corner_line(cm, units: str = "metric") -> str:
     """One driver-facing corner line: speeds, apex-relative brake/throttle, trail,
     peak g, and the delta vs best. Absolute lap-distance is never shown."""
     spd, _, spd_u, _ = unit_fns(units)
+    tag = f"T{cm.label or cm.corner_no}"
+    sect = f" [part of {cm.section}]" if cm.section else ""
     if math.isnan(cm.min_spd):
         # No telemetry in this corner's window (e.g. a sparse out-lap): say so
         # rather than render nan speeds + the defaulted (fake) brake/throttle.
-        return f"T{cm.corner_no} {cm.name} ({cm.direction}): no telemetry captured here"
+        return f"{tag} {cm.name} ({cm.direction}){sect}: no telemetry captured here"
     brake_before = cm.apex_dist - cm.brake_point
     thr_after = cm.throttle_point - cm.apex_dist
     brake_txt = (
@@ -43,12 +45,17 @@ def format_corner_line(cm, units: str = "metric") -> str:
     )
     thr_txt = f", back to throttle {thr_after:.0f}m after apex" if thr_after > 0 else ""
     line = (
-        f"T{cm.corner_no} {cm.name} ({cm.direction}): "
+        f"{tag} {cm.name} ({cm.direction}){sect}: "
         f"{spd(cm.entry_spd):.0f}→min {spd(cm.min_spd):.0f}→{spd(cm.exit_spd):.0f} {spd_u}, "
         f"{brake_txt}{thr_txt}, trail {cm.trailbrake_overlap:.0%}, peak {cm.peak_lat_g:.1f}g"
     )
     if not math.isnan(cm.min_grip):
         line += f", min grip {cm.min_grip:.2f}"   # 1.0 = full grip; low = sliding/locking
+    # Double-apex: name it and give the per-apex minima so the coach advises on both.
+    aps = cm.apexes or []
+    if len(aps) > 1 and cm.apex_min_speeds:
+        mins = "/".join(f"{spd(s):.0f}" for s in cm.apex_min_speeds)
+        line += f", {len(aps)}-apex (per-apex min {mins} {spd_u})"
     if cm.min_spd_delta is not None:
         line += f" (min vs best: {spd(cm.min_spd_delta):+.1f} {spd_u})"
     return line
@@ -114,7 +121,8 @@ def find_corner(analysis, corner) -> object | None:
     substring), so a tool can fetch just the one the driver asked about."""
     key = str(corner).strip().lower()
     for cm in analysis.corners:
-        if key == str(cm.corner_no) or key == f"t{cm.corner_no}":
+        lbl = str(cm.label or cm.corner_no).lower()
+        if key in (str(cm.corner_no), f"t{cm.corner_no}", lbl, f"t{lbl}"):
             return cm
     for cm in analysis.corners:
         if key and key in cm.name.lower():

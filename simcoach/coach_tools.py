@@ -253,7 +253,7 @@ class CoachContext:
             return "No lap captured yet (or no corner map for this track)."
         cm = find_corner(analysis, corner)
         if cm is None:
-            names = ", ".join(f"T{c.corner_no} {c.name}" for c in analysis.corners)
+            names = ", ".join(f"T{c.label or c.corner_no} {c.name}" for c in analysis.corners)
             return f"No corner matching {corner!r}. Corners this track: {names}"
         return format_corner_line(cm, self.units)
 

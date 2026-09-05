@@ -23,6 +23,10 @@ class CornerMetrics:
     peak_lat_g: float = 0.0          # max |lateral g| — how hard the car was loaded
     min_grip: float = float("nan")   # lowest grip fraction any tire saw (near 0 = sliding)
     min_spd_delta: Optional[float] = None
+    label: str = ""                          # displayed designation ("8A")
+    apexes: Optional[list[float]] = None     # apex lap_distances (>1 = multi-apex)
+    apex_min_speeds: Optional[list[float]] = None  # min speed per apex (parallel to apexes)
+    section: Optional[str] = None            # named section this corner sits in, if any
 
 
 @dataclass
@@ -83,6 +87,9 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
     throttle = record.channels["throttle"]
     steering = record.channels["steering"]
 
+    label = corner.label or str(corner.number)
+    apexes = list(corner.apexes) if corner.apexes else [corner.apex_dist]
+
     mask = (dist >= corner.start_dist) & (dist <= corner.end_dist)
     idx = np.where(mask)[0]
 
@@ -100,6 +107,7 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
             brake_point=corner.end_dist,
             throttle_point=corner.end_dist,
             trailbrake_overlap=0.0,
+            label=label, apexes=apexes,
         )
 
     win_dist = dist[idx]
@@ -122,6 +130,7 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
             brake_point=corner.end_dist,
             throttle_point=corner.end_dist,
             trailbrake_overlap=0.0,
+            label=label, apexes=apexes,
         )
 
     valid_i = np.where(~np.isnan(win_speed))[0]
@@ -158,6 +167,18 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
     except ValueError:
         direction = corner.direction
 
+    # Per-apex min speed: split the window at midpoints between consecutive apexes
+    # (a double-apex corner reports a min for each apex, so the coach can advise on
+    # both). apexes is the source of truth -- we don't auto-detect extra minima.
+    aps = [a for a in apexes if corner.start_dist <= a <= corner.end_dist] or [corner.apex_dist]
+    edges = [corner.start_dist] + [(aps[i] + aps[i + 1]) / 2 for i in range(len(aps) - 1)] + [corner.end_dist]
+    apex_min_speeds = []
+    for i in range(len(aps)):
+        seg = win_speed[(win_dist >= edges[i]) & (win_dist <= edges[i + 1])]
+        apex_min_speeds.append(
+            float(np.nanmin(seg)) if seg.size and not np.isnan(seg).all() else min_spd
+        )
+
     return CornerMetrics(
         corner_no=corner.number,
         name=corner.name,
@@ -173,6 +194,7 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
         peak_brake=peak_brake,
         peak_lat_g=peak_lat_g,
         min_grip=min_grip,
+        label=label, apexes=aps, apex_min_speeds=apex_min_speeds,
     )
 
 
@@ -183,6 +205,13 @@ def analyze_lap(
         raise ValueError(f"reference lap track {reference.track!r} != {record.track!r}")
 
     corners = [_metrics_for_corner(record, corner) for corner in cmap.corners]
+
+    # Tag each corner with the named section its apex falls in (e.g. "The Corkscrew").
+    for cm in corners:
+        for s in getattr(cmap, "sections", []) or []:
+            if s["start_dist"] <= cm.apex_dist <= s["end_dist"]:
+                cm.section = s["name"]
+                break
 
     has_reference = reference is not None
     if has_reference:

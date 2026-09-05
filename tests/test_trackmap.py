@@ -31,11 +31,11 @@ def test_square_path_normalized_into_box():
         assert 0 <= px <= m["width"]
         assert 0 <= py <= m["height"]
     # Vertical flip: world (100,0) -> bottom-right; world (100,100) -> top-right.
-    assert m["corners"][0] == {"number": 1, "name": "T1", "direction": "right",
-                               "x": 1000.0, "y": 1000.0,
+    assert m["corners"][0] == {"number": 1, "label": "1", "name": "T1", "direction": "right",
+                               "x": 1000.0, "y": 1000.0, "apexes": [100.0],
                                "apex_dist": 100.0, "start_dist": 50.0, "end_dist": 150.0}
-    assert m["corners"][1] == {"number": 2, "name": "T2", "direction": "left",
-                               "x": 1000.0, "y": 0.0,
+    assert m["corners"][1] == {"number": 2, "label": "2", "name": "T2", "direction": "left",
+                               "x": 1000.0, "y": 0.0, "apexes": [200.0],
                                "apex_dist": 200.0, "start_dist": 150.0, "end_dist": 250.0}
 
 

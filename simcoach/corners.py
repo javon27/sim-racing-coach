@@ -19,13 +19,30 @@ class Corner:
     start_dist: float
     apex_dist: float
     end_dist: float
+    label: str = ""                       # displayed designation ("8A"); defaults to str(number)
+    apexes: Optional[list[float]] = None  # lap_distances; defaults to [apex_dist] (double-apex -> 2)
+
+
+def _load_sections(data: dict) -> list[dict]:
+    """Named distance spans (straights, corner-group complexes, DRS zones):
+    [{name, kind, start_dist, end_dist}]. Default []; validate start<end in range."""
+    length = data.get("length") or data.get("length_m")
+    out = []
+    for s in data.get("sections", []) or []:
+        sd, ed = float(s["start_dist"]), float(s["end_dist"])
+        if not (0 <= sd < ed) or (length and ed > float(length) + 1e-6):
+            raise ValueError(f"section {s.get('name')!r}: bad span [{sd}, {ed}]")
+        out.append({"name": str(s.get("name", "")), "kind": str(s.get("kind", "section")),
+                    "start_dist": sd, "end_dist": ed})
+    return out
 
 
 class CornerMap:
     """Loads and queries corner data from a track map JSON file."""
 
-    def __init__(self, corners: list[Corner]):
+    def __init__(self, corners: list[Corner], sections: Optional[list[dict]] = None):
         self.corners = corners
+        self.sections = sections or []
 
     @classmethod
     def load(cls, path: str) -> "CornerMap":
@@ -48,7 +65,11 @@ class CornerMap:
                     f"corner {c.number}: apex_dist ({c.apex_dist}) must be within "
                     f"[start_dist, end_dist] ({c.start_dist}, {c.end_dist})"
                 )
-        return cls(corners)
+            if not c.label:                       # back-compat: label defaults to the number
+                c.label = str(c.number)
+            if not c.apexes:                      # back-compat: single-apex default
+                c.apexes = [c.apex_dist]
+        return cls(corners, _load_sections(data))
 
     def corner_at(self, dist: float) -> Optional[Corner]:
         """Return the first corner whose [start_dist, end_dist] contains dist (inclusive boundaries)."""

@@ -245,6 +245,36 @@ def test_put_map_saves_and_direction_is_server_derived(tmp_path):
     assert got["corners"][0]["name"] == "The Bend"
 
 
+def test_put_map_persists_label_apexes_sections(tmp_path):
+    app, lap_id, tracks = _curve_app(tmp_path)
+    c = _tc(app)
+    r = c.put(f"/laps/{lap_id}/map", json={
+        "corners": [{"number": 1, "label": "8A", "name": "Bend", "apex_dist": 200.0,
+                     "apexes": [190.0, 210.0], "start_dist": 150.0, "end_dist": 250.0}],
+        "sectors": [150.0],
+        "sections": [{"name": "The Esses", "kind": "complex", "start_dist": 100.0, "end_dist": 300.0}],
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["corners"][0]["label"] == "8A"
+    assert body["corners"][0]["apexes"] == [190.0, 210.0]
+    assert body["sections"][0]["name"] == "The Esses"
+    saved = json.loads((tracks / "curveland.json").read_text())
+    assert saved["corners"][0]["label"] == "8A" and saved["sections"][0]["kind"] == "complex"
+    # GET serves the persisted label/apexes/sections.
+    got = c.get(f"/laps/{lap_id}/map?avg=1").json()
+    assert got["corners"][0]["label"] == "8A" and got["sections"][0]["name"] == "The Esses"
+
+
+def test_put_map_bad_section_span_is_422(tmp_path):
+    app, lap_id, _ = _curve_app(tmp_path)
+    r = _tc(app).put(f"/laps/{lap_id}/map", json={
+        "corners": [{"number": 1, "apex_dist": 200.0}],
+        "sections": [{"name": "x", "start_dist": 300.0, "end_dist": 100.0}],
+    })
+    assert r.status_code == 422
+
+
 def test_put_map_invalid_window_is_422(tmp_path):
     app, lap_id, tracks = _curve_app(tmp_path)
     r = _tc(app).put(f"/laps/{lap_id}/map", json={

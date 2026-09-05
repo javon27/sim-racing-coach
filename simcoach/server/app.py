@@ -155,6 +155,28 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         except (OSError, ValueError, HTTPException):
             return {}
 
+    def _clean_sections(raw, length: float) -> list:
+        # Validate/normalize a client sections array: [{name,kind,start_dist,end_dist}]
+        # with 0<=start<end<=length. 422 on anything malformed.
+        if raw is None:
+            return []
+        if not isinstance(raw, list):
+            raise HTTPException(422, "sections must be a list")
+        out = []
+        for s in raw:
+            if not isinstance(s, dict):
+                raise HTTPException(422, "each section must be an object")
+            try:
+                sd, ed = float(s["start_dist"]), float(s["end_dist"])
+            except (KeyError, TypeError, ValueError):
+                raise HTTPException(422, "section requires numeric start_dist/end_dist")
+            if not (math.isfinite(sd) and math.isfinite(ed) and 0.0 <= sd < ed <= length):
+                raise HTTPException(422, "section span must satisfy 0 <= start < end <= length")
+            out.append({"name": str(s.get("name", ""))[:60],
+                        "kind": str(s.get("kind", "section"))[:16],
+                        "start_dist": round(sd, 1), "end_dist": round(ed, 1)})
+        return out
+
     def _track_rotation(track: str) -> float:
         # Per-track display rotation (degrees), 0 if unset/invalid (back-compat).
         r = _track_file_data(track).get("rotation", 0.0)
@@ -438,6 +460,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             except (KeyError, TypeError, ValueError):
                 raise HTTPException(422, "corner requires integer number and numeric apex_dist")
             name = str(c.get("name") or f"Turn {number}")[:80]  # cap: owned data + coach prompt
+            label = str(c.get("label") or number)[:8]  # displayed designation ("8A")
             if not math.isfinite(apex) or not (0.0 <= apex <= length):
                 raise HTTPException(422, f"corner {number}: apex_dist out of range")
             if number in seen_numbers:
@@ -457,10 +480,19 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             if not (start < apex < end):
                 raise HTTPException(422, f"corner {number}: require start_dist < apex_dist < end_dist")
             direction = direction_from_path(path, dist, apex)  # server-derived, never client
+            # Optional multi-apex list; keep only finite apexes inside the window,
+            # else fall back to the single primary apex.
+            raw_apexes = c.get("apexes")
+            apexes = [apex]
+            if isinstance(raw_apexes, list):
+                kept = [float(a) for a in raw_apexes
+                        if isinstance(a, (int, float)) and math.isfinite(a) and start <= a <= end]
+                if kept:
+                    apexes = sorted(round(a, 1) for a in kept)
             corners.append({
-                "number": number, "name": name, "direction": direction,
+                "number": number, "label": label, "name": name, "direction": direction,
                 "start_dist": round(start, 1), "apex_dist": round(apex, 1),
-                "end_dist": round(end, 1),
+                "end_dist": round(end, 1), "apexes": apexes,
             })
         corners.sort(key=lambda c: c["apex_dist"])
 
@@ -476,12 +508,15 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         if any(a >= b for a, b in zip(sectors, sectors[1:])):
             raise HTTPException(422, "sector splits must be strictly increasing")
 
+        sections = _clean_sections(body.get("sections"), length)
+
         out = {
             "track": track_slug(rec.track),
             "corners": corners,
             "path": path,
             "path_dist": dist,
             "sectors": sectors,
+            "sections": sections,
             "length": length,
             "rotation": _track_rotation(rec.track),  # preserve existing rotation
         }
@@ -545,8 +580,9 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 edge_channels=edge_channels, lap_length=length,
             )
             out.append({
-                "number": i + 1, "name": f"Turn {i + 1}", "direction": direction,
-                "apex_dist": round(apex, 1),
+                "number": i + 1, "label": str(i + 1), "name": f"Turn {i + 1}",
+                "direction": direction,
+                "apex_dist": round(apex, 1), "apexes": [round(apex, 1)],
                 "start_dist": round(dist[si], 1),
                 "end_dist": round(dist[ei], 1),
                 "confidence": confidence,
@@ -596,13 +632,15 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         if not ribbon:
             raise HTTPException(422, "boundary laps lack position telemetry")
         corners = _place_corners(ribbon, left_rec.channels)
-        sectors = _shipped_extras(left_rec.track).get("sectors") or []
+        extras = _track_file_data(left_rec.track)
+        sectors = extras.get("sectors") or []
+        sections = extras.get("sections") or []
         # Pin the track from the buffered lap NOW: the sim may change track between
         # build and save, and the geometry belongs to this lap's track.
-        app.state.last_ribbon = {"world": ribbon, "corners": corners,
-                                 "sectors": sectors, "track": left_rec.track}
+        app.state.last_ribbon = {"world": ribbon, "corners": corners, "sectors": sectors,
+                                 "sections": sections, "track": left_rec.track}
         return _clean(ribbon_to_screen(ribbon, corners, sectors,
-                                       rotation=_track_rotation(left_rec.track)))
+                                       rotation=_track_rotation(left_rec.track), sections=sections))
 
     @app.post("/mapcapture/save")
     def mapcapture_save(body: dict = Body(...)):
@@ -615,8 +653,9 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         world = rib["world"]
         # Strip to the CornerMap.load-compatible Corner shape (drops confidence
         # etc.), so the saved file still loads unchanged.
-        keys = ("number", "name", "direction", "start_dist", "apex_dist", "end_dist")
-        corners = [{k: c[k] for k in keys} for c in rib["corners"]]
+        keys = ("number", "label", "name", "direction", "start_dist", "apex_dist",
+                "end_dist", "apexes")
+        corners = [{k: c[k] for k in keys if k in c} for c in rib["corners"]]
         out = {
             "track": track_slug(track),
             "corners": corners,
@@ -624,6 +663,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             "path": world["center"],
             "path_dist": world["dist"],
             "sectors": rib["sectors"],
+            "sections": rib.get("sections", []),  # preserve existing named sections
             "length": world["dist"][-1] if world["dist"] else 0.0,
             "rotation": _track_rotation(track),  # preserve any existing rotation
         }
