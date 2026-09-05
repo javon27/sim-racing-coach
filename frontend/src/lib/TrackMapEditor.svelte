@@ -775,6 +775,7 @@
     gap: 8px;
     padding: 10px 14px;
     border-bottom: 1px solid var(--muted);
+    flex-wrap: wrap;
   }
   footer {
     border-bottom: none;
@@ -790,6 +791,7 @@
     display: flex;
     align-items: center;
     gap: 4px;
+    flex-wrap: wrap;
   }
   .rot input {
     width: 56px;
@@ -825,6 +827,7 @@
   .tools {
     display: flex;
     gap: 6px;
+    flex-wrap: wrap;
   }
   .corners {
     list-style: none;
