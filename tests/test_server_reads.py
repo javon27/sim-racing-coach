@@ -399,9 +399,12 @@ def test_analysis_resolves_map_per_track(tmp_path, synthetic_lap):
     assert c.get(f"/laps/{other_id}/analysis").status_code == 404
 
 
-def test_status_has_map_reflects_canonical(tmp_path):
+def test_status_has_map_reflects_canonical(tmp_path, monkeypatch):
     # has_map = a canonical outline is available for the live track (a pos lap
     # exists to average, or a frozen file) -- not merely a loaded CornerMap.
+    # No live SMM so /status uses the latest lap's track deterministically.
+    from simcoach.lmu import smm
+    monkeypatch.setattr(smm, "read_session_track_car", lambda: None)
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     pos = store.save(_curve_lap("Curveland", "GT3", 90.0))
     coach = Coach(FakeModel(), "simcoach/knowledge")
@@ -554,7 +557,11 @@ def test_mapcapture_detected_corners_reach_editor(tmp_path):
     assert [x["name"] for x in got["corners"]] == ["Turn 1"]
 
 
-def test_mapcapture_save_persists_raw_capture_and_rebuild(tmp_path):
+def test_mapcapture_save_persists_raw_capture_and_rebuild(tmp_path, monkeypatch):
+    # No live SMM so _live_track resolves the track from the latest lap (MapTrack),
+    # not whatever sim happens to be running on the dev machine.
+    from simcoach.lmu import smm
+    monkeypatch.setattr(smm, "read_session_track_car", lambda: None)
     app, store = _map_app(tmp_path)
     app.state.latest = {"record": _edge("MapTrack", 1, 100.0), "lap_id": 0}
     app.state.map_buffer = [_edge("MapTrack", 1, 100.0), _edge("MapTrack", -1, 100.0)]

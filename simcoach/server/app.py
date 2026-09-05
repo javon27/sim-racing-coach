@@ -353,10 +353,9 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         return rest
 
     def _live_track():
-        # Current track: the latest captured lap's track, else the live SMM read.
-        latest = app.state.latest
-        if latest is not None:
-            return latest["record"].track
+        # Current track: prefer the live SMM read so a track change is detected
+        # immediately (else mapping a new track would save under the OLD one). Fall
+        # back to the latest captured lap only when SMM is unavailable (sim closed).
         try:
             from ..lmu.smm import read_session_track_car
             tc = read_session_track_car()
@@ -364,7 +363,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 return tc[0]
         except Exception:
             pass
-        return None
+        latest = app.state.latest
+        return latest["record"].track if latest is not None else None
 
     app.add_middleware(CORSMiddleware, allow_origins=FRONTEND_ORIGINS,
                         allow_methods=["*"], allow_headers=["*"])
@@ -382,22 +382,30 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
 
     @app.get("/status")
     def status():
+        # Live track/car from shared memory FIRST, so a track/car change is detected
+        # right away. The latest captured lap adds rich context (on_track + session/
+        # lap ids) but ONLY while it still matches the live session; once the driver
+        # moves to another track/car it's stale, so drop it (else we'd report the old
+        # track and, worse, map the new track under the old slug).
+        try:
+            from ..lmu.smm import read_session_track_car
+            live = read_session_track_car()  # (track, car) | None
+        except Exception:
+            live = None
         latest = app.state.latest
+        matches_live = (
+            latest is not None
+            and (live is None
+                 or (latest["record"].track == live[0] and latest["record"].car == live[1]))
+        )
         session_id = lap_id = None
-        if latest is not None:
+        if matches_live:
             record = latest["record"]
             track, car, on_track = record.track, record.car, True
             session_id, lap_id = record.session_id, latest["lap_id"]
         else:
+            track, car = (live[0], live[1]) if live else (None, None)
             on_track = False
-            track = car = None
-            try:
-                from ..lmu.smm import read_session_track_car
-                tc = read_session_track_car()
-                if tc:
-                    track, car = tc
-            except Exception:
-                track = car = None
         return {
             "track": track, "car": car,
             "on_track": on_track,

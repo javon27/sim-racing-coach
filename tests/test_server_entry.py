@@ -93,6 +93,40 @@ def test_status_lmu_connected_reflects_disconnect(tmp_path, monkeypatch):
     assert tc.get("/status", headers={"host": "127.0.0.1"}).json()["lmu_connected"] is True
 
 
+def test_status_detects_track_change_over_stale_latest(tmp_path, monkeypatch):
+    # A captured lap pins app.state.latest to track A; when the driver moves to
+    # track B the live SMM read must win — /status reports B (on_track False, no
+    # stale lap ids), else the app shows the old track and would map B under A's
+    # slug. Regression for "still shows Algarve after moving to Imola".
+    from fastapi.testclient import TestClient
+
+    from simcoach.coach import Coach
+    from simcoach.model.fake import FakeModel
+    from simcoach.server.app import create_app
+    from simcoach.store import LapStore
+    from simcoach.model_types import LapRecord
+    from simcoach.lmu import smm
+
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    coach = Coach(FakeModel(reply="ok"), "simcoach/knowledge")
+    app = create_app(store, coach, rest_factory=lambda: None)
+    rec = LapRecord("lmu", "Algarve", "CarA", 90.0, True, 0.0, {},
+                    session_id="algarve--cara--offline")
+    app.state.latest = {"record": rec, "lap_id": 42}
+    tc = TestClient(app, base_url="http://127.0.0.1")
+
+    # Same track live -> the captured lap supplies the rich context.
+    monkeypatch.setattr(smm, "read_session_track_car", lambda: ("Algarve", "CarA"))
+    s = tc.get("/status", headers={"host": "127.0.0.1"}).json()
+    assert s["track"] == "Algarve" and s["on_track"] is True and s["lap_id"] == 42
+
+    # Driver moved to track B -> live read wins, stale lap context dropped.
+    monkeypatch.setattr(smm, "read_session_track_car", lambda: ("Imola", "CarB"))
+    s = tc.get("/status", headers={"host": "127.0.0.1"}).json()
+    assert s["track"] == "Imola" and s["car"] == "CarB"
+    assert s["on_track"] is False and s["session_id"] is None and s["lap_id"] is None
+
+
 def test_status_probe_is_rate_capped(tmp_path):
     # Rapid /status polls must not each hit LMU's REST (threadpool-saturation guard):
     # with the default REST_PROBE_TTL, a burst shares one liveness probe.

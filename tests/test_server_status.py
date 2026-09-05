@@ -24,7 +24,11 @@ def test_status_offline_shape(tmp_path, monkeypatch):
     assert b["session_id"] is None and b["lap_id"] is None
 
 
-def test_status_on_track_from_latest(tmp_path, synthetic_lap):
+def test_status_on_track_from_latest(tmp_path, synthetic_lap, monkeypatch):
+    # No live SMM (deterministic regardless of whether LMU is running): /status
+    # falls back to the latest captured lap for context.
+    from simcoach.lmu import smm
+    monkeypatch.setattr(smm, "read_session_track_car", lambda: None)
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     app = create_app(store, Coach(FakeModel(), "simcoach/knowledge"))
     app.state.latest = {"record": synthetic_lap, "lap_id": 1}
