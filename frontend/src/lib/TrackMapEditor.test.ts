@@ -329,6 +329,23 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     await fireEvent.click(screen.getByText("Rebuild from saved capture"));
     expect(await screen.findByText(/no saved capture for this track/i)).toBeTruthy();
   });
+
+  // Regression: on a fresh/unmapped session (lapId=null) starting a capture must
+  // NOT be torn down by the teardown effect — it used to cancelGen() the instant
+  // genPhase became "capturing", killing the capture and leaking laps to the store.
+  it("fresh session (lapId=null): capture starts and is NOT auto-cancelled", async () => {
+    render(TrackMapEditor, { props: { lapId: null, open: true, pollMs: 5 } });
+    // No lap map -> the capture-entry panel, not a dead "Loading…".
+    await fireEvent.click(await screen.findByText("(Re)generate map layout"));
+
+    expect(startMapCapture).toHaveBeenCalled();
+    await screen.findByText(/full track width/i); // entered + stayed in capturing
+    expect(cancelMapCapture).not.toHaveBeenCalled(); // the bug: instant cancel
+
+    cap.laps = [{ idx: 0, samples: 500, length: 5000 }];
+    await waitFor(() => expect(screen.getByText(/1 lap\(s\) buffered/i)).toBeTruthy());
+    expect(cancelMapCapture).not.toHaveBeenCalled(); // still alive while buffering
+  });
 });
 
 describe("TrackMapEditor — rotation", () => {
