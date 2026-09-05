@@ -87,7 +87,7 @@
       {/each}
     </svg>
   {:else if phase === "none"}
-    <p class="empty">No track map for this lap yet (position not captured)</p>
+    <p class="empty">No map for this track yet. Drive a lap with position capture, then build it in the map editor.</p>
   {:else}
     <p class="empty">Loading…</p>
   {/if}

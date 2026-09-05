@@ -55,7 +55,7 @@ describe("TrackMap", () => {
 
     render(TrackMap, { props: { lapId: 7 } });
 
-    expect(await screen.findByText(/no track map for this lap/i)).toBeTruthy();
+    expect(await screen.findByText(/no map for this track/i)).toBeTruthy();
   });
 
   it("shows the no-map note when the fetch is rejected", async () => {
@@ -63,6 +63,6 @@ describe("TrackMap", () => {
 
     render(TrackMap, { props: { lapId: 7 } });
 
-    expect(await screen.findByText(/no track map for this lap/i)).toBeTruthy();
+    expect(await screen.findByText(/no map for this track/i)).toBeTruthy();
   });
 });
