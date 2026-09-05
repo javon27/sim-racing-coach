@@ -106,6 +106,10 @@ REMAINING on the editor (deferred, not blockers):
 - [ ] **Direction real-data verify** (rig-gated) — `_LEFT_TURN_IS_CROSS_POSITIVE` pinned by synthetic test + indirect lat_g/steering check; `test_direction_monza_real` SKIPPED (no stored lap has `pos_x/pos_z` yet — capture started `2a43826`). RISK: shipped directions could be globally inverted until confirmed on a real pos lap.
 - [ ] **Manual portrait-track drag check** — CTM pointer transform isn't unit-testable in jsdom; one manual drag on a portrait track (world zrange>xrange) confirms letterbox snapping.
 
+## Edit-map "Save" button unstyled (2026-09-05, LOW)
+The Save button on the edit-map screen has no styling (looks like a default/bare button). Give
+it the app's primary-button style (match the other primary actions). Cosmetic. TrackMapEditor.svelte.
+
 ## Ribbon-preview rotation not persisted on first Save (2026-09-05, LOW)
 Review finding: in the fresh-ribbon flow the preview rotates by the dialed `angle`, but
 `mapcapture_save` (app.py ~665) writes `rotation: _track_rotation(track)` (the pre-existing
