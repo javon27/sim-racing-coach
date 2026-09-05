@@ -22,9 +22,37 @@ from simcoach.lmu.smm import (
     open_first_available,
     player_position,
     sample_from_telem,
+    sector_bounds_from,
     telemetry_is_sane,
     version_ok,
 )
+
+
+def test_sector_bounds_from_two_clean_transitions():
+    assert sector_bounds_from([1900.0, 3800.0], 5793.0) == pytest.approx([1900.0, 3800.0])
+
+
+def test_sector_bounds_from_guards():
+    # Wrong count (missing a transition, or a flicker adding a third).
+    assert sector_bounds_from([1900.0], 5793.0) is None
+    assert sector_bounds_from([1000.0, 2000.0, 3000.0], 5793.0) is None
+    # Out of order / not strictly increasing.
+    assert sector_bounds_from([3800.0, 1900.0], 5793.0) is None
+    assert sector_bounds_from([1900.0, 1900.0], 5793.0) is None
+    # Out of (0, length).
+    assert sector_bounds_from([0.0, 3800.0], 5793.0) is None
+    assert sector_bounds_from([1900.0, 6000.0], 5793.0) is None
+    # No/invalid lap length.
+    assert sector_bounds_from([1900.0, 3800.0], None) is None
+    assert sector_bounds_from([1900.0, 3800.0], 0.0) is None
+
+
+def test_build_lap_record_carries_sector_bounds():
+    record = build_lap_record(
+        "lmu", "track", "car", lap_time=92.5, invalidated=0, timestamp=0.0,
+        channels={"speed": [100.0]}, sector_bounds=[1900.0, 3800.0],
+    )
+    assert record.sector_bounds == [1900.0, 3800.0]
 
 
 def test_player_position_positive_is_int():
@@ -300,6 +328,96 @@ def test_laps_commits_only_completed_freshly_timed_laps(monkeypatch):
     assert abs(records[0].lap_time - 92.5) < 1e-6
     d = records[0].channels["lap_distance"]
     assert d.max() > 3000 and d.min() < 100   # spans the flying lap, not the out-lap/teleport
+
+
+def test_sector_boundary_dists_forward_transitions_only():
+    from simcoach.lmu.smm import sector_boundary_dists
+    # A lap's samples: sector steps 1->2 at d=1000, 2->3 at d=2000; the S/F wrap
+    # back to 1 (a DECREASE) is not a boundary.
+    dists = [0.0, 500.0, 1000.0, 1500.0, 2000.0, 2500.0, 0.0]
+    sectors = [1, 1, 2, 2, 3, 3, 1]
+    assert sector_boundary_dists(dists, sectors) == [1000.0, 2000.0]
+    # Feeds cleanly into the guard.
+    from simcoach.lmu.smm import sector_bounds_from
+    assert sector_bounds_from(sector_boundary_dists(dists, sectors), 3000.0) == [1000.0, 2000.0]
+
+
+def test_sector_boundary_dists_messy_sequence_rejected_by_guard():
+    from simcoach.lmu.smm import sector_boundary_dists, sector_bounds_from
+    # Flicker adds a spurious third forward change -> guard rejects (need exactly 2).
+    dists = [0.0, 1000.0, 1100.0, 2000.0]
+    sectors = [1, 2, 3, 2]  # 1->2, 2->3 (only two forward); 3->2 is a decrease
+    # ...but a genuine flicker 1->2->1->2 yields two forwards at odd places:
+    flick_d = [0.0, 500.0, 700.0, 900.0]
+    flick_s = [1, 2, 1, 2]
+    assert sector_boundary_dists(flick_d, flick_s) == [500.0, 900.0]
+    # An incomplete lap (only one transition) -> None.
+    assert sector_bounds_from(sector_boundary_dists([0.0, 1000.0], [1, 2]), 3000.0) is None
+
+
+def test_laps_records_sector_bounds_end_to_end(monkeypatch):
+    """Integration guard: the loop reads mCurrentSector from the TELEM struct and
+    a flying lap stepping 1->2->3 records two boundaries. Mirrors the committed-lap
+    test's cadence (proven reliable)."""
+    import mmap
+    import threading
+    import time as _t
+    from simcoach.lmu import smm
+    from simcoach.lmu.rf2structs import rF2Scoring, rF2Telemetry
+
+    tn, sn = "$simcoach_test_telem_sb$", "$simcoach_test_scoring_sb$"
+    monkeypatch.setattr(smm, "TELEMETRY_CANDIDATES", [tn])
+    monkeypatch.setattr(smm, "SCORING_CANDIDATES", [sn])
+    tmap = mmap.mmap(-1, C.sizeof(rF2Telemetry), tagname=tn, access=mmap.ACCESS_WRITE)
+    smap = mmap.mmap(-1, C.sizeof(rF2Scoring), tagname=sn, access=mmap.ACCESS_WRITE)
+
+    def write(dist, last_lap, sector, lap_no=0, spd=180.0):
+        t = rF2Telemetry(); t.mVersionUpdateBegin = t.mVersionUpdateEnd = 1; t.mNumVehicles = 1
+        v = t.mVehicles[0]; v.mID = 1; v.mLapNumber = lap_no; v.mLocalVel.z = -spd / 3.6
+        v.mTrackName = b"Test Circuit"; v.mVehicleName = b"Car"; v.mCurrentSector = sector
+        s = rF2Scoring(); s.mScoringInfo.mVersionUpdateBegin = s.mScoringInfo.mVersionUpdateEnd = 1
+        s.mScoringInfo.mNumVehicles = 1; s.mScoringInfo.mSession = 2
+        pv = s.mVehicles[0]; pv.mID = 1; pv.mIsPlayer = True; pv.mLapDist = dist; pv.mLastLapTime = last_lap
+        tmap.seek(0); tmap.write(bytes(t)); smap.seek(0); smap.write(bytes(s))
+
+    write(5.0, -1.0, 1)
+    stop = [False]
+
+    def writer():
+        def ramp(d0, d1, last, lap, secs=1.2):
+            n = int(secs / 0.03)
+            for i in range(n):
+                if stop[0]:
+                    return
+                d = d0 + (d1 - d0) * i / n
+                sector = 1 if d < 1500 else (2 if d < 3000 else 3)
+                write(d, last, sector, lap); _t.sleep(0.03)
+        ramp(3, 4500, -1.0, 1)                    # the flying lap, sectors step 1->2->3
+        write(2.0, 92.5, 1, lap_no=2); _t.sleep(0.4)  # cross S/F, fresh time -> COMMIT
+        stop[0] = True
+
+    records = []
+
+    def cap():
+        try:
+            for lap in smm.LmuSource(poll_hz=60).laps():
+                records.append(lap)
+                if stop[0]:
+                    break
+        except Exception:
+            pass
+
+    threading.Thread(target=writer, daemon=True).start()
+    ct = threading.Thread(target=cap, daemon=True); ct.start()
+    while not stop[0]:
+        _t.sleep(0.05)
+    _t.sleep(0.3)
+    tmap.close(); smap.close()
+
+    assert len(records) == 1
+    b = records[0].sector_bounds
+    assert b is not None, "expected two clean sector transitions to record bounds"
+    assert 1300 < b[0] < 1700 and 2800 < b[1] < 3200
 
 
 def test_session_phase_maps_msession_index():

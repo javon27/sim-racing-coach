@@ -12,7 +12,7 @@ import numpy as np
 
 from simcoach.model_types import LapRecord
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS laps (
     s1 REAL,
     s2 REAL,
     s3 REAL,
-    position INTEGER
+    position INTEGER,
+    sector_bounds TEXT
 );
 CREATE TABLE IF NOT EXISTS ingested_files (
     path TEXT PRIMARY KEY,
@@ -185,6 +186,12 @@ class LapStore:
                 cols = [r[1] for r in self.conn.execute("PRAGMA table_info(laps)")]
                 if cols and "position" not in cols:
                     _add_column(self.conn, "laps", "position INTEGER")
+            if current_version < 10:
+                # v9 -> v10: per-lap sector-boundary distances (JSON [d1, d2] of
+                # lap_distance), nullable. Existing rows stay NULL.
+                cols = [r[1] for r in self.conn.execute("PRAGMA table_info(laps)")]
+                if cols and "sector_bounds" not in cols:
+                    _add_column(self.conn, "laps", "sector_bounds TEXT")
         if current_version != SCHEMA_VERSION:
             self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self.conn.commit()
@@ -195,14 +202,15 @@ class LapStore:
             with self._lock, self.conn:
                 def _sec(i):
                     return record.sectors[i] if record.sectors and len(record.sectors) > i else None
+                bounds = json.dumps(record.sector_bounds) if record.sector_bounds else None
                 cur = self.conn.execute(
                     "INSERT INTO laps (ts, sim, track, car, lap_time, valid, telemetry_path, "
-                    "phase, session_id, s1, s2, s3, position) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "phase, session_id, s1, s2, s3, position, sector_bounds) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (record.timestamp, record.sim, record.track, record.car,
                      record.lap_time, int(record.valid), None,
                      record.phase, record.session_id, _sec(0), _sec(1), _sec(2),
-                     record.position),
+                     record.position, bounds),
                 )
                 lap_id = cur.lastrowid
                 telemetry_path = os.path.join(self.data_dir, f"{lap_id}.npz")

@@ -331,6 +331,43 @@ def compute_sectors(
     return None
 
 
+def sector_boundary_dists(dists: list[float], sectors: list[int]) -> list[float]:
+    """lap_distances at each FORWARD mCurrentSector change (parallel lists). The
+    S/F wrap is a DECREASE and is not counted, so a clean lap yields two entries
+    (end S1, end S2). Pure; the loop feeds it a lap's accumulated samples."""
+    out: list[float] = []
+    prev: int | None = None
+    for d, s in zip(dists, sectors):
+        if prev is not None and s > prev:
+            out.append(d)
+        prev = s
+    return out
+
+
+def sector_bounds_from(
+    sector_dists: list[float], lap_length: float | None
+) -> list[float] | None:
+    """Two in-lap sector-boundary distances (end of S1, end of S2) from the
+    lap_distances captured at forward mCurrentSector transitions, or None if the
+    observation isn't clean -- mirrors compute_sectors: ship None over a wrong
+    convention rather than a misplaced split.
+
+    # ponytail: the mCurrentSector->sector-number mapping is UNCONFIRMED (rF2 has
+    # a known off-by-one). We key only off FORWARD index changes, so a 0/1/2 or a
+    # 1/2/3 ordering both yield the same two boundaries; the guard rejects any lap
+    # that didn't show exactly two clean, increasing in-bounds transitions. RIG:
+    # eyeball that the two distances land at the real S1/S2 split points.
+    """
+    if lap_length is None or lap_length <= 0 or len(sector_dists) != 2:
+        return None
+    d1, d2 = sector_dists
+    if not (math.isfinite(d1) and math.isfinite(d2)):
+        return None
+    if not (0 < d1 < d2 < lap_length):
+        return None
+    return [float(d1), float(d2)]
+
+
 def player_position(place) -> int | None:
     """The player's live race position (mPlace) as a 1-based int, or None for the
     0/unset sentinel LMU reports when not racing. Guards nonsensical values so a
@@ -350,6 +387,7 @@ def build_lap_record(
     session_id: str | None = None,
     sectors: list[float] | None = None,
     position: int | None = None,
+    sector_bounds: list[float] | None = None,
 ) -> LapRecord | None:
     """Pure decision: turn a completed lap's raw fields into a LapRecord, or
     None if the lap shouldn't be stored.
@@ -373,6 +411,7 @@ def build_lap_record(
         session_id=session_id,
         sectors=sectors,
         position=position,
+        sector_bounds=sector_bounds,
     )
 
 
@@ -448,6 +487,10 @@ class LmuSource:
         channels: dict[str, list[float]] = {}
         prev_dist: float | None = None
         committed_time: float | None = None
+        # Per-lap mCurrentSector sample, parallel to channels["lap_distance"];
+        # forward changes become the sector boundaries at commit (see
+        # sector_boundary_dists / sector_bounds_from).
+        sector_seq: list[int] = []
         # A "session" is one (track, car, online|offline) combo with a stable,
         # deterministic id -- all sim phases merge, and the id survives sidecar
         # restarts. mSession still gives the per-lap phase label.
@@ -477,20 +520,28 @@ class LmuSource:
                         player.mLastSector1, player.mLastSector2, lap_time
                     )
                     position = player_position(player.mPlace)
+                    lap_dists = channels.get("lap_distance") or []
+                    lap_len = max(lap_dists or [0.0])
+                    sector_bounds = sector_bounds_from(
+                        sector_boundary_dists(lap_dists, sector_seq), lap_len
+                    )
                     record = build_lap_record(
                         sim="lmu", track=track, car=car, lap_time=lap_time,
                         invalidated=vt.mLapInvalidated, timestamp=time.time(),
                         channels=channels, phase=phase, session_id=session_id,
-                        sectors=sectors, position=position,
+                        sectors=sectors, position=position, sector_bounds=sector_bounds,
                     )
                     if record is not None:
                         committed_time = lap_time
                         yield record
                 channels = {}  # start the next lap fresh (committed or discarded)
+                sector_seq = []
 
             sample = sample_from_telem(vt, dist)
             for k, v in sample.items():
                 channels.setdefault(k, []).append(v)
             prev_dist = dist
+            # mCurrentSector lives on the TELEM struct (vt), not scoring.
+            sector_seq.append(int(vt.mCurrentSector))  # parallel to lap_distance
 
             time.sleep(period)

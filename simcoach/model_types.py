@@ -15,3 +15,4 @@ class LapRecord:
     session_id: str | None = None
     sectors: list[float] | None = None
     position: int | None = None
+    sector_bounds: list[float] | None = None  # lap_distance of S1/S2 boundaries
