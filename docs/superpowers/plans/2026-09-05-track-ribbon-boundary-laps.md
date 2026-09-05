@@ -38,6 +38,19 @@ the coach. They route to a transient in-memory buffer used only to build the rib
   server exposes start/stop mapping-capture + a build-ribbon-from-buffered-laps step; the editor
   drives it and shows "recording left/right edge…" status.
 
+## Laps per edge: 2 is the MINIMUM, not the cap (user, 2026-09-05)
+The original "two laps" (one left, one right) is the FLOOR, not a limit. Allow N laps per edge
+and AVERAGE each side (reuse the existing multi-lap `average_racing_line` per edge on the shared
+grid) → smoother, more accurate edges the more laps you drive. So:
+- Capture wizard: record ≥1 left-edge lap(s), then ≥1 right-edge lap(s); each buffered lap is
+  designated left or right (build takes a LIST of left indices + a LIST of right indices, not a
+  single left/right). Minimum = one each.
+- `reconstruct_ribbon` signature becomes `(left_laps: list[channels], right_laps: list[channels])`
+  → average each side first (per-edge `average_racing_line`), then pair nearest-point → centerline
+  / width / bank as before. One lap per side still works (averaging a single lap = that lap).
+- `/mapcapture/build` body: `{left: int[], right: int[]}` (buffer index lists) instead of single ints.
+NOT YET BUILT — fold into the ribbon build when driven on the rig.
+
 ## Reconstruction (backend, pure fn + tested)
 Key wrinkle: the two laps have DIFFERENT lengths (inside is shorter), so DO NOT pair by raw
 `lap_distance`.
