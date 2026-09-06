@@ -44,7 +44,7 @@
 
 <div class="splash" out:fade={{ duration: 280 }}>
   <div class="stack">
-    <div class="logo"><NestorWordmark size={54} /></div>
+    <div class="logo"><NestorWordmark size={108} /></div>
     <div class="tag">AI Sim Racing Coach</div>
     {#if phase === "loading"}
       <div class="bar"><span class:done style="width:{progress}%"></span></div>
