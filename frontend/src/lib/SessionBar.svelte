@@ -70,7 +70,10 @@
       <button type="button" onclick={load}>Retry</button>
     </div>
   {:else}
-    <div class="brand"><span class="wm">NEST<span class="o"><NestorMark size={19} label="O" /></span>R</span></div>
+    <div class="brand">
+      <span class="wm">NEST<span class="o"><NestorMark size={19} label="O" /></span>R</span>
+      <span class="sub">AI Sim Racing Coach</span>
+    </div>
     <div class="game-status {gameStatus.cls}">
       <span class="ind"></span>{gameStatus.label}
     </div>
