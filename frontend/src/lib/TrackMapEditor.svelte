@@ -340,9 +340,9 @@
   // gravitate to their own corner but don't pile onto neighbours. Pre-rotation coords
   // (the whole group rotates together, so "outside" is rotation-invariant).
   const cornerLabels = $derived.by(() => {
-    if (!map || !map.path.length) return [] as { x: number; y: number; anchor: "start" | "middle" | "end"; text: string }[];
+    if (!map || !map.path.length) return [] as { x: number; y: number; cx: number; cy: number; anchor: "start" | "middle" | "end"; text: string }[];
     const N = map.path.length;
-    const gap = u * 0.055;
+    const gap = u * 0.036; // hug the marker so each label clearly belongs to its corner
     const k = Math.max(2, Math.round(N * 0.012));
     const markers = corners.map((c) => ptAtDist(c.apex_dist));
     const L = corners.map((c, i) => {
@@ -364,16 +364,19 @@
       const [sx, sy] = openness(outX, outY) >= openness(inX, inY) - gap * 0.5 ? [outX, outY] : [inX, inY];
       return { cx, cy, sx, sy, x: sx, y: sy, text: `T${c.label || c.number}` };
     });
-    const minD = u * 0.05;
-    for (let it = 0; it < 16; it++) {
+    const minD = u * 0.04;
+    const maxDrift = u * 0.05; // barely drift — labels stay tight to their own corner
+    for (let it = 0; it < 22; it++) {
       for (const a of L) {
-        let fx = (a.sx - a.x) * 0.25, fy = (a.sy - a.y) * 0.25; // spring toward the seed
+        let fx = (a.sx - a.x) * 0.35, fy = (a.sy - a.y) * 0.35; // spring toward the seed
         for (const m of markers) { const dx = a.x - m[0], dy = a.y - m[1], dd = Math.hypot(dx, dy); if (dd > 1e-6 && dd < minD) { const f = (minD - dd) / minD; fx += (dx / dd) * f * minD * 0.5; fy += (dy / dd) * f * minD * 0.5; } }
         for (const b of L) { if (b === a) continue; const dx = a.x - b.x, dy = a.y - b.y, dd = Math.hypot(dx, dy); if (dd > 1e-6 && dd < minD) { const f = (minD - dd) / minD; fx += (dx / dd) * f * minD * 0.5; fy += (dy / dd) * f * minD * 0.5; } }
         a.x += fx; a.y += fy;
+        const ddx = a.x - a.sx, ddy = a.y - a.sy, drift = Math.hypot(ddx, ddy); // cap drift from the seed
+        if (drift > maxDrift) { a.x = a.sx + (ddx / drift) * maxDrift; a.y = a.sy + (ddy / drift) * maxDrift; }
       }
     }
-    return L.map((a) => ({ x: a.x, y: a.y + gap * 0.28, text: a.text, anchor: (a.x > a.cx + gap * 0.25 ? "start" : a.x < a.cx - gap * 0.25 ? "end" : "middle") as "start" | "middle" | "end" }));
+    return L.map((a) => ({ x: a.x, y: a.y + gap * 0.28, cx: a.cx, cy: a.cy, text: a.text, anchor: (a.x > a.cx + gap * 0.25 ? "start" : a.x < a.cx - gap * 0.25 ? "end" : "middle") as "start" | "middle" | "end" }));
   });
 
   // S/F marker + heading arrow, same construction as TrackMap.svelte.
