@@ -11,16 +11,25 @@
 
   let phase: "loading" | "error" = $state("loading");
   let step = $state("Warming up…");
+  let progress = $state(6); // %; creeps while we wait, snaps to 100 on reveal
+  let done = $state(false); // switches the bar to a fast fill for the final snap
 
   async function boot() {
     phase = "loading";
+    done = false;
+    progress = 6;
     try {
       // PyInstaller onefile is slow to launch on first run; wait until it binds.
+      // Ease toward (never reaching) 90% so the bar always shows motion even
+      // though the bind time is unknown.
       step = "Connecting to the coach server…";
+      requestAnimationFrame(() => (progress = 90));
       await withRetry(getHealth, 24, 500);
       // Prefetch the first-paint data against the now-warm server.
       step = "Loading your garage…";
       await Promise.allSettled([getStatus(), getSettings(), getSessions(), getChats()]);
+      done = true;
+      progress = 100;
       onready();
     } catch {
       phase = "error";
@@ -36,7 +45,7 @@
     <div class="wm">NESTOR</div>
     <div class="tag">AI Sim Racing Coach</div>
     {#if phase === "loading"}
-      <div class="bar"><span></span></div>
+      <div class="bar"><span class:done style="width:{progress}%"></span></div>
       <div class="step">{step}</div>
     {:else}
       <div class="err">Can't reach the coach server.</div>
@@ -90,11 +99,15 @@
   }
   .bar span {
     display: block;
-    width: 40%;
     height: 100%;
     border-radius: 999px;
     background: var(--accent);
-    animation: slide 1.15s ease-in-out infinite;
+    /* Long ease-out: decelerates toward 90% so it always looks alive, then
+       .done swaps to a quick fill for the final snap to 100%. */
+    transition: width 14s cubic-bezier(0.1, 0.7, 0.15, 1);
+  }
+  .bar span.done {
+    transition: width 0.3s ease;
   }
   .step {
     margin-top: 12px;
@@ -120,16 +133,11 @@
     padding: 8px 18px;
     cursor: pointer;
   }
-  @keyframes slide {
-    0% { transform: translateX(-110%); }
-    100% { transform: translateX(310%); }
-  }
   @keyframes rise {
     from { opacity: 0; transform: translateY(8px); }
     to { opacity: 1; transform: translateY(0); }
   }
   @media (prefers-reduced-motion: reduce) {
     .mark { animation: none; }
-    .bar span { animation-duration: 2.4s; }
   }
 </style>
