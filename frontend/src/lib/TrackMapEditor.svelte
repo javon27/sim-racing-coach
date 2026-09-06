@@ -535,8 +535,14 @@
             <button type="button" onclick={resetRotation}>0°</button>
           </div>
         {/if}
-        {#if !editMode && map}
-          <button type="button" class="pencil" aria-label="Edit map" title="Edit" onclick={() => (editMode = true)}>✎</button>
+        {#if map}
+          {#if editMode}
+            <button type="button" class="pencil" aria-label="View map" title="View (hide edit tools)" onclick={() => (editMode = false)}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          {:else}
+            <button type="button" class="pencil" aria-label="Edit map" title="Edit" onclick={() => (editMode = true)}>✎</button>
+          {/if}
         {/if}
         <button type="button" class="x" aria-label="Close" onclick={close}>×</button>
       </header>
@@ -707,8 +713,8 @@
             <ul class="corners">
               {#each corners as c, i (c.number)}
                 <li>
-                  <span class="num" aria-label="Corner number">T{c.number}</span>
                   {#if editMode}
+                    <span class="num" aria-label="Corner number">T{c.number}</span>
                     <input class="lbl-in" bind:value={c.label} placeholder={String(c.number)} aria-label="Corner label" />
                     <input class="name" bind:value={c.name} aria-label="Corner name" />
                     <span class="dir" data-dir={c.direction}>{c.direction || "—"}</span>
@@ -719,7 +725,7 @@
                     {/if}
                     <button type="button" class="rm" aria-label="Remove corner" onclick={() => removeCorner(i)}>×</button>
                   {:else}
-                    <span class="lbl-ro">{c.label || c.number}</span>
+                    <span class="num">T{c.label || c.number}</span>
                     <span class="name-ro">{c.name || "—"}</span>
                     <span class="dir" data-dir={c.direction}>{c.direction || "—"}</span>
                   {/if}
@@ -950,13 +956,6 @@
   .pencil {
     font-size: 15px;
     line-height: 1;
-  }
-  /* Read-only corner label cell, mirrors .lbl-in width so view/edit rows align. */
-  .lbl-ro {
-    width: 44px;
-    flex: none;
-    font-size: 12px;
-    color: var(--faint);
   }
   /* View mode: markers/sectors are shown but not draggable — no grab affordance. */
   .marker.ro,

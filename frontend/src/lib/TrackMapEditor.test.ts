@@ -102,7 +102,7 @@ describe("TrackMapEditor", () => {
     expect(container.querySelectorAll("li").length).toBe(2);
 
     await fireEvent.click(screen.getByText("Add corner"));
-    await fireEvent.pointerDown(container.querySelector("svg")!);
+    await fireEvent.pointerDown(container.querySelector('svg[role="application"]')!);
     expect(container.querySelectorAll("li").length).toBe(3);
 
     await fireEvent.click(screen.getAllByLabelText("Remove corner")[0]);
@@ -114,7 +114,7 @@ describe("TrackMapEditor", () => {
     await screen.findByText("First");
 
     await fireEvent.click(screen.getByText("Add corner"));
-    await fireEvent.pointerDown(container.querySelector("svg")!);
+    await fireEvent.pointerDown(container.querySelector('svg[role="application"]')!);
 
     // jsdom has no CTM -> click maps to apex_dist 0 -> renumbers to T1 -> "Turn 1".
     const names = [...container.querySelectorAll("input.name")].map((el) => (el as HTMLInputElement).value);
@@ -126,7 +126,7 @@ describe("TrackMapEditor", () => {
     await screen.findByText("First");
 
     await fireEvent.click(screen.getByText("Add corner"));
-    await fireEvent.pointerDown(container.querySelector("svg")!);
+    await fireEvent.pointerDown(container.querySelector('svg[role="application"]')!);
 
     // A corner added anywhere renumbers the set 1..N in apex order — no gaps,
     // no "T15" appended last.
@@ -220,7 +220,7 @@ describe("TrackMapEditor", () => {
     // Click "Add section" to enter add-section mode, then a pointerdown on the
     // svg places a section at the clicked point (click-to-place, like add-corner).
     await fireEvent.click(screen.getByText("Add section"));
-    await fireEvent.pointerDown(container.querySelector("svg")!);
+    await fireEvent.pointerDown(container.querySelector('svg[role="application"]')!);
 
     // findBy* — the sections list renders reactively after the click.
     await fireEvent.input(await screen.findByLabelText("Section name"), { target: { value: "Back Straight" } });
@@ -288,7 +288,7 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     expect(buildRibbon).toHaveBeenCalledWith(); // no left/right args
 
     // Preview renders the ribbon (filled band) + its solved corner.
-    const svg = (await screen.findByText("Save ribbon")).closest(".modal")!.querySelector("svg")!;
+    const svg = (await screen.findByText("Save ribbon")).closest(".modal")!.querySelector('svg[role="img"]')!;
     expect(svg.querySelector("path")).toBeTruthy(); // the band
     expect(screen.getAllByText("T1").length).toBeGreaterThan(0); // svg label + list row
 
@@ -337,7 +337,7 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     await fireEvent.click(screen.getByText("Rebuild from saved capture"));
 
     expect(rebuildFromCapture).toHaveBeenCalled();
-    const svg = (await screen.findByText("Save ribbon")).closest(".modal")!.querySelector("svg")!;
+    const svg = (await screen.findByText("Save ribbon")).closest(".modal")!.querySelector('svg[role="img"]')!;
     expect(svg.querySelector("path")).toBeTruthy(); // the band
     expect(screen.getAllByText("T1").length).toBeGreaterThan(0);
   });
