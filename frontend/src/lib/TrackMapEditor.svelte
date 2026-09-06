@@ -322,18 +322,6 @@
     return map.path[nearestDistIndex(map.dist, d)];
   }
 
-  // Fallback: place a label OUTWARD from the track centroid (used for section labels
-  // and straight-ish corners where local curvature gives no clear outside).
-  function lblPos(x: number, y: number, gap: number): { x: number; y: number; anchor: "start" | "middle" | "end" } {
-    if (!map) return { x: x + gap, y: y - gap, anchor: "start" };
-    let dx = x - map.width / 2;
-    let dy = y - map.height / 2;
-    const d = Math.hypot(dx, dy) || 1;
-    dx /= d;
-    dy /= d;
-    return { x: x + dx * gap, y: y + dy * gap + gap * 0.28, anchor: dx > 0.3 ? "start" : dx < -0.3 ? "end" : "middle" };
-  }
-
   // Force-directed corner labels: seed each on the OUTSIDE of its bend (opposite the
   // local curvature, which points to the turn's inside), then relax with a spring back
   // to that seed plus repulsion from every corner marker and other label, so labels
@@ -377,6 +365,39 @@
       }
     }
     return L.map((a) => ({ x: a.x, y: a.y + gap * 0.28, cx: a.cx, cy: a.cy, text: a.text, anchor: (a.x > a.cx + gap * 0.25 ? "start" : a.x < a.cx - gap * 0.25 ? "end" : "middle") as "start" | "middle" | "end" }));
+  });
+
+  // Section labels (long names) laid out the same way, but treated as the lower
+  // priority: they're pushed off the already-placed corner markers and labels and off
+  // each other, so they stop overlapping the corners. Point-based, so very long names
+  // can still touch — width-aware boxes would be the next step if needed.
+  const sectionLabels = $derived.by(() => {
+    if (!map || !sections.length) return [] as { x: number; y: number; anchor: "start" | "middle" | "end" }[];
+    const gap = u * 0.06;
+    const obstacles: [number, number][] = [
+      ...corners.map((c) => ptAtDist(c.apex_dist)),
+      ...cornerLabels.map((l) => [l.x, l.y] as [number, number]),
+    ];
+    const S = sections.map((s) => {
+      const mid = sectionSeg(s).mid;
+      let ox = mid[0] - map!.width / 2, oy = mid[1] - map!.height / 2;
+      const d = Math.hypot(ox, oy) || 1; ox /= d; oy /= d;
+      return { mx: mid[0], my: mid[1], sx: mid[0] + ox * gap, sy: mid[1] + oy * gap, x: mid[0] + ox * gap, y: mid[1] + oy * gap };
+    });
+    const minC = u * 0.05;   // clearance from a corner marker/label
+    const minS = u * 0.09;   // section-to-section (wider text needs more room)
+    const maxDrift = u * 0.16;
+    for (let it = 0; it < 24; it++) {
+      for (const a of S) {
+        let fx = (a.sx - a.x) * 0.3, fy = (a.sy - a.y) * 0.3;
+        for (const o of obstacles) { const dx = a.x - o[0], dy = a.y - o[1], dd = Math.hypot(dx, dy); if (dd > 1e-6 && dd < minC) { const f = (minC - dd) / minC; fx += (dx / dd) * f * minC * 0.5; fy += (dy / dd) * f * minC * 0.5; } }
+        for (const b of S) { if (b === a) continue; const dx = a.x - b.x, dy = a.y - b.y, dd = Math.hypot(dx, dy); if (dd > 1e-6 && dd < minS) { const f = (minS - dd) / minS; fx += (dx / dd) * f * minS * 0.5; fy += (dy / dd) * f * minS * 0.5; } }
+        a.x += fx; a.y += fy;
+        const ddx = a.x - a.sx, ddy = a.y - a.sy, drift = Math.hypot(ddx, ddy);
+        if (drift > maxDrift) { a.x = a.sx + (ddx / drift) * maxDrift; a.y = a.sy + (ddy / drift) * maxDrift; }
+      }
+    }
+    return S.map((a) => ({ x: a.x, y: a.y, anchor: (a.x > a.mx + gap * 0.25 ? "start" : a.x < a.mx - gap * 0.25 ? "end" : "middle") as "start" | "middle" | "end" }));
   });
 
   // S/F marker + heading arrow, same construction as TrackMap.svelte.
@@ -703,8 +724,10 @@
               {@const ps = ptAtDist(sec.start_dist)}
               {@const pe = ptAtDist(sec.end_dist)}
               <polyline class="section-band" points={seg.pts} fill="none" stroke="var(--good, #3a7)" stroke-width={u * 0.02} stroke-linecap="round" opacity="0.35" />
-              {@const sl = lblPos(seg.mid[0], seg.mid[1], u * 0.055)}
-              <text class="section-lbl" x={sl.x} y={sl.y} text-anchor={sl.anchor} font-size={u * 0.026} fill="var(--good, #3a7)" paint-order="stroke" stroke="var(--bg, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">{sec.name}</text>
+              {@const sl = sectionLabels[i]}
+              {#if sl}
+                <text class="section-lbl" x={sl.x} y={sl.y} text-anchor={sl.anchor} font-size={u * 0.026} fill="var(--good, #3a7)" paint-order="stroke" stroke="var(--bg, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">{sec.name}</text>
+              {/if}
               <!-- svelte-ignore a11y_no_static_element_interactions -->
               {#if editMode}
                 <circle class="sec-handle" cx={ps[0]} cy={ps[1]} r={u * 0.012} fill="var(--good, #3a7)" role="slider" aria-label="{sec.name} start" aria-valuenow={sec.start_dist} tabindex="-1" onpointerdown={(e) => startDrag("secstart", i, e)}><title>{sec.name} start</title></circle>
