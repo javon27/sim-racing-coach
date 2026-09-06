@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { getStatus, getSettings, withRetry, type StatusResponse, type SettingsResponse } from "./api";
+  import NestorMark from "./NestorMark.svelte";
 
   let {
     retryTries = 8,
@@ -69,7 +70,7 @@
       <button type="button" onclick={load}>Retry</button>
     </div>
   {:else}
-    <div class="brand"><span class="dot"></span><b>SIMCOACH</b></div>
+    <div class="brand"><NestorMark size={22} /><b>NESTOR</b></div>
     <div class="game-status {gameStatus.cls}">
       <span class="ind"></span>{gameStatus.label}
     </div>

@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Sim Racing Coach",
+        "title": "Nestor",
         "width": 800,
         "height": 600,
         "resizable": true,

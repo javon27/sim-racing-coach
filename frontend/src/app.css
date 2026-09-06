@@ -134,17 +134,10 @@ body {
   gap: 10px;
   margin-right: 6px;
 }
-.brand .dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 0 4px var(--accent-soft);
-}
 .brand b {
   font-family: var(--display);
   font-weight: 700;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.06em;
   font-size: 16px;
 }
 .stat {
