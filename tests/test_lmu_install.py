@@ -55,3 +55,18 @@ def test_none_when_nothing_found(tmp_path, monkeypatch):
     assert install.lmu_userdata_dir() is None
     assert install.results_dir() is None
     assert install.player_dir() is None
+
+
+def test_lmu_build_reads_appmanifest_buildid(tmp_path, monkeypatch):
+    steam_base, userdata = _make_fake_steam(tmp_path)
+    monkeypatch.setattr(install, "_steam_base", lambda: steam_base)
+    # LMU's appmanifest sits in the same library's steamapps dir as the install.
+    acf = userdata.parent.parent.parent / "appmanifest_2399420.acf"  # <lib>/steamapps/
+    acf.write_text('"AppState"\n{\n\t"appid"\t\t"2399420"\n\t"name"\t\t"Le Mans Ultimate"\n\t"buildid"\t\t"25081074"\n}\n')
+    assert install.lmu_build() == "25081074"
+
+
+def test_lmu_build_none_without_manifest(tmp_path, monkeypatch):
+    steam_base, _ = _make_fake_steam(tmp_path)
+    monkeypatch.setattr(install, "_steam_base", lambda: steam_base)
+    assert install.lmu_build() is None

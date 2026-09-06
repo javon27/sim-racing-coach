@@ -17,6 +17,7 @@ DEFAULTS = {
     "corner_naming": "names",     # "names" or "numbers"
     "log_level": "INFO",          # stdlib logging level name; see logging_setup
     "lmu_dir": None,              # override for lmu.install.lmu_userdata_dir()
+    "lmu_build": None,            # last-seen LMU Steam build id (detected, persisted)
     "lmu_player_names": [],       # alias set for result-log ingest matching (see lmu.results)
     "driver": {                   # DriverProfile fields; None = unset
         "braking_style": None,

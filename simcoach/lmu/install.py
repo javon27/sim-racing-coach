@@ -10,6 +10,7 @@ from pathlib import Path
 from .. import config as _config
 
 _STEAM_DEFAULT_BASE = Path(r"C:\Program Files (x86)\Steam")
+_LMU_STEAM_APPID = "2399420"
 
 _FALLBACK_USERDATA_DIRS = [
     Path(r"C:\Program Files\Epic Games\LeMansUltimate\UserData"),
@@ -84,6 +85,27 @@ def lmu_userdata_dir() -> Path | None:
     for candidate in _FALLBACK_USERDATA_DIRS:
         if _has_results(candidate):
             return candidate
+    return None
+
+
+def lmu_build() -> str | None:
+    """LMU's Steam build id from its appmanifest (changes each game update), or None
+    for a non-Steam install / unreadable manifest. Never raises."""
+    try:
+        base = _steam_base()
+        if not base:
+            return None
+        for lib in _steam_libraries(base):
+            acf = lib / "steamapps" / f"appmanifest_{_LMU_STEAM_APPID}.acf"
+            try:
+                text = acf.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            m = re.search(r'"buildid"\s+"(\d+)"', text)
+            if m:
+                return m.group(1)
+    except Exception:
+        pass
     return None
 
 

@@ -1013,11 +1013,18 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         except Exception:
             app_version = "dev"
         cfg = config.load_config()
+        # LMU build: read live from the Steam appmanifest; persist the last-seen value
+        # so it still shows when Steam/the game dir isn't readable at this moment.
+        from ..lmu import install as lmu_install
+        live_build = lmu_install.lmu_build()
+        if live_build and live_build != cfg.get("lmu_build"):
+            config.save_config({"lmu_build": live_build})
+            cfg["lmu_build"] = live_build
         cfg.update({
             "api_key_set": secrets.has_api_key(),
             "data_dir": str(paths.app_data_dir()),
             "app_version": app_version,
-            "lmu_build": None,
+            "lmu_build": cfg.get("lmu_build"),
         })
         return cfg
 
