@@ -29,7 +29,7 @@ from ..model.factory import CoachUserError, make_model
 from ..tiers import legal_adjustments
 from ..corners import CornerMap, in_window
 from ..ribbon import multi_signal_direction, reconstruct_surface, ribbon_to_screen
-from ..track_lookup import track_slug
+from ..track_lookup import load_map_data, track_slug
 from ..trackmap import average_racing_line, build_track_map, direction_from_path
 
 # Shipped corner-map dir, resolved off the package (not cwd) so it's correct
@@ -154,40 +154,56 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             return m
         return app.state.cmap
 
-    def _track_file(track: str) -> Path:
-        # Resolve a track name to its shipped JSON path, and REJECT any path that
-        # escapes the tracks dir (defense in depth: track_slug already sanitizes
-        # to [a-z0-9_], but a save writes owned data, so verify containment).
-        slug = track_slug(track)
-        tracks_dir = app.state.tracks_dir.resolve()
-        p = (tracks_dir / f"{slug}.json").resolve()
-        if not slug or tracks_dir not in p.parents:
+    def _map_dirs() -> tuple[Path, Path]:
+        # (user_dir, bundled_dir). Curated maps ship in the install dir (read-only
+        # once installed); user-created maps live in app-data (writable, like the
+        # .npz captures). Reads prefer the user copy so a re-map overrides a shipped
+        # one; writes go to the install dir when writable (dev curation) else app-data.
+        return Path(store.data_dir) / "tracks", app.state.tracks_dir
+
+    def _in(base: Path, slug: str) -> Path:
+        # <base>/<slug>.json, rejecting any path that escapes base (defense in depth:
+        # track_slug already sanitizes to [a-z0-9_], but this guards owned data).
+        b = base.resolve()
+        p = (b / f"{slug}.json").resolve()
+        if b not in p.parents:
             raise HTTPException(400, "invalid track")
         return p
 
     def _write_track_json(track: str, out: dict) -> None:
-        # Atomic write (unique tmp + os.replace) so a crash mid-write never leaves
-        # a partial file and concurrent same-track writes don't clobber one tmp
-        # path. allow_nan=False hard-fails rather than emit invalid JSON.
-        # _track_file rejects traversal outside the tracks dir.
-        target = _track_file(track)
-        target.parent.mkdir(parents=True, exist_ok=True)
+        # Atomic write (unique tmp + os.replace) so a crash mid-write never leaves a
+        # partial file. Target the shipped dir when writable (dev curates maps that
+        # ship); fall back to app-data when it's read-only (installed app) so an
+        # end-user's edits still save. allow_nan=False hard-fails on invalid JSON.
+        slug = track_slug(track)
+        if not slug:
+            raise HTTPException(400, "invalid track")
+        user_dir, bundled = _map_dirs()
         payload = json.dumps(out, indent=2, allow_nan=False)
-        fd, tmp = tempfile.mkstemp(dir=str(target.parent), suffix=".json.tmp")
-        try:
-            with os.fdopen(fd, "w") as f:
-                f.write(payload)
-            os.replace(tmp, target)
-        except BaseException:
-            if os.path.exists(tmp):
-                os.unlink(tmp)
-            raise
+        last_err: BaseException | None = None
+        for d in (bundled, user_dir):
+            target = _in(d, slug)
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                fd, tmp = tempfile.mkstemp(dir=str(target.parent), suffix=".json.tmp")
+                try:
+                    with os.fdopen(fd, "w") as f:
+                        f.write(payload)
+                    os.replace(tmp, target)
+                    return
+                except BaseException:
+                    if os.path.exists(tmp):
+                        os.unlink(tmp)
+                    raise
+            except (PermissionError, OSError) as e:
+                last_err = e  # dir read-only (installed app) -> try app-data next
+        raise last_err if last_err else RuntimeError("no writable tracks dir")
 
     def _capture_path(track: str) -> Path:
         # Raw point cloud lives in app-data (store.data_dir), NOT the shipped tracks
         # dir -- large + per-user, one file per track (latest capture wins).
         slug = track_slug(track)
-        if not slug:  # guard like _track_file: never write captures/.npz
+        if not slug:  # guard like _write_track_json: never write captures/.npz
             raise HTTPException(400, "invalid track")
         return Path(store.data_dir) / "captures" / f"{slug}.npz"
 
@@ -197,12 +213,10 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         return max(files, key=lambda p: p.stat().st_mtime) if files else None
 
     def _track_file_data(track: str) -> dict:
-        # Parsed shipped track file, or {} if missing/unreadable. Never raises.
-        try:
-            data = json.loads(_track_file(track).read_text())
-            return data if isinstance(data, dict) else {}
-        except (OSError, ValueError, HTTPException):
-            return {}
+        # Merged map dict: authoritative shipped geometry + the user's annotation
+        # overlay (corners/sections/rotation). {} if we have neither. Never raises.
+        user_dir, bundled = _map_dirs()
+        return load_map_data(track, str(bundled), str(user_dir))
 
     def _clean_sections(raw, length: float) -> list:
         # Validate/normalize a client sections array: [{name,kind,start_dist,end_dist}]
@@ -279,9 +293,12 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         m = _map_for(track)
         if m is not None:
             return m
+        data = _track_file_data(track)
+        if not data.get("corners"):
+            return None
         try:
-            return CornerMap.load(str(_track_file(track)))
-        except (OSError, ValueError, KeyError, HTTPException):
+            return CornerMap.from_data(data)
+        except (ValueError, KeyError):
             return None
 
     def _any_pos_lap(track: str, car: str) -> bool:
@@ -909,7 +926,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                     try:
                         from .. import __main__ as _m  # resolve_context: map + car name (+ note)
                         cmap, live_car, _ = _m.resolve_context(
-                            rest, str(app.state.tracks_dir), live_track, vehicle)
+                            rest, str(app.state.tracks_dir), live_track, vehicle,
+                            user_dir=str(Path(store.data_dir) / "tracks"))
                     except Exception:
                         cmap, live_car = _map_for(live_track), vehicle
             ctx = CoachContext(app.state.store, record=record, lap_id=eff_lap_id, cmap=cmap,

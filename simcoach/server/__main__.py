@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import threading
 import time
+from pathlib import Path
 
 from .. import __main__ as m  # reuse track/car/corner-map resolution helpers
 from ..coach import Coach
@@ -23,13 +24,17 @@ def build_app():
     store = LapStore(str(db_path()), str(telemetry_dir()))
     coach = Coach(LazyModel(model=cfg["model"]), str(m.PKG_DIR / "knowledge"))
 
+    user_tracks_dir = str(Path(store.data_dir) / "tracks")
+
     def _map_resolver(track):
-        # Resolve+load the corner map for a track name, or None if unmapped.
-        # Called per-lap by the app so a track change follows the live car.
+        # Resolve+load the corner map for a track name, or None if unmapped. Called
+        # per-lap so a track change follows the live car. Shipped geometry + the
+        # user's annotation overlay (names/labels/etc.) so the coach uses the
+        # driver's own corner names.
         try:
-            map_path = m.resolve_track_map(track, str(m.TRACKS_DIR))
-            if map_path is not None:
-                return m.CornerMap.load(str(map_path))
+            data = m.load_map_data(track, str(m.TRACKS_DIR), user_dir=user_tracks_dir)
+            if data.get("corners"):
+                return m.CornerMap.from_data(data)
         except Exception:
             pass
         return None

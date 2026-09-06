@@ -41,3 +41,59 @@ def test_series_suffix_shares_one_map():
 
 def test_unknown_layout_returns_none(tmp_path):
     assert resolve_track_map("Nonexistent Raceway ZZZ", str(tmp_path)) is None
+
+
+def test_load_map_data_merges_user_annotations_over_shipped_geometry(tmp_path):
+    # Installed app: shipped geometry (path/edges/sectors) is authoritative; the
+    # user's annotation overlay (corners/sections/rotation) layers on top.
+    import json
+
+    from simcoach.track_lookup import load_map_data
+
+    bundled = tmp_path / "bundled"
+    user = tmp_path / "user"
+    bundled.mkdir()
+    user.mkdir()
+    slug = "autodromo_nazionale_monza"
+    (bundled / f"{slug}.json").write_text(json.dumps({
+        "path": [[0, 0], [1, 1]], "dist": [0, 100], "sectors": [33.0, 66.0],
+        "rotation": 0.0,
+        "corners": [{"number": 1, "name": "Turn 1", "apex_dist": 10.0,
+                     "start_dist": 5.0, "end_dist": 15.0}],
+    }))
+
+    # No overlay yet -> shipped map verbatim.
+    d = load_map_data("Autodromo Nazionale Monza", str(bundled), user_dir=str(user))
+    assert d["corners"][0]["name"] == "Turn 1"
+
+    # User renames the corner + rotates: annotations win, geometry stays shipped.
+    (user / f"{slug}.json").write_text(json.dumps({
+        "path": [[9, 9]], "sectors": [1.0],  # a hijacked-geometry overlay is ignored
+        "rotation": 90.0,
+        "corners": [{"number": 1, "name": "Rettifilo", "apex_dist": 10.0,
+                     "start_dist": 5.0, "end_dist": 15.0}],
+    }))
+    d = load_map_data("Autodromo Nazionale Monza", str(bundled), user_dir=str(user))
+    assert d["corners"][0]["name"] == "Rettifilo"   # user annotation applied
+    assert d["rotation"] == 90.0                     # user annotation applied
+    assert d["path"] == [[0, 0], [1, 1]]             # geometry stays authoritative
+    assert d["sectors"] == [33.0, 66.0]              # geometry stays authoritative
+
+
+def test_load_map_data_unshipped_track_is_wholly_user(tmp_path):
+    import json
+
+    from simcoach.track_lookup import load_map_data
+
+    bundled = tmp_path / "bundled"
+    user = tmp_path / "user"
+    bundled.mkdir()
+    user.mkdir()
+    (user / "some_community_track.json").write_text(json.dumps({
+        "path": [[0, 0]], "corners": [{"number": 1, "name": "T1", "apex_dist": 1.0,
+                                       "start_dist": 0.0, "end_dist": 2.0}],
+    }))
+    d = load_map_data("Some Community Track", str(bundled), user_dir=str(user))
+    assert d["path"] == [[0, 0]] and d["corners"][0]["name"] == "T1"
+    # Neither shipped nor user -> empty.
+    assert load_map_data("Nope Raceway", str(bundled), user_dir=str(user)) == {}

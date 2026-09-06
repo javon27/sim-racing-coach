@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import numpy as np
 from fastapi.testclient import TestClient
@@ -739,3 +740,31 @@ def test_analysis_unanalyzable_is_422(tmp_path, synthetic_lap, monkeypatch):
     monkeypatch.setattr(app_module, "analyze_lap", _boom)
     r = _tc(app).get(f"/laps/{lap_id}/analysis")
     assert r.status_code == 422
+
+
+def test_map_write_falls_back_to_appdata_when_bundled_readonly(tmp_path, monkeypatch):
+    # Installed app: the shipped tracks dir is read-only, so an end-user's edit must
+    # still save — to app-data. Simulate read-only by making mkstemp reject the
+    # bundled dir; the write should land under store.data_dir/tracks instead.
+    from simcoach.track_lookup import track_slug
+    from simcoach.server import app as app_module
+
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    lid = store.save(_curve_lap("Imola", "GT3", 90.0))
+    bundled = (tmp_path / "tracks").resolve()
+    bundled.mkdir()
+    real_mkstemp = app_module.tempfile.mkstemp
+
+    def guard(*a, **k):
+        if Path(k.get("dir", "")).resolve() == bundled:
+            raise PermissionError("read-only install dir")
+        return real_mkstemp(*a, **k)
+
+    monkeypatch.setattr(app_module.tempfile, "mkstemp", guard)
+    coach = Coach(FakeModel(), "simcoach/knowledge")
+    c = _tc(create_app(store, coach, tracks_dir=str(bundled)))
+    assert c.post(f"/laps/{lid}/rotation", json={"degrees": 45}).status_code == 200
+
+    slug = track_slug("Imola")
+    assert (Path(store.data_dir) / "tracks" / f"{slug}.json").exists()  # saved to app-data
+    assert not (bundled / f"{slug}.json").exists()                      # not the read-only dir

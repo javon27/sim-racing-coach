@@ -18,13 +18,14 @@ from simcoach.lmu.smm import LmuSource, read_session_track_car
 from simcoach.mapbuild import build_map
 from simcoach.model.factory import make_model
 from simcoach.store import LapStore
-from simcoach.track_lookup import resolve_track_map, track_slug
+from simcoach.track_lookup import load_map_data, resolve_track_map, track_slug
 
 PKG_DIR = Path(__file__).parent
 TRACKS_DIR = PKG_DIR / "tracks"
 
 
-def resolve_context(rest, tracks_dir, track_name: str, vehicle: str, channels=None):
+def resolve_context(rest, tracks_dir, track_name: str, vehicle: str, channels=None,
+                    user_dir=None):
     """Resolve the coaching context (corner map, car display name, track-note slug)
     for a live (track, car). Builds+saves a numbered map (named by the track slug, so
     it resolves next time) from `channels` if none exists yet. Returns
@@ -38,14 +39,13 @@ def resolve_context(rest, tracks_dir, track_name: str, vehicle: str, channels=No
             car_class = None
     car = resolve_car(vehicle, car_class)
     slug = track_slug(track_name)
-    map_path = resolve_track_map(track_name, str(tracks_dir))
-    if map_path is None and channels is not None:
-        obj = build_map(slug, channels)
-        map_path = Path(tracks_dir) / f"{slug}.json"
-        map_path.write_text(json.dumps(obj, indent=2))
-    if map_path is None:
+    data = load_map_data(track_name, str(tracks_dir), user_dir=user_dir)
+    if not data.get("corners") and channels is not None:
+        data = build_map(slug, channels)
+        (Path(tracks_dir) / f"{slug}.json").write_text(json.dumps(data, indent=2))
+    if not data.get("corners"):
         return None, car, slug
-    return CornerMap.load(str(map_path)), car, map_path.stem
+    return CornerMap.from_data(data), car, slug
 
 
 def wait_for_session(poll: float = 3.0):

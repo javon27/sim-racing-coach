@@ -54,14 +54,19 @@ class CornerMap:
 
     @classmethod
     def load(cls, path: str) -> "CornerMap":
-        """Load corner map from JSON file.
+        """Load corner map from JSON file. See from_data for the validation rules."""
+        with open(path) as f:
+            return cls.from_data(json.load(f))
+
+    @classmethod
+    def from_data(cls, data: dict) -> "CornerMap":
+        """Build from an already-parsed map dict (e.g. a shipped map merged with a
+        user annotation overlay).
 
         start_dist > end_dist is a valid S/F-seam WRAP (spans end-of-lap into the
         next). Raises ValueError only if start == end (degenerate) or an apex
         falls outside the (possibly wrapped) window.
         """
-        with open(path) as f:
-            data = json.load(f)
         corners = [Corner(**c) for c in data["corners"]]
         for c in corners:
             if c.start_dist == c.end_dist:
