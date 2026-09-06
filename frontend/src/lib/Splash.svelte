@@ -41,7 +41,7 @@
 
 <div class="splash" out:fade={{ duration: 280 }}>
   <div class="stack">
-    <div class="mark"><NestorMark size={104} label="Nestor" /></div>
+    <div class="medallion"><NestorMark size={92} label="Nestor" /></div>
     <div class="wm">NESTOR</div>
     <div class="tag">AI Sim Racing Coach</div>
     {#if phase === "loading"}
@@ -70,8 +70,16 @@
     align-items: center;
     gap: 4px;
   }
-  .mark {
-    margin-bottom: 14px;
+  /* Always-light chip: the mark's near-black shell would vanish on the dark
+     splash, so pedestal it on a light tile that reads in both themes. */
+  .medallion {
+    margin-bottom: 18px;
+    padding: 20px 24px;
+    border-radius: 26px;
+    background: linear-gradient(160deg, #ffffff, #e9edf4);
+    box-shadow:
+      0 14px 34px rgba(10, 12, 20, 0.34),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.6);
     animation: rise 0.5s ease both;
   }
   .wm {
@@ -138,6 +146,6 @@
     to { opacity: 1; transform: translateY(0); }
   }
   @media (prefers-reduced-motion: reduce) {
-    .mark { animation: none; }
+    .medallion { animation: none; }
   }
 </style>

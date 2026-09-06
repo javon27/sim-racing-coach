@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from "svelte";
-  import { nextTheme, applyTheme, THEME_LABELS, THEME_ICONS, type ThemeMode } from "./theme";
+  import { nextTheme, applyTheme, loadTheme, saveTheme, THEME_LABELS, THEME_ICONS, type ThemeMode } from "./theme";
   import SessionBar from "./SessionBar.svelte";
   import RaceStrip from "./RaceStrip.svelte";
   import LapList from "./LapList.svelte";
@@ -16,7 +16,7 @@
 
   let booted = $state(false);
   let screen: Screen = $state("coach");
-  let theme: ThemeMode = $state("system");
+  let theme: ThemeMode = $state(loadTheme());
   let selectedLapId: number | undefined = $state(undefined);
   let selectedSessionId: string | undefined = $state(undefined);
   let activeSessionId: string | undefined = $state(undefined);
@@ -28,6 +28,7 @@
   function toggleTheme() {
     theme = nextTheme(theme);
     applyTheme(theme);
+    saveTheme(theme);
   }
 
   // Draggable divider that grows/shrinks the lap list (its scroll area height).

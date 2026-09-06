@@ -31,3 +31,23 @@ export function applyTheme(mode: ThemeMode): void {
     document.documentElement.setAttribute("data-theme", mode);
   }
 }
+
+const STORE_KEY = "nestor-theme";
+
+export function loadTheme(): ThemeMode {
+  try {
+    const v = localStorage.getItem(STORE_KEY);
+    if (v === "light" || v === "dark" || v === "system") return v;
+  } catch {
+    /* storage blocked (private window etc.) — fall back to system */
+  }
+  return "system";
+}
+
+export function saveTheme(mode: ThemeMode): void {
+  try {
+    localStorage.setItem(STORE_KEY, mode);
+  } catch {
+    /* non-fatal */
+  }
+}
