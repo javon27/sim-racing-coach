@@ -644,13 +644,11 @@
           {#if genPhase === "building"}
             <p class="step">Reconstructing the track surface…</p>
           {:else}
-            <p class="step">Capture the surface in passes, then Build:</p>
-            <ol class="laps">
-              <li>Out lap — hug the <strong>left</strong> boundary</li>
-              <li>Lap — <strong>weave</strong> back and forth (no need to reach the edges)</li>
-              <li>Lap — hug the <strong>right</strong> boundary</li>
-            </ol>
-            <p class="step">More/denser passes give truer edges and camber.</p>
+            <p class="step">Your out lap from the pits isn't recorded (it's not a full lap).
+              After it, drive a lap hugging the <strong>left</strong> boundary, a
+              <strong>weaving</strong> lap (no need to reach the edges), then a lap hugging the
+              <strong>right</strong> boundary — then Build. More/denser passes give truer edges
+              and camber.</p>
             <button
               type="button"
               class="primary"
@@ -1099,37 +1097,6 @@
   .genpanel .step {
     margin: 0;
     line-height: 1.5;
-  }
-  .genpanel .laps {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    text-align: left;
-    counter-reset: lap;
-  }
-  .genpanel .laps li {
-    position: relative;
-    padding-left: 26px;
-    line-height: 1.4;
-  }
-  .genpanel .laps li::before {
-    counter-increment: lap;
-    content: counter(lap);
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 18px;
-    height: 18px;
-    border-radius: 50%;
-    background: var(--accent-soft);
-    color: var(--accent);
-    font-size: 11px;
-    font-weight: 700;
-    display: grid;
-    place-items: center;
   }
   .genpanel .cap {
     margin: 0;
