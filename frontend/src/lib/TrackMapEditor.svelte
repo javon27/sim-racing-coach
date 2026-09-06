@@ -287,7 +287,13 @@
     sectors = [...(res.sectors ?? [])];
     sections = (res.sections ?? []).map((s) => ({ ...s }));
     angle = res.rotation ?? 0;
+    trackName = res.track_name ?? "";
   }
+
+  // Editable display name for the track. Editable in dev (curating) or for a
+  // user-captured (unshipped) map; a shipped built-in's name is read-only in an install.
+  let trackName = $state("");
+  const nameEditable = $derived(!!(map?.curating || (map && !map.shipped)));
 
   // Path slice + midpoint for a named section span (start_dist..end_dist).
   function sectionSeg(s: Section) {
@@ -486,6 +492,7 @@
         })),
         sectors,
         sections,
+        ...(nameEditable && trackName.trim() ? { name: trackName.trim() } : {}),
       });
       applyMap(res);
       onSaved?.();
@@ -522,7 +529,11 @@
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div class="modal" role="dialog" tabindex="-1" aria-modal="true" aria-label="Edit track map" onclick={(e) => e.stopPropagation()}>
       <header>
-        <h2>{editMode ? "Edit track map" : "Track map"}</h2>
+        {#if map && editMode && nameEditable}
+          <input class="ttl-in" bind:value={trackName} placeholder="Track name" aria-label="Track name" />
+        {:else}
+          <h2>{map ? (trackName || "Untitled track") : editMode ? "Edit track map" : "Track map"}</h2>
+        {/if}
         {#if map?.shipped}
           <span class="badge" title="Built-in layout — you can rename/annotate corners, but the layout ships with the app and updates only with the app.">built-in</span>
         {/if}
@@ -703,8 +714,9 @@
                 <button type="button" class:on={addSectionMode} onclick={toggleAddSection}>
                   {addSectionMode ? "Click the line…" : "Add section"}
                 </button>
-                {#if !map?.shipped}
-                  <!-- Layout tools: hidden for built-in maps whose geometry is authoritative. -->
+                {#if map?.curating || !map?.shipped}
+                  <!-- Layout tools: for user maps, and for built-ins only in dev
+                       (curating) — an installed build can't rebuild a shipped layout. -->
                   <button type="button" onclick={startGen}>(Re)generate map layout</button>
                   <button type="button" onclick={rebuildGen}>Rebuild from saved capture</button>
                 {/if}
@@ -837,6 +849,19 @@
     margin: 0;
     font-size: 15px;
     margin-right: auto;
+  }
+  .ttl-in {
+    font: inherit;
+    font-size: 15px;
+    font-weight: 600;
+    margin-right: auto;
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 3px 8px;
+    min-width: 0;
+    max-width: 320px;
   }
   .rot {
     display: flex;

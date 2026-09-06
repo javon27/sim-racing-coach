@@ -8,6 +8,7 @@ import asyncio
 import json
 import math
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -154,6 +155,12 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             return m
         return app.state.cmap
 
+    def _curating() -> bool:
+        # True when running from source (dev): map edits go to the repo tracks dir to
+        # curate the shipped set. A frozen (installed) build returns False — it edits
+        # only its own app-data overlay, never the read-only/ephemeral bundle.
+        return not getattr(sys, "frozen", False)
+
     def _map_dirs() -> tuple[Path, Path]:
         # (user_dir, bundled_dir). Curated maps ship in the install dir (read-only
         # once installed); user-created maps live in app-data (writable, like the
@@ -172,32 +179,26 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
 
     def _write_track_json(track: str, out: dict) -> None:
         # Atomic write (unique tmp + os.replace) so a crash mid-write never leaves a
-        # partial file. Target the shipped dir when writable (dev curates maps that
-        # ship); fall back to app-data when it's read-only (installed app) so an
-        # end-user's edits still save. allow_nan=False hard-fails on invalid JSON.
+        # partial file. Dev (running from source) curates the shipped maps in the repo
+        # tracks dir; an installed build writes to app-data — its bundled dir is
+        # read-only/ephemeral (a PyInstaller onefile extracts it to a temp dir wiped on
+        # exit, so a write there would silently vanish). allow_nan=False hard-fails.
         slug = track_slug(track)
         if not slug:
             raise HTTPException(400, "invalid track")
         user_dir, bundled = _map_dirs()
+        target = _in(bundled if _curating() else user_dir, slug)
+        target.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(out, indent=2, allow_nan=False)
-        last_err: BaseException | None = None
-        for d in (bundled, user_dir):
-            target = _in(d, slug)
-            try:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                fd, tmp = tempfile.mkstemp(dir=str(target.parent), suffix=".json.tmp")
-                try:
-                    with os.fdopen(fd, "w") as f:
-                        f.write(payload)
-                    os.replace(tmp, target)
-                    return
-                except BaseException:
-                    if os.path.exists(tmp):
-                        os.unlink(tmp)
-                    raise
-            except (PermissionError, OSError) as e:
-                last_err = e  # dir read-only (installed app) -> try app-data next
-        raise last_err if last_err else RuntimeError("no writable tracks dir")
+        fd, tmp = tempfile.mkstemp(dir=str(target.parent), suffix=".json.tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(payload)
+            os.replace(tmp, target)
+        except BaseException:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            raise
 
     def _capture_path(track: str) -> Path:
         # Raw point cloud lives in app-data (store.data_dir), NOT the shipped tracks
@@ -514,8 +515,11 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             # The game's real S1/S2 boundaries (if any lap captured them) so the
             # editor can seed sector splits at the true positions, not thirds.
             # `shipped`: the geometry is a built-in the user may annotate but not rebuild.
+            # `curating`: dev (source) build — layout tools + the track name are editable.
+            # `track_name`: stored display-name override, else the live/canonical name.
             m = {**m, "detected_sectors": store.sector_bounds(rec.track, rec.car) or [],
-                 "shipped": _is_shipped(rec.track)}
+                 "shipped": _is_shipped(rec.track), "curating": _curating(),
+                 "track_name": _track_file_data(rec.track).get("name") or rec.track}
         return m
 
     @app.put("/laps/{lap_id}/map")
@@ -613,6 +617,12 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
 
         sections = _clean_sections(body.get("sections"), length)
 
+        # Optional display-name override. Not an annotation-merge field, so an
+        # end-user's app-data copy can't rename a shipped track (its read still takes
+        # the bundled name); a dev/user-map edit lands in the map itself.
+        new_name = body.get("name")
+        name = (new_name.strip()[:80] if isinstance(new_name, str) and new_name.strip()
+                else _track_file_data(rec.track).get("name"))
         out = {
             "track": track_slug(rec.track),
             "corners": corners,
@@ -623,6 +633,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             "length": length,
             "rotation": _track_rotation(rec.track),  # preserve existing rotation
         }
+        if name:
+            out["name"] = name
         if keep_ribbon:
             out["ribbon"] = keep_ribbon  # keep the reconstructed surface across edits
         _write_track_json(rec.track, out)

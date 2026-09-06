@@ -183,6 +183,8 @@ export interface TrackMap {
   sectors: number[]; // lap_distance of S1/S2 boundaries; [] when unset
   detected_sectors?: number[]; // game's real S1/S2 boundary lap_distances (seed source)
   shipped?: boolean; // built-in authoritative geometry: annotate but don't rebuild layout
+  curating?: boolean; // dev build: layout tools + track name are editable
+  track_name?: string; // display name (stored override, else the live/canonical name)
   sections: Section[]; // named distance spans (straights, complexes, DRS)
   corners: {
     number: number; // internal positional order key
@@ -224,7 +226,7 @@ export interface CornerEdit {
 
 export function saveLapMap(
   id: number,
-  body: { corners: CornerEdit[]; sectors: number[]; sections: Section[] },
+  body: { corners: CornerEdit[]; sectors: number[]; sections: Section[]; name?: string },
 ): Promise<TrackMap> {
   return request<TrackMap>(`/laps/${id}/map`, {
     method: "PUT",
