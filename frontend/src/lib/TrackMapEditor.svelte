@@ -52,12 +52,14 @@
     onClose,
     onSaved,
     pollMs = 2000,
+    startMode = "edit",
   }: {
     lapId: number | null; // null = no lap yet (capture-only: generate/rebuild a map)
     open?: boolean;
     onClose?: () => void;
     onSaved?: () => void;
     pollMs?: number;
+    startMode?: "view" | "edit"; // pane opens the modal in "view"; pencil -> "edit"
   } = $props();
 
   type EditCorner = {
@@ -79,6 +81,14 @@
   let saving = $state(false);
   let error: string | null = $state(null);
   let svgEl: SVGSVGElement | null = $state(null);
+
+  // View vs edit. The pane opens the modal enlarged in "view" (read-only map + corner
+  // table); the pencil switches to "edit" (tools + editable table). The effect resets
+  // it from startMode each time the modal opens.
+  let editMode = $state(true);
+  $effect(() => {
+    if (open) editMode = startMode === "edit";
+  });
 
   // What the pointer is currently dragging. `ai` = apex index for kind "apex".
   type DragKind = "corner" | "sector" | "apex" | "secstart" | "secend";
@@ -512,8 +522,11 @@
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div class="modal" role="dialog" tabindex="-1" aria-modal="true" aria-label="Edit track map" onclick={(e) => e.stopPropagation()}>
       <header>
-        <h2>Edit track map</h2>
-        {#if map || ribbon}
+        <h2>{editMode ? "Edit track map" : "Track map"}</h2>
+        {#if map?.shipped}
+          <span class="badge" title="Built-in layout — you can rename/annotate corners, but the layout ships with the app and updates only with the app.">built-in</span>
+        {/if}
+        {#if editMode && (map || ribbon)}
           <div class="rot" role="group" aria-label="Rotate map">
             <button type="button" aria-label="Rotate 90° left" onclick={() => rotateBy(-90)}>⟲</button>
             <input type="number" step="5" aria-label="Rotation degrees" bind:value={angle} />
@@ -521,6 +534,9 @@
             <button type="button" aria-label="Rotate 90° right" onclick={() => rotateBy(90)}>⟳</button>
             <button type="button" onclick={resetRotation}>0°</button>
           </div>
+        {/if}
+        {#if !editMode && map}
+          <button type="button" class="pencil" aria-label="Edit map" title="Edit" onclick={() => (editMode = true)}>✎</button>
         {/if}
         <button type="button" class="x" aria-label="Close" onclick={close}>×</button>
       </header>
@@ -591,10 +607,11 @@
           <svg
             bind:this={svgEl}
             viewBox="{-pad} {-pad} {map.width + pad * 2} {map.height + pad * 2}"
-            class:add={addMode || addSectionMode}
+            class:add={editMode && (addMode || addSectionMode)}
+            class:ro={!editMode}
             role="application"
             aria-label="Track map — drag corner and sector markers"
-            onpointerdown={onSvgClick}
+            onpointerdown={editMode ? onSvgClick : undefined}
           >
             <g transform="rotate({mapPreviewRot}, {map.width / 2}, {map.height / 2})">
             <polyline
@@ -612,9 +629,11 @@
               <polyline class="section-band" points={seg.pts} fill="none" stroke="var(--good, #3a7)" stroke-width={u * 0.02} stroke-linecap="round" opacity="0.35" />
               <text class="section-lbl" x={seg.mid[0]} y={seg.mid[1] - u * 0.03} font-size={u * 0.026} fill="var(--good, #3a7)" text-anchor="middle" paint-order="stroke" stroke="var(--bg, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">{sec.name}</text>
               <!-- svelte-ignore a11y_no_static_element_interactions -->
-              <circle class="sec-handle" cx={ps[0]} cy={ps[1]} r={u * 0.012} fill="var(--good, #3a7)" role="slider" aria-label="{sec.name} start" aria-valuenow={sec.start_dist} tabindex="-1" onpointerdown={(e) => startDrag("secstart", i, e)}><title>{sec.name} start</title></circle>
-              <!-- svelte-ignore a11y_no_static_element_interactions -->
-              <circle class="sec-handle" cx={pe[0]} cy={pe[1]} r={u * 0.012} fill="var(--good, #3a7)" role="slider" aria-label="{sec.name} end" aria-valuenow={sec.end_dist} tabindex="-1" onpointerdown={(e) => startDrag("secend", i, e)}><title>{sec.name} end</title></circle>
+              {#if editMode}
+                <circle class="sec-handle" cx={ps[0]} cy={ps[1]} r={u * 0.012} fill="var(--good, #3a7)" role="slider" aria-label="{sec.name} start" aria-valuenow={sec.start_dist} tabindex="-1" onpointerdown={(e) => startDrag("secstart", i, e)}><title>{sec.name} start</title></circle>
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <circle class="sec-handle" cx={pe[0]} cy={pe[1]} r={u * 0.012} fill="var(--good, #3a7)" role="slider" aria-label="{sec.name} end" aria-valuenow={sec.end_dist} tabindex="-1" onpointerdown={(e) => startDrag("secend", i, e)}><title>{sec.name} end</title></circle>
+              {/if}
             {/each}
             {#if startDir}
               {@const b = sfBar(startDir.x0, startDir.y0, startDir.ang, u * 0.03)}
@@ -627,6 +646,7 @@
               <!-- svelte-ignore a11y_no_static_element_interactions -->
               <rect
                 class="sector"
+                class:ro={!editMode}
                 x={p[0] - u * 0.014}
                 y={p[1] - u * 0.014}
                 width={u * 0.028}
@@ -636,7 +656,7 @@
                 aria-label="Sector split {i + 1}"
                 aria-valuenow={s}
                 tabindex="-1"
-                onpointerdown={(e) => startDrag("sector", i, e)}
+                onpointerdown={editMode ? (e) => startDrag("sector", i, e) : undefined}
               ><title>Sector split {i + 1}</title></rect>
             {/each}
             {#each corners as c, i (c.number)}
@@ -645,6 +665,7 @@
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
                 <circle
                   class="marker"
+                  class:ro={!editMode}
                   cx={p[0]}
                   cy={p[1]}
                   r={u * 0.014}
@@ -655,7 +676,7 @@
                   aria-label="{c.name} apex {ai + 1}"
                   aria-valuenow={ad}
                   tabindex="-1"
-                  onpointerdown={(e) => startDrag(ai === 0 ? "corner" : "apex", i, e, ai)}
+                  onpointerdown={editMode ? (e) => startDrag(ai === 0 ? "corner" : "apex", i, e, ai) : undefined}
                 ><title>{c.name}</title></circle>
               {/each}
               {@const lp = ptAtDist(c.apex_dist)}
@@ -665,32 +686,43 @@
           </svg>
 
           <aside class="side">
-            <div class="tools">
-              <button type="button" class:on={addMode} onclick={() => { addMode = !addMode; if (addMode) addSectionMode = false; }}>
-                {addMode ? "Click the line…" : "Add corner"}
-              </button>
-              {#if sectors.length === 0}
-                <button type="button" onclick={seedSectors}>Add sectors</button>
-              {/if}
-              <button type="button" class:on={addSectionMode} onclick={toggleAddSection}>
-                {addSectionMode ? "Click the line…" : "Add section"}
-              </button>
-              <button type="button" onclick={startGen}>(Re)generate map layout</button>
-              <button type="button" onclick={rebuildGen}>Rebuild from saved capture</button>
-            </div>
+            {#if editMode}
+              <div class="tools">
+                <button type="button" class:on={addMode} onclick={() => { addMode = !addMode; if (addMode) addSectionMode = false; }}>
+                  {addMode ? "Click the line…" : "Add corner"}
+                </button>
+                {#if sectors.length === 0}
+                  <button type="button" onclick={seedSectors}>Add sectors</button>
+                {/if}
+                <button type="button" class:on={addSectionMode} onclick={toggleAddSection}>
+                  {addSectionMode ? "Click the line…" : "Add section"}
+                </button>
+                {#if !map?.shipped}
+                  <!-- Layout tools: hidden for built-in maps whose geometry is authoritative. -->
+                  <button type="button" onclick={startGen}>(Re)generate map layout</button>
+                  <button type="button" onclick={rebuildGen}>Rebuild from saved capture</button>
+                {/if}
+              </div>
+            {/if}
             <ul class="corners">
               {#each corners as c, i (c.number)}
                 <li>
                   <span class="num" aria-label="Corner number">T{c.number}</span>
-                  <input class="lbl-in" bind:value={c.label} placeholder={String(c.number)} aria-label="Corner label" />
-                  <input class="name" bind:value={c.name} aria-label="Corner name" />
-                  <span class="dir" data-dir={c.direction}>{c.direction || "—"}</span>
-                  {#if c.apexes.length < 2}
-                    <button type="button" class="apex-btn" aria-label="Add apex" onclick={() => addApex(i)}>+apex</button>
+                  {#if editMode}
+                    <input class="lbl-in" bind:value={c.label} placeholder={String(c.number)} aria-label="Corner label" />
+                    <input class="name" bind:value={c.name} aria-label="Corner name" />
+                    <span class="dir" data-dir={c.direction}>{c.direction || "—"}</span>
+                    {#if c.apexes.length < 2}
+                      <button type="button" class="apex-btn" aria-label="Add apex" onclick={() => addApex(i)}>+apex</button>
+                    {:else}
+                      <button type="button" class="apex-btn" aria-label="Remove apex" onclick={() => removeApex(i, c.apexes.length - 1)}>−apex</button>
+                    {/if}
+                    <button type="button" class="rm" aria-label="Remove corner" onclick={() => removeCorner(i)}>×</button>
                   {:else}
-                    <button type="button" class="apex-btn" aria-label="Remove apex" onclick={() => removeApex(i, c.apexes.length - 1)}>−apex</button>
+                    <span class="lbl-ro">{c.label || c.number}</span>
+                    <span class="name-ro">{c.name || "—"}</span>
+                    <span class="dir" data-dir={c.direction}>{c.direction || "—"}</span>
                   {/if}
-                  <button type="button" class="rm" aria-label="Remove corner" onclick={() => removeCorner(i)}>×</button>
                 </li>
               {/each}
             </ul>
@@ -698,14 +730,19 @@
               <ul class="sections">
                 {#each sections as s, i (i)}
                   <li>
-                    <input class="name" bind:value={s.name} aria-label="Section name" />
-                    <select bind:value={s.kind} aria-label="Section kind">
-                      <option value="straight">straight</option>
-                      <option value="complex">complex</option>
-                      <option value="section">section</option>
-                      <option value="drs">drs</option>
-                    </select>
-                    <button type="button" class="rm" aria-label="Remove section" onclick={() => removeSection(i)}>×</button>
+                    {#if editMode}
+                      <input class="name" bind:value={s.name} aria-label="Section name" />
+                      <select bind:value={s.kind} aria-label="Section kind">
+                        <option value="straight">straight</option>
+                        <option value="complex">complex</option>
+                        <option value="section">section</option>
+                        <option value="drs">drs</option>
+                      </select>
+                      <button type="button" class="rm" aria-label="Remove section" onclick={() => removeSection(i)}>×</button>
+                    {:else}
+                      <span class="name-ro">{s.name || "—"}</span>
+                      <span class="dir">{s.kind}</span>
+                    {/if}
                   </li>
                 {/each}
               </ul>
@@ -742,10 +779,12 @@
             </button>
           {/if}
         {:else}
-          <button type="button" onclick={close}>Cancel</button>
-          <button type="button" class="primary" disabled={saving || !map} onclick={save}>
-            {saving ? "Saving…" : "Save"}
-          </button>
+          <button type="button" onclick={close}>{editMode && map ? "Cancel" : "Close"}</button>
+          {#if editMode && map}
+            <button type="button" class="primary" disabled={saving || !map} onclick={save}>
+              {saving ? "Saving…" : "Save"}
+            </button>
+          {/if}
         {/if}
       </footer>
     </div>
@@ -896,6 +935,36 @@
     border: 1px solid var(--accent);
     border-radius: 8px;
     padding: 7px 12px;
+  }
+  .badge {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--faint);
+    border: 1px solid var(--muted);
+    border-radius: 999px;
+    padding: 2px 8px;
+    white-space: nowrap;
+  }
+  .pencil {
+    font-size: 15px;
+    line-height: 1;
+  }
+  /* Read-only corner label cell, mirrors .lbl-in width so view/edit rows align. */
+  .lbl-ro {
+    width: 44px;
+    flex: none;
+    font-size: 12px;
+    color: var(--faint);
+  }
+  /* View mode: markers/sectors are shown but not draggable — no grab affordance. */
+  .marker.ro,
+  .sector.ro {
+    cursor: default;
+  }
+  svg.ro {
+    cursor: default;
   }
   .genpanel {
     padding: 20px 16px;

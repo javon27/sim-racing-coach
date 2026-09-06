@@ -136,9 +136,9 @@
               onpointerup={railResizeUp}
             ></div>
             <CornerSetupTabs lapId={selectedLapId ?? null} />
+            <TrackMapPane sessionId={selectedSessionId} />
           </aside>
           <ChatPanel lapId={selectedLapId} sessionId={selectedSessionId} chatId={activeChatId} />
-          <TrackMapPane sessionId={selectedSessionId} />
         </div>
       </div>
     </section>

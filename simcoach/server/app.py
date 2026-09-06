@@ -245,6 +245,16 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         r = _track_file_data(track).get("rotation", 0.0)
         return float(r) if isinstance(r, (int, float)) else 0.0
 
+    def _is_shipped(track: str) -> bool:
+        # True when the track has an authoritative geometry map shipped in the install
+        # dir. The client hides layout tools (regenerate/rebuild) for these — a user
+        # may re-annotate a built-in track but not replace its layout.
+        slug = track_slug(track)
+        if not slug:
+            return False
+        _, bundled = _map_dirs()
+        return (bundled / f"{slug}.json").exists()
+
     def _shipped_extras(track: str) -> dict:
         # sectors/length from the shipped track file (if any) -- the map builder's
         # passthrough. Missing file/keys -> {}.
@@ -503,7 +513,9 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         if m:
             # The game's real S1/S2 boundaries (if any lap captured them) so the
             # editor can seed sector splits at the true positions, not thirds.
-            m = {**m, "detected_sectors": store.sector_bounds(rec.track, rec.car) or []}
+            # `shipped`: the geometry is a built-in the user may annotate but not rebuild.
+            m = {**m, "detected_sectors": store.sector_bounds(rec.track, rec.car) or [],
+                 "shipped": _is_shipped(rec.track)}
         return m
 
     @app.put("/laps/{lap_id}/map")

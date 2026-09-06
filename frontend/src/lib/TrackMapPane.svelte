@@ -9,6 +9,7 @@
   let collapsed = $state(readCollapsed());
   let lapId: number | null = $state(null);
   let editing = $state(false);
+  let editorMode: "view" | "edit" = $state("view"); // 🔍 opens view; "Generate" opens edit
   let mapNonce = $state(0); // bump to force TrackMap to re-fetch after an edit save
 
   function readCollapsed(): boolean {
@@ -46,21 +47,27 @@
 </script>
 
 <section class="map-pane" class:collapsed>
-  {#if collapsed}
-    <button type="button" class="strip" aria-label="Show track map" onclick={toggle}><span class="cap">‹</span></button>
-  {:else}
-    <header>
+  <header>
+    <button type="button" class="ttl" aria-expanded={!collapsed}
+            aria-label={collapsed ? "Show track map" : "Hide track map"} onclick={toggle}>
+      <span class="caret">{collapsed ? "▸" : "▾"}</span>
       <h2>Track map</h2>
-      <div class="acts">
-        <!-- Always available: with a lap it edits the map; without one it opens the
-             capture flow so a fresh/unmapped track can be generated (uses the LIVE
-             track, no stored lap needed). -->
-        <button type="button" onclick={() => (editing = true)}>
-          {lapId !== null ? "Edit map" : "Generate map"}
+    </button>
+    <div class="acts">
+      {#if lapId !== null}
+        <!-- Magnifier: opens the map enlarged in a read-only VIEW modal (a pencil in
+             the modal reveals the edit tools). -->
+        <button type="button" class="icon" aria-label="Enlarge track map" title="View map"
+                onclick={() => { editorMode = "view"; editing = true; }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
         </button>
-        <button type="button" class="collapse" aria-label="Hide track map" onclick={toggle}>›</button>
-      </div>
-    </header>
+      {:else}
+        <!-- No stored lap: open the capture flow directly (uses the LIVE track). -->
+        <button type="button" onclick={() => { editorMode = "edit"; editing = true; }}>Generate map</button>
+      {/if}
+    </div>
+  </header>
+  {#if !collapsed}
     {#if lapId !== null}
       {#key mapNonce}
         <TrackMap {lapId} />
@@ -68,34 +75,48 @@
     {:else}
       <p class="empty">No map yet — “Generate map” records the live track and builds one.</p>
     {/if}
-    <TrackMapEditor
-      {lapId}
-      open={editing}
-      onClose={() => (editing = false)}
-      onSaved={() => (mapNonce += 1)}
-    />
   {/if}
+  <TrackMapEditor
+    {lapId}
+    open={editing}
+    startMode={editorMode}
+    onClose={() => (editing = false)}
+    onSaved={() => (mapNonce += 1)}
+  />
 </section>
 
 <style>
+  /* Stacked under the corner/setup pane in the left rail — a full-width block, not a
+     side column. Collapsing hides the map body (accordion), header stays visible. */
   .map-pane {
-    width: 360px;
-    border-left: 1px solid var(--line);
+    border-top: 1px solid var(--line);
     background: var(--surface);
     display: flex;
     flex-direction: column;
     min-height: 0;
-    overflow: auto;
-  }
-  .map-pane.collapsed {
-    width: 20px;
-    overflow: hidden;
   }
   header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 14px 16px 8px;
+    gap: 6px;
+    padding: 10px 12px;
+  }
+  /* Title doubles as the collapse toggle (whole label is the hit target). */
+  .ttl {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: none;
+    border: none;
+    padding: 2px;
+    cursor: pointer;
+    color: inherit;
+  }
+  .ttl .caret {
+    color: var(--faint);
+    font-size: 11px;
+    width: 12px;
   }
   header h2 {
     margin: 0;
@@ -110,39 +131,33 @@
     gap: 6px;
     align-items: center;
   }
-  .strip {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: none;
-    background: transparent;
+  .acts button {
+    font: inherit;
+    font-size: 12px;
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 6px 12px;
     cursor: pointer;
-    padding: 0;
   }
-  /* A prominent caret tab on the thin collapsed strip — easy to spot and click. */
-  .strip .cap {
-    display: flex;
+  .icon {
+    display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 18px;
-    height: 48px;
-    border-radius: 6px;
-    background: var(--surface2, rgba(127, 127, 127, 0.14));
+    padding: 6px !important;
+    line-height: 0;
     color: var(--muted);
-    font-size: 18px;
-    font-weight: 700;
-    line-height: 1;
+    background: none !important;
+    border: none !important;
   }
-  .strip:hover .cap {
-    background: var(--accent-soft, rgba(127, 127, 127, 0.26));
+  .icon:hover {
     color: var(--text);
   }
   .empty {
     color: var(--faint);
     font-size: 13px;
     text-align: center;
-    padding: 24px 12px;
+    padding: 16px 12px;
   }
 </style>

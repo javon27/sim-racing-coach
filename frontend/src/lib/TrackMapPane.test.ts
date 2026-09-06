@@ -59,31 +59,36 @@ describe("TrackMapPane", () => {
     expect(container.querySelector("polyline")).toBeTruthy();
   });
 
-  it("collapses and expands, persisting the state", async () => {
-    render(TrackMapPane, { props: { sessionId: "s1" } });
-    await screen.findByText("Track map");
+  it("collapses and expands the map body, persisting the state", async () => {
+    const { container } = render(TrackMapPane, { props: { sessionId: "s1" } });
+    await screen.findByText("T1"); // map body present
 
+    // The title doubles as the collapse toggle; the title stays, the body hides.
     await fireEvent.click(screen.getByLabelText("Hide track map"));
-    expect(screen.queryByText("Track map")).toBeNull();
+    expect(container.querySelector("polyline")).toBeNull();
+    expect(screen.getByText("Track map")).toBeTruthy();
     expect(localStorage.getItem("trackmap.collapsed")).toBe("1");
 
     await fireEvent.click(screen.getByLabelText("Show track map"));
-    expect(screen.getByText("Track map")).toBeTruthy();
+    expect(await screen.findByText("T1")).toBeTruthy();
     expect(localStorage.getItem("trackmap.collapsed")).toBe("0");
   });
 
-  it("starts collapsed when localStorage says so", () => {
+  it("starts collapsed when localStorage says so (body hidden, title shown)", () => {
     localStorage.setItem("trackmap.collapsed", "1");
-    render(TrackMapPane, { props: { sessionId: "s1" } });
-    expect(screen.queryByText("Track map")).toBeNull();
+    const { container } = render(TrackMapPane, { props: { sessionId: "s1" } });
+    expect(screen.getByText("Track map")).toBeTruthy();
+    expect(container.querySelector("polyline")).toBeNull();
     expect(screen.getByLabelText("Show track map")).toBeTruthy();
   });
 
-  it("opens the editor modal from the Edit map button", async () => {
+  it("opens the map in a read-only VIEW modal from the magnifier", async () => {
     render(TrackMapPane, { props: { sessionId: "s1" } });
-    await screen.findByText("Edit map");
-
-    await fireEvent.click(screen.getByText("Edit map"));
-    expect(await screen.findByRole("dialog")).toBeTruthy();
+    await fireEvent.click(await screen.findByLabelText("Enlarge track map"));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toBeTruthy();
+    // View mode: header reads "Track map" (not "Edit"), no Save, offers a pencil.
+    expect(screen.getByLabelText("Edit map")).toBeTruthy(); // the pencil
+    expect(screen.queryByText("Save")).toBeNull();
   });
 });
