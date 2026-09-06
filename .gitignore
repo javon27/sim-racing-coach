@@ -50,3 +50,6 @@ build/
 
 # Tauri sidecar runtime log
 sidecar.log
+
+# PyInstaller sidecar work dir
+build-sidecar/
