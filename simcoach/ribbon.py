@@ -132,6 +132,44 @@ def _smooth(a: np.ndarray, w: int) -> np.ndarray:
     return np.convolve(np.concatenate([a[-w:], a, a[:w]]), k, mode="valid")
 
 
+def _menger(x: np.ndarray, z: np.ndarray) -> np.ndarray:
+    """Per-station discrete (Menger) curvature of a closed 2D polyline, 1/m."""
+    n = len(x)
+    xp = np.concatenate([x[-1:], x, x[:1]])
+    zp = np.concatenate([z[-1:], z, z[:1]])
+    k = np.zeros(n)
+    for i in range(n):
+        ax, az, bx, bz, cx, cz = xp[i], zp[i], xp[i + 1], zp[i + 1], xp[i + 2], zp[i + 2]
+        area = abs((bx - ax) * (cz - az) - (cx - ax) * (bz - az))
+        den = np.hypot(bx - ax, bz - az) * np.hypot(cx - bx, cz - bz) * np.hypot(cx - ax, cz - az)
+        k[i] = 2 * area / den if den > 1e-9 else 0.0
+    return k
+
+
+def _smooth_curve(x: np.ndarray, z: np.ndarray, base_w: int, pct: float = 88.0) -> tuple[np.ndarray, np.ndarray]:
+    """Curvature-ADAPTIVE closed-loop smoothing of a 2D polyline: a wide window on
+    straights (kills the ~9 m capture squiggle) that narrows through corners (so a
+    tight infield ess isn't flattened, the way a fixed window did). The per-station
+    window scales from base_w on straights down to 1 at the sharpest bends, keyed to
+    curvature on a lightly pre-smoothed copy so the window choice isn't itself noisy."""
+    n = len(x)
+    if base_w < 2 or n <= 2 * base_w:
+        return x, z
+    pre = max(1, base_w // 3)
+    kap = _menger(_smooth(x, pre), _smooth(z, pre))
+    ref = float(np.percentile(kap, pct)) or 1.0
+    alpha = np.clip(kap / ref, 0.0, 1.0)                       # 1 at corners, 0 on straights
+    w = np.clip(np.round(base_w - (base_w - 1) * alpha).astype(int), 1, base_w)
+    xp = np.concatenate([x[-base_w:], x, x[:base_w]])
+    zp = np.concatenate([z[-base_w:], z, z[:base_w]])
+    sx, sz = np.empty(n), np.empty(n)
+    for i in range(n):
+        wi = int(w[i]); c = base_w + i
+        sx[i] = xp[c - wi:c + wi + 1].mean()
+        sz[i] = zp[c - wi:c + wi + 1].mean()
+    return sx, sz
+
+
 def _lateral(cx: np.ndarray, cz: np.ndarray):
     """Unit lateral (perpendicular to the centered-diff tangent, rot +90), closed loop."""
     tx, tz = np.roll(cx, -1) - np.roll(cx, 1), np.roll(cz, -1) - np.roll(cz, 1)
@@ -207,6 +245,10 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
     # Distance-based smoothing half-window (bins), so it's ~_SMOOTH_HALF_M metres on
     # EVERY track -- a fixed bin count over-smoothed long tracks (chicanes flattened).
     sw = max(1, int(round(_SMOOTH_HALF_M * bins / max_len)))
+    # Light structural smoothing for the reconstruction; corner-preserving detail on
+    # the rendered edges/center comes from the adaptive final pass (_smooth_curve),
+    # so a fixed wide window no longer flattens tight esses.
+    swl = max(1, sw // 3)
 
     # Bootstrap centerline (mean of all), smooth, lateral from it.
     cx = np.array([X[mm].mean() if mm.size else np.nan for mm in members])
@@ -223,8 +265,8 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
         li, ri = int(lap_means.argmin()), int(lap_means.argmax())
         a, b = slices[li]; lx, lz = _lap_grid(X[a:b], Z[a:b], D[a:b], max_len, bins)
         a, b = slices[ri]; rx, rz = _lap_grid(X[a:b], Z[a:b], D[a:b], max_len, bins)
-        lx, lz, rx, rz = (_smooth(lx, sw), _smooth(lz, sw),
-                          _smooth(rx, sw), _smooth(rz, sw))
+        lx, lz, rx, rz = (_smooth(lx, swl), _smooth(lz, swl),
+                          _smooth(rx, swl), _smooth(rz, swl))
         # Bound laps cross S/F mid-track, so the edges PINCH at the seam -> stitch
         # those bins closed-loop from neighbours (same seam guard as the fallback).
         wid = np.hypot(lx - rx, lz - rz)
@@ -237,7 +279,7 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
             for arr in (lx, lz, rx, rz):
                 arr[bad] = np.nan
                 arr[:] = _fill_nan(arr, period=bins)
-        ctr_x, ctr_z = _smooth((lx + rx) / 2.0, sw), _smooth((lz + rz) / 2.0, sw)
+        ctr_x, ctr_z = _smooth((lx + rx) / 2.0, swl), _smooth((lz + rz) / 2.0, swl)
         lat_x, lat_z = _lateral(ctr_x, ctr_z)
         wid = np.hypot(lx - rx, lz - rz)
     else:
@@ -257,7 +299,7 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
             for arr in (off_lo, off_hi):
                 arr[bad] = np.nan
                 arr[:] = _fill_nan(arr, period=bins)
-            off_lo, off_hi = _smooth(off_lo, sw), _smooth(off_hi, sw)
+            off_lo, off_hi = _smooth(off_lo, swl), _smooth(off_hi, swl)
             lx, lz = cx + off_lo * lat_x, cz + off_lo * lat_z
             rx, rz = cx + off_hi * lat_x, cz + off_hi * lat_z
             wid = off_hi - off_lo
@@ -265,6 +307,16 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
             lx, lz, rx, rz = cx.copy(), cz.copy(), cx.copy(), cz.copy()
             wid = np.zeros(bins)
         ctr_x, ctr_z = (lx + rx) / 2.0, (lz + rz) / 2.0
+
+    # Curvature-adaptive final smoothing of the rendered edges + center: a fixed wide
+    # window flattened tight infield esses (the layout lost visible corners). This
+    # keeps straights clean and preserves the bends; center is the midpoint of the
+    # smoothed edges.
+    lx, lz = _smooth_curve(lx, lz, sw)
+    rx, rz = _smooth_curve(rx, rz, sw)
+    ctr_x, ctr_z = (lx + rx) / 2.0, (lz + rz) / 2.0
+    lat_x, lat_z = _lateral(ctr_x, ctr_z)
+    wid = np.hypot(lx - rx, lz - rz)
 
     bnk = _bank_per_bin(X, Z, Y, members, ctr_x, ctr_z, lat_x, lat_z, bins, w=sw)
 

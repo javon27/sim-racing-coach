@@ -261,3 +261,23 @@ def test_ribbon_to_screen_rotation_swaps_bounds():
 
 def test_ribbon_to_screen_empty_ribbon():
     assert ribbon_to_screen({}, []) == {}
+
+
+def test_smooth_curve_preserves_corners_and_cleans_straights():
+    # The adaptive smoother must keep a sharp corner sharp (unlike a fixed boxcar,
+    # which rounds it) while removing noise on the straights.
+    from simcoach.ribbon import _menger, _smooth, _smooth_curve
+
+    rng = np.random.default_rng(0)
+    t = np.linspace(0, 1, 60, endpoint=False)[:, None]
+    side = lambda a, b: np.array(a) + (np.array(b) - np.array(a)) * t
+    pts = np.vstack([side([0, 0], [10, 0]), side([10, 0], [10, 10]),
+                     side([10, 10], [0, 10]), side([0, 10], [0, 0])])  # square: 4 sharp 90° corners
+    x, z = pts[:, 0].copy(), pts[:, 1].copy()
+    xn, zn = x + rng.normal(0, 0.15, x.shape), z + rng.normal(0, 0.15, z.shape)
+
+    sx, sz = _smooth_curve(xn, zn, base_w=8)
+    bx, bz = _smooth(xn, 8), _smooth(zn, 8)  # fixed boxcar, for comparison
+
+    assert np.std(sx - x) < np.std(xn - x)               # straights denoised
+    assert _menger(sx, sz).max() > _menger(bx, bz).max()  # corners kept sharper than boxcar
