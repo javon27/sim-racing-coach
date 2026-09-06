@@ -590,23 +590,9 @@ body {
 .nav .logo {
   width: 32px;
   height: 32px;
-  border-radius: 9px;
-  background: var(--accent);
   display: grid;
   place-items: center;
-  color: #fff;
-  font-family: var(--display);
-  font-weight: 700;
-  font-size: 15px;
   margin-bottom: 10px;
-}
-:root[data-theme="dark"] .nav .logo {
-  color: #160f2b;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .nav .logo {
-    color: #160f2b;
-  }
 }
 .nav button.nav-item {
   width: 42px;

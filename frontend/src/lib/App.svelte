@@ -9,6 +9,7 @@
   import TrackMapPane from "./TrackMapPane.svelte";
   import SessionsScreen from "./SessionsScreen.svelte";
   import SettingsScreen from "./SettingsScreen.svelte";
+  import NestorMark from "./NestorMark.svelte";
 
   type Screen = "coach" | "sessions" | "pitwall" | "settings";
 
@@ -67,7 +68,7 @@
 
 <div class="shell">
   <nav class="nav">
-    <div class="logo">P</div>
+    <div class="logo"><NestorMark size={26} label="Nestor" /></div>
     <button
       type="button"
       class="nav-item"
