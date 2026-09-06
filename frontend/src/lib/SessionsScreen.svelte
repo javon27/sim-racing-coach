@@ -54,7 +54,9 @@
     });
   }
 
-  const tracks = $derived([...new Set(sessions.map((s) => s.track))]);
+  const tracks = $derived(
+    [...new Set(sessions.map((s) => s.track))].sort((a, b) => a.localeCompare(b)),
+  );
   const cars = $derived([...new Set(sessions.map((s) => s.car))]);
 
   const filtered = $derived(
