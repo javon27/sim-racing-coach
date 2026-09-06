@@ -320,6 +320,24 @@
     return map.path[nearestDistIndex(map.dist, d)];
   }
 
+  // Place a label OUTWARD from the track centroid (radially away from the map
+  // center) so labels sit off the track and cluster less than a fixed up-right
+  // offset. Side-aware anchor keeps the text reading away from the line. The center
+  // is the rotation pivot, so "outward" stays outward at any map rotation.
+  function lblPos(x: number, y: number, gap: number): { x: number; y: number; anchor: "start" | "middle" | "end" } {
+    if (!map) return { x: x + gap, y: y - gap, anchor: "start" };
+    let dx = x - map.width / 2;
+    let dy = y - map.height / 2;
+    const d = Math.hypot(dx, dy) || 1;
+    dx /= d;
+    dy /= d;
+    return {
+      x: x + dx * gap,
+      y: y + dy * gap + gap * 0.28, // nudge down so the baseline clears the marker
+      anchor: dx > 0.3 ? "start" : dx < -0.3 ? "end" : "middle",
+    };
+  }
+
   // S/F marker + heading arrow, same construction as TrackMap.svelte.
   const startDir = $derived.by(() => {
     if (!map || map.path.length < 2) return null;
@@ -644,7 +662,8 @@
               {@const ps = ptAtDist(sec.start_dist)}
               {@const pe = ptAtDist(sec.end_dist)}
               <polyline class="section-band" points={seg.pts} fill="none" stroke="var(--good, #3a7)" stroke-width={u * 0.02} stroke-linecap="round" opacity="0.35" />
-              <text class="section-lbl" x={seg.mid[0]} y={seg.mid[1] - u * 0.03} font-size={u * 0.026} fill="var(--good, #3a7)" text-anchor="middle" paint-order="stroke" stroke="var(--bg, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">{sec.name}</text>
+              {@const sl = lblPos(seg.mid[0], seg.mid[1], u * 0.055)}
+              <text class="section-lbl" x={sl.x} y={sl.y} text-anchor={sl.anchor} font-size={u * 0.026} fill="var(--good, #3a7)" paint-order="stroke" stroke="var(--bg, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">{sec.name}</text>
               <!-- svelte-ignore a11y_no_static_element_interactions -->
               {#if editMode}
                 <circle class="sec-handle" cx={ps[0]} cy={ps[1]} r={u * 0.012} fill="var(--good, #3a7)" role="slider" aria-label="{sec.name} start" aria-valuenow={sec.start_dist} tabindex="-1" onpointerdown={(e) => startDrag("secstart", i, e)}><title>{sec.name} start</title></circle>
@@ -697,7 +716,8 @@
                 ><title>{c.name}</title></circle>
               {/each}
               {@const lp = ptAtDist(c.apex_dist)}
-              <text class="corner-lbl" x={lp[0] + u * 0.024} y={lp[1] - u * 0.024} font-size={u * 0.03} fill="var(--accent)" paint-order="stroke" stroke="var(--bg, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">T{c.label || c.number}</text>
+              {@const cl = lblPos(lp[0], lp[1], u * 0.05)}
+              <text class="corner-lbl" x={cl.x} y={cl.y} text-anchor={cl.anchor} font-size={u * 0.03} fill="var(--accent)" paint-order="stroke" stroke="var(--bg, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">T{c.label || c.number}</text>
             {/each}
             </g>
           </svg>

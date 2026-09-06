@@ -62,6 +62,18 @@
     return `${x + dx * len},${y + dy * len} ${x + px * wid},${y + py * wid} ${x - px * wid},${y - py * wid}`;
   }
 
+  // Place a label OUTWARD from the track centroid so labels sit off the track and
+  // cluster less than a fixed offset (mirrors TrackMapEditor.lblPos).
+  function lblPos(x: number, y: number, gap: number): { x: number; y: number; anchor: "start" | "middle" | "end" } {
+    if (!map) return { x: x + gap, y: y - gap, anchor: "start" };
+    let dx = x - map.width / 2;
+    let dy = y - map.height / 2;
+    const d = Math.hypot(dx, dy) || 1;
+    dx /= d;
+    dy /= d;
+    return { x: x + dx * gap, y: y + dy * gap + gap * 0.28, anchor: dx > 0.3 ? "start" : dx < -0.3 ? "end" : "middle" };
+  }
+
   // Path slice + midpoint for a named section span (start_dist..end_dist).
   function sectionSeg(s: { start_dist: number; end_dist: number }) {
     if (!map) return { pts: "", mid: [0, 0] as [number, number] };
@@ -95,14 +107,16 @@
       {#each map.sections ?? [] as sec (sec.name + sec.start_dist)}
         {@const seg = sectionSeg(sec)}
         <polyline points={seg.pts} fill="none" stroke="var(--good, #3a7)" stroke-width={u * 0.02} stroke-linecap="round" opacity="0.35" />
-        <text class="section-lbl" x={seg.mid[0]} y={seg.mid[1] - u * 0.03} font-size={u * 0.026} fill="var(--good, #3a7)" text-anchor="middle" paint-order="stroke" stroke="var(--surface, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">{sec.name}</text>
+        {@const sl = lblPos(seg.mid[0], seg.mid[1], u * 0.055)}
+        <text class="section-lbl" x={sl.x} y={sl.y} text-anchor={sl.anchor} font-size={u * 0.026} fill="var(--good, #3a7)" paint-order="stroke" stroke="var(--surface, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">{sec.name}</text>
       {/each}
       {#each map.corners as c (c.number)}
         {#each c.apexes ?? [c.apex_dist] as ad, ai}
           {@const p = ai === 0 ? [c.x, c.y] : map.path[nearestDistIndex(map.dist, ad)]}
           <circle cx={p[0]} cy={p[1]} r={u * 0.011} fill="var(--accent)"><title>{c.name}</title></circle>
         {/each}
-        <text class="corner-lbl" x={c.x + u * 0.022} y={c.y - u * 0.022} font-size={u * 0.03} fill="var(--accent)" paint-order="stroke" stroke="var(--surface, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">T{c.label || c.number}</text>
+        {@const cl = lblPos(c.x, c.y, u * 0.05)}
+        <text class="corner-lbl" x={cl.x} y={cl.y} text-anchor={cl.anchor} font-size={u * 0.03} fill="var(--accent)" paint-order="stroke" stroke="var(--surface, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">T{c.label || c.number}</text>
       {/each}
     </svg>
   {:else if phase === "none"}
