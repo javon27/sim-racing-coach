@@ -76,7 +76,7 @@
 {#if booted}
 <div class="shell">
   <nav class="nav">
-    <div class="logo"><NestorMark size={26} label="Nestor" /></div>
+    <div class="logo"><NestorMark size={26} label="Nestor" outline /></div>
     <button
       type="button"
       class="nav-item"

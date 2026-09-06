@@ -25,7 +25,9 @@
       // the fill is always visible. In dev the sidecar is already warm and boot
       // is near-instant; without this the bar would just flash to 100.
       step = "Connecting to the coach server…";
-      requestAnimationFrame(() => (progress = 90));
+      // Double rAF: let the 0% width paint first so the browser has a baseline
+      // to transition FROM — a single rAF jumps straight to 90 with no anim.
+      requestAnimationFrame(() => requestAnimationFrame(() => (progress = 90)));
       const sweep = sleep(1100);
 
       // PyInstaller onefile is slow to launch on first run; wait until it binds,

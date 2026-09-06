@@ -2,12 +2,15 @@
   // Nestor crested-helm mark. Default = colorized (black shell, bronze crest, purple
   // visor). flat=true renders a single-color silhouette via currentColor (favicons,
   // one-ink contexts). Sized by height; aspect is intrinsic to the viewBox.
-  let { size = 22, flat = false, label = "Nestor" }:
-    { size?: number; flat?: boolean; label?: string } = $props();
+  let { size = 22, flat = false, label = "Nestor", outline = false }:
+    { size?: number; flat?: boolean; label?: string; outline?: boolean } = $props();
+  // White outline (dark surfaces only) so the near-black shell separates from
+  // the background; scales with size so it reads the same at 17px and 108px.
+  const ol = $derived(Math.max(1, Math.round(size * 0.03)));
 </script>
 
 {#if flat}
-  <svg viewBox="36 41 469 556" height={size} role="img" aria-label={label} style="width:auto;display:block"><path fill="currentColor" d="
+  <svg viewBox="36 41 469 556" height={size} role="img" aria-label={label} class:outline style="--ol:{ol}px;width:auto;display:block"><path fill="currentColor" d="
 M209.153351,332.132812 
 	C208.606506,340.659546 210.839279,348.148254 214.329529,355.224060 
 	C224.632523,376.111359 237.769470,395.122162 253.160217,412.570831 
@@ -107,7 +110,7 @@ M251.545166,161.323486
 	C245.671432,162.891418 248.410370,162.178162 251.545166,161.323486 
 z"/></svg>
 {:else}
-  <svg viewBox="36 41 469 556" height={size} role="img" aria-label={label} style="width:auto;display:block"><path fill="#141218" d="
+  <svg viewBox="36 41 469 556" height={size} role="img" aria-label={label} class:outline style="--ol:{ol}px;width:auto;display:block"><path fill="#141218" d="
 M209.153351,332.132812 
 	C208.606506,340.659546 210.839279,348.148254 214.329529,355.224060 
 	C224.632523,376.111359 237.769470,395.122162 253.160217,412.570831 
@@ -207,3 +210,24 @@ M251.545166,161.323486
 	C245.671432,162.891418 248.410370,162.178162 251.545166,161.323486 
 z"/></svg>
 {/if}
+
+<style>
+  /* Outline via stacked drop-shadows around the silhouette. White on dark
+     surfaces; transparent on light, where the dark shell already reads. */
+  svg.outline {
+    --olc: transparent;
+    filter:
+      drop-shadow(var(--ol) 0 0 var(--olc))
+      drop-shadow(calc(-1 * var(--ol)) 0 0 var(--olc))
+      drop-shadow(0 var(--ol) 0 var(--olc))
+      drop-shadow(0 calc(-1 * var(--ol)) 0 var(--olc));
+  }
+  :root[data-theme="dark"] svg.outline {
+    --olc: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) svg.outline {
+      --olc: #ffffff;
+    }
+  }
+</style>
