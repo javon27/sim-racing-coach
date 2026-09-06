@@ -644,11 +644,8 @@
           {#if genPhase === "building"}
             <p class="step">Reconstructing the track surface…</p>
           {:else}
-            <p class="step">Your out lap from the pits isn't recorded (it's not a full lap).
-              After it, drive a lap hugging the <strong>left</strong> boundary, a
-              <strong>weaving</strong> lap (no need to reach the edges), then a lap hugging the
-              <strong>right</strong> boundary — then Build. More/denser passes give truer edges
-              and camber.</p>
+            <p class="step">Drive three full laps — <strong>left</strong> boundary, a
+              <strong>weave</strong>, <strong>right</strong> boundary — then Build.</p>
             <button
               type="button"
               class="primary"
