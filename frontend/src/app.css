@@ -143,20 +143,6 @@ body {
   text-transform: uppercase;
   color: var(--faint);
 }
-.brand .wm {
-  display: inline-flex;
-  align-items: center;
-  font-family: var(--display);
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  font-size: 17px;
-}
-/* The helmet stands in for the O — tuck it snug between the T and the R. */
-.brand .o {
-  display: inline-flex;
-  margin: 0 1px;
-  transform: translateY(1px);
-}
 .stat {
   display: flex;
   flex-direction: column;

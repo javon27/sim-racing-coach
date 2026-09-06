@@ -9,18 +9,14 @@
     type SettingsResponse,
     type IngestResult,
   } from "./api";
-  import { nextTheme, applyTheme, THEME_LABELS, type ThemeMode } from "./theme";
   import InfoTip from "./InfoTip.svelte";
 
-  const THEME_KEY = "simcoach-theme";
   const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
   let browseStatus: string | null = $state(null);
 
   let settings: SettingsResponse | null = $state(null);
   let phase: "loading" | "ok" | "error" = $state("loading");
-
-  let theme: ThemeMode = $state("system");
 
   let apiKeyInput = $state("");
   let keyStatus: string | null = $state(null);
@@ -35,11 +31,6 @@
   let importing = $state(false);
 
   $effect(() => {
-    const stored = localStorage.getItem(THEME_KEY);
-    if (stored === "light" || stored === "dark" || stored === "system") {
-      theme = stored;
-      applyTheme(theme);
-    }
     (async () => {
       try {
         settings = await getSettings();
@@ -65,12 +56,6 @@
     putSettings(cfg).then((res) => {
       settings = res;
     });
-  }
-
-  function toggleTheme() {
-    theme = nextTheme(theme);
-    applyTheme(theme);
-    localStorage.setItem(THEME_KEY, theme);
   }
 
   async function saveKey() {
@@ -151,10 +136,6 @@
           <option value="metric">Metric</option>
           <option value="imperial">Imperial</option>
         </select>
-      </div>
-      <div class="row">
-        <span class="lbl">Theme<InfoTip text="Light, dark, or follow your system setting." /></span>
-        <button type="button" onclick={toggleTheme}>{THEME_LABELS[theme]}</button>
       </div>
     </section>
 

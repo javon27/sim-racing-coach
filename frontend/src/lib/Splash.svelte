@@ -5,7 +5,7 @@
   import { onMount } from "svelte";
   import { fade } from "svelte/transition";
   import { getHealth, getStatus, getSettings, getSessions, getChats, withRetry } from "./api";
-  import NestorMark from "./NestorMark.svelte";
+  import NestorWordmark from "./NestorWordmark.svelte";
 
   let { onready }: { onready: () => void } = $props();
 
@@ -30,6 +30,9 @@
       await Promise.allSettled([getStatus(), getSettings(), getSessions(), getChats()]);
       done = true;
       progress = 100;
+      // Hold a beat so the fill visibly completes — on a warm boot the reveal
+      // would otherwise fire mid-fill and you'd never see it reach 100%.
+      await new Promise((r) => setTimeout(r, 480));
       onready();
     } catch {
       phase = "error";
@@ -41,8 +44,7 @@
 
 <div class="splash" out:fade={{ duration: 280 }}>
   <div class="stack">
-    <div class="medallion"><NestorMark size={92} label="Nestor" /></div>
-    <div class="wm">NESTOR</div>
+    <div class="logo"><NestorWordmark size={54} /></div>
     <div class="tag">AI Sim Racing Coach</div>
     {#if phase === "loading"}
       <div class="bar"><span class:done style="width:{progress}%"></span></div>
@@ -70,24 +72,9 @@
     align-items: center;
     gap: 4px;
   }
-  /* Always-light chip: the mark's near-black shell would vanish on the dark
-     splash, so pedestal it on a light tile that reads in both themes. */
-  .medallion {
-    margin-bottom: 18px;
-    padding: 20px 24px;
-    border-radius: 26px;
-    background: linear-gradient(160deg, #ffffff, #e9edf4);
-    box-shadow:
-      0 14px 34px rgba(10, 12, 20, 0.34),
-      inset 0 0 0 1px rgba(255, 255, 255, 0.6);
+  .logo {
+    margin-bottom: 4px;
     animation: rise 0.5s ease both;
-  }
-  .wm {
-    font-family: var(--display);
-    font-weight: 700;
-    font-size: 30px;
-    letter-spacing: 0.14em;
-    color: var(--text);
   }
   .tag {
     font-family: var(--display);
@@ -146,6 +133,6 @@
     to { opacity: 1; transform: translateY(0); }
   }
   @media (prefers-reduced-motion: reduce) {
-    .medallion { animation: none; }
+    .logo { animation: none; }
   }
 </style>
