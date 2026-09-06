@@ -5,10 +5,12 @@
   import NestorMark from "./NestorMark.svelte";
   let { size = 17 }: { size?: number } = $props();
   const mark = $derived(Math.round(size * 1.12));
+  // Outline width scales with the mark so it reads the same at 17px and 108px.
+  const ol = $derived(Math.max(1, Math.round(size * 0.03)));
 </script>
 
 <span class="wm" style="font-size:{size}px">
-  NEST<span class="o"><NestorMark size={mark} label="O" /></span>R
+  NEST<span class="o" style="--ol:{ol}px"><NestorMark size={mark} label="O" /></span>R
 </span>
 
 <style>
@@ -26,5 +28,23 @@
     display: inline-flex;
     margin: 0 0.04em;
     transform: translateY(0.06em);
+    /* White outline so the near-black shell separates from a dark surface.
+       Transparent on light (the dark shell already reads there). */
+    --olc: transparent;
+  }
+  .o :global(svg) {
+    filter:
+      drop-shadow(var(--ol) 0 0 var(--olc))
+      drop-shadow(calc(-1 * var(--ol)) 0 0 var(--olc))
+      drop-shadow(0 var(--ol) 0 var(--olc))
+      drop-shadow(0 calc(-1 * var(--ol)) 0 var(--olc));
+  }
+  :root[data-theme="dark"] .o {
+    --olc: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .o {
+      --olc: #ffffff;
+    }
   }
 </style>

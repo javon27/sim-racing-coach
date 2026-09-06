@@ -11,28 +11,34 @@
 
   let phase: "loading" | "error" = $state("loading");
   let step = $state("Warming up…");
-  let progress = $state(6); // %; creeps while we wait, snaps to 100 on reveal
-  let done = $state(false); // switches the bar to a fast fill for the final snap
+  let progress = $state(0); // %; visual fill, deliberately decoupled from boot speed
+  let done = $state(false); // switches the bar to the fast final-fill transition
+
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
   async function boot() {
     phase = "loading";
     done = false;
-    progress = 6;
+    progress = 0;
     try {
-      // PyInstaller onefile is slow to launch on first run; wait until it binds.
-      // Ease toward (never reaching) 90% so the bar always shows motion even
-      // though the bind time is unknown.
+      // Sweep the bar 0 -> 90% over ~1.1s no matter how fast the server is, so
+      // the fill is always visible. In dev the sidecar is already warm and boot
+      // is near-instant; without this the bar would just flash to 100.
       step = "Connecting to the coach server…";
       requestAnimationFrame(() => (progress = 90));
+      const sweep = sleep(1100);
+
+      // PyInstaller onefile is slow to launch on first run; wait until it binds,
+      // then prefetch the first-paint data against the now-warm server.
       await withRetry(getHealth, 24, 500);
-      // Prefetch the first-paint data against the now-warm server.
       step = "Loading your garage…";
       await Promise.allSettled([getStatus(), getSettings(), getSessions(), getChats()]);
+
+      // Only complete the bar once BOTH the sweep and the real work are done.
+      await sweep;
       done = true;
       progress = 100;
-      // Hold a beat so the fill visibly completes — on a warm boot the reveal
-      // would otherwise fire mid-fill and you'd never see it reach 100%.
-      await new Promise((r) => setTimeout(r, 480));
+      await sleep(320); // let the 100% fill land before revealing
       onready();
     } catch {
       phase = "error";
@@ -97,9 +103,9 @@
     height: 100%;
     border-radius: 999px;
     background: var(--accent);
-    /* Long ease-out: decelerates toward 90% so it always looks alive, then
-       .done swaps to a quick fill for the final snap to 100%. */
-    transition: width 14s cubic-bezier(0.1, 0.7, 0.15, 1);
+    /* Sweep to 90% over ~1.1s (matches the JS `sweep` timer), then .done swaps
+       to a quick transition for the final fill to 100%. */
+    transition: width 1.1s cubic-bezier(0.25, 0.8, 0.35, 1);
   }
   .bar span.done {
     transition: width 0.3s ease;
