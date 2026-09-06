@@ -107,7 +107,7 @@
       {#each map.sections ?? [] as sec (sec.name + sec.start_dist)}
         {@const seg = sectionSeg(sec)}
         <polyline points={seg.pts} fill="none" stroke="var(--good, #3a7)" stroke-width={u * 0.02} stroke-linecap="round" opacity="0.35" />
-        {@const sl = lblPos(seg.mid[0], seg.mid[1], u * 0.055)}
+        {@const sl = lblPos(seg.mid[0], seg.mid[1], u * 0.04)}
         <text class="section-lbl" x={sl.x} y={sl.y} text-anchor={sl.anchor} font-size={u * 0.026} fill="var(--good, #3a7)" paint-order="stroke" stroke="var(--surface, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">{sec.name}</text>
       {/each}
       {#each map.corners as c (c.number)}
@@ -115,7 +115,7 @@
           {@const p = ai === 0 ? [c.x, c.y] : map.path[nearestDistIndex(map.dist, ad)]}
           <circle cx={p[0]} cy={p[1]} r={u * 0.011} fill="var(--accent)"><title>{c.name}</title></circle>
         {/each}
-        {@const cl = lblPos(c.x, c.y, u * 0.05)}
+        {@const cl = lblPos(c.x, c.y, u * 0.034)}
         <text class="corner-lbl" x={cl.x} y={cl.y} text-anchor={cl.anchor} font-size={u * 0.03} fill="var(--accent)" paint-order="stroke" stroke="var(--surface, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">T{c.label || c.number}</text>
       {/each}
     </svg>
