@@ -182,7 +182,7 @@
     } catch (e) {
       genPhase = "off";
       genErr = String(e).includes("422")
-        ? "No saved capture for this track — use (Re)generate to record one."
+        ? "No saved capture for this track — use Generate map layout to record one."
         : "Rebuild failed.";
     }
   }
@@ -802,7 +802,7 @@
                 {#if map?.curating || !map?.shipped}
                   <!-- Layout tools: for user maps, and for built-ins only in dev
                        (curating) — an installed build can't rebuild a shipped layout. -->
-                  <button type="button" onclick={startGen}>(Re)generate map layout</button>
+                  <button type="button" onclick={startGen}>Generate map layout</button>
                   <button type="button" onclick={rebuildGen}>Rebuild from saved capture</button>
                 {/if}
               </div>
@@ -863,7 +863,7 @@
             (weave across the full width) to generate one, or rebuild from a capture you
             already recorded.</p>
           <div class="tools">
-            <button type="button" class="primary" onclick={startGen}>(Re)generate map layout</button>
+            <button type="button" class="primary" onclick={startGen}>Generate map layout</button>
             <button type="button" onclick={rebuildGen}>Rebuild from saved capture</button>
           </div>
           {#if error}<p class="msg err">{error}</p>{/if}
@@ -1079,8 +1079,14 @@
     padding: 20px 16px;
     display: flex;
     flex-direction: column;
+    align-items: center;
+    text-align: center;
     gap: 12px;
     max-width: 520px;
+    margin: 0 auto;
+  }
+  .genpanel .tools {
+    justify-content: center;
   }
   .genpanel h3 {
     margin: 0;
