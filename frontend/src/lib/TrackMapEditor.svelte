@@ -320,10 +320,8 @@
     return map.path[nearestDistIndex(map.dist, d)];
   }
 
-  // Place a label OUTWARD from the track centroid (radially away from the map
-  // center) so labels sit off the track and cluster less than a fixed up-right
-  // offset. Side-aware anchor keeps the text reading away from the line. The center
-  // is the rotation pivot, so "outward" stays outward at any map rotation.
+  // Fallback: place a label OUTWARD from the track centroid (used for section labels
+  // and straight-ish corners where local curvature gives no clear outside).
   function lblPos(x: number, y: number, gap: number): { x: number; y: number; anchor: "start" | "middle" | "end" } {
     if (!map) return { x: x + gap, y: y - gap, anchor: "start" };
     let dx = x - map.width / 2;
@@ -331,12 +329,50 @@
     const d = Math.hypot(dx, dy) || 1;
     dx /= d;
     dy /= d;
-    return {
-      x: x + dx * gap,
-      y: y + dy * gap + gap * 0.28, // nudge down so the baseline clears the marker
-      anchor: dx > 0.3 ? "start" : dx < -0.3 ? "end" : "middle",
-    };
+    return { x: x + dx * gap, y: y + dy * gap + gap * 0.28, anchor: dx > 0.3 ? "start" : dx < -0.3 ? "end" : "middle" };
   }
+
+  // Force-directed corner labels: seed each on the OUTSIDE of its bend (opposite the
+  // local curvature, which points to the turn's inside), then relax with a spring back
+  // to that seed plus repulsion from every corner marker and other label, so labels
+  // gravitate to their own corner but don't pile onto neighbours. Pre-rotation coords
+  // (the whole group rotates together, so "outside" is rotation-invariant).
+  const cornerLabels = $derived.by(() => {
+    if (!map || !map.path.length) return [] as { x: number; y: number; anchor: "start" | "middle" | "end"; text: string }[];
+    const N = map.path.length;
+    const gap = u * 0.055;
+    const k = Math.max(2, Math.round(N * 0.012));
+    const markers = corners.map((c) => ptAtDist(c.apex_dist));
+    const L = corners.map((c, i) => {
+      const [cx, cy] = markers[i];
+      const idx = nearestDistIndex(map!.dist, c.apex_dist);
+      const [px, py] = map!.path[(idx - k + N) % N];
+      const [qx, qy] = map!.path[(idx + k) % N];
+      let ox = -(px + qx - 2 * cx); // negate 2nd-derivative (which points to the inside)
+      let oy = -(py + qy - 2 * cy);
+      let d = Math.hypot(ox, oy);
+      if (d < 1e-6) { ox = cx - map!.width / 2; oy = cy - map!.height / 2; d = Math.hypot(ox, oy) || 1; }
+      ox /= d; oy /= d;
+      // Outside is the default, but pick the INSIDE when it's the more open side (a
+      // cramped outside — e.g. between two corners — reads worse than the inside).
+      const openness = (x: number, y: number) =>
+        Math.min(...markers.map((m, j) => (j === i ? Infinity : Math.hypot(x - m[0], y - m[1]))));
+      const outX = cx + ox * gap, outY = cy + oy * gap;
+      const inX = cx - ox * gap, inY = cy - oy * gap;
+      const [sx, sy] = openness(outX, outY) >= openness(inX, inY) - gap * 0.5 ? [outX, outY] : [inX, inY];
+      return { cx, cy, sx, sy, x: sx, y: sy, text: `T${c.label || c.number}` };
+    });
+    const minD = u * 0.05;
+    for (let it = 0; it < 16; it++) {
+      for (const a of L) {
+        let fx = (a.sx - a.x) * 0.25, fy = (a.sy - a.y) * 0.25; // spring toward the seed
+        for (const m of markers) { const dx = a.x - m[0], dy = a.y - m[1], dd = Math.hypot(dx, dy); if (dd > 1e-6 && dd < minD) { const f = (minD - dd) / minD; fx += (dx / dd) * f * minD * 0.5; fy += (dy / dd) * f * minD * 0.5; } }
+        for (const b of L) { if (b === a) continue; const dx = a.x - b.x, dy = a.y - b.y, dd = Math.hypot(dx, dy); if (dd > 1e-6 && dd < minD) { const f = (minD - dd) / minD; fx += (dx / dd) * f * minD * 0.5; fy += (dy / dd) * f * minD * 0.5; } }
+        a.x += fx; a.y += fy;
+      }
+    }
+    return L.map((a) => ({ x: a.x, y: a.y + gap * 0.28, text: a.text, anchor: (a.x > a.cx + gap * 0.25 ? "start" : a.x < a.cx - gap * 0.25 ? "end" : "middle") as "start" | "middle" | "end" }));
+  });
 
   // S/F marker + heading arrow, same construction as TrackMap.svelte.
   const startDir = $derived.by(() => {
@@ -715,9 +751,10 @@
                   onpointerdown={editMode ? (e) => startDrag(ai === 0 ? "corner" : "apex", i, e, ai) : undefined}
                 ><title>{c.name}</title></circle>
               {/each}
-              {@const lp = ptAtDist(c.apex_dist)}
-              {@const cl = lblPos(lp[0], lp[1], u * 0.05)}
-              <text class="corner-lbl" x={cl.x} y={cl.y} text-anchor={cl.anchor} font-size={u * 0.03} fill="var(--accent)" paint-order="stroke" stroke="var(--bg, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">T{c.label || c.number}</text>
+              {@const cl = cornerLabels[i]}
+              {#if cl}
+                <text class="corner-lbl" x={cl.x} y={cl.y} text-anchor={cl.anchor} font-size={u * 0.03} fill="var(--accent)" paint-order="stroke" stroke="var(--bg, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">{cl.text}</text>
+              {/if}
             {/each}
             </g>
           </svg>
