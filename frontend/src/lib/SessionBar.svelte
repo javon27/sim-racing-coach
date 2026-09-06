@@ -76,10 +76,6 @@
     <div class="stat"><span class="k">Track</span><span class="v">{status?.track ?? "—"}</span></div>
     <div class="stat"><span class="k">Car</span><span class="v">{status?.car ?? "—"}</span></div>
     <div class="stat"><span class="k">Units</span><span class="v">{units ?? "—"}</span></div>
-    <div class="spacer"></div>
-    <div class="stat"><span class="k">Fuel</span><span class="v">—</span></div>
-    <div class="stat"><span class="k">Energy</span><span class="v">—</span></div>
-    <div class="stat"><span class="k">Tier</span><span class="v">—</span></div>
   {/if}
 </header>
 
