@@ -161,6 +161,7 @@
     genErr = null;
     try {
       ribbon = await buildRibbon();
+      trackName = ribbon.track_name ?? "";
       genPhase = "preview";
     } catch {
       genErr = "Couldn't reconstruct the ribbon from those laps.";
@@ -176,6 +177,7 @@
     ribbon = null;
     try {
       ribbon = await rebuildFromCapture();
+      trackName = ribbon.track_name ?? "";
       genPhase = "preview";
     } catch (e) {
       genPhase = "off";
@@ -586,7 +588,7 @@
         {#if map && editMode && nameEditable}
           <input class="ttl-in" bind:value={trackName} placeholder="Track name" aria-label="Track name" />
         {:else}
-          <h2>{map ? (trackName || "Untitled track") : editMode ? "Edit track map" : "Track map"}</h2>
+          <h2>{trackName || (map ? "Untitled track" : editMode ? "Edit track map" : "Track map")}</h2>
         {/if}
         {#if map?.shipped}
           <span class="badge" title="Built-in layout — you can rename/annotate corners, but the layout ships with the app and updates only with the app.">built-in</span>

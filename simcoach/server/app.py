@@ -774,8 +774,10 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         raw = [{c: r.channels[c] for c in _POS_CHANNELS if c in r.channels} for r in buf]
         app.state.last_ribbon = {"world": ribbon, "corners": corners, "sectors": sectors,
                                  "sections": sections, "track": track, "laps": raw}
-        return _clean(ribbon_to_screen(ribbon, corners, sectors,
-                                       rotation=_track_rotation(track), sections=sections))
+        res = _clean(ribbon_to_screen(ribbon, corners, sectors,
+                                      rotation=_track_rotation(track), sections=sections))
+        res["track_name"] = _track_file_data(track).get("name") or track
+        return res
 
     @app.post("/mapcapture/save")
     def mapcapture_save(body: dict = Body(...)):
@@ -793,6 +795,9 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         corners = [{k: c[k] for k in keys if k in c} for c in rib["corners"]]
         out = {
             "track": track_slug(track),
+            # Display name from the session (the live track), unless a custom name was
+            # already set — so a saved layout carries its track name.
+            "name": _track_file_data(track).get("name") or track,
             "corners": corners,
             "ribbon": {k: world[k] for k in ("left", "right", "center", "width", "bank")},
             "path": world["center"],
@@ -838,8 +843,10 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         sections = extras.get("sections") or []
         app.state.last_ribbon = {"world": ribbon, "corners": corners, "sectors": sectors,
                                  "sections": sections, "track": track, "laps": laps}
-        return _clean(ribbon_to_screen(ribbon, corners, sectors,
-                                       rotation=_track_rotation(track), sections=sections))
+        res = _clean(ribbon_to_screen(ribbon, corners, sectors,
+                                      rotation=_track_rotation(track), sections=sections))
+        res["track_name"] = _track_file_data(track).get("name") or track
+        return res
 
     @app.get("/setup")
     def setup():

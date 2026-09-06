@@ -262,6 +262,7 @@ export interface RibbonPreview {
     y: number;
   }[];
   sectors: number[];
+  track_name?: string; // session track name, shown in the header + saved with the layout
 }
 
 export function startMapCapture(): Promise<{ active: boolean }> {
