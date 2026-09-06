@@ -425,8 +425,21 @@ body {
   color: var(--accent);
 }
 .lap.selected {
+  position: relative;
   background: var(--accent-soft);
-  box-shadow: inset 3px 0 0 var(--accent);
+}
+/* Inset accent bar as a pseudo-element: an inset box-shadow tapers on the row's
+   9px corners and leaves a stray sliver — this stays clean within the padding. */
+.lap.selected::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  pointer-events: none;
 }
 .lapwrap:not(.open) .lap.selected:hover {
   background: var(--accent-soft);

@@ -172,7 +172,7 @@
         <span class="lbl">API key<InfoTip text="Your Anthropic API key. Stored in the OS keyring, never in a file. Save, then Test to verify." /></span>
         <span class="badge">{settings.api_key_set ? "set ✓" : "not set"}</span>
       </div>
-      <div class="row">
+      <div class="row keyrow">
         <input
           type="password"
           aria-label="API key"
@@ -340,6 +340,18 @@
   .row > input[type="text"],
   .row > input[type="password"] {
     min-width: 200px;
+  }
+  /* Input + Save/Test in one row: input fills, buttons group at the right (no
+     space-between scatter). */
+  .row.keyrow {
+    justify-content: flex-start;
+  }
+  .row.keyrow > input[type="password"] {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .row.keyrow > button {
+    flex: none;
   }
   .val {
     font-family: var(--mono);
