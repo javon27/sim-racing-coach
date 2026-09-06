@@ -888,9 +888,14 @@
   button.on {
     outline: 2px solid var(--accent);
   }
+  /* A custom background drops native rounding, leaving colored buttons square.
+     Give .primary its own box (8px, app convention) to match the plain ones. */
   button.primary {
     background: var(--accent);
     color: #000;
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    padding: 7px 12px;
   }
   .genpanel {
     padding: 20px 16px;
