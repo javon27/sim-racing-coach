@@ -225,7 +225,13 @@
       {/if}
       {#each messages as m, i (i)}
         <div class="msg {m.role}">
-          <div class="who">{m.role === "you" ? "YOU" : "⚑"}</div>
+          <div class="who">
+            {#if m.role === "you"}
+              <!-- Helmet avatar (the bubble's "You" name already labels the sender, so
+                   a "YOU" badge here doubled it). Profile-image customization: backlog. -->
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="You"><path d="M4 13a8 8 0 0 1 16 0v2a2 2 0 0 1-2 2h-6l-2 3-1.6-3H6a2 2 0 0 1-2-2z"/><path d="M8 12h9"/></svg>
+            {:else}⚑{/if}
+          </div>
           <div class="bubble">
             <div class="name">{m.role === "you" ? "You" : "Engineer"}</div>
             {#if m.role === "coach"}
