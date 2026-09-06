@@ -31,12 +31,16 @@ fn bundled_sidecar() -> Option<PathBuf> {
     p.exists().then_some(p)
 }
 
-/// How to launch the sidecar. Installed app: the bundled exe, run as-is (it embeds
-/// Python + simcoach and reads its data dir from APPDATA/SIMCOACH_DATA_DIR). From
-/// source: the repo venv's `python -m simcoach.server` with the repo as cwd.
+/// How to launch the sidecar. A RELEASE (installed) build runs the bundled exe (it
+/// embeds Python + simcoach and reads its data dir from APPDATA/SIMCOACH_DATA_DIR). A
+/// DEBUG build (`cargo tauri dev`) runs the repo venv's `python -m simcoach.server` so
+/// code changes are live — Tauri copies the externalBin into target/debug too, so
+/// presence of the exe alone can't distinguish dev from installed; the build profile can.
 fn sidecar_command() -> Command {
-    if let Some(exe) = bundled_sidecar() {
-        return Command::new(exe);
+    if !cfg!(debug_assertions) {
+        if let Some(exe) = bundled_sidecar() {
+            return Command::new(exe);
+        }
     }
     let mut c = Command::new(python_path());
     c.args(["-m", "simcoach.server"]).current_dir(repo_root());
@@ -129,6 +133,26 @@ fn assign_kill_on_close_job(child: &Child) -> windows::core::Result<()> {
     Ok(())
 }
 
+/// Best-effort kill of any ORPHANED bundled sidecar. `simcoach-sidecar.exe` is our
+/// own unique image name, so this can never touch an unrelated process. It covers the
+/// gaps the owned-child kill + job object don't: a REUSED (un-owned) sidecar, and one
+/// left by a crashed or force-closed instance — either of which would keep holding
+/// port 8765 and get reused by the next launch (stale code). Run at startup (clear the
+/// port before we spawn) and on exit (don't leave one behind). Dev runs the venv
+/// python, not this exe, so in dev it only clears a stray bundle left over from an
+/// installed run — never the dev sidecar.
+#[cfg(windows)]
+fn kill_stray_sidecars() {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let _ = Command::new("taskkill")
+        .args(["/F", "/IM", "simcoach-sidecar.exe"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+}
+#[cfg(not(windows))]
+fn kill_stray_sidecars() {}
+
 /// AABB overlap: is the window rect (x, y, w, h) touching ANY monitor rect
 /// (mx, my, mw, mh)? Pure decision fn so the off-screen recovery is testable
 /// without a real window/monitor.
@@ -184,6 +208,9 @@ pub fn run() {
                 )?;
             }
 
+            // Clear any orphaned bundled sidecar before deciding — a stale one left by
+            // a crashed/force-closed run would otherwise be reused (old code) and hold 8765.
+            kill_stray_sidecars();
             let child = if is_sidecar_already_running() {
                 let _ = std::fs::write(sidecar_log_path(), "reusing existing server on 8765\n");
                 log::info!("reusing existing server on 8765");
@@ -230,6 +257,9 @@ pub fn run() {
                         let _ = child.kill();
                     }
                 }
+                // Backstop: also kill a REUSED (un-owned) bundled sidecar, so closing
+                // the app never leaves one carried over.
+                kill_stray_sidecars();
             }
         });
 }
