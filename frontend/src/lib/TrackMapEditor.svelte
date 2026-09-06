@@ -644,8 +644,9 @@
           {#if genPhase === "building"}
             <p class="step">Reconstructing the track surface…</p>
           {:else}
-            <p class="step">After your out lap, drive three full laps — <strong>left</strong>
-              boundary, a <strong>weave</strong>, <strong>right</strong> boundary — then Build.</p>
+            <p class="step">After your out lap, drive three full laps — one lap hugging the
+              <strong>left</strong> boundary, one lightly <strong>weaving</strong> lap, and one lap
+              hugging the <strong>right</strong> boundary — then click Build.</p>
             <button
               type="button"
               class="primary"
