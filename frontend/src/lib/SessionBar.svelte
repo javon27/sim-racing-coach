@@ -62,25 +62,24 @@
 </script>
 
 <header class="bar">
-  {#if phase === "connecting"}
-    <div class="stat"><span class="v">Connecting to the coach server…</span></div>
-  {:else if phase === "unreachable"}
-    <div class="stat">
-      <span class="v">Can't reach the coach server — is it running?</span>
-      <button type="button" onclick={load}>Retry</button>
-    </div>
-  {:else}
-    <div class="brand">
-      <NestorWordmark size={17} />
-      <span class="sub">AI Sim Racing Coach</span>
-    </div>
+  <div class="brand">
+    <NestorWordmark size={17} />
+    <span class="sub">AI Sim Racing Coach</span>
+  </div>
+  {#if phase === "ok"}
     <div class="game-status {gameStatus.cls}">
       <span class="ind"></span>{gameStatus.label}
     </div>
-    <div class="stat"><span class="k">Track</span><span class="v">{status?.track ?? "—"}</span></div>
-    <div class="stat"><span class="k">Car</span><span class="v">{status?.car ?? "—"}</span></div>
-    <div class="stat"><span class="k">Units</span><span class="v">{units ?? "—"}</span></div>
+  {:else if phase === "connecting"}
+    <div class="game-status idle"><span class="ind"></span>Connecting…</div>
+  {:else}
+    <button type="button" class="game-status off" onclick={load} title="Retry">
+      <span class="ind"></span>No server · Retry
+    </button>
   {/if}
+  <div class="stat"><span class="k">Track</span><span class="v">{status?.track ?? "—"}</span></div>
+  <div class="stat"><span class="k">Car</span><span class="v">{status?.car ?? "—"}</span></div>
+  <div class="stat"><span class="k">Units</span><span class="v">{units ?? "—"}</span></div>
 </header>
 
 <style>
@@ -96,6 +95,10 @@
     padding: 3px 9px;
     border-radius: 999px;
     border: 1px solid var(--line);
+  }
+  button.game-status {
+    background: none;
+    cursor: pointer;
   }
   .game-status .ind {
     width: 7px;

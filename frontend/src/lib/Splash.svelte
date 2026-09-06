@@ -11,24 +11,35 @@
 
   let phase: "loading" | "error" = $state("loading");
   let step = $state("Warming up…");
-  let progress = $state(0); // %; visual fill, deliberately decoupled from boot speed
-  let done = $state(false); // switches the bar to the fast final-fill transition
+  let progress = $state(0); // %; driven per-frame so it always visibly fills
 
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+  // Animate `progress` to `to` over `ms` by writing it every frame. Driving the
+  // width per-frame (rather than a CSS transition) sidesteps the transition
+  // baseline race that left the bar stuck blank.
+  function tween(to: number, ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      const from = progress;
+      const start = performance.now();
+      function frame(now: number) {
+        const t = Math.min(1, (now - start) / ms);
+        progress = from + (to - from) * (1 - Math.pow(1 - t, 3)); // easeOutCubic
+        if (t < 1) requestAnimationFrame(frame);
+        else resolve();
+      }
+      requestAnimationFrame(frame);
+    });
+  }
+
   async function boot() {
     phase = "loading";
-    done = false;
     progress = 0;
     try {
-      // Sweep the bar 0 -> 90% over ~1.1s no matter how fast the server is, so
-      // the fill is always visible. In dev the sidecar is already warm and boot
-      // is near-instant; without this the bar would just flash to 100.
+      // Sweep to 90% over ~1.1s regardless of how fast the server is, so the
+      // fill is always visible (dev boots are near-instant).
       step = "Connecting to the coach server…";
-      // Double rAF: let the 0% width paint first so the browser has a baseline
-      // to transition FROM — a single rAF jumps straight to 90 with no anim.
-      requestAnimationFrame(() => requestAnimationFrame(() => (progress = 90)));
-      const sweep = sleep(1100);
+      const sweep = tween(90, 1100);
 
       // PyInstaller onefile is slow to launch on first run; wait until it binds,
       // then prefetch the first-paint data against the now-warm server.
@@ -36,11 +47,10 @@
       step = "Loading your garage…";
       await Promise.allSettled([getStatus(), getSettings(), getSessions(), getChats()]);
 
-      // Only complete the bar once BOTH the sweep and the real work are done.
+      // Finish only once both the sweep and the real work are done.
       await sweep;
-      done = true;
-      progress = 100;
-      await sleep(320); // let the 100% fill land before revealing
+      await tween(100, 320);
+      await sleep(160); // let 100% sit a beat before the reveal
       onready();
     } catch {
       phase = "error";
@@ -55,7 +65,7 @@
     <div class="logo"><NestorWordmark size={108} /></div>
     <div class="tag">AI Sim Racing Coach</div>
     {#if phase === "loading"}
-      <div class="bar"><span class:done style="width:{progress}%"></span></div>
+      <div class="bar"><span style="width:{progress}%"></span></div>
       <div class="step">{step}</div>
     {:else}
       <div class="err">Can't reach the coach server.</div>
@@ -105,12 +115,6 @@
     height: 100%;
     border-radius: 999px;
     background: var(--accent);
-    /* Sweep to 90% over ~1.1s (matches the JS `sweep` timer), then .done swaps
-       to a quick transition for the final fill to 100%. */
-    transition: width 1.1s cubic-bezier(0.25, 0.8, 0.35, 1);
-  }
-  .bar span.done {
-    transition: width 0.3s ease;
   }
   .step {
     margin-top: 12px;
