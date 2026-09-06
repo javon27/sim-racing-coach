@@ -166,3 +166,18 @@ def test_agentic_system_prompt_has_units_and_tools_guidance(tmp_path, synthetic_
     Coach(model, "simcoach/knowledge").ask_agentic(ctx, "q", "test_car", units="imperial")
     assert "mph" in model.last_system and "°F" in model.last_system
     assert "tool" in model.last_system.lower()
+
+
+def test_current_lap_resolved_from_store_when_not_pinned(tmp_path, synthetic_lap):
+    # The coach is no longer handed a lap (record=None). 'latest' and the corner
+    # tools resolve the most-recent stored lap on demand — the fix for the coach
+    # fixating on a UI-selected lap.
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    store.save(synthetic_lap)
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    ctx = CoachContext(store, record=None, lap_id=None, cmap=cmap,
+                       track=synthetic_lap.track, car=synthetic_lap.car, on_track=False)
+    summary = ctx.get_lap_summary("latest")
+    assert "Corner facts" in summary and "T1 " in summary
+    assert ctx.get_corner("1").startswith("T1 ")
+    assert "Current lap: yes" in ctx.get_session_status()

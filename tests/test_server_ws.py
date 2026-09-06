@@ -264,5 +264,6 @@ def test_ws_coach_auto_anchors_to_live_session(tmp_path, synthetic_lap):
                 break
 
     msgs = store.chat_messages(ev["chat_id"])
-    assert msgs[0]["session_id"] == "live-s"
-    assert msgs[0]["lap_id"] == lap_id
+    assert msgs[0]["session_id"] == "live-s"          # anchored to the live stint
+    assert msgs[0]["lap_id"] is None                  # but NOT pinned to a lap — the
+    # coach fetches laps on demand via its tools, so a turn isn't tied to one lap.

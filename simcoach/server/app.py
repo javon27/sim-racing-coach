@@ -898,52 +898,55 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             #
             # Blocking I/O (store.load, rest.get_setup) lives here, off the event
             # loop, so a hung LMU REST call can't freeze the whole server.
-            record = None
-            eff_lap_id = lap_id
             eff_session_id = session_id
-            if eff_lap_id is not None:
-                try: record = app.state.store.load(eff_lap_id)
-                except Exception: record = None
-            # Auto-anchor to the LIVE session when the client didn't pick a lap or
-            # session, so the coach already knows the current session + its latest
-            # lap without the driver having to click one (the auto-context goal).
-            latest = app.state.latest
-            if record is None and latest is not None:
-                record = latest["record"]
-                eff_lap_id = latest["lap_id"]
-            if eff_session_id is None and latest is not None:
-                eff_session_id = latest["record"].session_id
             setup = {}
             rest = _ensure_rest()
             if rest:
                 try: setup = rest.get_setup()
                 except Exception: setup = {}
-            # Context source: a stored lap if we have one, else the LIVE session
-            # (in-garage / on track, zero laps yet) so the coach still knows the
-            # track/car/map and can answer before the first lap is captured.
-            live_track = live_car = None
-            if record is not None:
-                cmap = _map_for(record.track)
+            # Orient the coach to the CURRENT track/car/session/map WITHOUT handing it a
+            # lap. A pinned lap made the coach fixate on the UI selection; instead it
+            # fetches laps itself via list_recent_laps / get_lap_summary as the
+            # conversation needs. We still resolve the environment so corner tools and
+            # the reference lap work. Priority: live session -> most-recent lap ->
+            # the lap the client is viewing (for track/car only, never pinned).
+            track = car = cmap = None
+            on_track = None
+            try:
+                from ..lmu.smm import read_session_track_car
+                live = read_session_track_car()          # (track, vehicle) | None
+            except Exception:
+                live = None
+            if live:
                 on_track = True
-            else:
-                cmap, on_track = None, False
+                track, vehicle = live
                 try:
-                    from ..lmu.smm import read_session_track_car
-                    live = read_session_track_car()          # (track, vehicle) | None
+                    from .. import __main__ as _m  # resolve_context: map + car name (+ note)
+                    cmap, car, _ = _m.resolve_context(
+                        rest, str(app.state.tracks_dir), track, vehicle,
+                        user_dir=str(Path(store.data_dir) / "tracks"))
                 except Exception:
-                    live = None
-                if live:
-                    on_track = True
-                    live_track, vehicle = live
-                    try:
-                        from .. import __main__ as _m  # resolve_context: map + car name (+ note)
-                        cmap, live_car, _ = _m.resolve_context(
-                            rest, str(app.state.tracks_dir), live_track, vehicle,
-                            user_dir=str(Path(store.data_dir) / "tracks"))
-                    except Exception:
-                        cmap, live_car = _map_for(live_track), vehicle
-            ctx = CoachContext(app.state.store, record=record, lap_id=eff_lap_id, cmap=cmap,
-                               setup=setup, track=live_track, car=live_car, on_track=on_track,
+                    cmap, car = _map_for(track), vehicle
+            if track is None and app.state.latest is not None:
+                lr = app.state.latest["record"]
+                track, car = lr.track, lr.car
+                eff_session_id = eff_session_id or lr.session_id
+                cmap, on_track = _map_for(track), False
+            if track is None and lap_id is not None:
+                try:
+                    sr = app.state.store.load(lap_id)
+                    track, car = sr.track, sr.car
+                    eff_session_id = eff_session_id or sr.session_id
+                    cmap, on_track = _map_for(track), False
+                except Exception:
+                    pass
+            # Backfill the current stint id from the latest lap when the client didn't
+            # supply one (auto-anchor) — the live path above resolves track/car but not
+            # the session stamp.
+            if eff_session_id is None and app.state.latest is not None:
+                eff_session_id = app.state.latest["record"].session_id
+            ctx = CoachContext(app.state.store, record=None, lap_id=None, cmap=cmap,
+                               setup=setup, track=track, car=car, on_track=on_track,
                                allowed_adjustments=(legal_adjustments(setup) if setup else None),
                                session_id=eff_session_id)
             car = ctx.car or "car"

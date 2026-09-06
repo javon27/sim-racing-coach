@@ -124,8 +124,29 @@ class CoachContext:
         self.tool_calls: list = []   # (name, input) invoked this turn, for the chat log
         self._analysis_cache: dict = {}
         self._lap_numbering_cache: tuple[dict, dict] | None = None
+        self._current_lap_cache: tuple | None = None
 
     # --- helpers ---------------------------------------------------------
+    def _current_lap(self) -> tuple:
+        """(record, lap_id) for the driver's CURRENT lap — an injected record if the
+        caller pinned one, else the most recent stored lap for this track/car/session,
+        loaded lazily. The coach is not handed a lap up front (that fixated it on a UI
+        selection); 'latest'/'current' and the corner tools resolve it on demand here."""
+        if self.record is not None:
+            return self.record, self.lap_id
+        if self._current_lap_cache is not None:
+            return self._current_lap_cache
+        found = (None, None)
+        if self.track and self.car:
+            rows = self.store.recent_laps(self.track, self.car, 1, session_id=self.session_id)
+            if rows:
+                lid = rows[0]["lap_id"]
+                try:
+                    found = (self.store.load(lid), lid)
+                except Exception:
+                    found = (None, None)
+        self._current_lap_cache = found
+        return found
     def _lap_numbering(self) -> tuple[dict, dict]:
         """Per-phase, in-session lap numbering matching the UI (laps numbered 1..N
         within each phase, in ts order). Returns (label_by_id, id_by_ref):
@@ -137,7 +158,8 @@ class CoachContext:
         label_by_id: dict[int, str] = {}
         id_by_ref: dict[str, int] = {}
         if self.session_id:
-            cur_phase = self.record.phase if self.record is not None else None
+            cur_rec, _ = self._current_lap()
+            cur_phase = cur_rec.phase if cur_rec is not None else None
             counts: dict = {}
             for lap in self.store.session_laps(self.session_id):
                 ph = lap.get("phase")
@@ -171,9 +193,10 @@ class CoachContext:
         return self._analysis_cache[key]
 
     def _latest_analysis(self):
-        if self.record is None:
+        record, lap_id = self._current_lap()
+        if record is None:
             return None
-        return self._analysis_for(self.record, self.lap_id)
+        return self._analysis_for(record, lap_id)
 
     def _resolve_lap(self, which):
         """which -> (record, lap_id). 'latest'/None -> current; 'best' -> best lap;
@@ -181,7 +204,7 @@ class CoachContext:
         current phase) -> that lap; a bare number falls back to a raw DB id."""
         which = (which or "latest").strip().lower()
         if which in ("latest", "current", ""):
-            return self.record, self.lap_id
+            return self._current_lap()
         if which == "best":
             if not (self.track and self.car):
                 return None, None
@@ -209,8 +232,9 @@ class CoachContext:
         n_sess = len(self.store.session_lap_ids(self.session_id)) if self.session_id else None
         has_ref = bool(self.track and self.car and self.store.best_lap(self.track, self.car))
         on = "on track" if self.on_track else ("unknown" if self.on_track is None else "not on track")
-        lap = "yes" if self.record is not None else "no lap captured yet"
-        phase = self.record.phase if self.record else None
+        cur_rec, _ = self._current_lap()
+        lap = "yes" if cur_rec is not None else "no lap captured yet"
+        phase = cur_rec.phase if cur_rec else None
         # Current-phase count: "8 laps into the race" must be race laps, not the
         # whole session (qualy + race). Grouped like _lap_numbering's counts[ph].
         n_phase = (sum(1 for r in self.store.session_laps(self.session_id) if r.get("phase") == phase)
