@@ -10,9 +10,11 @@
   import SessionsScreen from "./SessionsScreen.svelte";
   import SettingsScreen from "./SettingsScreen.svelte";
   import NestorMark from "./NestorMark.svelte";
+  import Splash from "./Splash.svelte";
 
   type Screen = "coach" | "sessions" | "pitwall" | "settings";
 
+  let booted = $state(false);
   let screen: Screen = $state("coach");
   let theme: ThemeMode = $state("system");
   let selectedLapId: number | undefined = $state(undefined);
@@ -66,6 +68,11 @@
   }
 </script>
 
+{#if !booted}
+  <Splash onready={() => (booted = true)} />
+{/if}
+
+{#if booted}
 <div class="shell">
   <nav class="nav">
     <div class="logo"><NestorMark size={26} label="Nestor" /></div>
@@ -152,3 +159,4 @@
     </section>
   </div>
 </div>
+{/if}
