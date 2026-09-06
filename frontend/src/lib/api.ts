@@ -297,11 +297,12 @@ export function buildRibbon(): Promise<RibbonPreview> {
 }
 
 // Re-reconstruct from the track's SAVED raw capture (no active capture / re-drive).
-export function rebuildFromCapture(): Promise<RibbonPreview> {
+// Pass the edited lap so the SELECTED session's track is rebuilt, not the live sim's.
+export function rebuildFromCapture(lapId?: number | null): Promise<RibbonPreview> {
   return request<RibbonPreview>("/mapcapture/rebuild", {
     method: "POST",
     headers: JSON_HEADERS,
-    body: JSON.stringify({}),
+    body: JSON.stringify(lapId != null ? { lap_id: lapId } : {}),
   });
 }
 

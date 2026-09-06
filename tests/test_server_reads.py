@@ -641,6 +641,25 @@ def test_mapcapture_rebuild_offline_uses_newest_capture(tmp_path, monkeypatch):
     assert r["left"] and len(r["center"]) == len(r["left"])
 
 
+def test_mapcapture_rebuild_targets_edited_lap_not_live(tmp_path, monkeypatch):
+    # Editing a PAST session's map must rebuild THAT track, not the live sim's — the
+    # lap_id wins over _live_track (which returns whatever's loaded in the sim now).
+    from simcoach.lmu import smm
+    app, store = _map_app(tmp_path)
+    app.state.latest = {"record": _edge("Monza", 1, 100.0), "lap_id": 0}
+    app.state.map_buffer = [_edge("Monza", 1, 100.0), _edge("Monza", -1, 100.0)]
+    c = _tc(app)
+    c.post("/mapcapture/build", json={})
+    c.post("/mapcapture/save", json={})            # writes captures/monza.npz
+    monza_lap = store.save(_edge("Monza", 1, 100.0))
+    # Live sim is a DIFFERENT track with no saved capture — a wrong resolution 422s.
+    monkeypatch.setattr(smm, "read_session_track_car", lambda: ("Bahrain", "GT3"))
+    app.state.last_ribbon = None
+    r = c.post("/mapcapture/rebuild", json={"lap_id": monza_lap})
+    assert r.status_code == 200
+    assert r.json().get("track_name") == "Monza"
+
+
 def test_mapcapture_rebuild_corrupt_capture_is_422(tmp_path):
     app, store = _map_app(tmp_path)
     app.state.latest = {"record": _edge("MapTrack", 1, 100.0), "lap_id": 0}

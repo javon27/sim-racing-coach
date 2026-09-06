@@ -818,16 +818,21 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     @app.post("/mapcapture/rebuild")
     def mapcapture_rebuild(body: dict = Body(...)):
         # Re-reconstruct from a SAVED raw cloud -- no active capture needed. Resolve
-        # the target: explicit body {"slug"}, else live/selected track, else the
-        # NEWEST saved capture (so rebuild works OFFLINE after a sidecar restart).
+        # the target in priority order: explicit {"slug"}, the lap being EDITED
+        # ({"lap_id"} -> its track), the live/last track, else the NEWEST saved capture.
+        # The edited lap MUST win over the live sim: editing a past Monza session has to
+        # rebuild Monza even while Bahrain is the live track.
         slug = body.get("slug")
-        track = _live_track() or (app.state.last_ribbon or {}).get("track")
-        if slug:
-            path = _capture_path(slug)
-        elif track:
-            path = _capture_path(track)
-        else:
-            path = _newest_capture()
+        lap_id = body.get("lap_id")
+        track = slug
+        if not track and lap_id is not None:
+            try:
+                track = app.state.store.load(int(lap_id)).track
+            except Exception:
+                track = None
+        if not track:
+            track = _live_track() or (app.state.last_ribbon or {}).get("track")
+        path = _capture_path(track) if track else _newest_capture()
         if path is None or not path.exists():
             raise HTTPException(422, "no saved capture available")
         laps = _load_cloud(path)

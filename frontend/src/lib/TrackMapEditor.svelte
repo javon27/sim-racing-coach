@@ -176,7 +176,7 @@
     genErr = null;
     ribbon = null;
     try {
-      ribbon = await rebuildFromCapture();
+      ribbon = await rebuildFromCapture(lapId);
       trackName = ribbon.track_name ?? "";
       genPhase = "preview";
     } catch (e) {
