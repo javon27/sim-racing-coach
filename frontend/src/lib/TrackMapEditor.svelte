@@ -644,9 +644,13 @@
           {#if genPhase === "building"}
             <p class="step">Reconstructing the track surface…</p>
           {:else}
-            <p class="step">Drive across the full track width (weave to both edges) for as many laps
-              as you like, then Build. Two laps is the minimum; more/denser passes give truer edges
-              and camber.</p>
+            <p class="step">Capture the surface in passes, then Build:</p>
+            <ol class="laps">
+              <li>Out lap — hug the <strong>left</strong> boundary</li>
+              <li>Lap — <strong>weave</strong> back and forth (no need to reach the edges)</li>
+              <li>Lap — hug the <strong>right</strong> boundary</li>
+            </ol>
+            <p class="step">More/denser passes give truer edges and camber.</p>
             <button
               type="button"
               class="primary"
@@ -859,9 +863,9 @@
              the first map can be generated without an existing lap. -->
         <div class="genpanel">
           <h3>Generate map layout</h3>
-          <p class="step">No saved layout for this track yet. Drive the track surface
-            (weave across the full width) to generate one, or rebuild from a capture you
-            already recorded.</p>
+          <p class="step">No saved layout for this track yet. Generate one by driving a few
+            boundary passes — the left edge, a weave, then the right edge — or rebuild from a
+            capture you already recorded.</p>
           <div class="tools">
             <button type="button" class="primary" onclick={startGen}>Generate map layout</button>
             <button type="button" onclick={rebuildGen}>Rebuild from saved capture</button>
@@ -1095,6 +1099,37 @@
   .genpanel .step {
     margin: 0;
     line-height: 1.5;
+  }
+  .genpanel .laps {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    text-align: left;
+    counter-reset: lap;
+  }
+  .genpanel .laps li {
+    position: relative;
+    padding-left: 26px;
+    line-height: 1.4;
+  }
+  .genpanel .laps li::before {
+    counter-increment: lap;
+    content: counter(lap);
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 700;
+    display: grid;
+    place-items: center;
   }
   .genpanel .cap {
     margin: 0;
