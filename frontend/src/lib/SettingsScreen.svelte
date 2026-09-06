@@ -29,6 +29,7 @@
 
   let importStatus: string | null = $state(null);
   let importing = $state(false);
+  let lmuStatus: string | null = $state(null);
 
   $effect(() => {
     (async () => {
@@ -53,7 +54,7 @@
       lmu_player_names: settings.lmu_player_names,
       log_level: settings.log_level,
     };
-    putSettings(cfg).then((res) => {
+    return putSettings(cfg).then((res) => {
       settings = res;
     });
   }
@@ -84,8 +85,14 @@
     settings = { ...settings, lmu_player_names: settings.lmu_player_names.filter((_, idx) => idx !== i) };
   }
 
-  function saveLmuSettings() {
-    saveConfig();
+  async function saveLmuSettings() {
+    lmuStatus = "Saving…";
+    try {
+      await saveConfig();
+      lmuStatus = "Saved.";
+    } catch {
+      lmuStatus = "Save failed.";
+    }
   }
 
   async function browseLmuDir() {
@@ -219,6 +226,7 @@
       </p>
       <div class="row">
         <button type="button" onclick={saveLmuSettings}>Save LMU settings</button>
+        {#if lmuStatus}<span class="status inline">{lmuStatus}</span>{/if}
         <button type="button" onclick={runImport} disabled={importing}>
           {importing ? "Importing…" : "Import history"}
         </button>
@@ -402,6 +410,10 @@
     font-family: var(--mono);
     font-size: 12px;
     color: var(--muted);
+  }
+  .status.inline {
+    margin: 0;
+    align-self: center;
   }
   .help {
     margin: 4px 0 8px;

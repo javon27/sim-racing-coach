@@ -406,9 +406,12 @@ class LapStore:
                 out.append(d)
             return out
 
-    def recent_race_sessions(self, limit: int = 20) -> list[dict]:
+    def recent_race_sessions(self, limit: int = 2000) -> list[dict]:
         """Race sessions from the laps table (not coach_chat, which would miss
-        capture-only sessions with no coach questions asked)."""
+        capture-only sessions with no coach questions asked). Limit is generous
+        so imported history (thousands of result-log sessions) reaches the
+        Sessions screen, which filters/charts client-side.
+        ponytail: flat cap; add server-side paging if a library outgrows 2000."""
         with self._lock:
             rows = self.conn.execute(
                 "SELECT session_id, track, car, COUNT(*), "
