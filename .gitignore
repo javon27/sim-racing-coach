@@ -42,5 +42,11 @@ frontend/node_modules
 frontend/dist
 src-tauri/target
 
+# PyInstaller sidecar build (generated in CI, staged as a Tauri externalBin)
+src-tauri/binaries/
+dist-sidecar/
+build/
+*.spec.bak
+
 # Tauri sidecar runtime log
 sidecar.log

@@ -24,6 +24,25 @@ fn python_path() -> PathBuf {
         .unwrap_or_else(|_| repo_root().join(".venv/Scripts/python.exe"))
 }
 
+/// The bundled sidecar exe (PyInstaller build shipped as a Tauri externalBin, so it
+/// lands next to our executable in an install), or None when running from source.
+fn bundled_sidecar() -> Option<PathBuf> {
+    let p = std::env::current_exe().ok()?.parent()?.join("simcoach-sidecar.exe");
+    p.exists().then_some(p)
+}
+
+/// How to launch the sidecar. Installed app: the bundled exe, run as-is (it embeds
+/// Python + simcoach and reads its data dir from APPDATA/SIMCOACH_DATA_DIR). From
+/// source: the repo venv's `python -m simcoach.server` with the repo as cwd.
+fn sidecar_command() -> Command {
+    if let Some(exe) = bundled_sidecar() {
+        return Command::new(exe);
+    }
+    let mut c = Command::new(python_path());
+    c.args(["-m", "simcoach.server"]).current_dir(repo_root());
+    c
+}
+
 /// Mirrors simcoach/paths.py's app_data_dir(): SIMCOACH_DATA_DIR override, else
 /// %APPDATA%\SimCoach, else %USERPROFILE%\.simcoach (home fallback).
 fn app_data_dir() -> Option<PathBuf> {
@@ -66,9 +85,7 @@ fn sidecar_log_path() -> PathBuf {
 fn spawn_sidecar() -> std::io::Result<Child> {
     let log = File::create(sidecar_log_path())?;
     let log_err = log.try_clone()?;
-    Command::new(python_path())
-        .args(["-m", "simcoach.server"])
-        .current_dir(repo_root())
+    sidecar_command()
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log_err))
         .spawn()
