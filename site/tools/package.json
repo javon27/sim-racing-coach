@@ -1,0 +1,12 @@
+{
+  "name": "nestor-site-tools",
+  "private": true,
+  "type": "module",
+  "description": "Asset generators for the Nestor marketing site (not part of the deployed page).",
+  "scripts": {
+    "marks": "node render-marks.mjs"
+  },
+  "dependencies": {
+    "sharp": "^0.33"
+  }
+}
