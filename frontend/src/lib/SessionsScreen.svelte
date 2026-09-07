@@ -12,7 +12,7 @@
     type SessionsSummary,
     type CarGroup,
   } from "./api";
-  import TrendChart from "./TrendChart.svelte";
+  import TrendChart, { ZOOM_MIN, ZOOM_MAX, ZOOM_STEP, clampZoom } from "./TrendChart.svelte";
 
   let { onselectSession }: { onselectSession?: (sessionId: string, chatId?: string) => void } = $props();
 
@@ -119,6 +119,8 @@
   const consistency = $derived(summary?.consistency ?? null);
   const carCount = $derived(summary?.cars ?? 0);
 
+  let chartZoom = $state(1);
+
   const chartSeries = $derived(
     (summary?.series ?? []).map((s) => ({
       name: s.car,
@@ -156,9 +158,19 @@
   {:else}
     <div class="trend-wrap">
       <div class="chart-card">
-        <h3>Best lap</h3>
-        <div class="cap">lower is better</div>
-        <TrendChart series={chartSeries} placeholder="Select a track to see the best-lap trend" />
+        <div class="chart-head">
+          <div>
+            <h3>Best lap</h3>
+            <div class="cap">lower is better</div>
+          </div>
+          {#if chartSeries.length > 0}
+            <div class="zoom" role="group" aria-label="Zoom">
+              <button type="button" onclick={() => (chartZoom = clampZoom(chartZoom / ZOOM_STEP))} aria-label="Zoom out" disabled={chartZoom <= ZOOM_MIN}>−</button>
+              <button type="button" onclick={() => (chartZoom = clampZoom(chartZoom * ZOOM_STEP))} aria-label="Zoom in" disabled={chartZoom >= ZOOM_MAX}>+</button>
+            </div>
+          {/if}
+        </div>
+        <TrendChart series={chartSeries} bind:zoom={chartZoom} placeholder="Select a track to see the best-lap trend" />
       </div>
 
       <div class="stat-cards">
@@ -269,6 +281,13 @@
     box-shadow: var(--shadow);
     margin-bottom: 16px;
   }
+  .chart-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
   .chart-card h3 {
     font-family: var(--display);
     font-size: 14px;
@@ -279,7 +298,27 @@
     font-family: var(--mono);
     font-size: 11px;
     color: var(--faint);
-    margin-bottom: 12px;
+  }
+  .zoom {
+    display: flex;
+    gap: 4px;
+    flex: 0 0 auto;
+  }
+  .zoom button {
+    width: 24px;
+    height: 24px;
+    line-height: 1;
+    font-size: 16px;
+    font-family: var(--mono);
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .zoom button:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
   .stat-cards {
     display: grid;

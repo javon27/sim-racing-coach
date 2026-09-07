@@ -1,3 +1,12 @@
+<script module lang="ts">
+  // Zoom range/step shared with the parent, which renders the zoom buttons in the
+  // card header (same row as the title). clampZoom keeps both sides in range.
+  export const ZOOM_MIN = 1;
+  export const ZOOM_MAX = 400;
+  export const ZOOM_STEP = 1.5;
+  export const clampZoom = (z: number) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
+</script>
+
 <script lang="ts">
   import { untrack } from "svelte";
   import { Tween, prefersReducedMotion } from "svelte/motion";
@@ -12,7 +21,7 @@
   // - Same-day sessions collapse to that day's BEST lap while zoomed out; zooming
   //   in past DAY_COLLAPSE_PX (a day wide enough to separate sessions) shows the
   //   individual session times.
-  // - Zoom: toolbar buttons above the plot + Ctrl/Cmd+wheel.
+  // - Zoom: buttons live in the parent's card header (bind:zoom) + Ctrl/Cmd+wheel here.
 
   type Point = { x: number; label: string; value: number };
   type Series = { name: string; color?: string; points: Point[] };
@@ -28,8 +37,8 @@
   } = $props();
 
   const PALETTE = ["#6d4aff", "#0e9f6e", "#da2e2e", "#b45c09", "#0aa1c5"];
-  const MIN_ZOOM = 1;
-  const MAX_ZOOM = 400;
+  const MIN_ZOOM = ZOOM_MIN;
+  const MAX_ZOOM = ZOOM_MAX;
   const MIN_LABEL_PX = 52;
   const FALLBACK_W = 700; // used before the container reports its width
   const AXIS_W = 58; // fixed y-axis gutter (px)
@@ -70,20 +79,11 @@
 
   const totalPoints = $derived(series.reduce((n, s) => n + s.points.length, 0));
 
-  function setZoom(next: number) {
-    zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, next));
-  }
-  function zoomIn() {
-    setZoom(zoom * 1.5);
-  }
-  function zoomOut() {
-    setZoom(zoom / 1.5);
-  }
   function onWheel(e: WheelEvent) {
     // Ctrl/Cmd+wheel zooms; a plain wheel scrolls the container normally.
     if (!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
-    setZoom(zoom * (e.deltaY < 0 ? 1.25 : 1 / 1.25));
+    zoom = clampZoom(zoom * (e.deltaY < 0 ? 1.25 : 1 / 1.25));
   }
   function onScroll(e: Event) {
     scrollLeft = (e.currentTarget as HTMLDivElement).scrollLeft;
@@ -238,13 +238,6 @@
   <div class="chart-empty">{placeholder}</div>
 {:else}
   <div class="chart-wrap">
-    <div class="toolbar">
-      <div class="zoom" role="group" aria-label="Zoom">
-        <button type="button" onclick={zoomOut} aria-label="Zoom out" disabled={zoom <= MIN_ZOOM}>−</button>
-        <button type="button" onclick={zoomIn} aria-label="Zoom in" disabled={zoom >= MAX_ZOOM}>+</button>
-      </div>
-    </div>
-
     <div class="plot-row">
       <div class="chart-scroll" bind:this={containerEl} onwheel={onWheel} onscroll={onScroll}>
         <svg viewBox="0 0 {chart.W} {chart.H}" width={chart.W} height={chart.H} role="img" aria-label="Best lap trend">
@@ -297,11 +290,6 @@
     border: 1px dashed var(--line);
     border-radius: 10px;
   }
-  .toolbar {
-    display: flex;
-    justify-content: flex-end;
-    margin-bottom: 6px;
-  }
   .plot-row {
     display: flex;
     align-items: stretch;
@@ -319,26 +307,6 @@
     order: 0;
     flex: 0 0 auto;
     width: 58px;
-  }
-  .zoom {
-    display: flex;
-    gap: 4px;
-  }
-  .zoom button {
-    width: 24px;
-    height: 24px;
-    line-height: 1;
-    font-size: 16px;
-    font-family: var(--mono);
-    color: var(--text);
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    cursor: pointer;
-  }
-  .zoom button:disabled {
-    opacity: 0.4;
-    cursor: default;
   }
   .grid {
     stroke: var(--line);
