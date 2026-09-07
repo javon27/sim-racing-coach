@@ -15,6 +15,7 @@
   type Screen = "coach" | "sessions" | "pitwall" | "settings";
 
   let booted = $state(false);
+  let railOpen = $state(false); // narrow-width laps drawer
   let screen: Screen = $state("coach");
   let theme: ThemeMode = $state(loadTheme());
   let selectedLapId: number | undefined = $state(undefined);
@@ -123,7 +124,19 @@
     <section class="screen" class:on={screen === "coach"}>
       <div class="app">
         <SessionBar />
-        <div class="main">
+        <div class="main" class:rail-open={railOpen}>
+          <!-- Narrow-width only: the rail is hidden by default; this tab slides
+               it in as an overlay drawer, dismissed by the scrim. -->
+          <button
+            type="button"
+            class="rail-tab"
+            aria-label={railOpen ? "Hide laps panel" : "Show laps panel"}
+            aria-expanded={railOpen}
+            onclick={() => (railOpen = !railOpen)}
+          >{railOpen ? "‹" : "›"}</button>
+          {#if railOpen}
+            <div class="rail-scrim" role="presentation" onclick={() => (railOpen = false)}></div>
+          {/if}
           <aside class="rail" style="--laps-h: {lapsH}px">
             <RaceStrip sessionId={selectedSessionId} />
             <LapList
