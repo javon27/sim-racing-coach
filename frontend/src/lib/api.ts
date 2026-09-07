@@ -156,16 +156,23 @@ export function getStatus(): Promise<StatusResponse> {
   return request<StatusResponse>("/status");
 }
 
+export interface CarGroup {
+  car_class: string;
+  cars: string[];
+}
+
 export interface SessionsPage {
   rows: SessionRow[];
   total: number;
   tracks: string[];
   cars: string[];
+  car_groups: CarGroup[];
 }
 
 export interface SessionsFilter {
   track?: string;
   car?: string;
+  car_class?: string;
   offset?: number;
   limit?: number;
 }
@@ -183,6 +190,7 @@ function sessionQuery(f: SessionsFilter = {}): string {
   const q = new URLSearchParams();
   if (f.track) q.set("track", f.track);
   if (f.car) q.set("car", f.car);
+  if (f.car_class) q.set("car_class", f.car_class);
   if (f.offset != null) q.set("offset", String(f.offset));
   if (f.limit != null) q.set("limit", String(f.limit));
   const s = q.toString();
@@ -193,7 +201,7 @@ export function getSessions(f: SessionsFilter = {}): Promise<SessionsPage> {
   return request<SessionsPage>(`/sessions${sessionQuery(f)}`);
 }
 
-export function getSessionsSummary(f: Pick<SessionsFilter, "track" | "car"> = {}): Promise<SessionsSummary> {
+export function getSessionsSummary(f: Pick<SessionsFilter, "track" | "car" | "car_class"> = {}): Promise<SessionsSummary> {
   return request<SessionsSummary>(`/sessions/summary${sessionQuery(f)}`);
 }
 

@@ -10,8 +10,12 @@ from uuid import uuid4
 
 import numpy as np
 
-from simcoach.car_lookup import resolve_car
+from simcoach.car_lookup import resolve_car, resolve_car_class
 from simcoach.model_types import LapRecord
+
+# Class display order for the sessions filter (fastest/top class first); anything
+# not listed sorts after these, alphabetically.
+_CLASS_ORDER = ["Hyper", "LMP2", "LMP2_ELMS", "LMP3", "GT3", "GTE"]
 
 SCHEMA_VERSION = 10
 
@@ -416,36 +420,50 @@ class LapStore:
                 "SELECT DISTINCT car FROM laps WHERE session_id IS NOT NULL "
                 "AND car IS NOT NULL").fetchall()]
 
-    def _session_where(self, track: str | None, car_model: str | None) -> tuple[str, list]:
+    def _session_where(self, track: str | None, car_model: str | None,
+                       car_class: str | None = None) -> tuple[str, list]:
         """WHERE clause for the session filters. `car_model` filters by resolved car
-        MODEL, expanded to every raw entry name that resolves to it (several team
-        entries can share one model). No match -> a clause that selects nothing."""
+        MODEL, `car_class` by resolved CLASS -- each expanded to every raw entry name
+        that resolves to it (several team entries share a model/class). No match ->
+        a clause that selects nothing. car_model wins if both are given."""
         clauses = ["session_id IS NOT NULL"]
         params: list = []
         if track:
             clauses.append("track = ?"); params.append(track)
+        teams: list[str] | None = None
         if car_model:
             teams = [c for c in self._distinct_db_cars() if resolve_car(c) == car_model]
+        elif car_class:
+            teams = [c for c in self._distinct_db_cars() if resolve_car_class(c) == car_class]
+        if teams is not None:
             clauses.append(f"car IN ({','.join('?' * len(teams)) or 'NULL'})")
             params += teams
         return " AND ".join(clauses), params
 
     def session_facets(self) -> dict:
-        """Distinct tracks + car MODELS across ALL sessions, for the filter dropdowns
-        (independent of the current page/filter). Cars are resolved models, so the
-        dropdown lists 'BMW M4 LMGT3' not the raw team entry."""
+        """Filter-dropdown facets over ALL sessions (independent of page/filter):
+        distinct tracks, a flat list of car MODELS, and car_groups -- models grouped
+        by resolved class, class-ordered -- so the dropdown can offer each class as a
+        selectable filter with its models nested under it."""
         with self._lock:
             tracks = [r[0] for r in self.conn.execute(
                 "SELECT DISTINCT track FROM laps WHERE session_id IS NOT NULL "
                 "AND track IS NOT NULL ORDER BY track").fetchall()]
-        cars = sorted({resolve_car(c) for c in self._distinct_db_cars()})
-        return {"tracks": tracks, "cars": cars}
+        by_class: dict[str, set[str]] = {}
+        for c in self._distinct_db_cars():
+            by_class.setdefault(resolve_car_class(c) or "Other", set()).add(resolve_car(c))
+        order = lambda cls: (_CLASS_ORDER.index(cls) if cls in _CLASS_ORDER else len(_CLASS_ORDER), cls)
+        car_groups = [{"car_class": cls, "cars": sorted(by_class[cls])}
+                      for cls in sorted(by_class, key=order)]
+        cars = sorted({m for models in by_class.values() for m in models})
+        return {"tracks": tracks, "cars": cars, "car_groups": car_groups}
 
     def race_sessions_page(self, track: str | None = None, car: str | None = None,
-                           offset: int = 0, limit: int = 30) -> dict:
+                           offset: int = 0, limit: int = 30,
+                           car_class: str | None = None) -> dict:
         """One page of sessions (newest first) matching the filters, plus the
         total count so the client can render page controls."""
-        where, params = self._session_where(track, car)
+        where, params = self._session_where(track, car, car_class)
         with self._lock:
             total = self.conn.execute(
                 f"SELECT COUNT(*) FROM (SELECT session_id FROM laps WHERE {where} "
@@ -469,13 +487,14 @@ class LapStore:
         race_sessions_page for callers/tests that don't need paging."""
         return self.race_sessions_page(offset=0, limit=limit)["rows"]
 
-    def session_summary(self, track: str | None = None, car: str | None = None) -> dict:
+    def session_summary(self, track: str | None = None, car: str | None = None,
+                        car_class: str | None = None) -> dict:
         """Aggregate stats + best-lap trend over the FULL filtered set (not one
         page), so the Sessions screen's cards/chart stay accurate under paging.
         The per-session trend series is only built when a track is selected
         (the chart is hidden otherwise), keeping the all-tracks case to pure
         aggregates."""
-        where, params = self._session_where(track, car)
+        where, params = self._session_where(track, car, car_class)
         per = (f"SELECT session_id, car, MIN(CASE WHEN valid THEN lap_time END) AS best, "
                f"MIN(ts) AS started FROM laps WHERE {where} GROUP BY session_id")
         with self._lock:
