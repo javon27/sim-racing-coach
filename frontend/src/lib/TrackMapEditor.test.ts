@@ -11,7 +11,7 @@ import {
   rebuildFromCapture,
   saveRibbon,
 } from "./api";
-import TrackMapEditor, { nearestPathIndex, nearestDistIndex } from "./TrackMapEditor.svelte";
+import TrackMapEditor, { nearestPathIndex, nearestDistIndex, layoutLabels } from "./TrackMapEditor.svelte";
 
 vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
@@ -60,6 +60,50 @@ describe("nearestDistIndex", () => {
     expect(nearestDistIndex(fixture.dist, 0)).toBe(0);
     expect(nearestDistIndex(fixture.dist, 190)).toBe(2); // closest to 200
     expect(nearestDistIndex(fixture.dist, 260)).toBe(3); // closest to 300
+  });
+});
+
+describe("layoutLabels", () => {
+  const bounds: [number, number, number, number] = [-10, -10, 110, 70];
+  const base = { fontSize: 3, gap: 3, cx: 50, cy: 30, bounds };
+
+  it("keeps every label box fully inside the viewBox bounds", () => {
+    // Markers on the edges would push naive labels off-canvas; clamp must hold them in.
+    const anchors: [number, number][] = [[0, 0], [100, 0], [0, 60], [100, 60], [50, 30]];
+    const out = layoutLabels(anchors, ["T1", "T2", "T3", "T4", "Very Long Section Name"], base);
+    for (const l of out) {
+      // text x is an edge; allow the drawn extent either side of it — just assert it
+      // never lands outside the padded box (the off-canvas bug).
+      expect(l.x).toBeGreaterThanOrEqual(bounds[0] - 0.001);
+      expect(l.x).toBeLessThanOrEqual(bounds[2] + 0.001);
+      expect(l.y).toBeGreaterThanOrEqual(bounds[1] - 0.001);
+      expect(l.y).toBeLessThanOrEqual(bounds[3] + 0.001);
+    }
+  });
+
+  it("separates labels seeded on top of each other (no overlap)", () => {
+    const anchors: [number, number][] = [[50, 30], [50, 30], [50, 30]];
+    const out = layoutLabels(anchors, ["T1", "T2", "T3"], base);
+    // Every pair ends up at least a character-height apart in x or y.
+    for (let i = 0; i < out.length; i++)
+      for (let j = i + 1; j < out.length; j++)
+        expect(Math.abs(out[i].x - out[j].x) + Math.abs(out[i].y - out[j].y)).toBeGreaterThan(base.fontSize);
+  });
+
+  it("draws a leader only for labels forced clear of their marker", () => {
+    // One lonely corner (hugs, no leader) + a tight cluster (some get pushed out).
+    const lonely = layoutLabels([[50, 30]], ["T1"], base);
+    expect(lonely[0].leader).toBeNull();
+
+    // A tight complex: four corners crammed into ~4 world units on one edge. Labels
+    // can't all fit by their markers, so some get shoved well clear — leaders then say
+    // which marker each belongs to.
+    const packed = layoutLabels(
+      [[49, 4], [50.2, 4], [51.4, 4], [52.6, 4]],
+      ["T5", "T6", "T7", "T8"],
+      base,
+    );
+    expect(packed.some((l) => l.leader !== null)).toBe(true);
   });
 });
 

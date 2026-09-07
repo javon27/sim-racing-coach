@@ -28,6 +28,109 @@
     }
     return best;
   }
+
+  export type PlacedLabel = {
+    x: number; // text x (edge nearest the marker; grows away from it)
+    y: number; // text baseline
+    anchor: "start" | "middle" | "end";
+    // Marker -> label leader, ONLY when the label had to drift clear of a packed
+    // cluster; null when it hugs its own marker (open track = no line noise).
+    leader: [number, number, number, number] | null;
+  };
+
+  // Box-aware, canvas-clamped label placement shared by the pane and the editor.
+  // Seeds each label just outside its marker (radially away from the map centre),
+  // then relaxes with axis-aligned box separation + a spring back to the seed, and
+  // clamps every box fully inside `bounds` so nothing renders off-canvas. Because it
+  // knows each label's rendered box (monospace width from the text), wide names stop
+  // overlapping instead of only their centre points being spaced.
+  export function layoutLabels(
+    anchors: [number, number][],
+    texts: string[],
+    o: {
+      fontSize: number;
+      gap: number; // natural hug distance from the marker
+      cx: number;
+      cy: number; // map centre, for the outward seed direction
+      bounds: [number, number, number, number]; // minX, minY, maxX, maxY (viewBox)
+      obstacles?: [number, number][]; // extra points to avoid (e.g. corners for sections)
+      iterations?: number;
+    },
+  ): PlacedLabel[] {
+    const n = anchors.length;
+    if (!n) return [];
+    const fs = o.fontSize;
+    const [minX, minY, maxX, maxY] = o.bounds;
+    const obst = o.obstacles ?? [];
+    const hw = texts.map((t) => Math.max(1, t.length) * fs * 0.32 + fs * 0.15); // ~0.6em/char + halo
+    const hh = fs * 0.7;
+
+    const clampX = (v: number, i: number) =>
+      minX + hw[i] > maxX - hw[i] ? (minX + maxX) / 2 : Math.min(maxX - hw[i], Math.max(minX + hw[i], v));
+    const clampY = (v: number) =>
+      minY + hh > maxY - hh ? (minY + maxY) / 2 : Math.min(maxY - hh, Math.max(minY + hh, v));
+
+    const L = anchors.map(([ax, ay], i) => {
+      let dx = ax - o.cx, dy = ay - o.cy;
+      let d = Math.hypot(dx, dy);
+      if (d < 1e-6) { const t = (i * 2.399963); dx = Math.cos(t); dy = Math.sin(t); d = 1; } // fan out coincident anchors
+      dx /= d; dy /= d;
+      const sx = clampX(ax + dx * (o.gap + hw[i]), i);
+      const sy = clampY(ay + dy * (o.gap + hh));
+      return { ax, ay, sx, sy, x: sx, y: sy, hw: hw[i] };
+    });
+
+    const iters = o.iterations ?? 30;
+    for (let it = 0; it < iters; it++) {
+      // 1) drift each label back toward its seed (keeps it near its own marker)...
+      for (const a of L) { a.x += (a.sx - a.x) * 0.2; a.y += (a.sy - a.y) * 0.2; }
+      // 2) ...then HARD-resolve every box overlap along the axis of least penetration.
+      // Positional (not force) resolution converges to just-touching — a spring alone
+      // leaves residual overlap since its pull never vanishes as boxes separate.
+      for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+          const a = L[i], b = L[j];
+          const ox = a.hw + b.hw - Math.abs(a.x - b.x);
+          const oy = 2 * hh - Math.abs(a.y - b.y);
+          if (ox > 0 && oy > 0) {
+            if (ox < oy) { const s = (a.x < b.x ? -1 : 1) * ox * 0.5; a.x += s; b.x -= s; }
+            else { const s = (a.y < b.y ? -1 : 1) * oy * 0.5; a.y += s; b.y -= s; }
+          }
+        }
+        const a = L[i];
+        for (const [mx, my] of obst) {
+          const ox = a.hw - Math.abs(a.x - mx);
+          const oy = hh - Math.abs(a.y - my);
+          if (ox > 0 && oy > 0) {
+            if (ox < oy) a.x += (a.x < mx ? -1 : 1) * ox;
+            else a.y += (a.y < my ? -1 : 1) * oy;
+          }
+        }
+      }
+      for (let i = 0; i < n; i++) { L[i].x = clampX(L[i].x, i); L[i].y = clampY(L[i].y); }
+    }
+
+    return L.map((a, i) => {
+      const side = a.x - a.ax; // text grows away from the marker so it never covers it
+      const anchor = side > a.hw * 0.4 ? "start" : side < -a.hw * 0.4 ? "end" : "middle";
+      const x = anchor === "start" ? a.x - a.hw : anchor === "end" ? a.x + a.hw : a.x;
+      const y = a.y + fs * 0.34;
+      const edgeX = Math.max(a.x - a.hw, Math.min(a.ax, a.x + a.hw)); // nearest box edge to marker
+      const edgeY = Math.max(a.y - hh, Math.min(a.ay, a.y + hh));
+      // Leader ONLY where corners are packed: this marker has a close neighbour AND its
+      // label got shoved off its seed. Open corners hug their marker and get no line;
+      // an edge-clamped lone corner has no near neighbour, so no false leader either.
+      const nearest = Math.min(
+        Infinity,
+        ...L.map((b, j) => (j === i ? Infinity : Math.hypot(a.ax - b.ax, a.ay - b.ay))),
+      );
+      const packed = nearest < (o.gap + hh) * 2.5;
+      const shoved = Math.hypot(a.x - a.sx, a.y - a.sy) > o.gap * 0.5;
+      const leader: [number, number, number, number] | null =
+        packed && shoved ? [a.ax, a.ay, edgeX, edgeY] : null;
+      return { x, y, anchor, leader };
+    });
+  }
 </script>
 
 <script lang="ts">
@@ -322,82 +425,36 @@
     return map.path[nearestDistIndex(map.dist, d)];
   }
 
-  // Force-directed corner labels: seed each on the OUTSIDE of its bend (opposite the
-  // local curvature, which points to the turn's inside), then relax with a spring back
-  // to that seed plus repulsion from every corner marker and other label, so labels
-  // gravitate to their own corner but don't pile onto neighbours. Pre-rotation coords
-  // (the whole group rotates together, so "outside" is rotation-invariant).
+  // Corner labels: box-aware placement that hugs each marker, and only grows a leader
+  // line when a packed cluster forces a label clear of its own corner.
   const cornerLabels = $derived.by(() => {
-    if (!map || !map.path.length) return [] as { x: number; y: number; cx: number; cy: number; anchor: "start" | "middle" | "end"; text: string }[];
-    const N = map.path.length;
-    const gap = u * 0.036; // hug the marker so each label clearly belongs to its corner
-    const k = Math.max(2, Math.round(N * 0.012));
-    const markers = corners.map((c) => ptAtDist(c.apex_dist));
-    const L = corners.map((c, i) => {
-      const [cx, cy] = markers[i];
-      const idx = nearestDistIndex(map!.dist, c.apex_dist);
-      const [px, py] = map!.path[(idx - k + N) % N];
-      const [qx, qy] = map!.path[(idx + k) % N];
-      let ox = -(px + qx - 2 * cx); // negate 2nd-derivative (which points to the inside)
-      let oy = -(py + qy - 2 * cy);
-      let d = Math.hypot(ox, oy);
-      if (d < 1e-6) { ox = cx - map!.width / 2; oy = cy - map!.height / 2; d = Math.hypot(ox, oy) || 1; }
-      ox /= d; oy /= d;
-      // Outside is the default, but pick the INSIDE when it's the more open side (a
-      // cramped outside — e.g. between two corners — reads worse than the inside).
-      const openness = (x: number, y: number) =>
-        Math.min(...markers.map((m, j) => (j === i ? Infinity : Math.hypot(x - m[0], y - m[1]))));
-      const outX = cx + ox * gap, outY = cy + oy * gap;
-      const inX = cx - ox * gap, inY = cy - oy * gap;
-      const [sx, sy] = openness(outX, outY) >= openness(inX, inY) - gap * 0.5 ? [outX, outY] : [inX, inY];
-      return { cx, cy, sx, sy, x: sx, y: sy, text: `T${c.label || c.number}` };
-    });
-    const minD = u * 0.04;
-    const maxDrift = u * 0.05; // barely drift — labels stay tight to their own corner
-    for (let it = 0; it < 22; it++) {
-      for (const a of L) {
-        let fx = (a.sx - a.x) * 0.35, fy = (a.sy - a.y) * 0.35; // spring toward the seed
-        for (const m of markers) { const dx = a.x - m[0], dy = a.y - m[1], dd = Math.hypot(dx, dy); if (dd > 1e-6 && dd < minD) { const f = (minD - dd) / minD; fx += (dx / dd) * f * minD * 0.5; fy += (dy / dd) * f * minD * 0.5; } }
-        for (const b of L) { if (b === a) continue; const dx = a.x - b.x, dy = a.y - b.y, dd = Math.hypot(dx, dy); if (dd > 1e-6 && dd < minD) { const f = (minD - dd) / minD; fx += (dx / dd) * f * minD * 0.5; fy += (dy / dd) * f * minD * 0.5; } }
-        a.x += fx; a.y += fy;
-        const ddx = a.x - a.sx, ddy = a.y - a.sy, drift = Math.hypot(ddx, ddy); // cap drift from the seed
-        if (drift > maxDrift) { a.x = a.sx + (ddx / drift) * maxDrift; a.y = a.sy + (ddy / drift) * maxDrift; }
-      }
-    }
-    return L.map((a) => ({ x: a.x, y: a.y + gap * 0.28, cx: a.cx, cy: a.cy, text: a.text, anchor: (a.x > a.cx + gap * 0.25 ? "start" : a.x < a.cx - gap * 0.25 ? "end" : "middle") as "start" | "middle" | "end" }));
+    if (!map || !map.path.length) return [] as PlacedLabel[];
+    return layoutLabels(
+      corners.map((c) => ptAtDist(c.apex_dist)),
+      corners.map((c) => `T${c.label || c.number}`),
+      { fontSize: u * 0.03, gap: u * 0.036, cx: map.width / 2, cy: map.height / 2, bounds: [-pad, -pad, map.width + pad, map.height + pad] },
+    );
   });
 
-  // Section labels (long names) laid out the same way, but treated as the lower
-  // priority: they're pushed off the already-placed corner markers and labels and off
-  // each other, so they stop overlapping the corners. Point-based, so very long names
-  // can still touch — width-aware boxes would be the next step if needed.
+  // Section labels (long names): same labeler, but they also avoid the already-placed
+  // corner markers/labels so long names don't sit on top of the corners.
   const sectionLabels = $derived.by(() => {
-    if (!map || !sections.length) return [] as { x: number; y: number; anchor: "start" | "middle" | "end" }[];
-    const gap = u * 0.06;
-    const obstacles: [number, number][] = [
-      ...corners.map((c) => ptAtDist(c.apex_dist)),
-      ...cornerLabels.map((l) => [l.x, l.y] as [number, number]),
-    ];
-    const S = sections.map((s) => {
-      const mid = sectionSeg(s).mid;
-      let ox = mid[0] - map!.width / 2, oy = mid[1] - map!.height / 2;
-      const d = Math.hypot(ox, oy) || 1; ox /= d; oy /= d;
-      return { mx: mid[0], my: mid[1], sx: mid[0] + ox * gap, sy: mid[1] + oy * gap, x: mid[0] + ox * gap, y: mid[1] + oy * gap };
-    });
-    const minC = u * 0.05;   // clearance from a corner marker/label
-    const minS = u * 0.09;   // section-to-section (wider text needs more room)
-    const maxDrift = u * 0.16;
-    for (let it = 0; it < 24; it++) {
-      for (const a of S) {
-        let fx = (a.sx - a.x) * 0.3, fy = (a.sy - a.y) * 0.3;
-        for (const o of obstacles) { const dx = a.x - o[0], dy = a.y - o[1], dd = Math.hypot(dx, dy); if (dd > 1e-6 && dd < minC) { const f = (minC - dd) / minC; fx += (dx / dd) * f * minC * 0.5; fy += (dy / dd) * f * minC * 0.5; } }
-        for (const b of S) { if (b === a) continue; const dx = a.x - b.x, dy = a.y - b.y, dd = Math.hypot(dx, dy); if (dd > 1e-6 && dd < minS) { const f = (minS - dd) / minS; fx += (dx / dd) * f * minS * 0.5; fy += (dy / dd) * f * minS * 0.5; } }
-        a.x += fx; a.y += fy;
-        const ddx = a.x - a.sx, ddy = a.y - a.sy, drift = Math.hypot(ddx, ddy);
-        if (drift > maxDrift) { a.x = a.sx + (ddx / drift) * maxDrift; a.y = a.sy + (ddy / drift) * maxDrift; }
-      }
-    }
-    return S.map((a) => ({ x: a.x, y: a.y, anchor: (a.x > a.mx + gap * 0.25 ? "start" : a.x < a.mx - gap * 0.25 ? "end" : "middle") as "start" | "middle" | "end" }));
+    if (!map || !sections.length) return [] as PlacedLabel[];
+    return layoutLabels(
+      sections.map((s) => sectionSeg(s).mid),
+      sections.map((s) => s.name),
+      {
+        fontSize: u * 0.026,
+        gap: u * 0.055,
+        cx: map.width / 2,
+        cy: map.height / 2,
+        bounds: [-pad, -pad, map.width + pad, map.height + pad],
+        obstacles: [
+          ...corners.map((c) => ptAtDist(c.apex_dist)),
+          ...cornerLabels.map((l) => [l.x, l.y] as [number, number]),
+        ],
+      },
+    );
   });
 
   // S/F marker + heading arrow, same construction as TrackMap.svelte.
@@ -726,6 +783,9 @@
               <polyline class="section-band" points={seg.pts} fill="none" stroke="var(--good, #3a7)" stroke-width={u * 0.02} stroke-linecap="round" opacity="0.35" />
               {@const sl = sectionLabels[i]}
               {#if sl}
+                {#if sl.leader}
+                  <line class="lbl-leader" x1={sl.leader[0]} y1={sl.leader[1]} x2={sl.leader[2]} y2={sl.leader[3]} stroke="var(--good, #3a7)" stroke-width={u * 0.004} opacity="0.6" />
+                {/if}
                 <text class="section-lbl" x={sl.x} y={sl.y} text-anchor={sl.anchor} font-size={u * 0.026} fill="var(--good, #3a7)" paint-order="stroke" stroke="var(--bg, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">{sec.name}</text>
               {/if}
               <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -781,7 +841,10 @@
               {/each}
               {@const cl = cornerLabels[i]}
               {#if cl}
-                <text class="corner-lbl" x={cl.x} y={cl.y} text-anchor={cl.anchor} font-size={u * 0.03} fill="var(--accent)" paint-order="stroke" stroke="var(--bg, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">{cl.text}</text>
+                {#if cl.leader}
+                  <line class="lbl-leader" x1={cl.leader[0]} y1={cl.leader[1]} x2={cl.leader[2]} y2={cl.leader[3]} stroke="var(--accent)" stroke-width={u * 0.004} opacity="0.6" />
+                {/if}
+                <text class="corner-lbl" x={cl.x} y={cl.y} text-anchor={cl.anchor} font-size={u * 0.03} fill="var(--accent)" paint-order="stroke" stroke="var(--bg, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">T{c.label || c.number}</text>
               {/if}
             {/each}
             </g>
