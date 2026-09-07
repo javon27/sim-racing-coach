@@ -10,6 +10,7 @@ export interface HealthResponse {
 export interface StatusResponse {
   track: string | null;
   car: string | null;
+  car_model?: string | null;
   on_track: boolean;
   has_map: boolean;
   lmu_connected: boolean;
@@ -21,6 +22,7 @@ export interface SessionRow {
   session_id: string;
   track: string;
   car: string;
+  car_model?: string | null;
   laps: number;
   best: number | null;
   started: number;
@@ -38,6 +40,7 @@ export interface LapRow {
   phase: string | null;
   track?: string;
   car?: string;
+  car_model?: string | null;
 }
 
 export interface CornerMetrics {

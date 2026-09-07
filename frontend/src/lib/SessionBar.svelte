@@ -78,7 +78,7 @@
     </button>
   {/if}
   <div class="stat"><span class="k">Track</span><span class="v">{status?.track ?? "—"}</span></div>
-  <div class="stat"><span class="k">Car</span><span class="v">{status?.car ?? "—"}</span></div>
+  <div class="stat"><span class="k">Car</span><span class="v">{status?.car_model ?? status?.car ?? "—"}</span></div>
   <div class="stat"><span class="k">Units</span><span class="v">{units ?? "—"}</span></div>
 </header>
 

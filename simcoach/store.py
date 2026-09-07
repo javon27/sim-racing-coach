@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import numpy as np
 
+from simcoach.car_lookup import resolve_car
 from simcoach.model_types import LapRecord
 
 SCHEMA_VERSION = 10
@@ -408,25 +409,36 @@ class LapStore:
 
     # Filtered, paginated race sessions from the laps table (not coach_chat,
     # which would miss capture-only sessions with no coach questions asked).
-    def _session_where(self, track: str | None, car: str | None) -> tuple[str, list]:
+    def _distinct_db_cars(self) -> list[str]:
+        """Distinct raw entry/team names (the DB `car` key) across all sessions."""
+        with self._lock:
+            return [r[0] for r in self.conn.execute(
+                "SELECT DISTINCT car FROM laps WHERE session_id IS NOT NULL "
+                "AND car IS NOT NULL").fetchall()]
+
+    def _session_where(self, track: str | None, car_model: str | None) -> tuple[str, list]:
+        """WHERE clause for the session filters. `car_model` filters by resolved car
+        MODEL, expanded to every raw entry name that resolves to it (several team
+        entries can share one model). No match -> a clause that selects nothing."""
         clauses = ["session_id IS NOT NULL"]
         params: list = []
         if track:
             clauses.append("track = ?"); params.append(track)
-        if car:
-            clauses.append("car = ?"); params.append(car)
+        if car_model:
+            teams = [c for c in self._distinct_db_cars() if resolve_car(c) == car_model]
+            clauses.append(f"car IN ({','.join('?' * len(teams)) or 'NULL'})")
+            params += teams
         return " AND ".join(clauses), params
 
     def session_facets(self) -> dict:
-        """Distinct tracks/cars across ALL sessions, for the filter dropdowns
-        (independent of the current page/filter)."""
+        """Distinct tracks + car MODELS across ALL sessions, for the filter dropdowns
+        (independent of the current page/filter). Cars are resolved models, so the
+        dropdown lists 'BMW M4 LMGT3' not the raw team entry."""
         with self._lock:
             tracks = [r[0] for r in self.conn.execute(
                 "SELECT DISTINCT track FROM laps WHERE session_id IS NOT NULL "
                 "AND track IS NOT NULL ORDER BY track").fetchall()]
-            cars = [r[0] for r in self.conn.execute(
-                "SELECT DISTINCT car FROM laps WHERE session_id IS NOT NULL "
-                "AND car IS NOT NULL ORDER BY car").fetchall()]
+        cars = sorted({resolve_car(c) for c in self._distinct_db_cars()})
         return {"tracks": tracks, "cars": cars}
 
     def race_sessions_page(self, track: str | None = None, car: str | None = None,
@@ -445,7 +457,12 @@ class LapStore:
                 "ORDER BY MAX(ts) DESC LIMIT ? OFFSET ?",
                 params + [limit, offset]).fetchall()
         keys = ("session_id", "track", "car", "laps", "best", "started", "last")
-        return {"rows": [dict(zip(keys, r)) for r in rows], "total": total}
+        out = []
+        for r in rows:
+            d = dict(zip(keys, r))
+            d["car_model"] = resolve_car(d["car"]) if d["car"] else None
+            out.append(d)
+        return {"rows": out, "total": total}
 
     def recent_race_sessions(self, limit: int = 2000) -> list[dict]:
         """All sessions (newest first) as a flat list — convenience over
@@ -479,7 +496,7 @@ class LapStore:
                     f"ORDER BY started ASC", params).fetchall()
                 by_car: dict[str, list] = {}
                 for c, started, best in rows:
-                    by_car.setdefault(c, []).append({"x": started, "value": best})
+                    by_car.setdefault(resolve_car(c), []).append({"x": started, "value": best})
                 series = [{"car": c, "points": pts} for c, pts in by_car.items()]
         # improvement = earliest best - latest best, only when a single car is in
         # the set (mirrors the old client rule); positive means faster over time.
@@ -502,7 +519,12 @@ class LapStore:
                 (session_id,),
             ).fetchall()
             keys = ("id", "lap_time", "valid", "ts", "s1", "s2", "s3", "phase", "track", "car")
-            return [dict(zip(keys, r)) for r in rows]
+            out = []
+            for r in rows:
+                d = dict(zip(keys, r))
+                d["car_model"] = resolve_car(d["car"]) if d["car"] else None
+                out.append(d)
+            return out
 
     def session_position_arc(self, session_id: str) -> dict | None:
         """The session's live per-lap race-position arc, or None if no lap carried

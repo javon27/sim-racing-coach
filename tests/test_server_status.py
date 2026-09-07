@@ -19,7 +19,7 @@ def test_status_offline_shape(tmp_path, monkeypatch):
     r = _tc(tmp_path).get("/status")
     assert r.status_code == 200
     b = r.json()
-    assert set(b) == {"track", "car", "on_track", "has_map", "lmu_connected", "session_id", "lap_id"}
+    assert set(b) == {"track", "car", "car_model", "on_track", "has_map", "lmu_connected", "session_id", "lap_id"}
     assert b["has_map"] is False and b["lmu_connected"] is False and b["on_track"] is False
     assert b["session_id"] is None and b["lap_id"] is None
 

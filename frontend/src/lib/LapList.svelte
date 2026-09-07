@@ -35,7 +35,7 @@
   // pair labels the whole list — tells the driver which combo "This session" is).
   const combo = $derived.by(() => {
     const l = laps.find((x) => x.track || x.car);
-    return l ? { track: l.track, car: l.car } : null;
+    return l ? { track: l.track, car: l.car_model ?? l.car } : null;
   });
 
   // Group consecutive laps by phase (a session spans practice/qualy/race in

@@ -180,7 +180,7 @@
           {#each rows as s (s.session_id)}
             <div class="srow" role="button" tabindex="0" onclick={() => selectSession(s.session_id)} onkeydown={(e) => e.key === "Enter" && selectSession(s.session_id)}>
               <div class="d">{formatDate(s.started)}</div>
-              <div class="tk">{s.track}<div class="ln"><small>{s.car}</small></div></div>
+              <div class="tk">{s.track}<div class="ln"><small>{s.car_model ?? s.car}</small></div></div>
               <div class="lp">{s.laps} laps</div>
               <div class="bt">{formatBest(s.best)}</div>
             </div>

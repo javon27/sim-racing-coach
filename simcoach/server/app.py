@@ -24,6 +24,7 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from .. import config, logging_setup, paths, secrets
 from ..analysis import analyze_lap
+from ..car_lookup import resolve_car
 from ..coach_tools import CoachContext
 from ..lmu.ingest import ingest_all
 from ..model.factory import CoachUserError, make_model
@@ -458,6 +459,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             on_track = False
         return {
             "track": track, "car": car,
+            "car_model": resolve_car(car) if car else None,
             "on_track": on_track,
             "has_map": _has_canonical(track, car),
             "lmu_connected": _ensure_rest() is not None,
@@ -959,13 +961,13 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                     cmap, car = _map_for(track), vehicle
             if track is None and app.state.latest is not None:
                 lr = app.state.latest["record"]
-                track, car = lr.track, lr.car
+                track, car = lr.track, resolve_car(lr.car)
                 eff_session_id = eff_session_id or lr.session_id
                 cmap, on_track = _map_for(track), False
             if track is None and lap_id is not None:
                 try:
                     sr = app.state.store.load(lap_id)
-                    track, car = sr.track, sr.car
+                    track, car = sr.track, resolve_car(sr.car)
                     eff_session_id = eff_session_id or sr.session_id
                     cmap, on_track = _map_for(track), False
                 except Exception:
