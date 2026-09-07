@@ -63,9 +63,19 @@
     backdrop-filter:blur(10px); background:rgba(13,16,22,.72);
     border-bottom:1px solid var(--line)}
   .nav{display:flex; align-items:center; justify-content:space-between; height:64px}
-  .brand{display:flex; align-items:center; gap:11px; text-decoration:none}
-  .brand img{height:30px; width:auto}
-  .brand .name{font-family:var(--display); font-weight:700; font-size:20px; letter-spacing:.10em}
+  .brand{display:flex; align-items:center; text-decoration:none}
+  .brand .wordmark{font-size:21px}
+
+  /* Wordmark: the helm mark stands in for the O in NESTOR (matches the app). */
+  .wordmark{display:inline-flex; align-items:center; font-family:var(--display);
+    font-weight:700; letter-spacing:.08em; line-height:1; white-space:nowrap; color:var(--text)}
+  .wordmark .helm-o{height:1.12em; width:auto; margin:0 .04em; transform:translateY(.06em);
+    display:inline-block; --ol:.055em}
+  /* White outline on dark surfaces so the near-black shell separates from the bg
+     (same stacked drop-shadow trick the app uses in dark mode). */
+  .helm-ol{filter:
+    drop-shadow(var(--ol,1px) 0 0 #fff) drop-shadow(calc(-1 * var(--ol,1px)) 0 0 #fff)
+    drop-shadow(0 var(--ol,1px) 0 #fff) drop-shadow(0 calc(-1 * var(--ol,1px)) 0 #fff)}
   .navlinks{display:flex; align-items:center; gap:28px}
   .navlinks a{font-size:14px; color:var(--muted); text-decoration:none; transition:color .12s}
   .navlinks a:hover{color:var(--text)}
@@ -117,7 +127,7 @@
   .name-sec{padding:88px 0; border-top:1px solid var(--line);
     background:radial-gradient(700px 420px at 50% 0%, rgba(176,130,74,.10), transparent 60%)}
   .name-sec .wrap{max-width:820px; text-align:center}
-  .name-sec .helm{height:96px; margin:0 auto 26px}
+  .name-sec .helm{height:96px; width:auto; margin:0 auto 26px; --ol:3px}
   .name-sec h2{font-size:clamp(26px,3.6vw,40px)}
   .name-sec p{color:var(--muted); font-size:18px; margin:20px auto 0; max-width:680px}
   .name-sec .pull{font-family:var(--display); color:var(--text); font-size:clamp(20px,2.6vw,26px);
@@ -150,9 +160,8 @@
 
 <header class="top">
   <div class="wrap nav">
-    <a class="brand" href="#top">
-      <img src="assets/helm-color.svg" alt="Nestor helm mark">
-      <span class="name">NESTOR</span>
+    <a class="brand" href="#top" aria-label="Nestor">
+      <span class="wordmark">NEST<img class="helm-o helm-ol" src="assets/helm-color.svg" alt="O">R</span>
     </a>
     <nav class="navlinks">
       <a href="#features">Features</a>
@@ -269,7 +278,7 @@
 
 <section class="name-sec" id="name">
   <div class="wrap">
-    <img class="helm" src="assets/helm-color.svg" alt="The Nestor helm">
+    <img class="helm helm-ol" src="assets/helm-color.svg" alt="The Nestor helm">
     <div class="eyebrow">Why “Nestor”</div>
     <h2>The oldest, wisest voice in the paddock.</h2>
     <p>
@@ -313,8 +322,7 @@
 <footer>
   <div class="wrap">
     <div class="brand">
-      <img src="assets/helm.svg" alt="" style="height:24px;color:var(--muted)">
-      <span class="name" style="font-size:16px;letter-spacing:.10em;color:var(--muted)">NESTOR</span>
+      <span class="wordmark" style="font-size:17px;color:var(--muted)">NEST<img class="helm-o helm-ol" src="assets/helm-color.svg" alt="O">R</span>
     </div>
     <p class="disclaimer">
       Nestor is an independent tool and is not affiliated with, endorsed by, or
