@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, beforeAll } from "vitest";
-import { render, cleanup, fireEvent } from "@testing-library/svelte";
+import { render, cleanup, fireEvent, waitFor } from "@testing-library/svelte";
 import TrendChart from "./TrendChart.svelte";
 
 // The chart reads its scroll container's clientWidth to fill the width; jsdom
@@ -78,15 +78,18 @@ describe("TrendChart", () => {
     expect(container.querySelectorAll("circle").length).toBe(4);
   });
 
-  it("zoom-in widens the plot (svg width grows)", async () => {
+  it("zoom-in widens the plot (svg width grows, animated)", async () => {
     const series = [
       { name: "Corvette Z06", points: [{ x: 1, label: "9/1", value: 216.5 }, { x: 2, label: "9/2", value: 214.0 }] },
     ];
     const { container, getByLabelText } = render(TrendChart, { props: { series } });
     const before = Number(container.querySelector("svg")!.getAttribute("width"));
     await fireEvent.click(getByLabelText("Zoom in"));
-    const after = Number(container.querySelector("svg")!.getAttribute("width"));
-    expect(after).toBeGreaterThan(before);
+    // Width is tweened, so it grows over a few animation frames rather than at once.
+    await waitFor(() => {
+      const after = Number(container.querySelector("svg")!.getAttribute("width"));
+      expect(after).toBeGreaterThan(before);
+    });
   });
 
   it("fills the container width at base zoom", () => {

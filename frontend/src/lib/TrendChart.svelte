@@ -1,4 +1,8 @@
 <script lang="ts">
+  import { untrack } from "svelte";
+  import { Tween, prefersReducedMotion } from "svelte/motion";
+  import { cubicOut } from "svelte/easing";
+
   // Best-lap trend, one line per car (color per series). Each point is a session
   // keyed by a unix-seconds `x`, placed by its ACTUAL time. At base zoom the plot
   // fills the container; zooming in grows it wider (horizontal scroll).
@@ -98,7 +102,37 @@
     series.map((s, i) => ({ name: s.name, color: s.color ?? PALETTE[i % PALETTE.length] })),
   );
 
-  const chart = $derived.by(() => {
+  // Zoom and the y-axis domain are ANIMATED: buttons/scroll/data set a target and
+  // these tweens ease toward it, so the whole chart (recomputed from them) glides
+  // instead of snapping. `geom` reads the live zoom; `chart` reads the live domain.
+  const ANIM_MS = 240;
+  const animDur = () => (prefersReducedMotion.current ? 0 : ANIM_MS);
+
+  function domainOf(values: number[]): { mn: number; mx: number } {
+    if (!values.length) return { mn: 0, mx: 1 };
+    let mn = Math.min(...values);
+    let mx = Math.max(...values);
+    const pad = (mx - mn) * 0.08 || Math.max(0.5, mx * 0.001);
+    return { mn: mn - pad, mx: mx + pad };
+  }
+
+  // Initial tween values snapshot the props at mount (untrack: intentional, not reactive).
+  const init = untrack(() => domainOf(series.flatMap((s) => s.points.map((p) => p.value))));
+  const zoomTween = new Tween(untrack(() => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom))), { easing: cubicOut });
+  const mnTween = new Tween(init.mn, { easing: cubicOut });
+  const mxTween = new Tween(init.mx, { easing: cubicOut });
+
+  $effect(() => {
+    zoomTween.set(Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom)), { duration: animDur() });
+  });
+  $effect(() => {
+    const d = targetDomain;
+    mnTween.set(d.mn, { duration: animDur() });
+    mxTween.set(d.mx, { duration: animDur() });
+  });
+
+  // Geometry (x-axis, widths, per-point pixel-x) — driven by the animating zoom.
+  const geom = $derived.by(() => {
     const H = 250, LPAD = 10, R = 18, T = 16, B = 34;
     const plotH = H - T - B;
     const plotTop = T;
@@ -112,7 +146,7 @@
     // Base plot width fits the span into the container; zoom scales from there.
     const cw = containerWidth || FALLBACK_W;
     const basePlotW = Math.max(1, cw - LPAD - R);
-    const z = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom));
+    const z = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoomTween.current));
     const plotW = basePlotW * z;
     const W = LPAD + plotW + R;
     const pxPerSec = span > 0 ? plotW / span : 0;
@@ -139,37 +173,6 @@
       return { name: s.name, color, pts, px };
     });
 
-    // Y scale fits the points inside the visible viewport (fallback: all points).
-    const vLeft = scrollLeft;
-    const vRight = scrollLeft + (containerWidth || W);
-    const visibleY: number[] = [];
-    const allY: number[] = [];
-    for (const s of prepared) {
-      for (const p of s.px) {
-        allY.push(p.value);
-        if (p.px >= vLeft - 1 && p.px <= vRight + 1) visibleY.push(p.value);
-      }
-    }
-    const domainY = visibleY.length ? visibleY : allY;
-    let mn = Math.min(...domainY);
-    let mx = Math.max(...domainY);
-    const pad = (mx - mn) * 0.08 || Math.max(0.5, mx * 0.001);
-    mn -= pad;
-    mx += pad;
-    const rng = mx - mn || 1;
-    const y = (v: number) => T + (1 - (v - mn) / rng) * plotH;
-
-    const gridLines = Array.from({ length: 4 }, (_, gi) => {
-      const yy = T + (gi / 3) * plotH;
-      return { y: yy, label: formatLap(mx - (gi / 3) * rng) };
-    });
-
-    const lines = prepared.map((s) => {
-      const dots = s.pts.map((p) => [x(p.x), y(p.value)] as const);
-      const path = dots.map((p, i2) => `${i2 ? "L" : "M"}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(" ");
-      return { name: s.name, color: s.color, path, dots };
-    });
-
     // Adaptive x-axis ticks: smallest ladder interval whose pixel spacing ≥ ~52px.
     let iv = TICK_LADDER[TICK_LADDER.length - 1];
     for (const c of TICK_LADDER) {
@@ -190,7 +193,44 @@
       ticks.push({ x: x(minX), label: new Date(minX * 1000).toLocaleDateString(undefined, { month: "numeric", day: "numeric" }) });
     }
 
-    return { W, H, R, plotTop, plotBottom, gridLines, lines, ticks };
+    return { H, R, T, plotH, plotTop, plotBottom, W, x, prepared, ticks };
+  });
+
+  // Target y-domain: fits the points inside the visible viewport (fallback: all).
+  const targetDomain = $derived.by(() => {
+    const g = geom;
+    const vLeft = scrollLeft;
+    const vRight = scrollLeft + (containerWidth || g.W);
+    const visible: number[] = [];
+    const all: number[] = [];
+    for (const s of g.prepared) {
+      for (const p of s.px) {
+        all.push(p.value);
+        if (p.px >= vLeft - 1 && p.px <= vRight + 1) visible.push(p.value);
+      }
+    }
+    return domainOf(visible.length ? visible : all);
+  });
+
+  const chart = $derived.by(() => {
+    const g = geom;
+    const mn = mnTween.current;
+    const mx = mxTween.current;
+    const rng = mx - mn || 1;
+    const y = (v: number) => g.T + (1 - (v - mn) / rng) * g.plotH;
+
+    const gridLines = Array.from({ length: 4 }, (_, gi) => {
+      const yy = g.T + (gi / 3) * g.plotH;
+      return { y: yy, label: formatLap(mx - (gi / 3) * rng) };
+    });
+
+    const lines = g.prepared.map((s) => {
+      const dots = s.pts.map((p) => [g.x(p.x), y(p.value)] as const);
+      const path = dots.map((p, i2) => `${i2 ? "L" : "M"}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(" ");
+      return { name: s.name, color: s.color, path, dots };
+    });
+
+    return { W: g.W, H: g.H, R: g.R, plotTop: g.plotTop, plotBottom: g.plotBottom, gridLines, lines, ticks: g.ticks };
   });
 </script>
 
