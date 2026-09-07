@@ -95,6 +95,17 @@ def test_clamps_to_num_vehicles():
     assert [c.id for c in snap.cars] == [1]
 
 
+def test_unclassified_ranks_last_in_class():
+    s = _scoring([
+        _veh(mID=1, mPlace=1, mVehicleClass="GT3", mVehicleName="G1"),
+        _veh(mID=2, mPlace=0, mVehicleClass="GT3", mVehicleName="G2", mIsPlayer=True),
+    ])
+    snap = read_field(s)
+    by_id = {c.id: c for c in snap.cars}
+    assert by_id[1].class_position == 1
+    assert by_id[2].class_position == 2
+
+
 def test_empty_snapshot_is_not_live():
     snap = empty_snapshot()
     assert isinstance(snap, FieldSnapshot)

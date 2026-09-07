@@ -111,7 +111,12 @@ def read_field(scoring: rF2Scoring) -> FieldSnapshot:
         by_class.setdefault(_decode(v.mVehicleClass), []).append(v)
     class_pos: dict[int, int] = {}
     for members in by_class.values():
-        for rank, v in enumerate(sorted(members, key=lambda x: int(x.mPlace)), start=1):
+        # Sort by place (1-based), pushing mPlace==0 (unclassified) to the end.
+        # Deterministic tiebreaker: mID (ascending).
+        def sort_key(v):
+            place = int(v.mPlace)
+            return (place if place > 0 else 10_000, int(v.mID))
+        for rank, v in enumerate(sorted(members, key=sort_key), start=1):
             class_pos[int(v.mID)] = rank
 
     cars = [_vehicle_state(v, class_pos[int(v.mID)]) for v in raw]
