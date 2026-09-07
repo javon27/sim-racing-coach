@@ -68,11 +68,18 @@ The sidecar alone, for frontend dev: `python -m simcoach.server` (→ `127.0.0.1
 Each track needs a corner map under `simcoach/tracks/<slug>.json`. You don't build
 these by hand:
 
-- **Automatic** — if you drive a track with no map, the coach builds one from your
-  first lap (numbered corners, real directions/distances from telemetry) and
-  continues. `Turn N` names are the default and are honestly useful while you're
-  still learning a circuit.
-- **From a saved lap** — `python -m simcoach.mapbuild <lap.npz> [--slug SLUG]
+- **In the desktop app** — a track-map editor reconstructs the track surface from a
+  point cloud of free-driving passes (weave across the width; no left/right to
+  designate), detects corners by curvature, and seeds sectors from the game's real
+  boundaries. You can then rename corners, add labels/sections, rotate, and rebuild
+  from the saved capture without re-driving. Your edits merge over the shipped
+  geometry as a user annotation overlay — the reconstructed layout stays
+  authoritative and only changes on a new app release.
+- **Automatic (terminal)** — if you drive a track with no map, the CLI coach builds
+  one from your first lap (numbered corners, real directions/distances from
+  telemetry) and continues. `Turn N` names are the default and are honestly useful
+  while you're still learning a circuit.
+- **From a saved lap (CLI)** — `python -m simcoach.mapbuild <lap.npz> [--slug SLUG]
   [--length METRES]` writes a validated map and self-checks corner directions.
 
 Real corner **names** (Copse, Ferradura, …) are an optional enrichment from the LMU
@@ -114,8 +121,11 @@ screenshots and brand assets, and the Railway deploy + CNAME steps.
 
 v1.0 is the standalone desktop app (Tauri + Svelte + FastAPI sidecar) built over the
 v0.1 core: live capture → per-corner analysis → streaming coach chat, plus a sessions
-browser, a settings screen (keyring-backed key, driver profile, data reset), and LMU
-result-log history import. Unit-tested (Python + frontend). Remaining: a shareable
-installer (Phase 6 packaging) and a full live shakedown at the rig. Deferred by
+browser, an in-app track-map editor (point-cloud reconstruction + curvature-based
+corner detection), a settings screen (keyring-backed key, driver profile, data
+reset), and LMU result-log history import. Unit-tested (Python + frontend). Installer
+packaging has landed — CI freezes the sidecar and builds MSI/NSIS bundles on a
+`vX.Y.Z` tag (see `packaging/README.md`). Remaining: code signing (installers are
+unsigned, so SmartScreen warns) and a full live shakedown at the rig. Deferred by
 design: voice, side-by-side replay, multi-provider models beyond Anthropic, and
 automated corner-name enrichment.
