@@ -74,13 +74,14 @@ describe("TrackMap", () => {
       props: {
         lapId: 1,
         cars: [
-          { lapDist: 0, cls: "GT3", isPlayer: false },
-          { lapDist: 100, cls: "Hypercar", isPlayer: true },
+          { id: 1, lapDist: 0, cls: "GT3", isPlayer: false },
+          { id: 2, lapDist: 0, cls: "GT4", isPlayer: false },
+          { id: 3, lapDist: 100, cls: "Hypercar", isPlayer: true },
         ],
       },
     });
 
-    await waitFor(() => expect(container.querySelectorAll(".car-dot").length).toBe(2));
+    await waitFor(() => expect(container.querySelectorAll(".car-dot").length).toBe(3));
     const player = container.querySelector(".car-dot.player");
     expect(player).not.toBeNull();
   });

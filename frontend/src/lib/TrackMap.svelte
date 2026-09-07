@@ -5,7 +5,7 @@
 
   let { lapId, cars = [] }: {
     lapId: number | null;
-    cars?: { lapDist: number; cls: string; isPlayer: boolean }[];
+    cars?: { id: number; lapDist: number; cls: string; isPlayer: boolean }[];
   } = $props();
 
   let map: TrackMap | null = $state(null);
@@ -108,7 +108,7 @@
     map
       ? cars.map((c) => {
           const [x, y] = map!.path[nearestDistIndex(map!.dist, c.lapDist)];
-          return { x, y, color: CLASS_COLOR[c.cls] ?? "var(--faint)", isPlayer: c.isPlayer };
+          return { id: c.id, x, y, color: CLASS_COLOR[c.cls] ?? "var(--faint)", isPlayer: c.isPlayer };
         })
       : [],
   );
@@ -159,7 +159,7 @@
           <text class="corner-lbl" x={cl.cx} y={cl.cy + cl.fontSize * 0.34} text-anchor="middle" font-size={cl.fontSize} fill="var(--accent)" paint-order="stroke" stroke="var(--surface, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">T{c.label || c.number}</text>
         {/if}
       {/each}
-      {#each carDots as d (d.x + "," + d.y + d.isPlayer)}
+      {#each carDots as d (d.id)}
         <circle
           class="car-dot"
           class:player={d.isPlayer}
