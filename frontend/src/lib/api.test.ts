@@ -9,10 +9,15 @@ describe("api client", () => {
     vi.unstubAllGlobals();
   });
 
-  it("getSessions requests {base}/sessions and returns the parsed array", async () => {
-    const payload = [
-      { session_id: "s1", track: "Le Mans", car: "Corvette Z06", laps: 2, best: 216.0, started: 1, last: 2 },
-    ];
+  it("getSessions requests {base}/sessions with filter params and returns the page", async () => {
+    const payload = {
+      rows: [
+        { session_id: "s1", track: "Le Mans", car: "Corvette Z06", laps: 2, best: 216.0, started: 1, last: 2 },
+      ],
+      total: 1,
+      tracks: ["Le Mans"],
+      cars: ["Corvette Z06"],
+    };
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -20,9 +25,9 @@ describe("api client", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await getSessions();
+    const result = await getSessions({ track: "Le Mans", offset: 30, limit: 30 });
 
-    expect(fetchMock).toHaveBeenCalledWith(`${BASE}/sessions`, undefined);
+    expect(fetchMock).toHaveBeenCalledWith(`${BASE}/sessions?track=Le+Mans&offset=30&limit=30`, undefined);
     expect(result).toEqual(payload);
   });
 

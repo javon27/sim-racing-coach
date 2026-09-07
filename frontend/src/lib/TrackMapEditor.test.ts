@@ -270,9 +270,9 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     render(TrackMapEditor, { props: { lapId: 7, open: true, onSaved, onClose, pollMs: 5 } });
     await screen.findByText("First"); // editor loaded
 
-    await fireEvent.click(screen.getByText("(Re)generate map layout"));
+    await fireEvent.click(screen.getByText("Generate map layout"));
     expect(startMapCapture).toHaveBeenCalled();
-    await screen.findByText(/full track width/i);
+    await screen.findByText(/three full laps/i);
 
     // Build is disabled until at least one lap is buffered.
     const buildBtn = await screen.findByText("Build");
@@ -302,8 +302,8 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     render(TrackMapEditor, { props: { lapId: 7, open: true, pollMs: 5 } });
     await screen.findByText("First");
 
-    await fireEvent.click(screen.getByText("(Re)generate map layout"));
-    await screen.findByText(/full track width/i);
+    await fireEvent.click(screen.getByText("Generate map layout"));
+    await screen.findByText(/three full laps/i);
 
     await fireEvent.click(screen.getByText("Cancel capture"));
     expect(cancelMapCapture).toHaveBeenCalled();
@@ -313,8 +313,8 @@ describe("TrackMapEditor — (re)generate map layout", () => {
   it("cancels mapping mode on unmount while capturing (no silent buffering)", async () => {
     const { unmount } = render(TrackMapEditor, { props: { lapId: 7, open: true, pollMs: 5 } });
     await screen.findByText("First");
-    await fireEvent.click(screen.getByText("(Re)generate map layout"));
-    await screen.findByText(/full track width/i);
+    await fireEvent.click(screen.getByText("Generate map layout"));
+    await screen.findByText(/three full laps/i);
 
     unmount();
     expect(cancelMapCapture).toHaveBeenCalled();
@@ -323,8 +323,8 @@ describe("TrackMapEditor — (re)generate map layout", () => {
   it("cancels mapping mode when open flips false while capturing", async () => {
     const { rerender } = render(TrackMapEditor, { props: { lapId: 7, open: true, pollMs: 5 } });
     await screen.findByText("First");
-    await fireEvent.click(screen.getByText("(Re)generate map layout"));
-    await screen.findByText(/full track width/i);
+    await fireEvent.click(screen.getByText("Generate map layout"));
+    await screen.findByText(/three full laps/i);
 
     await rerender({ lapId: 7, open: false });
     await waitFor(() => expect(cancelMapCapture).toHaveBeenCalled());
@@ -357,10 +357,11 @@ describe("TrackMapEditor — (re)generate map layout", () => {
   it("fresh session (lapId=null): capture starts and is NOT auto-cancelled", async () => {
     render(TrackMapEditor, { props: { lapId: null, open: true, pollMs: 5 } });
     // No lap map -> the capture-entry panel, not a dead "Loading…".
-    await fireEvent.click(await screen.findByText("(Re)generate map layout"));
+    // (Heading and button share this text here, so target the button.)
+    await fireEvent.click(await screen.findByRole("button", { name: "Generate map layout" }));
 
     expect(startMapCapture).toHaveBeenCalled();
-    await screen.findByText(/full track width/i); // entered + stayed in capturing
+    await screen.findByText(/three full laps/i); // entered + stayed in capturing
     expect(cancelMapCapture).not.toHaveBeenCalled(); // the bug: instant cancel
 
     cap.laps = [{ idx: 0, samples: 500, length: 5000 }];

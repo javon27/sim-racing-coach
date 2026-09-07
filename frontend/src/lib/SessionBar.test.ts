@@ -106,7 +106,7 @@ describe("SessionBar", () => {
     render(SessionBar, { props: { retryTries: 2, retryDelayMs: 5 } });
 
     const retryBtn = await screen.findByRole("button", { name: /retry/i });
-    expect(screen.getByText(/can't reach the coach server/i)).toBeTruthy();
+    expect(screen.getByText(/no server/i)).toBeTruthy();
 
     vi.mocked(getStatus).mockResolvedValue({
       track: "Le Mans",

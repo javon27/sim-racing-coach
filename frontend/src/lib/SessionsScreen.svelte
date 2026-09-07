@@ -3,8 +3,14 @@
   // mock has game/cfg/cls/type fields the real /sessions payload doesn't --
   // this builds against the real SessionRow shape (session_id, track, car,
   // laps, best, started, last) and filters/groups by track + car only.
-  import { onMount } from "svelte";
-  import { getSessions, getSessionChats, withRetry, type SessionRow } from "./api";
+  import {
+    getSessions,
+    getSessionsSummary,
+    getSessionChats,
+    withRetry,
+    type SessionRow,
+    type SessionsSummary,
+  } from "./api";
   import TrendChart from "./TrendChart.svelte";
 
   let { onselectSession }: { onselectSession?: (sessionId: string, chatId?: string) => void } = $props();
@@ -22,26 +28,70 @@
   }
 
   const ALL = "All";
-
   const PAGE_SIZE = 30;
 
-  let sessions: SessionRow[] = $state([]);
+  // Backend owns filtering + pagination; the client only holds the current page
+  // plus a summary (stats + trend) computed server-side over the full match set.
+  let rows: SessionRow[] = $state([]);
+  let total = $state(0);
+  let tracks: string[] = $state([]);
+  let cars: string[] = $state([]);
+  let summary: SessionsSummary | null = $state(null);
   let loaded = $state(false);
   let selectedTrack = $state(ALL);
   let selectedCar = $state(ALL);
   let page = $state(1);
 
-  onMount(async () => {
-    // Retry through the sidecar startup race — all screens mount at app start,
-    // so this fetch can fire before the server is bound (like LapList/SessionBar).
-    try {
-      const res = await withRetry(getSessions);
-      sessions = Array.isArray(res) ? res : [];
-    } catch {
-      sessions = [];
-    }
-    loaded = true;
+  const filterArgs = () => ({
+    track: selectedTrack === ALL ? undefined : selectedTrack,
+    car: selectedCar === ALL ? undefined : selectedCar,
   });
+
+  function onFilterChange() {
+    page = 1; // reset paging before the fetch effects react to the new filter
+  }
+
+  // Fetch the current page (reacts to filters + page). A token guards against
+  // out-of-order responses when the user pages/filters quickly.
+  let pageToken = 0;
+  $effect(() => {
+    const args = { ...filterArgs(), offset: (page - 1) * PAGE_SIZE, limit: PAGE_SIZE };
+    const token = ++pageToken;
+    (async () => {
+      try {
+        // Retry through the sidecar startup race — screens mount before bind.
+        const res = await withRetry(() => getSessions(args));
+        if (token !== pageToken) return;
+        rows = res.rows;
+        total = res.total;
+        tracks = res.tracks;
+        cars = res.cars;
+      } catch {
+        if (token !== pageToken) return;
+        rows = [];
+        total = 0;
+      } finally {
+        if (token === pageToken) loaded = true;
+      }
+    })();
+  });
+
+  // Fetch stats + trend for the filter (reacts to filters only, not page).
+  let summaryToken = 0;
+  $effect(() => {
+    const args = filterArgs();
+    const token = ++summaryToken;
+    (async () => {
+      try {
+        const res = await getSessionsSummary(args);
+        if (token === summaryToken) summary = res;
+      } catch {
+        if (token === summaryToken) summary = null;
+      }
+    })();
+  });
+
+  const pageCount = $derived(Math.max(1, Math.ceil(total / PAGE_SIZE)));
 
   function formatBest(seconds: number | null): string {
     if (seconds == null) return "—";
@@ -57,58 +107,16 @@
     });
   }
 
-  const tracks = $derived(
-    [...new Set(sessions.map((s) => s.track))].sort((a, b) => a.localeCompare(b)),
-  );
-  const cars = $derived([...new Set(sessions.map((s) => s.car))]);
-
-  const filtered = $derived(
-    sessions.filter(
-      (s) => (selectedTrack === ALL || s.track === selectedTrack) && (selectedCar === ALL || s.car === selectedCar),
-    ),
-  );
-
-  const filteredCars = $derived([...new Set(filtered.map((s) => s.car))]);
-
-  // Paginate the RENDERED list only — stats/trend/filters above still run over
-  // the full filtered set, so they stay accurate while the DOM stays light.
-  const pageCount = $derived(Math.max(1, Math.ceil(filtered.length / PAGE_SIZE)));
-  const paged = $derived(filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE));
-  // Reset to page 1 whenever the filters change; clamp if the set shrinks.
-  $effect(() => {
-    selectedTrack;
-    selectedCar;
-    page = 1;
-  });
-  $effect(() => {
-    if (page > pageCount) page = pageCount;
-  });
-
-  const bests = $derived(filtered.map((s) => s.best).filter((b): b is number => b != null));
-
-  const personalBest = $derived(bests.length ? Math.min(...bests) : null);
-
-  const improvement = $derived.by(() => {
-    if (filteredCars.length !== 1) return null;
-    const byDate = [...filtered].filter((s) => s.best != null).sort((a, b) => a.started - b.started);
-    if (byDate.length < 2) return null;
-    return byDate[0].best! - byDate[byDate.length - 1].best!;
-  });
-
-  const consistency = $derived(bests.length >= 2 ? (Math.max(...bests) - Math.min(...bests)) / 2 : null);
+  const personalBest = $derived(summary?.personal_best ?? null);
+  const improvement = $derived(summary?.improvement ?? null);
+  const consistency = $derived(summary?.consistency ?? null);
+  const carCount = $derived(summary?.cars ?? 0);
 
   const chartSeries = $derived(
-    selectedTrack === ALL
-      ? []
-      : filteredCars.map((car) => ({
-          name: car,
-          points: filtered
-            .filter((s) => s.car === car && s.best != null)
-            .sort((a, b) => a.started - b.started)
-            // x = the session start timestamp so same-day sessions each get their
-            // own slot (spread out); label shows the date.
-            .map((s) => ({ x: s.started, label: formatDate(s.started), value: s.best as number })),
-        })),
+    (summary?.series ?? []).map((s) => ({
+      name: s.car,
+      points: s.points.map((p) => ({ x: p.x, label: formatDate(p.x), value: p.value })),
+    })),
   );
 </script>
 
@@ -116,13 +124,13 @@
   <div class="page-h">
     <h1>Sessions</h1>
     <div class="filters">
-      <select aria-label="Track" bind:value={selectedTrack}>
+      <select aria-label="Track" bind:value={selectedTrack} onchange={onFilterChange}>
         <option value={ALL}>All tracks</option>
         {#each tracks as t}
           <option value={t}>{t}</option>
         {/each}
       </select>
-      <select aria-label="Car" bind:value={selectedCar}>
+      <select aria-label="Car" bind:value={selectedCar} onchange={onFilterChange}>
         <option value={ALL}>All cars</option>
         {#each cars as c}
           <option value={c}>{c}</option>
@@ -131,7 +139,7 @@
     </div>
   </div>
 
-  {#if loaded && sessions.length === 0}
+  {#if loaded && total === 0 && selectedTrack === ALL && selectedCar === ALL}
     <p class="empty">No sessions yet &mdash; drive some laps or import your history in Settings.</p>
   {:else}
     <div class="trend-wrap">
@@ -154,22 +162,22 @@
         </div>
         <div class="scard">
           <div class="k">Sessions</div>
-          <div class="v">{filtered.length}</div>
+          <div class="v">{total}</div>
         </div>
         <div class="scard">
-          <div class="k">{filteredCars.length > 1 ? "Cars" : "Consistency"}</div>
+          <div class="k">{carCount > 1 ? "Cars" : "Consistency"}</div>
           <div class="v">
-            {filteredCars.length > 1 ? filteredCars.length : consistency != null ? `±${consistency.toFixed(3)}s` : "—"}
+            {carCount > 1 ? carCount : consistency != null ? `±${consistency.toFixed(3)}s` : "—"}
           </div>
         </div>
       </div>
 
-      <div class="sess-list-h">Recorded sessions <span>&middot; {filtered.length}</span></div>
+      <div class="sess-list-h">Recorded sessions <span>&middot; {total}</span></div>
       <div class="sess-list">
-        {#if filtered.length === 0}
+        {#if rows.length === 0}
           <p class="empty">No sessions match these filters.</p>
         {:else}
-          {#each paged as s (s.session_id)}
+          {#each rows as s (s.session_id)}
             <div class="srow" role="button" tabindex="0" onclick={() => selectSession(s.session_id)} onkeydown={(e) => e.key === "Enter" && selectSession(s.session_id)}>
               <div class="d">{formatDate(s.started)}</div>
               <div class="tk">{s.track}<div class="ln"><small>{s.car}</small></div></div>

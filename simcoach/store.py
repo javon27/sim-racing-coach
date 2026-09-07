@@ -406,22 +406,93 @@ class LapStore:
                 out.append(d)
             return out
 
-    def recent_race_sessions(self, limit: int = 2000) -> list[dict]:
-        """Race sessions from the laps table (not coach_chat, which would miss
-        capture-only sessions with no coach questions asked). Limit is generous
-        so imported history (thousands of result-log sessions) reaches the
-        Sessions screen, which filters/charts client-side.
-        ponytail: flat cap; add server-side paging if a library outgrows 2000."""
+    # Filtered, paginated race sessions from the laps table (not coach_chat,
+    # which would miss capture-only sessions with no coach questions asked).
+    def _session_where(self, track: str | None, car: str | None) -> tuple[str, list]:
+        clauses = ["session_id IS NOT NULL"]
+        params: list = []
+        if track:
+            clauses.append("track = ?"); params.append(track)
+        if car:
+            clauses.append("car = ?"); params.append(car)
+        return " AND ".join(clauses), params
+
+    def session_facets(self) -> dict:
+        """Distinct tracks/cars across ALL sessions, for the filter dropdowns
+        (independent of the current page/filter)."""
         with self._lock:
+            tracks = [r[0] for r in self.conn.execute(
+                "SELECT DISTINCT track FROM laps WHERE session_id IS NOT NULL "
+                "AND track IS NOT NULL ORDER BY track").fetchall()]
+            cars = [r[0] for r in self.conn.execute(
+                "SELECT DISTINCT car FROM laps WHERE session_id IS NOT NULL "
+                "AND car IS NOT NULL ORDER BY car").fetchall()]
+        return {"tracks": tracks, "cars": cars}
+
+    def race_sessions_page(self, track: str | None = None, car: str | None = None,
+                           offset: int = 0, limit: int = 30) -> dict:
+        """One page of sessions (newest first) matching the filters, plus the
+        total count so the client can render page controls."""
+        where, params = self._session_where(track, car)
+        with self._lock:
+            total = self.conn.execute(
+                f"SELECT COUNT(*) FROM (SELECT session_id FROM laps WHERE {where} "
+                f"GROUP BY session_id)", params).fetchone()[0]
             rows = self.conn.execute(
                 "SELECT session_id, track, car, COUNT(*), "
                 "MIN(CASE WHEN valid THEN lap_time END), MIN(ts), MAX(ts) "
-                "FROM laps WHERE session_id IS NOT NULL "
-                "GROUP BY session_id ORDER BY MAX(ts) DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
-            keys = ("session_id", "track", "car", "laps", "best", "started", "last")
-            return [dict(zip(keys, r)) for r in rows]
+                f"FROM laps WHERE {where} GROUP BY session_id "
+                "ORDER BY MAX(ts) DESC LIMIT ? OFFSET ?",
+                params + [limit, offset]).fetchall()
+        keys = ("session_id", "track", "car", "laps", "best", "started", "last")
+        return {"rows": [dict(zip(keys, r)) for r in rows], "total": total}
+
+    def recent_race_sessions(self, limit: int = 2000) -> list[dict]:
+        """All sessions (newest first) as a flat list — convenience over
+        race_sessions_page for callers/tests that don't need paging."""
+        return self.race_sessions_page(offset=0, limit=limit)["rows"]
+
+    def session_summary(self, track: str | None = None, car: str | None = None) -> dict:
+        """Aggregate stats + best-lap trend over the FULL filtered set (not one
+        page), so the Sessions screen's cards/chart stay accurate under paging.
+        The per-session trend series is only built when a track is selected
+        (the chart is hidden otherwise), keeping the all-tracks case to pure
+        aggregates."""
+        where, params = self._session_where(track, car)
+        per = (f"SELECT session_id, car, MIN(CASE WHEN valid THEN lap_time END) AS best, "
+               f"MIN(ts) AS started FROM laps WHERE {where} GROUP BY session_id")
+        with self._lock:
+            count = self.conn.execute(f"SELECT COUNT(*) FROM ({per})", params).fetchone()[0]
+            n_best, cars, best_min, best_max = self.conn.execute(
+                f"SELECT COUNT(*), COUNT(DISTINCT car), MIN(best), MAX(best) "
+                f"FROM ({per}) WHERE best IS NOT NULL", params).fetchone()
+            first = self.conn.execute(
+                f"SELECT best FROM ({per}) WHERE best IS NOT NULL ORDER BY started ASC LIMIT 1",
+                params).fetchone()
+            last = self.conn.execute(
+                f"SELECT best FROM ({per}) WHERE best IS NOT NULL ORDER BY started DESC LIMIT 1",
+                params).fetchone()
+            series: list[dict] = []
+            if track:
+                rows = self.conn.execute(
+                    f"SELECT car, started, best FROM ({per}) WHERE best IS NOT NULL "
+                    f"ORDER BY started ASC", params).fetchall()
+                by_car: dict[str, list] = {}
+                for c, started, best in rows:
+                    by_car.setdefault(c, []).append({"x": started, "value": best})
+                series = [{"car": c, "points": pts} for c, pts in by_car.items()]
+        # improvement = earliest best - latest best, only when a single car is in
+        # the set (mirrors the old client rule); positive means faster over time.
+        improvement = (first[0] - last[0]) if (cars == 1 and n_best >= 2 and first and last) else None
+        consistency = ((best_max - best_min) / 2) if (n_best >= 2 and best_min is not None) else None
+        return {
+            "count": count,
+            "cars": cars,
+            "personal_best": best_min,
+            "consistency": consistency,
+            "improvement": improvement,
+            "series": series,
+        }
 
     def session_laps(self, session_id: str) -> list[dict]:
         with self._lock:

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, within, waitFor } from "@testing-library/svelte";
-import { getSessions, getSessionChats } from "./api";
+import { getSessions, getSessionsSummary, getSessionChats, type SessionsFilter } from "./api";
 import SessionsScreen from "./SessionsScreen.svelte";
 
 function sessList(container: HTMLElement) {
@@ -9,7 +9,12 @@ function sessList(container: HTMLElement) {
 
 vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
-  return { ...actual, getSessions: vi.fn(), getSessionChats: vi.fn() };
+  return {
+    ...actual,
+    getSessions: vi.fn(),
+    getSessionsSummary: vi.fn(),
+    getSessionChats: vi.fn(),
+  };
 });
 
 const SESSIONS = [
@@ -18,18 +23,60 @@ const SESSIONS = [
   { session_id: "s3", track: "Sebring", car: "Corvette Z06", laps: 5, best: null, started: 1_725_200_000, last: 1_725_203_600 },
 ];
 
+// A fake backend over a fixture: filters + paginates like the real /sessions,
+// and aggregates like /sessions/summary, so the component's server-driven flow
+// is exercised end to end.
+function fakeBackend(data = SESSIONS) {
+  const match = (f: SessionsFilter) =>
+    data.filter((s) => (!f.track || s.track === f.track) && (!f.car || s.car === f.car));
+
+  vi.mocked(getSessions).mockImplementation(async (f: SessionsFilter = {}) => {
+    const m = match(f);
+    const offset = f.offset ?? 0;
+    const limit = f.limit ?? 30;
+    return {
+      rows: m.slice(offset, offset + limit),
+      total: m.length,
+      tracks: [...new Set(data.map((s) => s.track))].sort(),
+      cars: [...new Set(data.map((s) => s.car))],
+    };
+  });
+
+  vi.mocked(getSessionsSummary).mockImplementation(async (f: SessionsFilter = {}) => {
+    const m = match(f);
+    const withBest = m.filter((s) => s.best != null) as (typeof m[number] & { best: number })[];
+    const bests = withBest.map((s) => s.best);
+    let series: { car: string; points: { x: number; value: number }[] }[] = [];
+    if (f.track) {
+      const byCar: Record<string, { x: number; value: number }[]> = {};
+      [...withBest].sort((a, b) => a.started - b.started).forEach((s) => {
+        (byCar[s.car] ||= []).push({ x: s.started, value: s.best });
+      });
+      series = Object.entries(byCar).map(([car, points]) => ({ car, points }));
+    }
+    return {
+      count: m.length,
+      cars: new Set(m.map((s) => s.car)).size,
+      personal_best: bests.length ? Math.min(...bests) : null,
+      consistency: bests.length >= 2 ? (Math.max(...bests) - Math.min(...bests)) / 2 : null,
+      improvement: null,
+      series,
+    };
+  });
+}
+
 describe("SessionsScreen", () => {
   beforeEach(() => {
     vi.mocked(getSessions).mockReset();
+    vi.mocked(getSessionsSummary).mockReset();
     vi.mocked(getSessionChats).mockReset();
     vi.mocked(getSessionChats).mockResolvedValue([]);
+    fakeBackend();
   });
 
   afterEach(cleanup);
 
   it("renders session rows and filter dropdowns from the API payload", async () => {
-    vi.mocked(getSessions).mockResolvedValue(SESSIONS);
-
     const { container } = render(SessionsScreen);
     await screen.findByRole("combobox", { name: /track/i });
     const list = within(sessList(container));
@@ -42,8 +89,6 @@ describe("SessionsScreen", () => {
   });
 
   it("narrows the session list when the track filter changes", async () => {
-    vi.mocked(getSessions).mockResolvedValue(SESSIONS);
-
     const { container } = render(SessionsScreen);
     await within(sessList(container)).findByText("Sebring");
 
@@ -51,12 +96,12 @@ describe("SessionsScreen", () => {
     await fireEvent.change(trackSelect, { target: { value: "Sebring" } });
 
     const list = within(sessList(container));
-    expect(list.queryByText("Le Mans")).toBeNull();
+    await waitFor(() => expect(list.queryByText("Le Mans")).toBeNull());
     expect(list.getByText("Sebring")).toBeTruthy();
+    expect(getSessions).toHaveBeenCalledWith(expect.objectContaining({ track: "Sebring" }));
   });
 
   it("fires onselectSession with the session id and its linked chat id when a row is clicked", async () => {
-    vi.mocked(getSessions).mockResolvedValue(SESSIONS);
     vi.mocked(getSessionChats).mockResolvedValue([
       { chat_id: "chatA", started: 1, last: 5, message_count: 3, tracks: "Le Mans" },
     ]);
@@ -73,7 +118,6 @@ describe("SessionsScreen", () => {
   });
 
   it("passes chatId undefined when a session has no linked chat", async () => {
-    vi.mocked(getSessions).mockResolvedValue(SESSIONS);
     vi.mocked(getSessionChats).mockResolvedValue([]);
     const onselectSession = vi.fn();
 
@@ -86,7 +130,7 @@ describe("SessionsScreen", () => {
   });
 
   it("shows an empty state when there are no sessions", async () => {
-    vi.mocked(getSessions).mockResolvedValue([]);
+    fakeBackend([]);
 
     render(SessionsScreen);
 
@@ -94,8 +138,6 @@ describe("SessionsScreen", () => {
   });
 
   it("shows a select-a-track placeholder in the chart before a track is chosen", async () => {
-    vi.mocked(getSessions).mockResolvedValue(SESSIONS);
-
     const { container } = render(SessionsScreen);
     await within(sessList(container)).findByText("Sebring");
 
@@ -104,20 +146,16 @@ describe("SessionsScreen", () => {
   });
 
   it("renders the trend chart once a specific track is chosen", async () => {
-    vi.mocked(getSessions).mockResolvedValue(SESSIONS);
-
     const { container } = render(SessionsScreen);
     await within(sessList(container)).findByText("Sebring");
 
     const trackSelect = screen.getByRole("combobox", { name: /track/i }) as HTMLSelectElement;
     await fireEvent.change(trackSelect, { target: { value: "Le Mans" } });
 
-    expect(document.querySelector("svg")).toBeTruthy();
+    await waitFor(() => expect(document.querySelector("svg")).toBeTruthy());
   });
 
   it("formats best lap times as m:ss.mmm", async () => {
-    vi.mocked(getSessions).mockResolvedValue(SESSIONS);
-
     const { container } = render(SessionsScreen);
 
     expect(await within(sessList(container)).findByText("3:36.512")).toBeTruthy();

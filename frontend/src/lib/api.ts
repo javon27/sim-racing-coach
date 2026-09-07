@@ -151,8 +151,45 @@ export function getStatus(): Promise<StatusResponse> {
   return request<StatusResponse>("/status");
 }
 
-export function getSessions(): Promise<SessionRow[]> {
-  return request<SessionRow[]>("/sessions");
+export interface SessionsPage {
+  rows: SessionRow[];
+  total: number;
+  tracks: string[];
+  cars: string[];
+}
+
+export interface SessionsFilter {
+  track?: string;
+  car?: string;
+  offset?: number;
+  limit?: number;
+}
+
+export interface SessionsSummary {
+  count: number;
+  cars: number;
+  personal_best: number | null;
+  consistency: number | null;
+  improvement: number | null;
+  series: { car: string; points: { x: number; value: number }[] }[];
+}
+
+function sessionQuery(f: SessionsFilter = {}): string {
+  const q = new URLSearchParams();
+  if (f.track) q.set("track", f.track);
+  if (f.car) q.set("car", f.car);
+  if (f.offset != null) q.set("offset", String(f.offset));
+  if (f.limit != null) q.set("limit", String(f.limit));
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+
+export function getSessions(f: SessionsFilter = {}): Promise<SessionsPage> {
+  return request<SessionsPage>(`/sessions${sessionQuery(f)}`);
+}
+
+export function getSessionsSummary(f: Pick<SessionsFilter, "track" | "car"> = {}): Promise<SessionsSummary> {
+  return request<SessionsSummary>(`/sessions/summary${sessionQuery(f)}`);
 }
 
 export function getSessionLaps(sid: string): Promise<LapRow[]> {

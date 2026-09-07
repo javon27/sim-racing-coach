@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, within, waitFor } from "@testing-library/svelte";
 import {
+  getHealth,
   getStatus,
   getSettings,
   getSessions,
+  getSessionsSummary,
   getSessionLaps,
   getLapAnalysis,
   getSetup,
@@ -16,9 +18,11 @@ vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
   return {
     ...actual,
+    getHealth: vi.fn(),
     getStatus: vi.fn(),
     getSettings: vi.fn(),
     getSessions: vi.fn(),
+    getSessionsSummary: vi.fn(),
     getSessionLaps: vi.fn(),
     getLapAnalysis: vi.fn(),
     getSetup: vi.fn(),
@@ -30,8 +34,11 @@ vi.mock("./api", async () => {
 describe("App shell", () => {
   afterEach(cleanup);
 
-  it("renders the three nav items and a theme toggle", () => {
+  // The shell mounts after the splash finishes its boot (health + prefetch),
+  // so these await the shell rather than querying synchronously.
+  it("renders the three nav items and a theme toggle", async () => {
     const { container } = render(App);
+    await screen.findByText("Pit Wall");
     const nav = within(container.querySelector(".nav") as HTMLElement);
 
     expect(nav.getByText("Coach")).toBeTruthy();
@@ -40,10 +47,10 @@ describe("App shell", () => {
     expect(nav.getByText(/^Theme ·/)).toBeTruthy();
   });
 
-  it("has a draggable resizer for the lap pane", () => {
+  it("has a draggable resizer for the lap pane", async () => {
     const { container } = render(App);
+    await waitFor(() => expect(container.querySelector(".rail-resizer")).not.toBeNull());
     const resizer = container.querySelector(".rail-resizer");
-    expect(resizer).not.toBeNull();
     expect(resizer!.getAttribute("role")).toBe("separator");
   });
 });
@@ -68,9 +75,23 @@ describe("Coach screen assembly", () => {
       app_version: "0.1",
       lmu_build: null,
     });
-    vi.mocked(getSessions).mockResolvedValue([
-      { session_id: "s1", track: "Le Mans", car: "Corvette Z06", laps: 1, best: 216.0, started: 1, last: 2 },
-    ]);
+    vi.mocked(getHealth).mockResolvedValue({ status: "ok" });
+    vi.mocked(getSessions).mockResolvedValue({
+      rows: [
+        { session_id: "s1", track: "Le Mans", car: "Corvette Z06", laps: 1, best: 216.0, started: 1, last: 2 },
+      ],
+      total: 1,
+      tracks: ["Le Mans"],
+      cars: ["Corvette Z06"],
+    });
+    vi.mocked(getSessionsSummary).mockResolvedValue({
+      count: 1,
+      cars: 1,
+      personal_best: 216.0,
+      consistency: null,
+      improvement: null,
+      series: [],
+    });
     vi.mocked(getSessionLaps).mockResolvedValue([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
     vi.mocked(getLapAnalysis).mockResolvedValue({ lap_time: 216.0, corners: [] });
     vi.mocked(getSetup).mockResolvedValue({});
@@ -82,6 +103,7 @@ describe("Coach screen assembly", () => {
 
   it("renders the session bar, lap list, corner/setup tabs, and chat composer together", async () => {
     const { container } = render(App);
+    await screen.findByText("Pit Wall"); // wait for the shell to mount past the splash
     const bar = container.querySelector(".bar") as HTMLElement;
 
     expect(await within(bar).findByText("Le Mans")).toBeTruthy(); // session bar
@@ -93,6 +115,7 @@ describe("Coach screen assembly", () => {
 
   it("flows a selected lap's id into the corner panel and highlights the row", async () => {
     render(App);
+    await screen.findByText("Pit Wall"); // shell mounts past the splash
 
     const lapRow = await screen.findByText("Lap 1");
     const cell = lapRow.closest(".lap") as HTMLElement; // grid container keeps best/selected
@@ -110,6 +133,7 @@ describe("Coach screen assembly", () => {
 
   it("switches to the Sessions screen when the Sessions nav item is clicked", async () => {
     const { container } = render(App);
+    await screen.findByText("Pit Wall"); // shell mounts past the splash
     const nav = within(container.querySelector(".nav") as HTMLElement);
 
     await fireEvent.click(nav.getByText("Sessions"));
@@ -119,6 +143,7 @@ describe("Coach screen assembly", () => {
 
   it("switches to the Settings screen when the Settings nav item is clicked", async () => {
     const { container } = render(App);
+    await screen.findByText("Pit Wall"); // shell mounts past the splash
     const nav = within(container.querySelector(".nav") as HTMLElement);
 
     await fireEvent.click(nav.getByText("Settings"));
@@ -128,6 +153,7 @@ describe("Coach screen assembly", () => {
 
   it("deep-links a clicked session row into the Coach screen and loads that session's laps", async () => {
     const { container } = render(App);
+    await screen.findByText("Pit Wall"); // shell mounts past the splash
     const nav = within(container.querySelector(".nav") as HTMLElement);
 
     await fireEvent.click(nav.getByText("Sessions"));

@@ -70,8 +70,11 @@ def test_setup_empty_without_rest(tmp_path, synthetic_lap):
 
 def test_sessions_from_laps_table(tmp_path, synthetic_lap):
     app, lap_id, cid = _app(tmp_path, synthetic_lap)
-    rows = _tc(app).get("/sessions").json()
-    assert isinstance(rows, list)
+    body = _tc(app).get("/sessions").json()
+    assert body["total"] == 1
+    assert body["tracks"] == [synthetic_lap.track]
+    assert body["cars"] == [synthetic_lap.car]
+    rows = body["rows"]
     assert len(rows) == 1
     row = rows[0]
     assert row["session_id"] == "s1"
@@ -79,6 +82,28 @@ def test_sessions_from_laps_table(tmp_path, synthetic_lap):
     assert row["car"] == synthetic_lap.car
     assert row["laps"] == 1
     assert row["best"] == synthetic_lap.lap_time
+
+
+def test_sessions_filter_and_paginate(tmp_path, synthetic_lap):
+    app, lap_id, cid = _app(tmp_path, synthetic_lap)
+    # Filtering to a non-matching track yields an empty page; the facet lists
+    # still reflect the full dataset.
+    body = _tc(app).get("/sessions", params={"track": "Nowhere"}).json()
+    assert body["total"] == 0
+    assert body["rows"] == []
+    assert synthetic_lap.track in body["tracks"]
+    # Offset past the end is an empty page, total unchanged.
+    body = _tc(app).get("/sessions", params={"offset": 5}).json()
+    assert body["total"] == 1
+    assert body["rows"] == []
+
+
+def test_sessions_summary(tmp_path, synthetic_lap):
+    app, lap_id, cid = _app(tmp_path, synthetic_lap)
+    body = _tc(app).get("/sessions/summary").json()
+    assert body["count"] == 1
+    assert body["personal_best"] == synthetic_lap.lap_time
+    assert body["series"] == []  # no track filter -> no trend series
 
 
 def test_session_laps(tmp_path, synthetic_lap):

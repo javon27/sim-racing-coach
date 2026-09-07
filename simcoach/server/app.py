@@ -466,8 +466,14 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         }
 
     @app.get("/sessions")
-    def sessions():
-        return store.recent_race_sessions()
+    def sessions(track: str | None = None, car: str | None = None,
+                 offset: int = 0, limit: int = 30):
+        page = store.race_sessions_page(track or None, car or None, max(0, offset), max(1, min(limit, 200)))
+        return {**page, **store.session_facets()}
+
+    @app.get("/sessions/summary")
+    def sessions_summary(track: str | None = None, car: str | None = None):
+        return store.session_summary(track or None, car or None)
 
     @app.get("/sessions/{sid}/laps")
     def session_laps(sid: str):
