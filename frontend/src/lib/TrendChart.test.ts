@@ -136,6 +136,45 @@ describe("TrendChart", () => {
     expect(labels.some((l) => /\d{1,2}:\d{2}/.test(l))).toBe(true);
   });
 
+  it("collapses same-day sessions to one dot (daily best) when zoomed out", () => {
+    mockClientWidth = 640;
+    const day = 86400;
+    const start = 1_725_000_000;
+    const { container } = render(TrendChart, {
+      props: {
+        zoom: 1, // zoomed out over a multi-day span -> a day is only a few px wide
+        series: [
+          {
+            name: "Corvette Z06",
+            points: [
+              // day 1: three sessions, best is 214.2
+              { x: start + 3600, label: "d1", value: 216.5 },
+              { x: start + 7200, label: "d1", value: 214.2 },
+              { x: start + 10800, label: "d1", value: 215.0 },
+              // days 2 and 3: one each, keeps the span wide (small px/day)
+              { x: start + 30 * day, label: "d2", value: 213.0 },
+              { x: start + 60 * day, label: "d3", value: 212.4 },
+            ],
+          },
+        ],
+      },
+    });
+    // 3 days -> 3 dots (day 1's three sessions converged to its best).
+    expect(container.querySelectorAll("circle").length).toBe(3);
+  });
+
+  it("renders a legend entry per car when more than one series", () => {
+    const { container } = render(TrendChart, {
+      props: {
+        series: [
+          { name: "Corvette Z06", points: [{ x: 1, label: "9/1", value: 216.5 }] },
+          { name: "Ferrari 296", points: [{ x: 1, label: "9/1", value: 220.1 }] },
+        ],
+      },
+    });
+    expect(container.querySelectorAll(".legend li").length).toBe(2);
+  });
+
   it("shows a placeholder when there is less than one point", () => {
     const { container, getByText } = render(TrendChart, { props: { series: [] } });
 
