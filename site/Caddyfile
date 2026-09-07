@@ -1,0 +1,18 @@
+# Static file server for the Nestor marketing site.
+# Railway injects $PORT; fall back to 80 for local `docker run`.
+{
+	admin off
+	persist_config off
+	auto_https off
+}
+
+:{$PORT:80} {
+	root * /srv
+	encode gzip zstd
+	file_server
+
+	# Long-cache the fingerprint-free assets modestly; the HTML stays fresh.
+	@assets path /assets/*
+	header @assets Cache-Control "public, max-age=604800"
+	header Cache-Control "public, max-age=300"
+}

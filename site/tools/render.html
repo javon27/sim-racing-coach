@@ -1,0 +1,45 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<!-- Render page for the wordmark lockups + OG card. Serve the SITE root
+     (`cd site && python -m http.server 8080`) and open /tools/render.html.
+     Screenshot each labelled block to site/assets/brand/:
+       #wm-dark  -> wordmark-dark.png
+       #wm-light -> wordmark-light.png
+       #og       -> og-image.png (exactly 1200x630) -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;600&display=swap">
+<style>
+  :root{--display:"Chakra Petch",sans-serif;--mono:"IBM Plex Mono",monospace;--body:"IBM Plex Sans",sans-serif;
+    --bg:#0D1016;--text:#E7ECF3;--muted:#8791A2;--accent:#8A6BFF;--ink:#161B24}
+  *{box-sizing:border-box;margin:0}
+  body{background:#333}
+  .wordmark{display:inline-flex;align-items:center;font-family:var(--display);font-weight:700;
+    letter-spacing:.08em;line-height:1;white-space:nowrap}
+  .wordmark .helm-o{width:auto;margin:0 .04em;transform:translateY(.06em);display:inline-block;--ol:.055em}
+  .helm-ol{filter:drop-shadow(var(--ol) 0 0 #fff) drop-shadow(calc(-1*var(--ol)) 0 0 #fff)
+    drop-shadow(0 var(--ol) 0 #fff) drop-shadow(0 calc(-1*var(--ol)) 0 #fff)}
+  #wm-dark,#wm-light{display:inline-flex;align-items:center;justify-content:center;padding:44px 64px}
+  #wm-dark{background:var(--bg)}   #wm-dark .wordmark{color:var(--text);font-size:104px}
+  #wm-dark .helm-o{height:1.12em}
+  #wm-light{background:#fff}        #wm-light .wordmark{color:var(--ink);font-size:104px}
+  #wm-light .helm-o{height:1.12em}
+  #og{width:1200px;height:630px;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:30px;background:
+      radial-gradient(900px 520px at 78% -12%, rgba(109,74,255,.22), transparent 60%),
+      radial-gradient(700px 500px at 8% 0%, rgba(176,130,74,.12), transparent 55%),
+      var(--bg);}
+  #og .eyebrow{font-family:var(--mono);font-size:22px;font-weight:600;letter-spacing:.28em;
+    text-transform:uppercase;color:var(--accent)}
+  #og .wordmark{color:var(--text);font-size:150px}
+  #og .wordmark .helm-o{height:1.12em;--ol:.05em}
+  #og .tag{font-family:var(--body);font-size:30px;color:var(--muted)}
+</style></head>
+<body>
+  <div id="wm-dark" role="img" aria-label="wordmark dark"><span class="wordmark">NEST<img class="helm-o helm-ol" src="../assets/helm-color.svg" alt="O">R</span></div>
+  <div id="wm-light" role="img" aria-label="wordmark light"><span class="wordmark">NEST<img class="helm-o" src="../assets/helm-color.svg" alt="O">R</span></div>
+  <div id="og" role="img" aria-label="og image">
+    <div class="eyebrow">AI Sim Racing Coach</div>
+    <span class="wordmark">NEST<img class="helm-o helm-ol" src="../assets/helm-color.svg" alt="O">R</span>
+    <div class="tag">The race engineer on your pit wall.</div>
+  </div>
+</body></html>

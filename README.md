@@ -102,6 +102,14 @@ python -m venv .venv
 .venv/Scripts/python.exe -m pytest
 ```
 
+## Marketing site
+
+A standalone landing page for Nestor lives in [`site/`](site/) — a single static
+page (Caddy + Dockerfile) meant to be hosted on Railway under a `jaysontrades.com`
+subdomain. Its screenshots are real captures of this app. See
+[`site/README.md`](site/README.md) for local preview, how to refresh the
+screenshots and brand assets, and the Railway deploy + CNAME steps.
+
 ## Status
 
 v1.0 is the standalone desktop app (Tauri + Svelte + FastAPI sidecar) built over the
