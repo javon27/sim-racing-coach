@@ -986,6 +986,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             if eff_session_id is None and app.state.latest is not None:
                 eff_session_id = app.state.latest["record"].session_id
             ctx = CoachContext(app.state.store, record=None, lap_id=None, cmap=cmap,
+                               units=config.load_config().get("units", "metric"),
                                setup=setup, track=track, car=car, on_track=on_track,
                                allowed_adjustments=(legal_adjustments(setup) if setup else None),
                                session_id=eff_session_id)
@@ -1010,7 +1011,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             try:
                 for ev in app.state.coach.ask_agentic_stream(
                         ctx, question, car=car, input_device=req.get("input_device"),
-                        history=history):
+                        history=history, units=ctx.units):
                     if ev["type"] == "text":
                         text += ev["text"]       # accumulate streamed deltas into the full answer
                     _emit(ev)

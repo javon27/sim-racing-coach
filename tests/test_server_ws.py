@@ -267,3 +267,27 @@ def test_ws_coach_auto_anchors_to_live_session(tmp_path, synthetic_lap):
     assert msgs[0]["session_id"] == "live-s"          # anchored to the live stint
     assert msgs[0]["lap_id"] is None                  # but NOT pinned to a lap — the
     # coach fetches laps on demand via its tools, so a turn isn't tied to one lap.
+
+
+def test_ws_coach_respects_imperial_units(tmp_path, monkeypatch):
+    # Regression: the coach's unit labels + tool data must follow the user's
+    # config (imperial), not silently default to metric.
+    from simcoach import config
+    monkeypatch.setattr(config, "load_config",
+                        lambda *a, **k: {**config.DEFAULTS, "units": "imperial"})
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    fake = FakeModel(reply="ok")
+    coach = Coach(fake, "simcoach/knowledge")
+    app = create_app(store, coach)
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "how am I doing?"})
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"):
+                break
+
+    assert fake.last_system is not None
+    assert "mph" in fake.last_system and "°F" in fake.last_system
+    assert "km/h" not in fake.last_system
