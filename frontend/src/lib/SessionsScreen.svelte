@@ -23,10 +23,13 @@
 
   const ALL = "All";
 
+  const PAGE_SIZE = 30;
+
   let sessions: SessionRow[] = $state([]);
   let loaded = $state(false);
   let selectedTrack = $state(ALL);
   let selectedCar = $state(ALL);
+  let page = $state(1);
 
   onMount(async () => {
     // Retry through the sidecar startup race — all screens mount at app start,
@@ -66,6 +69,20 @@
   );
 
   const filteredCars = $derived([...new Set(filtered.map((s) => s.car))]);
+
+  // Paginate the RENDERED list only — stats/trend/filters above still run over
+  // the full filtered set, so they stay accurate while the DOM stays light.
+  const pageCount = $derived(Math.max(1, Math.ceil(filtered.length / PAGE_SIZE)));
+  const paged = $derived(filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE));
+  // Reset to page 1 whenever the filters change; clamp if the set shrinks.
+  $effect(() => {
+    selectedTrack;
+    selectedCar;
+    page = 1;
+  });
+  $effect(() => {
+    if (page > pageCount) page = pageCount;
+  });
 
   const bests = $derived(filtered.map((s) => s.best).filter((b): b is number => b != null));
 
@@ -152,7 +169,7 @@
         {#if filtered.length === 0}
           <p class="empty">No sessions match these filters.</p>
         {:else}
-          {#each filtered as s (s.session_id)}
+          {#each paged as s (s.session_id)}
             <div class="srow" role="button" tabindex="0" onclick={() => selectSession(s.session_id)} onkeydown={(e) => e.key === "Enter" && selectSession(s.session_id)}>
               <div class="d">{formatDate(s.started)}</div>
               <div class="tk">{s.track}<div class="ln"><small>{s.car}</small></div></div>
@@ -162,6 +179,13 @@
           {/each}
         {/if}
       </div>
+      {#if pageCount > 1}
+        <div class="pager">
+          <button type="button" disabled={page <= 1} onclick={() => (page -= 1)}>Prev</button>
+          <span>Page {page} of {pageCount}</span>
+          <button type="button" disabled={page >= pageCount} onclick={() => (page += 1)}>Next</button>
+        </div>
+      {/if}
     </div>
   {/if}
 </div>
@@ -321,5 +345,33 @@
     font-size: 13px;
     font-weight: 600;
     color: var(--accent);
+  }
+  .pager {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    margin: 16px 0 4px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .pager button {
+    font-family: var(--display);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 6px 14px;
+    cursor: pointer;
+  }
+  .pager button:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+  .pager button:not(:disabled):hover {
+    border-color: var(--accent);
   }
 </style>
