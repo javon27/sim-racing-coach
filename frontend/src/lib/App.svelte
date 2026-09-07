@@ -52,6 +52,20 @@
     draggingRail = false;
   }
 
+  // "New session": clear the selected session, laps, map and chat so the driver
+  // starts fresh (back to the live view with an empty chat).
+  async function handleNewSession() {
+    selectedLapId = undefined;
+    selectedSessionId = undefined;
+    activeSessionId = undefined;
+    railOpen = false;
+    // Clear-then-set so ChatPanel re-registers an empty chat even if it was
+    // already on one (null = fresh empty chat, not "latest").
+    activeChatId = undefined;
+    await tick();
+    activeChatId = null;
+  }
+
   async function handleSelectSession(sessionId: string, chatId?: string) {
     // Clear then re-set so re-selecting the SAME session is a real prop change,
     // which re-arms LapList's review baseline (it may have snapped to live).
@@ -160,7 +174,7 @@
             <CornerSetupTabs lapId={selectedLapId ?? null} />
             <TrackMapPane sessionId={selectedSessionId} />
           </aside>
-          <ChatPanel lapId={selectedLapId} sessionId={selectedSessionId} chatId={activeChatId} />
+          <ChatPanel lapId={selectedLapId} sessionId={selectedSessionId} chatId={activeChatId} onnewsession={handleNewSession} />
         </div>
       </div>
     </section>

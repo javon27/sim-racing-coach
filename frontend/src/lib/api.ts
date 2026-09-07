@@ -36,6 +36,8 @@ export interface LapRow {
   s2: number | null;
   s3: number | null;
   phase: string | null;
+  track?: string;
+  car?: string;
 }
 
 export interface CornerMetrics {

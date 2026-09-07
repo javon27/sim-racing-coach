@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/svelte";
-import { getChats, getChatMessages } from "./api";
+import { getChatMessages } from "./api";
 import type { CoachPhase, ToolActivity } from "./coach";
 import ChatPanel from "./ChatPanel.svelte";
 
 vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
-  return { ...actual, getChats: vi.fn(), getChatMessages: vi.fn() };
+  return { ...actual, getChatMessages: vi.fn() };
 });
 
 // Drives the panel the same way CoachStream would, without a real WebSocket.
@@ -32,19 +32,14 @@ class FakeStream {
 
 describe("ChatPanel", () => {
   beforeEach(() => {
-    vi.mocked(getChats).mockReset();
     vi.mocked(getChatMessages).mockReset();
-    vi.mocked(getChats).mockResolvedValue([]);
   });
 
   afterEach(cleanup);
 
   it("cold load starts an empty new chat (does NOT auto-open an old chat)", async () => {
-    // Past chats exist, but a fresh app load must NOT surprise the driver by
-    // opening one — it shows the empty new-chat state; the dropdown lists them.
-    vi.mocked(getChats).mockResolvedValue([
-      { chat_id: "c1", started: 1, last: 2, message_count: 1, tracks: "Le Mans" },
-    ]);
+    // A fresh app load must NOT surprise the driver by opening a past chat —
+    // it shows the empty new-chat state. (Past chats are resumed via Sessions.)
     vi.mocked(getChatMessages).mockResolvedValue([
       { ts: 1, session_id: "s1", track: "Le Mans", car: "Corvette", lap_id: 9,
         question: "where do I brake?", answer: "Brake later into T3.", tool_calls: null },
@@ -55,8 +50,6 @@ describe("ChatPanel", () => {
 
     expect(await screen.findByText(/new chat — ask a question/i)).toBeTruthy();
     expect(screen.queryByText("where do I brake?")).toBeNull();
-    // Past chat is still offered in the switcher for manual resume.
-    expect(await screen.findByRole("option", { name: /Le Mans/ })).toBeTruthy();
   });
 
   it("sends a question, then renders the live coach bubble as the stream fills in", async () => {
@@ -123,10 +116,6 @@ describe("ChatPanel", () => {
   });
 
   it("loads the thread named by the chatId prop", async () => {
-    vi.mocked(getChats).mockResolvedValue([
-      { chat_id: "c1", started: 1, last: 2, message_count: 1, tracks: "Le Mans" },
-      { chat_id: "c9", started: 3, last: 4, message_count: 1, tracks: "Spa" },
-    ]);
     vi.mocked(getChatMessages).mockImplementation(async (id: string) =>
       id === "c9"
         ? [{ ts: 1, session_id: "s2", track: "Spa", car: "Ferrari", lap_id: null, question: "spa question", answer: "spa answer", tool_calls: null }]
@@ -141,11 +130,8 @@ describe("ChatPanel", () => {
   });
 
   it("chatId=null (session with no chat) shows an empty new chat, not the latest", async () => {
-    // getChats has a recent chat, but a chatless session was opened (chatId=null),
-    // so the panel must NOT load that latest chat — it shows the empty new-chat state.
-    vi.mocked(getChats).mockResolvedValue([
-      { chat_id: "c1", started: 1, last: 2, message_count: 1, tracks: "Le Mans" },
-    ]);
+    // A chatless session was opened (chatId=null), so the panel must NOT load
+    // any latest chat — it shows the empty new-chat state.
     vi.mocked(getChatMessages).mockResolvedValue([
       { ts: 1, session_id: "s1", track: "Le Mans", car: "Corvette", lap_id: null, question: "old question", answer: "old answer", tool_calls: null },
     ]);
@@ -157,47 +143,24 @@ describe("ChatPanel", () => {
     expect(screen.queryByText("old question")).toBeNull();
   });
 
-  it("+ New chat empties the thread and the next ask starts a fresh chat", async () => {
-    vi.mocked(getChats).mockResolvedValue([
-      { chat_id: "c1", started: 1, last: 2, message_count: 1, tracks: "Le Mans" },
-    ]);
+  it("+ New session empties the thread, fires onnewsession, and the next ask starts fresh", async () => {
     vi.mocked(getChatMessages).mockResolvedValue([
       { ts: 1, session_id: "s1", track: "Le Mans", car: "Corvette", lap_id: null, question: "old question", answer: "old answer", tool_calls: null },
     ]);
     const stream = new FakeStream();
+    const onnewsession = vi.fn();
 
-    render(ChatPanel, { props: { stream, chatId: "c1" } });
+    render(ChatPanel, { props: { stream, chatId: "c1", onnewsession } });
     expect(await screen.findByText("old question")).toBeTruthy();
 
-    await fireEvent.click(screen.getByRole("button", { name: /new chat/i }));
+    await fireEvent.click(screen.getByRole("button", { name: /new session/i }));
     await waitFor(() => expect(screen.queryByText("old question")).toBeNull());
     expect(screen.getByText(/new chat — ask a question/i)).toBeTruthy();
+    expect(onnewsession).toHaveBeenCalled();
 
     const textarea = screen.getByPlaceholderText(/ask your engineer/i);
     await fireEvent.input(textarea, { target: { value: "brand new" } });
     await fireEvent.click(screen.getByRole("button", { name: /send/i }));
     expect(stream.ask).toHaveBeenCalledWith("brand new", { sessionId: undefined, lapId: undefined, chatId: undefined });
-  });
-
-  it("the switcher loads the chosen thread", async () => {
-    vi.mocked(getChats).mockResolvedValue([
-      { chat_id: "c1", started: 1, last: 2, message_count: 1, tracks: "Le Mans" },
-      { chat_id: "c2", started: 3, last: 4, message_count: 1, tracks: "Spa" },
-    ]);
-    vi.mocked(getChatMessages).mockImplementation(async (id: string) =>
-      id === "c2"
-        ? [{ ts: 1, session_id: "s2", track: "Spa", car: "Ferrari", lap_id: null, question: "spa question", answer: "spa answer", tool_calls: null }]
-        : [{ ts: 1, session_id: "s1", track: "Le Mans", car: "Corvette", lap_id: null, question: "lemans question", answer: "lemans answer", tool_calls: null }],
-    );
-    const stream = new FakeStream();
-
-    render(ChatPanel, { props: { stream, chatId: "c1" } });
-    expect(await screen.findByText("lemans question")).toBeTruthy();
-
-    const switcher = screen.getByRole("combobox", { name: /switch chat/i });
-    await fireEvent.change(switcher, { target: { value: "c2" } });
-
-    expect(await screen.findByText("spa question")).toBeTruthy();
-    expect(screen.queryByText("lemans question")).toBeNull();
   });
 });

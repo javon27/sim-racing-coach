@@ -1,12 +1,13 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { CoachStream, type CoachPhase, type ToolActivity } from "./coach";
-  import { getChats, getChatMessages, type ChatRow } from "./api";
+  import { getChatMessages } from "./api";
 
   let {
     sessionId,
     lapId,
     chatId,
+    onnewsession,
     stream = new CoachStream(),
   }: {
     sessionId?: string;
@@ -14,6 +15,7 @@
     // undefined = show the latest chat; null = a session with no chat was opened
     // (show an empty new chat); string = open that chat.
     chatId?: string | null;
+    onnewsession?: () => void;
     stream?: {
       phase: CoachPhase;
       toolActivity: ToolActivity | null;
@@ -76,7 +78,6 @@
   }
 
   let messages: Msg[] = $state([]);
-  let chats: ChatRow[] = $state([]);
   // The thread currently shown/appended to. undefined = a fresh, unsaved chat:
   // the next ask sends no chat_id, and we adopt the id the server mints.
   let currentChatId: string | undefined = $state(undefined);
@@ -99,14 +100,6 @@
     if (nearBottom) el.scrollTop = el.scrollHeight;
   });
 
-  async function refreshChats() {
-    try {
-      chats = await getChats();
-    } catch {
-      // switcher stays with whatever it had
-    }
-  }
-
   // Populate the thread from a chat's saved messages.
   async function loadThread(id: string) {
     currentChatId = id;
@@ -128,14 +121,11 @@
     messages = [];
   }
 
-  function onSwitch(e: Event) {
-    const id = (e.target as HTMLSelectElement).value;
-    if (id) loadThread(id);
-  }
-
-  function chatLabel(c: ChatRow): string {
-    const when = new Date(c.last * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-    return `${c.tracks || "Chat"} · ${when}`;
+  // "New session": clear the chat locally and ask the app to clear the selected
+  // session, laps and track map so the driver starts fresh.
+  function newSession() {
+    newChat();
+    onnewsession?.();
   }
 
   // Follow the chatId prop: a pinned id opens that thread; otherwise (null = a
@@ -152,7 +142,6 @@
   });
 
   onMount(() => {
-    refreshChats();
     const unsubscribe = stream.subscribe((s) => {
       const snap = s as { phase: CoachPhase; toolActivity: ToolActivity | null; answer: string; chatId: string | null; error: string | null };
       phase = snap.phase;
@@ -162,10 +151,8 @@
       if (snap.phase === "done") {
         messages = [...messages, { role: "coach", text: snap.answer }];
         waiting = false;
-        // Adopt the server's chat id so follow-ups append to this thread, and
-        // surface a newly-created chat in the switcher.
+        // Adopt the server's chat id so follow-ups append to this thread.
         if (snap.chatId) currentChatId = snap.chatId;
-        refreshChats();
       } else if (snap.phase === "error") {
         messages = [...messages, { role: "coach", text: snap.error ?? "Something went wrong." }];
         waiting = false;
@@ -203,20 +190,7 @@
 
 <section class="chat">
   <div class="chat-bar">
-    <select
-      class="chat-switch"
-      aria-label="Switch chat"
-      value={currentChatId ?? ""}
-      onchange={onSwitch}
-    >
-      {#if currentChatId == null}
-        <option value="">New chat</option>
-      {/if}
-      {#each chats as c (c.chat_id)}
-        <option value={c.chat_id}>{chatLabel(c)}</option>
-      {/each}
-    </select>
-    <button type="button" class="new-chat" onclick={newChat}>+ New chat</button>
+    <button type="button" class="new-chat" onclick={newSession}>+ New session</button>
   </div>
   <div class="chat-scroll" bind:this={scrollEl}>
     <div class="thread">
@@ -283,21 +257,6 @@
     gap: 8px;
     padding: 8px 12px;
     border-bottom: 1px solid var(--line);
-  }
-  .chat-switch {
-    font-family: var(--body);
-    font-size: 12px;
-    color: var(--text);
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: 5px 9px;
-    max-width: 220px;
-    cursor: pointer;
-  }
-  .chat-switch:focus {
-    outline: none;
-    border-color: var(--accent);
   }
   .new-chat {
     margin-left: auto;

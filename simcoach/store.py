@@ -497,11 +497,11 @@ class LapStore:
     def session_laps(self, session_id: str) -> list[dict]:
         with self._lock:
             rows = self.conn.execute(
-                "SELECT id, lap_time, valid, ts, s1, s2, s3, phase FROM laps "
+                "SELECT id, lap_time, valid, ts, s1, s2, s3, phase, track, car FROM laps "
                 "WHERE session_id = ? ORDER BY ts",
                 (session_id,),
             ).fetchall()
-            keys = ("id", "lap_time", "valid", "ts", "s1", "s2", "s3", "phase")
+            keys = ("id", "lap_time", "valid", "ts", "s1", "s2", "s3", "phase", "track", "car")
             return [dict(zip(keys, r)) for r in rows]
 
     def session_position_arc(self, session_id: str) -> dict | None:

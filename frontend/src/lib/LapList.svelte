@@ -31,6 +31,13 @@
 
   const bestTime = $derived(laps.find((l) => l.id === bestId)?.lap_time ?? null);
 
+  // Track/car for the shown session (session_id encodes one combo, so any lap's
+  // pair labels the whole list — tells the driver which combo "This session" is).
+  const combo = $derived.by(() => {
+    const l = laps.find((x) => x.track || x.car);
+    return l ? { track: l.track, car: l.car } : null;
+  });
+
   // Group consecutive laps by phase (a session spans practice/qualy/race in
   // chronological blocks) and number laps 1..N within each phase.
   type LapGroup = { phase: string | null; laps: LapRow[] };
@@ -215,7 +222,15 @@
 </script>
 
 <div class="rail-head">
-  <h2>This session</h2>
+  <div class="rail-title">
+    <h2>This session</h2>
+    {#if combo}
+      <div class="combo">
+        {#if combo.track}<span class="track">{combo.track}</span>{/if}
+        {#if combo.car}<span class="car">{combo.car}</span>{/if}
+      </div>
+    {/if}
+  </div>
   <span>{laps.length} laps</span>
 </div>
 {#if bestTime !== null}
