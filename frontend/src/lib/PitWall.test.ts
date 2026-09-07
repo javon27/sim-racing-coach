@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, waitFor } from "@testing-library/svelte";
+import { render, waitFor, cleanup } from "@testing-library/svelte";
 
 // Stub the network + WS deps before importing the component.
 vi.mock("./api", () => ({
@@ -18,11 +18,20 @@ beforeEach(() => {
   vi.spyOn(LiveField.prototype, "start").mockImplementation(function (this: LiveField) {});
   vi.spyOn(LiveField.prototype, "stop").mockImplementation(function (this: LiveField) {});
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  cleanup(); // unmount so onDestroy runs before spies are restored
+  vi.restoreAllMocks();
+});
 
 describe("PitWall", () => {
   it("shows the waiting state when not live", async () => {
     const { getByText } = render(PitWall);
     await waitFor(() => expect(getByText(/waiting for lmu/i)).toBeTruthy());
+  });
+
+  it("stops the live field on destroy", async () => {
+    const { unmount } = render(PitWall);
+    unmount();
+    expect(LiveField.prototype.stop).toHaveBeenCalled();
   });
 });
