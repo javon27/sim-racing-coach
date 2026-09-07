@@ -52,6 +52,27 @@
     draggingRail = false;
   }
 
+  // Draggable divider above the track-map pane (mirrors the laps handle). The
+  // handle sits above the map, so dragging DOWN shrinks it.
+  let mapH = $state(200); // px; drives --map-h on the rail
+  let mapStartY = 0;
+  let mapStartH = 0;
+  let draggingMap = $state(false);
+  function mapResizeDown(e: PointerEvent) {
+    draggingMap = true;
+    mapStartY = e.clientY;
+    mapStartH = mapH;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  }
+  function mapResizeMove(e: PointerEvent) {
+    if (!draggingMap) return;
+    const max = typeof window !== "undefined" ? window.innerHeight * 0.7 : 700;
+    mapH = Math.max(60, Math.min(mapStartH - (e.clientY - mapStartY), max));
+  }
+  function mapResizeUp() {
+    draggingMap = false;
+  }
+
   // "New session": clear the selected session, laps, map and chat so the driver
   // starts fresh (back to the live view with an empty chat).
   async function handleNewSession() {
@@ -151,7 +172,7 @@
           {#if railOpen}
             <div class="rail-scrim" role="presentation" onclick={() => (railOpen = false)}></div>
           {/if}
-          <aside class="rail" style="--laps-h: {lapsH}px">
+          <aside class="rail" style="--laps-h: {lapsH}px; --map-h: {mapH}px">
             <RaceStrip sessionId={selectedSessionId} />
             <LapList
               sessionId={activeSessionId}
@@ -172,6 +193,16 @@
               onpointerup={railResizeUp}
             ></div>
             <CornerSetupTabs lapId={selectedLapId ?? null} />
+            <div
+              class="rail-resizer"
+              class:dragging={draggingMap}
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="Resize track map"
+              onpointerdown={mapResizeDown}
+              onpointermove={mapResizeMove}
+              onpointerup={mapResizeUp}
+            ></div>
             <TrackMapPane sessionId={selectedSessionId} />
           </aside>
           <ChatPanel lapId={selectedLapId} sessionId={selectedSessionId} chatId={activeChatId} onnewsession={handleNewSession} />

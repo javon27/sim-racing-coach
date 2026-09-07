@@ -5,29 +5,11 @@
 
   let { sessionId }: { sessionId: string | undefined } = $props();
 
-  const LS_KEY = "trackmap.collapsed";
-  let collapsed = $state(readCollapsed());
   let lapId: number | null = $state(null);
   let trackName: string | null = $state(null);
   let editing = $state(false);
   let editorMode: "view" | "edit" = $state("view"); // 🔍 opens view; "Generate" opens edit
   let mapNonce = $state(0); // bump to force TrackMap to re-fetch after an edit save
-
-  function readCollapsed(): boolean {
-    try {
-      return localStorage.getItem(LS_KEY) === "1";
-    } catch {
-      return false;
-    }
-  }
-  function toggle() {
-    collapsed = !collapsed;
-    try {
-      localStorage.setItem(LS_KEY, collapsed ? "1" : "0");
-    } catch {
-      /* private mode / blocked storage — collapse still works in-session */
-    }
-  }
 
   // The map is canonical per-track: any lap of the selected session resolves it.
   $effect(() => {
@@ -52,18 +34,12 @@
   });
 </script>
 
-<section class="map-pane" class:collapsed>
+<section class="map-pane">
   <header>
-    <button type="button" class="ttl" aria-expanded={!collapsed}
-            aria-label={collapsed ? "Show track map" : "Hide track map"} onclick={toggle}>
-      <span class="caret">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
-      </span>
-      <span class="ttl-text">
-        <h2>Track map</h2>
-        {#if trackName}<span class="tname">{trackName}</span>{/if}
-      </span>
-    </button>
+    <div class="ttl-text">
+      <h2>Track map</h2>
+      {#if trackName}<span class="tname">{trackName}</span>{/if}
+    </div>
     <div class="acts">
       {#if lapId !== null}
         <!-- Magnifier: opens the map enlarged in a read-only VIEW modal (a pencil in
@@ -78,7 +54,7 @@
       {/if}
     </div>
   </header>
-  {#if !collapsed}
+  <div class="map-body">
     {#if lapId !== null}
       {#key mapNonce}
         <TrackMap {lapId} />
@@ -86,7 +62,7 @@
     {:else}
       <p class="empty">No map yet — “Generate map” records the live track and builds one.</p>
     {/if}
-  {/if}
+  </div>
   <TrackMapEditor
     {lapId}
     open={editing}
@@ -98,7 +74,8 @@
 
 <style>
   /* Stacked under the corner/setup pane in the left rail — a full-width block, not a
-     side column. Collapsing hides the map body (accordion), header stays visible. */
+     side column. The map body's height is set by the drag handle above it
+     (--map-h on the rail); drag it small to tuck the map away. */
   .map-pane {
     border-top: 1px solid var(--line);
     background: var(--surface);
@@ -106,32 +83,16 @@
     flex-direction: column;
     min-height: 0;
   }
+  .map-body {
+    height: var(--map-h, 200px);
+    overflow: auto;
+  }
   header {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 6px;
     padding: 10px 12px;
-  }
-  /* Title doubles as the collapse toggle (whole label is the hit target). */
-  .ttl {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    background: none;
-    border: none;
-    padding: 2px;
-    cursor: pointer;
-    color: inherit;
-  }
-  .ttl .caret {
-    display: inline-flex;
-    align-items: center;
-    color: var(--muted);
-    transition: transform 0.15s ease;
-  }
-  .ttl[aria-expanded="true"] .caret {
-    transform: rotate(90deg);
   }
   .ttl-text {
     display: flex;
