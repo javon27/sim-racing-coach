@@ -11,7 +11,7 @@ import {
   rebuildFromCapture,
   saveRibbon,
 } from "./api";
-import TrackMapEditor, { nearestPathIndex, nearestDistIndex, layoutLabels } from "./TrackMapEditor.svelte";
+import TrackMapEditor, { nearestPathIndex, nearestDistIndex, layoutLabels, wrapLabel, localOutward, type LabelItem } from "./TrackMapEditor.svelte";
 
 vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
@@ -63,47 +63,74 @@ describe("nearestDistIndex", () => {
   });
 });
 
+describe("wrapLabel", () => {
+  it("keeps a short name on one line", () => expect(wrapLabel("Rivazza")).toEqual(["Rivazza"]));
+  it("splits a long name into two balanced lines at a word boundary", () =>
+    expect(wrapLabel("Variante della Roggia")).toEqual(["Variante", "della Roggia"]));
+});
+
+describe("localOutward", () => {
+  it("points to the outside of the bend (opposite the curvature)", () => {
+    // right-angle bend at index 1 ([10,0]); inside points up-left, so outside is down-right.
+    const path: [number, number][] = [[0, 0], [10, 0], [10, 10], [0, 10]];
+    const o = localOutward(path, 1, 1);
+    expect(o.ox).toBeCloseTo(Math.SQRT1_2, 5);
+    expect(o.oy).toBeCloseTo(-Math.SQRT1_2, 5);
+    expect(o.curv).toBeGreaterThan(0);
+  });
+  it("reports ~zero curvature on a straight", () => {
+    expect(localOutward([[0, 0], [10, 0], [20, 0]], 1, 1).curv).toBeLessThan(1e-6);
+  });
+});
+
 describe("layoutLabels", () => {
   const bounds: [number, number, number, number] = [-10, -10, 110, 70];
-  const base = { fontSize: 3, gap: 3, cx: 50, cy: 30, bounds };
+  const mk = (anchor: [number, number], text: string, extra: Partial<LabelItem> = {}): LabelItem =>
+    ({ anchor, text, outward: [0, -1], fontSize: 3, gap: 2, wrap: false, priority: 0, ...extra });
+  // half-extents of a placed label's rendered box (same formula the layout uses)
+  const box = (r: { lines: string[]; fontSize: number }) => {
+    const w = Math.max(...r.lines.map((l) => l.length)) * r.fontSize * 0.6, h = r.lines.length * r.fontSize * 1.02;
+    return { hw: w / 2 + r.fontSize * 0.15, hh: h / 2 + r.fontSize * 0.12 };
+  };
 
-  it("keeps every label box fully inside the viewBox bounds", () => {
-    // Markers on the edges would push naive labels off-canvas; clamp must hold them in.
-    const anchors: [number, number][] = [[0, 0], [100, 0], [0, 60], [100, 60], [50, 30]];
-    const out = layoutLabels(anchors, ["T1", "T2", "T3", "T4", "Very Long Section Name"], base);
-    for (const l of out) {
-      // text x is an edge; allow the drawn extent either side of it — just assert it
-      // never lands outside the padded box (the off-canvas bug).
-      expect(l.x).toBeGreaterThanOrEqual(bounds[0] - 0.001);
-      expect(l.x).toBeLessThanOrEqual(bounds[2] + 0.001);
-      expect(l.y).toBeGreaterThanOrEqual(bounds[1] - 0.001);
-      expect(l.y).toBeLessThanOrEqual(bounds[3] + 0.001);
+  it("keeps every label box inside the bounds", () => {
+    const items = [mk([0, 0], "T1"), mk([100, 0], "T2"), mk([0, 60], "T3"), mk([100, 60], "T4"),
+      mk([50, 30], "Long Section Name", { wrap: true, priority: 1 })];
+    const out = layoutLabels(items, { bounds, markers: items.map((i) => i.anchor), line: [] });
+    for (const r of out) {
+      const b = box(r);
+      expect(r.cx - b.hw).toBeGreaterThanOrEqual(bounds[0] - 0.01);
+      expect(r.cx + b.hw).toBeLessThanOrEqual(bounds[2] + 0.01);
+      expect(r.cy - b.hh).toBeGreaterThanOrEqual(bounds[1] - 0.01);
+      expect(r.cy + b.hh).toBeLessThanOrEqual(bounds[3] + 0.01);
     }
   });
 
-  it("separates labels seeded on top of each other (no overlap)", () => {
-    const anchors: [number, number][] = [[50, 30], [50, 30], [50, 30]];
-    const out = layoutLabels(anchors, ["T1", "T2", "T3"], base);
-    // Every pair ends up at least a character-height apart in x or y.
+  it("never covers another dot and never overlaps another label", () => {
+    const items = [mk([48, 30], "T1"), mk([52, 30], "T2"), mk([50, 33], "T3"), mk([50, 27], "T4")];
+    const markers = items.map((i) => i.anchor);
+    const out = layoutLabels(items, { bounds, markers, line: [] });
+    out.forEach((r, i) => {
+      const b = box(r);
+      markers.forEach((m, j) => { if (j !== i) expect(Math.abs(m[0] - r.cx) < b.hw && Math.abs(m[1] - r.cy) < b.hh).toBe(false); });
+    });
     for (let i = 0; i < out.length; i++)
-      for (let j = i + 1; j < out.length; j++)
-        expect(Math.abs(out[i].x - out[j].x) + Math.abs(out[i].y - out[j].y)).toBeGreaterThan(base.fontSize);
+      for (let j = i + 1; j < out.length; j++) {
+        const a = box(out[i]), b = box(out[j]);
+        const ox = Math.min(out[i].cx + a.hw, out[j].cx + b.hw) - Math.max(out[i].cx - a.hw, out[j].cx - b.hw);
+        const oy = Math.min(out[i].cy + a.hh, out[j].cy + b.hh) - Math.max(out[i].cy - a.hh, out[j].cy - b.hh);
+        expect(ox > 1 && oy > 1).toBe(false);
+      }
   });
 
-  it("draws a leader only for labels forced clear of their marker", () => {
-    // One lonely corner (hugs, no leader) + a tight cluster (some get pushed out).
-    const lonely = layoutLabels([[50, 30]], ["T1"], base);
-    expect(lonely[0].leader).toBeNull();
-
-    // A tight complex: four corners crammed into ~4 world units on one edge. Labels
-    // can't all fit by their markers, so some get shoved well clear — leaders then say
-    // which marker each belongs to.
-    const packed = layoutLabels(
-      [[49, 4], [50.2, 4], [51.4, 4], [52.6, 4]],
-      ["T5", "T6", "T7", "T8"],
-      base,
-    );
-    expect(packed.some((l) => l.leader !== null)).toBe(true);
+  it("draws a leader only as a last resort", () => {
+    // Open dot: a clean ring slot exists, so no leader.
+    expect(layoutLabels([mk([50, 30], "T1")], { bounds, markers: [[50, 30]], line: [] })[0].leader).toBeNull();
+    // A label bigger than the frame: no ring slot can fit inside the bounds, so a
+    // leader connects the displaced label back to its dot.
+    const tiny: [number, number, number, number] = [0, 0, 12, 12];
+    const stuck = layoutLabels([mk([6, 6], "Long Name", { fontSize: 8, gap: 4 })], { bounds: tiny, markers: [[6, 6]], line: [] });
+    expect(stuck[0].leader).not.toBeNull();
   });
 });
 
@@ -268,7 +295,8 @@ describe("TrackMapEditor", () => {
 
     // findBy* — the sections list renders reactively after the click.
     await fireEvent.input(await screen.findByLabelText("Section name"), { target: { value: "Back Straight" } });
-    expect(container.querySelector("text.section-lbl")?.textContent).toBe("Back Straight");
+    // Long names wrap onto two <tspan> lines; joining them recovers the full name.
+    expect([...container.querySelectorAll("text.section-lbl tspan")].map((t) => t.textContent).join(" ")).toBe("Back Straight");
 
     await fireEvent.click(screen.getByText("Save"));
     const [, body] = vi.mocked(saveLapMap).mock.calls[0];
