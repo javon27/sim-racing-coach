@@ -1,10 +1,14 @@
 <script lang="ts">
-  // Best-lap trend, one line per car. Each point is its own session keyed by a
-  // unix-seconds `x`, and points are placed by their ACTUAL time (proportional
-  // to `x`), so same-day sessions separate by time-of-day. At base zoom the plot
-  // fills the container width; zooming in grows it wider (horizontal scroll).
-  // X-axis gridlines are drawn at "nice" time intervals (down to 30 min) chosen
-  // from the current time-per-pixel. Zoom: ± buttons + Ctrl/Cmd+wheel.
+  // Best-lap trend, one line per car (color per series). Each point is a session
+  // keyed by a unix-seconds `x`, placed by its ACTUAL time. At base zoom the plot
+  // fills the container; zooming in grows it wider (horizontal scroll).
+  //
+  // - Y-axis is a fixed left column: it never scrolls horizontally, and its scale
+  //   auto-fits the points currently VISIBLE in the scroll viewport.
+  // - Same-day sessions collapse to that day's BEST lap while zoomed out; zooming
+  //   in past DAY_COLLAPSE_PX (a day wide enough to separate sessions) shows the
+  //   individual session times.
+  // - Zoom: toolbar buttons above the plot + Ctrl/Cmd+wheel.
 
   type Point = { x: number; label: string; value: number };
   type Series = { name: string; color?: string; points: Point[] };
@@ -24,6 +28,8 @@
   const MAX_ZOOM = 400;
   const MIN_LABEL_PX = 52;
   const FALLBACK_W = 700; // used before the container reports its width
+  const AXIS_W = 58; // fixed y-axis gutter (px)
+  const DAY_COLLAPSE_PX = 160; // below this per-day width, collapse same-day → daily best
   // Nice tick ladder (seconds): 30m is the finest granularity we ever show.
   const TICK_LADDER = [
     1800, 3600, 3 * 3600, 6 * 3600, 12 * 3600,
@@ -32,6 +38,7 @@
 
   let containerEl: HTMLDivElement | undefined = $state();
   let containerWidth = $state(0);
+  let scrollLeft = $state(0);
 
   // Track the scroll container's width so the base plot fills it. ResizeObserver
   // when available (real browser); a one-shot read otherwise (jsdom/SSR).
@@ -52,6 +59,11 @@
     return `${m}:${s.padStart(6, "0")}`;
   }
 
+  function dayKey(x: number): string {
+    const d = new Date(x * 1000);
+    return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  }
+
   const totalPoints = $derived(series.reduce((n, s) => n + s.points.length, 0));
 
   function setZoom(next: number) {
@@ -69,6 +81,9 @@
     e.preventDefault();
     setZoom(zoom * (e.deltaY < 0 ? 1.25 : 1 / 1.25));
   }
+  function onScroll(e: Event) {
+    scrollLeft = (e.currentTarget as HTMLDivElement).scrollLeft;
+  }
 
   function formatTick(t: number, iv: number, prevDay: string): string {
     const d = new Date(t * 1000);
@@ -79,16 +94,15 @@
     return d.toDateString() === prevDay ? hhmm : `${date} ${hhmm}`;
   }
 
+  const legend = $derived(
+    series.map((s, i) => ({ name: s.name, color: s.color ?? PALETTE[i % PALETTE.length] })),
+  );
+
   const chart = $derived.by(() => {
-    const H = 250, L = 64, R = 18, T = 16, B = 34;
+    const H = 250, LPAD = 10, R = 18, T = 16, B = 34;
     const plotH = H - T - B;
     const plotTop = T;
     const plotBottom = H - B;
-
-    const allY = series.flatMap((s) => s.points.map((p) => p.value));
-    const mn = Math.min(...allY);
-    const mx = Math.max(...allY);
-    const rng = mx - mn || 1;
 
     const allX = series.flatMap((s) => s.points.map((p) => p.x));
     const minX = Math.min(...allX);
@@ -97,29 +111,63 @@
 
     // Base plot width fits the span into the container; zoom scales from there.
     const cw = containerWidth || FALLBACK_W;
-    const basePlotW = Math.max(1, cw - L - R);
+    const basePlotW = Math.max(1, cw - LPAD - R);
     const z = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom));
     const plotW = basePlotW * z;
-    const W = L + plotW + R;
+    const W = LPAD + plotW + R;
     const pxPerSec = span > 0 ? plotW / span : 0;
 
     // Time -> px. All points sharing one timestamp are centered.
-    const x = (t: number) => (span > 0 ? L + (t - minX) * pxPerSec : L + plotW / 2);
+    const x = (t: number) => (span > 0 ? LPAD + (t - minX) * pxPerSec : LPAD + plotW / 2);
+
+    // Collapse same-day sessions to that day's best while a day is too narrow to
+    // separate its sessions; zoom in past the threshold to see them individually.
+    const collapse = pxPerSec * 86400 < DAY_COLLAPSE_PX;
+    const prepared = series.map((s, i) => {
+      const color = s.color ?? PALETTE[i % PALETTE.length];
+      let pts = s.points;
+      if (collapse) {
+        const byDay = new Map<string, Point>();
+        for (const p of s.points) {
+          const cur = byDay.get(dayKey(p.x));
+          if (!cur || p.value < cur.value) byDay.set(dayKey(p.x), p);
+        }
+        pts = [...byDay.values()];
+      }
+      pts = [...pts].sort((a, b) => a.x - b.x);
+      const px = pts.map((p) => ({ px: x(p.x), value: p.value }));
+      return { name: s.name, color, pts, px };
+    });
+
+    // Y scale fits the points inside the visible viewport (fallback: all points).
+    const vLeft = scrollLeft;
+    const vRight = scrollLeft + (containerWidth || W);
+    const visibleY: number[] = [];
+    const allY: number[] = [];
+    for (const s of prepared) {
+      for (const p of s.px) {
+        allY.push(p.value);
+        if (p.px >= vLeft - 1 && p.px <= vRight + 1) visibleY.push(p.value);
+      }
+    }
+    const domainY = visibleY.length ? visibleY : allY;
+    let mn = Math.min(...domainY);
+    let mx = Math.max(...domainY);
+    const pad = (mx - mn) * 0.08 || Math.max(0.5, mx * 0.001);
+    mn -= pad;
+    mx += pad;
+    const rng = mx - mn || 1;
     const y = (v: number) => T + (1 - (v - mn) / rng) * plotH;
 
     const gridLines = Array.from({ length: 4 }, (_, gi) => {
       const yy = T + (gi / 3) * plotH;
-      const val = mx - (gi / 3) * rng;
-      return { y: yy, label: formatLap(val) };
+      return { y: yy, label: formatLap(mx - (gi / 3) * rng) };
     });
 
-    const lines = series.map((s, i) => {
-      const color = s.color ?? PALETTE[i % PALETTE.length];
-      const pts = [...s.points]
-        .sort((a, b) => a.x - b.x)
-        .map((p) => [x(p.x), y(p.value)] as const);
-      const path = pts.map((p, i2) => `${i2 ? "L" : "M"}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(" ");
-      return { name: s.name, color, path, dots: pts };
+    const lines = prepared.map((s) => {
+      const dots = s.pts.map((p) => [x(p.x), y(p.value)] as const);
+      const path = dots.map((p, i2) => `${i2 ? "L" : "M"}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(" ");
+      return { name: s.name, color: s.color, path, dots };
     });
 
     // Adaptive x-axis ticks: smallest ladder interval whose pixel spacing ≥ ~52px.
@@ -142,7 +190,7 @@
       ticks.push({ x: x(minX), label: new Date(minX * 1000).toLocaleDateString(undefined, { month: "numeric", day: "numeric" }) });
     }
 
-    return { W, H, L, R, plotTop, plotBottom, gridLines, lines, ticks };
+    return { W, H, R, plotTop, plotBottom, gridLines, lines, ticks };
   });
 </script>
 
@@ -150,30 +198,50 @@
   <div class="chart-empty">{placeholder}</div>
 {:else}
   <div class="chart-wrap">
-    <div class="zoom" role="group" aria-label="Zoom">
-      <button type="button" onclick={zoomOut} aria-label="Zoom out" disabled={zoom <= MIN_ZOOM}>−</button>
-      <button type="button" onclick={zoomIn} aria-label="Zoom in" disabled={zoom >= MAX_ZOOM}>+</button>
+    <div class="toolbar">
+      <div class="zoom" role="group" aria-label="Zoom">
+        <button type="button" onclick={zoomOut} aria-label="Zoom out" disabled={zoom <= MIN_ZOOM}>−</button>
+        <button type="button" onclick={zoomIn} aria-label="Zoom in" disabled={zoom >= MAX_ZOOM}>+</button>
+      </div>
     </div>
-    <div class="chart-scroll" bind:this={containerEl} onwheel={onWheel}>
-      <svg viewBox="0 0 {chart.W} {chart.H}" width={chart.W} height={chart.H} role="img" aria-label="Best lap trend">
-        {#each chart.gridLines as gl}
-          <line x1={chart.L} y1={gl.y} x2={chart.W - chart.R} y2={gl.y} class="grid" />
-          <text x={chart.L - 8} y={gl.y + 3} text-anchor="end" class="ylabel">{gl.label}</text>
-        {/each}
-        {#each chart.ticks as tk}
-          <line x1={tk.x} y1={chart.plotTop} x2={tk.x} y2={chart.plotBottom} class="grid xgrid" />
-        {/each}
-        {#each chart.lines as line (line.name)}
-          <path d={line.path} fill="none" stroke={line.color} stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" />
-          {#each line.dots as d}
-            <circle cx={d[0].toFixed(1)} cy={d[1].toFixed(1)} r="3.5" fill={line.color} class="dot" />
+
+    <div class="plot-row">
+      <div class="chart-scroll" bind:this={containerEl} onwheel={onWheel} onscroll={onScroll}>
+        <svg viewBox="0 0 {chart.W} {chart.H}" width={chart.W} height={chart.H} role="img" aria-label="Best lap trend">
+          {#each chart.gridLines as gl}
+            <line x1="0" y1={gl.y} x2={chart.W} y2={gl.y} class="grid" />
           {/each}
-        {/each}
-        {#each chart.ticks as tk}
-          <text x={tk.x} y={chart.H - 12} text-anchor="middle" class="xlabel">{tk.label}</text>
-        {/each}
-      </svg>
+          {#each chart.ticks as tk}
+            <line x1={tk.x} y1={chart.plotTop} x2={tk.x} y2={chart.plotBottom} class="grid xgrid" />
+          {/each}
+          {#each chart.lines as line (line.name)}
+            <path d={line.path} fill="none" stroke={line.color} stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" />
+            {#each line.dots as d}
+              <circle cx={d[0].toFixed(1)} cy={d[1].toFixed(1)} r="3.5" fill={line.color} class="dot" />
+            {/each}
+          {/each}
+          {#each chart.ticks as tk}
+            <text x={tk.x} y={chart.H - 12} text-anchor="middle" class="xlabel">{tk.label}</text>
+          {/each}
+        </svg>
+      </div>
+
+      <div class="yaxis" aria-hidden="true">
+        <svg viewBox="0 0 {AXIS_W} {chart.H}" width={AXIS_W} height={chart.H}>
+          {#each chart.gridLines as gl}
+            <text x={AXIS_W - 8} y={gl.y + 3} text-anchor="end" class="ylabel">{gl.label}</text>
+          {/each}
+        </svg>
+      </div>
     </div>
+
+    {#if legend.length > 1}
+      <ul class="legend">
+        {#each legend as item (item.name)}
+          <li><span class="swatch" style="background:{item.color}"></span>{item.name}</li>
+        {/each}
+      </ul>
+    {/if}
   </div>
 {/if}
 
@@ -189,18 +257,30 @@
     border: 1px dashed var(--line);
     border-radius: 10px;
   }
-  .chart-wrap {
-    position: relative;
+  .toolbar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 6px;
   }
+  .plot-row {
+    display: flex;
+    align-items: stretch;
+  }
+  /* Plot is DOM-first (tests query the first <svg>); `order` renders it right of
+     the fixed y-axis column so the axis never scrolls with the plot. */
   .chart-scroll {
+    order: 1;
+    flex: 1 1 auto;
+    min-width: 0;
     overflow-x: auto;
     overflow-y: hidden;
   }
+  .yaxis {
+    order: 0;
+    flex: 0 0 auto;
+    width: 58px;
+  }
   .zoom {
-    position: absolute;
-    top: 4px;
-    right: 6px;
-    z-index: 1;
     display: flex;
     gap: 4px;
   }
@@ -235,5 +315,26 @@
   .dot {
     stroke: var(--surface);
     stroke-width: 1.5;
+  }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    margin: 10px 0 0;
+    padding: 0 0 0 58px;
+    list-style: none;
+  }
+  .legend li {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    flex: 0 0 auto;
   }
 </style>
