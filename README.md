@@ -80,21 +80,19 @@ wiki / a circuit diagram / your own knowledge — the geometry works without the
 Live track names are matched to map files by `simcoach/track_lookup.py` (handles
 suffixes, accents, and aliases like "Circuit de la Sarthe" → `lemans`).
 
-## Configuring your car
+## Car names
 
-LMU exposes the car *class* and the *team entry* name, not the specific model, so
-model matching is a small table you maintain in `simcoach/car_lookup.py`:
+LMU's live shared memory exposes the car *class* and the *team entry* name (e.g.
+`Team WRT 2026 #32:WEC`), not the specific model. LMU's own result logs, however,
+name both together for every entry — `simcoach/car_lookup.py` scrapes
+`UserData/Log/Results/*.xml` into a `{team entry → car model}` table, so the app
+shows `BMW M4 LMGT3` instead of the ambiguous team string. No table to maintain:
+any entry you've driven or raced against is already in your result logs. Unknown
+entries fall back to `<class> car`, then the raw entry name.
 
-```python
-CAR_ALIASES = {
-    "iron dames": "Porsche 911 GT3 R",
-    "by tf": "Chevrolet Corvette Z06 GT3.R",
-}
-```
-
-Add a line when you race a new entry. Unknown entries fall back to `<class> car`
-(the coach still runs, just without a model-specific note). The resolved model
-name loads its knowledge note from `simcoach/knowledge/<slug>.md`.
+The resolved model name loads its knowledge note from
+`simcoach/knowledge/<slug>.md` (slugged from the model, e.g.
+`porsche_911_gt3_r_lmgt3.md`).
 
 ## Dev setup
 

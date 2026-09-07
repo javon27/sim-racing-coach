@@ -123,6 +123,31 @@ def test_session_lap_ids(tmp_path, synthetic_lap):
     assert s.session_lap_ids("s1") == [id_a, id_b]
 
 
+def test_facets_group_by_class_and_class_filter(tmp_path, synthetic_lap, monkeypatch):
+    from simcoach import store as store_mod
+    from simcoach.store import LapStore
+    # team entry name -> (model, class), stand-in for the result-log scrape
+    table = {"WRT #32": ("BMW M4 LMGT3", "GT3"),
+             "Ferrari 499 #50": ("Ferrari 499P", "Hyper")}
+    monkeypatch.setattr(store_mod, "resolve_car", lambda c: table.get(c, (c, None))[0])
+    monkeypatch.setattr(store_mod, "resolve_car_class", lambda c: table.get(c, (c, None))[1])
+    s = LapStore(str(tmp_path/"c.sqlite"), str(tmp_path/"data"))
+    s.save(LapRecord(**{**synthetic_lap.__dict__, "car": "WRT #32", "session_id": "gt3s"}))
+    s.save(LapRecord(**{**synthetic_lap.__dict__, "car": "Ferrari 499 #50", "session_id": "hys"}))
+
+    groups = s.session_facets()["car_groups"]
+    # class-ordered (Hyper before GT3), models nested under each class
+    assert [g["car_class"] for g in groups] == ["Hyper", "GT3"]
+    assert groups[0]["cars"] == ["Ferrari 499P"] and groups[1]["cars"] == ["BMW M4 LMGT3"]
+
+    # selecting a class filters to only that class's sessions
+    page = s.race_sessions_page(car_class="Hyper")
+    assert [r["session_id"] for r in page["rows"]] == ["hys"]
+    assert page["rows"][0]["car_model"] == "Ferrari 499P"
+    # and a model filter still narrows to that one model
+    assert [r["session_id"] for r in s.race_sessions_page(car="BMW M4 LMGT3")["rows"]] == ["gt3s"]
+
+
 def test_best_lap_phase_filter(tmp_path, synthetic_lap):
     from simcoach.store import LapStore
     s = LapStore(str(tmp_path/"c.sqlite"), str(tmp_path/"data"))

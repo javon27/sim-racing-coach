@@ -24,6 +24,7 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from .. import config, logging_setup, paths, secrets
 from ..analysis import analyze_lap
+from ..car_lookup import resolve_car
 from ..coach_tools import CoachContext
 from ..lmu.ingest import ingest_all
 from ..model.factory import CoachUserError, make_model
@@ -463,6 +464,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         activity = live["state"] if live else None
         return {
             "track": track, "car": car,
+            "car_model": resolve_car(car) if car else None,
             "on_track": activity == "track",
             "activity": activity,
             "has_map": _has_canonical(track, car),
@@ -473,13 +475,15 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
 
     @app.get("/sessions")
     def sessions(track: str | None = None, car: str | None = None,
-                 offset: int = 0, limit: int = 30):
-        page = store.race_sessions_page(track or None, car or None, max(0, offset), max(1, min(limit, 200)))
+                 car_class: str | None = None, offset: int = 0, limit: int = 30):
+        page = store.race_sessions_page(track or None, car or None, max(0, offset),
+                                        max(1, min(limit, 200)), car_class=car_class or None)
         return {**page, **store.session_facets()}
 
     @app.get("/sessions/summary")
-    def sessions_summary(track: str | None = None, car: str | None = None):
-        return store.session_summary(track or None, car or None)
+    def sessions_summary(track: str | None = None, car: str | None = None,
+                         car_class: str | None = None):
+        return store.session_summary(track or None, car or None, car_class or None)
 
     @app.get("/sessions/{sid}/laps")
     def session_laps(sid: str):
@@ -965,13 +969,13 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                     cmap, car = _map_for(track), vehicle
             if track is None and app.state.latest is not None:
                 lr = app.state.latest["record"]
-                track, car = lr.track, lr.car
+                track, car = lr.track, resolve_car(lr.car)
                 eff_session_id = eff_session_id or lr.session_id
                 cmap, on_track = _map_for(track), False
             if track is None and lap_id is not None:
                 try:
                     sr = app.state.store.load(lap_id)
-                    track, car = sr.track, sr.car
+                    track, car = sr.track, resolve_car(sr.car)
                     eff_session_id = eff_session_id or sr.session_id
                     cmap, on_track = _map_for(track), False
                 except Exception:

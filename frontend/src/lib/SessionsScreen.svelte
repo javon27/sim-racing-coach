@@ -10,6 +10,7 @@
     withRetry,
     type SessionRow,
     type SessionsSummary,
+    type CarGroup,
   } from "./api";
   import TrendChart from "./TrendChart.svelte";
 
@@ -35,17 +36,23 @@
   let rows: SessionRow[] = $state([]);
   let total = $state(0);
   let tracks: string[] = $state([]);
-  let cars: string[] = $state([]);
+  let carGroups: CarGroup[] = $state([]);
   let summary: SessionsSummary | null = $state(null);
   let loaded = $state(false);
   let selectedTrack = $state(ALL);
+  // ALL, a car model, or "class:<CLASS>" (a whole class selected from the dropdown).
   let selectedCar = $state(ALL);
+  const CLASS_PREFIX = "class:";
+
   let page = $state(1);
 
-  const filterArgs = () => ({
-    track: selectedTrack === ALL ? undefined : selectedTrack,
-    car: selectedCar === ALL ? undefined : selectedCar,
-  });
+  const filterArgs = () => {
+    const track = selectedTrack === ALL ? undefined : selectedTrack;
+    if (selectedCar === ALL) return { track };
+    if (selectedCar.startsWith(CLASS_PREFIX))
+      return { track, car_class: selectedCar.slice(CLASS_PREFIX.length) };
+    return { track, car: selectedCar };
+  };
 
   function onFilterChange() {
     page = 1; // reset paging before the fetch effects react to the new filter
@@ -65,7 +72,7 @@
         rows = res.rows;
         total = res.total;
         tracks = res.tracks;
-        cars = res.cars;
+        carGroups = res.car_groups ?? [];
       } catch {
         if (token !== pageToken) return;
         rows = [];
@@ -132,8 +139,13 @@
       </select>
       <select aria-label="Car" bind:value={selectedCar} onchange={onFilterChange}>
         <option value={ALL}>All cars</option>
-        {#each cars as c}
-          <option value={c}>{c}</option>
+        {#each carGroups as g}
+          <optgroup label={g.car_class}>
+            <option value={CLASS_PREFIX + g.car_class}>All {g.car_class}</option>
+            {#each g.cars as c}
+              <option value={c}>{c}</option>
+            {/each}
+          </optgroup>
         {/each}
       </select>
     </div>
@@ -180,7 +192,7 @@
           {#each rows as s (s.session_id)}
             <div class="srow" role="button" tabindex="0" onclick={() => selectSession(s.session_id)} onkeydown={(e) => e.key === "Enter" && selectSession(s.session_id)}>
               <div class="d">{formatDate(s.started)}</div>
-              <div class="tk">{s.track}<div class="ln"><small>{s.car}</small></div></div>
+              <div class="tk">{s.track}<div class="ln"><small>{s.car_model ?? s.car}</small></div></div>
               <div class="lp">{s.laps} laps</div>
               <div class="bt">{formatBest(s.best)}</div>
             </div>
