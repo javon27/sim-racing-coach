@@ -22,6 +22,13 @@ class CornerMetrics:
     peak_brake: float = 0.0          # max brake input in the corner (0..1)
     peak_lat_g: float = 0.0          # max |lateral g| — how hard the car was loaded
     min_grip: float = float("nan")   # lowest grip fraction any tire saw (near 0 = sliding)
+    # Extended inputs/loads — nan when the source channel is absent (older laps).
+    peak_brake_g: float = float("nan")   # max deceleration g while braking
+    peak_accel_g: float = float("nan")   # max acceleration g while on throttle
+    peak_steer: float = float("nan")     # max |steering| (0..1 of full lock)
+    abs_pct: float = float("nan")        # fraction of corner with ABS engaged (braking too hard)
+    tc_pct: float = float("nan")         # fraction of corner with TC engaged (too much throttle)
+    track_edge_min: float = float("nan") # closest approach to the track edge (m); low = using all the track
     min_spd_delta: Optional[float] = None
     label: str = ""                          # displayed designation ("8A")
     apexes: Optional[list[float]] = None     # apex lap_distances (>1 = multi-apex)
@@ -162,6 +169,28 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
                if f"grip_{w}" in record.channels]
     min_grip = float(np.nanmin(np.vstack(grip_ch))) if grip_ch else float("nan")
 
+    # Longitudinal g split by pedal (sign-convention agnostic: magnitude while the
+    # brake / throttle is actually applied). nan when long_g wasn't captured.
+    long_g = record.channels.get("long_g")
+    peak_brake_g = peak_accel_g = float("nan")
+    if long_g is not None:
+        lgw = np.abs(long_g[idx])
+        bmask = win_brake > 0.1
+        amask = win_throttle > 0.5
+        peak_brake_g = float(np.nanmax(lgw[bmask])) if bmask.any() else float("nan")
+        peak_accel_g = float(np.nanmax(lgw[amask])) if amask.any() else float("nan")
+    peak_steer = float(np.nanmax(np.abs(win_steering))) if win_steering.size else float("nan")
+
+    def _pct(name: str) -> float:
+        ch = record.channels.get(name)
+        return float(np.nanmean((ch[idx] > 0.5).astype(float))) if ch is not None else float("nan")
+    abs_pct, tc_pct = _pct("abs_active"), _pct("tc_active")
+
+    # Track-width usage: closest the car got to the track edge (m). New capture, so
+    # nan for laps recorded before it. (Edge units PENDING LIVE VALIDATION — see smm.)
+    edge = record.channels.get("track_edge")
+    track_edge_min = float(np.nanmin(np.abs(edge[idx]))) if edge is not None else float("nan")
+
     try:
         direction = compute_direction(record, corner.start_dist, corner.end_dist)
     except ValueError:
@@ -199,6 +228,12 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
         peak_brake=peak_brake,
         peak_lat_g=peak_lat_g,
         min_grip=min_grip,
+        peak_brake_g=peak_brake_g,
+        peak_accel_g=peak_accel_g,
+        peak_steer=peak_steer,
+        abs_pct=abs_pct,
+        tc_pct=tc_pct,
+        track_edge_min=track_edge_min,
         label=label, apexes=aps, apex_min_speeds=apex_min_speeds,
     )
 

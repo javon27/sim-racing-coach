@@ -51,6 +51,22 @@ def format_corner_line(cm, units: str = "metric") -> str:
     )
     if not math.isnan(cm.min_grip):
         line += f", min grip {cm.min_grip:.2f}"   # 1.0 = full grip; low = sliding/locking
+    # Extended inputs/loads (guarded — older laps lack these channels).
+    if not math.isnan(getattr(cm, "peak_brake_g", float("nan"))):
+        line += f", brake {cm.peak_brake_g:.1f}g"
+    if not math.isnan(getattr(cm, "peak_accel_g", float("nan"))):
+        line += f", accel {cm.peak_accel_g:.1f}g"
+    if not math.isnan(getattr(cm, "peak_steer", float("nan"))):
+        line += f", steer {cm.peak_steer:.0%}"
+    aids = []
+    if not math.isnan(getattr(cm, "abs_pct", float("nan"))) and cm.abs_pct > 0:
+        aids.append(f"ABS {cm.abs_pct:.0%}")
+    if not math.isnan(getattr(cm, "tc_pct", float("nan"))) and cm.tc_pct > 0:
+        aids.append(f"TC {cm.tc_pct:.0%}")
+    if aids:
+        line += ", " + " ".join(aids)
+    if not math.isnan(getattr(cm, "track_edge_min", float("nan"))):
+        line += f", {cm.track_edge_min:.1f}m from edge"
     # Double-apex: name it and give the per-apex minima so the coach advises on both.
     aps = cm.apexes or []
     if len(aps) > 1 and cm.apex_min_speeds:

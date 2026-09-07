@@ -58,6 +58,12 @@ export interface CornerMetrics {
   peak_brake: number;
   peak_lat_g: number;
   min_grip: number | null;
+  peak_brake_g: number | null;
+  peak_accel_g: number | null;
+  peak_steer: number | null;
+  abs_pct: number | null;
+  tc_pct: number | null;
+  track_edge_min: number | null;
   min_spd_delta: number | null;
 }
 

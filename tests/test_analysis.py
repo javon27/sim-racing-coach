@@ -46,6 +46,51 @@ def test_wheel_report_and_min_grip(synthetic_lap):
     assert "min grip" in user
 
 
+def test_extended_corner_inputs(synthetic_lap):
+    # Longitudinal-g (split by pedal), steering, ABS/TC, and track-width usage
+    # reach the per-corner metrics and the coach's corner line.
+    import numpy as np
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap
+    from simcoach.model_types import LapRecord
+    from simcoach.format import format_corner_line
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    ch = dict(synthetic_lap.channels)
+    brake, throttle = ch["brake"], ch["throttle"]
+    dist = ch["lap_distance"]
+    left = (dist > 800) & (dist < 1200)   # the first corner (braking, close to edge)
+    ch["long_g"] = np.where(brake > 0, -1.4, 0.3)     # 1.4g decel under braking
+    ch["abs_active"] = (brake > 0).astype(float)      # ABS on under braking
+    ch["tc_active"] = np.zeros_like(brake)
+    ch["track_edge"] = np.where(left, 0.3, 5.0)       # ran to ~0.3m of the edge in T1
+    lap = LapRecord(**{**synthetic_lap.__dict__, "channels": ch})
+
+    c1 = analyze_lap(lap, cmap).corners[0]
+    assert abs(c1.peak_brake_g - 1.4) < 1e-6
+    assert np.isnan(c1.peak_accel_g)          # no throttle-on phase inside the corner
+    assert abs(c1.peak_steer - 0.5) < 1e-6
+    assert c1.abs_pct > 0.9
+    assert abs(c1.track_edge_min - 0.3) < 1e-6
+
+    line = format_corner_line(c1, "metric")
+    assert "brake 1.4g" in line and "ABS" in line and "from edge" in line
+    assert "accel" not in line               # nan accel is omitted
+
+
+def test_extended_inputs_absent_without_channels(synthetic_lap):
+    # A lap without long_g/abs/tc/track_edge leaves the new metrics nan (not 0),
+    # so the coach line simply omits them.
+    import math
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap
+    from simcoach.format import format_corner_line
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    c1 = analyze_lap(synthetic_lap, cmap).corners[0]
+    assert math.isnan(c1.peak_brake_g) and math.isnan(c1.abs_pct) and math.isnan(c1.track_edge_min)
+    line = format_corner_line(c1, "metric")
+    assert "from edge" not in line and "ABS" not in line
+
+
 def test_tire_summary_absent_without_channels(synthetic_lap):
     import numpy as np
     from simcoach.analysis import analyze_lap

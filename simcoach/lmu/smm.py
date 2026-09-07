@@ -569,6 +569,12 @@ class LmuSource:
                 sector_seq = []
 
             sample = sample_from_telem(vt, dist)
+            # Track-width usage lives on SCORING, not telemetry: lateral offset from
+            # the racing line and distance to the nearest track edge (m). Low
+            # |track_edge| = running to the edge / using all the track.
+            # PENDING LIVE VALIDATION: mPathLateral/mTrackEdge units + sign.
+            sample["path_lateral"] = player.mPathLateral
+            sample["track_edge"] = player.mTrackEdge
             for k, v in sample.items():
                 channels.setdefault(k, []).append(v)
             prev_dist = dist
