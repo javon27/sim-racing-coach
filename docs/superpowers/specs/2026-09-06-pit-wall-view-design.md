@@ -157,9 +157,12 @@ persisted in `localStorage`:
 - **Race position** (default): full field ordered by `place`; gap column =
   `gap_leader` (class-relative variant available); class chip per row; your
   row highlighted; optional per-car sector mini-bars.
-- **Car deltas**: anchored on *you*; shows the cars immediately ahead and
-  behind with ± gap chained from `gap_next` around your position — the
-  on-track battle view.
+- **Car deltas**: anchored on *you*; shows a window of the cars immediately
+  ahead and behind, each row's gap being its interval to the car directly
+  ahead of it (`gap_next`, `+X.X`) — the conventional timing-tower readout of
+  the pack around you. (A player-relative signed variant — each nearby car's
+  gap chained/signed relative to *your* car — is a possible future option;
+  v1 ships per-row intervals.)
 
 **`SectorDeltas.svelte` (new)** — current lap's S1/S2/S3 vs your session-best
 sectors, colored good/bad, each cell filled when that sector closes (player
@@ -179,7 +182,8 @@ fetch:
 
 - **Race position:** sort `cars` by `place`; gap text from `gap_leader`.
 - **Car deltas:** find the player's index in the `place`-sorted list; take a
-  window around it; gap text from `gap_next` (signed relative to the player).
+  window around it; gap text = each row's own `gap_next` (its interval to the
+  car directly ahead).
 
 This keeps the client stateless between snapshots and makes the toggle a pure
 render choice.
