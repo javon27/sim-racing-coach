@@ -411,7 +411,7 @@ body {
   transition: max-height 0.18s ease;
 }
 .lapwrap.open .lapdetail {
-  max-height: 72px;
+  max-height: 96px;
 }
 .secgrid {
   display: flex;
@@ -434,10 +434,19 @@ body {
   display: block;
   margin-bottom: 2px;
 }
-.seccell .sv {
+.seccell .st {
   font-family: var(--mono);
   font-size: 12px;
   font-weight: 600;
+  color: var(--text);
+  display: block;
+}
+.seccell .sv {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  display: block;
+  margin-top: 1px;
 }
 .seccell .sv.up {
   color: var(--bad);

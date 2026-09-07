@@ -192,12 +192,13 @@
 
   // Per-sector delta vs the reference lap. cls drives color: pb (matches ref) /
   // up (slower, red) / down (faster than the reference lap, green).
-  type SecInfo = { label: string; cls: string; delta: string };
+  type SecInfo = { label: string; cls: string; delta: string; time: string };
   function sectorCell(label: string, v: number | null, b: number | null): SecInfo {
-    if (v == null || b == null) return { label, cls: "", delta: "—" };
-    if (v === b) return { label, cls: "pb", delta: "best" };
+    const time = v == null ? "—" : v.toFixed(3);
+    if (v == null || b == null) return { label, cls: "", delta: "—", time };
+    if (v === b) return { label, cls: "pb", delta: "best", time };
     const d = v - b;
-    return { label, cls: d > 0 ? "up" : "down", delta: (d < 0 ? "−" : "+") + Math.abs(d).toFixed(2) };
+    return { label, cls: d > 0 ? "up" : "down", delta: (d < 0 ? "−" : "+") + Math.abs(d).toFixed(2), time };
   }
   function sectorInfo(lap: LapRow): SecInfo[] {
     return [
@@ -314,6 +315,7 @@
                 {#each sectors as s}
                   <div class="seccell">
                     <span class="sl">{s.label}</span>
+                    <span class="st">{s.time}</span>
                     <span class="sv {s.cls}">{s.delta}</span>
                   </div>
                 {/each}

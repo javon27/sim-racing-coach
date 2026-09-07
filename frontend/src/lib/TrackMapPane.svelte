@@ -8,6 +8,7 @@
   const LS_KEY = "trackmap.collapsed";
   let collapsed = $state(readCollapsed());
   let lapId: number | null = $state(null);
+  let trackName: string | null = $state(null);
   let editing = $state(false);
   let editorMode: "view" | "edit" = $state("view"); // 🔍 opens view; "Generate" opens edit
   let mapNonce = $state(0); // bump to force TrackMap to re-fetch after an edit save
@@ -33,15 +34,20 @@
     const sid = sessionId;
     if (!sid) {
       lapId = null;
+      trackName = null;
       return;
     }
     withRetry(() => getSessionLaps(sid))
       .then((laps) => {
         if (sid !== sessionId) return;
         lapId = laps[0]?.id ?? null;
+        trackName = laps[0]?.track ?? null;
       })
       .catch(() => {
-        if (sid === sessionId) lapId = null;
+        if (sid === sessionId) {
+          lapId = null;
+          trackName = null;
+        }
       });
   });
 </script>
@@ -50,8 +56,13 @@
   <header>
     <button type="button" class="ttl" aria-expanded={!collapsed}
             aria-label={collapsed ? "Show track map" : "Hide track map"} onclick={toggle}>
-      <span class="caret">{collapsed ? "▸" : "▾"}</span>
-      <h2>Track map</h2>
+      <span class="caret">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+      </span>
+      <span class="ttl-text">
+        <h2>Track map</h2>
+        {#if trackName}<span class="tname">{trackName}</span>{/if}
+      </span>
     </button>
     <div class="acts">
       {#if lapId !== null}
@@ -114,9 +125,20 @@
     color: inherit;
   }
   .ttl .caret {
-    color: var(--faint);
-    font-size: 11px;
-    width: 12px;
+    display: inline-flex;
+    align-items: center;
+    color: var(--muted);
+    transition: transform 0.15s ease;
+  }
+  .ttl[aria-expanded="true"] .caret {
+    transform: rotate(90deg);
+  }
+  .ttl-text {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    min-width: 0;
   }
   header h2 {
     margin: 0;
@@ -125,6 +147,18 @@
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.12em;
+  }
+  .tname {
+    font-family: var(--body);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    text-transform: none;
+    letter-spacing: 0;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .acts {
     display: flex;
