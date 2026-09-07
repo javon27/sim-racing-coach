@@ -12,32 +12,41 @@ def _tc(tmp_path):
 
 
 def test_status_offline_shape(tmp_path, monkeypatch):
-    # Force the offline case: on a dev box with LMU actually running, /status reads
-    # live SMM and would report the real session (has_map True for a mapped track).
+    # Force the offline case (no live SMM): on a dev box with LMU running, /status
+    # reads live state and would report the real session.
     from simcoach.lmu import smm
-    monkeypatch.setattr(smm, "read_session_track_car", lambda: None)
+    monkeypatch.setattr(smm, "read_live_status", lambda: None)
     r = _tc(tmp_path).get("/status")
     assert r.status_code == 200
     b = r.json()
-    assert set(b) == {"track", "car", "on_track", "has_map", "lmu_connected", "session_id", "lap_id"}
-    assert b["has_map"] is False and b["lmu_connected"] is False and b["on_track"] is False
+    assert set(b) == {"track", "car", "on_track", "activity", "has_map",
+                      "lmu_connected", "session_id", "lap_id"}
+    assert b["has_map"] is False and b["lmu_connected"] is False
+    assert b["on_track"] is False and b["activity"] is None
     assert b["session_id"] is None and b["lap_id"] is None
 
 
-def test_status_on_track_from_latest(tmp_path, synthetic_lap, monkeypatch):
-    # No live SMM (deterministic regardless of whether LMU is running): /status
-    # falls back to the latest captured lap for context.
+def test_status_on_track_live_with_latest_context(tmp_path, synthetic_lap, monkeypatch):
+    # Live state says on-track; a matching captured lap adds session/lap context.
     from simcoach.lmu import smm
-    monkeypatch.setattr(smm, "read_session_track_car", lambda: None)
+    monkeypatch.setattr(smm, "read_live_status",
+                        lambda: {"track": synthetic_lap.track, "car": synthetic_lap.car, "state": "track"})
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     app = create_app(store, Coach(FakeModel(), "simcoach/knowledge"))
     app.state.latest = {"record": synthetic_lap, "lap_id": 1}
 
-    r = TestClient(app, base_url="http://127.0.0.1").get("/status")
-    assert r.status_code == 200
-    b = r.json()
-    assert b["on_track"] is True
-    assert b["track"] == synthetic_lap.track
-    assert b["car"] == synthetic_lap.car
-    assert b["session_id"] == synthetic_lap.session_id
-    assert b["lap_id"] == 1
+    b = TestClient(app, base_url="http://127.0.0.1").get("/status").json()
+    assert b["on_track"] is True and b["activity"] == "track"
+    assert b["track"] == synthetic_lap.track and b["car"] == synthetic_lap.car
+    assert b["session_id"] == synthetic_lap.session_id and b["lap_id"] == 1
+
+
+def test_status_reports_garage_before_any_lap(tmp_path, monkeypatch):
+    # The fix: garage/on-track is reported live, with NO captured lap at all.
+    from simcoach.lmu import smm
+    monkeypatch.setattr(smm, "read_live_status",
+                        lambda: {"track": "Spa", "car": "GT3", "state": "garage"})
+    b = _tc(tmp_path).get("/status").json()
+    assert b["activity"] == "garage" and b["on_track"] is False
+    assert b["track"] == "Spa" and b["car"] == "GT3"
+    assert b["session_id"] is None and b["lap_id"] is None

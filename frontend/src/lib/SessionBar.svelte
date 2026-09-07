@@ -6,7 +6,7 @@
   let {
     retryTries = 8,
     retryDelayMs = 750,
-    pollMs = 3000,
+    pollMs = 2000,
   }: { retryTries?: number; retryDelayMs?: number; pollMs?: number } = $props();
 
   let status: StatusResponse | null = $state(null);
@@ -51,14 +51,22 @@
     if (pollTimer !== undefined) clearInterval(pollTimer);
   });
 
-  // Game connection state for the header indicator.
-  const gameStatus = $derived(
-    status?.on_track
-      ? { label: "On track", cls: "on" }
-      : status?.lmu_connected
-        ? { label: "Connected", cls: "idle" }
-        : { label: "LMU offline", cls: "off" },
-  );
+  // Game connection state for the header indicator. Prefer the live driving
+  // state (track/pits/garage) so it flips the moment the car's state changes,
+  // then fall back to connection state.
+  const gameStatus = $derived.by(() => {
+    switch (status?.activity) {
+      case "track":
+        return { label: "On track", cls: "on" };
+      case "pits":
+        return { label: "Pit lane", cls: "warn" };
+      case "garage":
+        return { label: "Garage", cls: "warn" };
+    }
+    return status?.lmu_connected
+      ? { label: "In menus", cls: "idle" }
+      : { label: "LMU offline", cls: "off" };
+  });
 </script>
 
 <header class="bar">
@@ -111,6 +119,9 @@
   }
   .game-status.idle {
     color: var(--muted, #888);
+  }
+  .game-status.warn {
+    color: var(--warn, #b45c09);
   }
   .game-status.off {
     color: var(--bad, #e74c3c);

@@ -11,6 +11,9 @@ export interface StatusResponse {
   track: string | null;
   car: string | null;
   on_track: boolean;
+  // Live driving state (from scoring, detected immediately): on the circuit,
+  // in the pit lane, in the garage, or null in menus / not in a session.
+  activity: "track" | "pits" | "garage" | null;
   has_map: boolean;
   lmu_connected: boolean;
   session_id: string | null;

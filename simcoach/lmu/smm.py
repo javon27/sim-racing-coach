@@ -451,6 +451,37 @@ def read_session_track_car() -> tuple[str, str] | None:
     )
 
 
+def read_live_status() -> dict | None:
+    """Coarse LIVE driving state straight from scoring, independent of whether a
+    lap has been captured yet — so the UI can show on-track/garage/pits the moment
+    the car is in that state, not only after the first completed lap.
+
+    Returns {"track", "car", "state"} with state ∈ {"track","pits","garage"}, or
+    None if LMU isn't running / no player is in the session (menus).
+
+    # PENDING LIVE VALIDATION: mInGarageStall / mInPits offsets are from the
+    # header, unconfirmed against a running sim (see module docstring).
+    """
+    try:
+        telem = read_consistent(TELEMETRY_CANDIDATES[0], rF2Telemetry)
+        scoring = read_consistent(SCORING_CANDIDATES[0], rF2Scoring)
+    except Exception:
+        return None
+    player = _find_player(scoring)
+    if player is None:
+        return None
+    vt = _find_telem_by_id(telem, player.mID)
+    track = vt.mTrackName.decode(errors="replace").strip() if vt is not None else ""
+    car = (vt.mVehicleName if vt is not None else player.mVehicleName).decode(errors="replace").strip()
+    if player.mInGarageStall:
+        state = "garage"
+    elif player.mInPits:
+        state = "pits"
+    else:
+        state = "track"
+    return {"track": track, "car": car, "state": state}
+
+
 class LmuSource:
     """TelemetrySource backed by LMU's live shared memory.
 

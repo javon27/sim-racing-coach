@@ -438,27 +438,33 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # moves to another track/car it's stale, so drop it (else we'd report the old
         # track and, worse, map the new track under the old slug).
         try:
-            from ..lmu.smm import read_session_track_car
-            live = read_session_track_car()  # (track, car) | None
+            from ..lmu.smm import read_live_status
+            live = read_live_status()  # {track, car, state} | None
         except Exception:
             live = None
+        live_tc = (live["track"], live["car"]) if live else None
         latest = app.state.latest
         matches_live = (
             latest is not None
-            and (live is None
-                 or (latest["record"].track == live[0] and latest["record"].car == live[1]))
+            and (live_tc is None
+                 or (latest["record"].track == live_tc[0] and latest["record"].car == live_tc[1]))
         )
         session_id = lap_id = None
         if matches_live:
             record = latest["record"]
-            track, car, on_track = record.track, record.car, True
+            track, car = record.track, record.car
             session_id, lap_id = record.session_id, latest["lap_id"]
+        elif live:
+            track, car = live["track"], live["car"]
         else:
-            track, car = (live[0], live[1]) if live else (None, None)
-            on_track = False
+            track, car = None, None
+        # `activity` is the live driving state (track/pits/garage), detected from
+        # scoring immediately — not gated on a captured lap. on_track mirrors it.
+        activity = live["state"] if live else None
         return {
             "track": track, "car": car,
-            "on_track": on_track,
+            "on_track": activity == "track",
+            "activity": activity,
             "has_map": _has_canonical(track, car),
             "lmu_connected": _ensure_rest() is not None,
             "session_id": session_id,

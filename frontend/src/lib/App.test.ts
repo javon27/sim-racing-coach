@@ -61,6 +61,7 @@ describe("Coach screen assembly", () => {
       track: "Le Mans",
       car: "Corvette Z06",
       on_track: false,
+      activity: null,
       has_map: true,
       lmu_connected: true,
     });

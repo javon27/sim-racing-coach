@@ -43,7 +43,7 @@ describe("SessionBar", () => {
     expect(screen.getByText("metric")).toBeTruthy();
   });
 
-  it("shows the game connection status (On track / Connected / LMU offline)", async () => {
+  it("shows the live driving state (On track / Garage / In menus / LMU offline)", async () => {
     const settings = {
       units: "metric" as const,
       input_device: "wheel" as const,
@@ -58,14 +58,30 @@ describe("SessionBar", () => {
     vi.mocked(getSettings).mockResolvedValue(settings as never);
 
     vi.mocked(getStatus).mockResolvedValue({
-      track: "Le Mans", car: "C8", on_track: true, has_map: true, lmu_connected: true,
+      track: "Le Mans", car: "C8", on_track: true, activity: "track", has_map: true, lmu_connected: true,
     } as never);
-    const { unmount } = render(SessionBar);
+    let view = render(SessionBar);
     expect(await screen.findByText("On track")).toBeTruthy();
-    unmount();
+    view.unmount();
+
+    // Garage: detected live even before any lap is completed.
+    vi.mocked(getStatus).mockResolvedValue({
+      track: "Le Mans", car: "C8", on_track: false, activity: "garage", has_map: true, lmu_connected: true,
+    } as never);
+    view = render(SessionBar);
+    expect(await screen.findByText("Garage")).toBeTruthy();
+    view.unmount();
+
+    // In a session menu (connected, no player state).
+    vi.mocked(getStatus).mockResolvedValue({
+      track: null, car: null, on_track: false, activity: null, has_map: false, lmu_connected: true,
+    } as never);
+    view = render(SessionBar);
+    expect(await screen.findByText("In menus")).toBeTruthy();
+    view.unmount();
 
     vi.mocked(getStatus).mockResolvedValue({
-      track: null, car: null, on_track: false, has_map: false, lmu_connected: false,
+      track: null, car: null, on_track: false, activity: null, has_map: false, lmu_connected: false,
     } as never);
     render(SessionBar);
     expect(await screen.findByText("LMU offline")).toBeTruthy();

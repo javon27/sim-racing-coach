@@ -431,7 +431,7 @@ def test_status_has_map_reflects_canonical(tmp_path, monkeypatch):
     # exists to average, or a frozen file) -- not merely a loaded CornerMap.
     # No live SMM so /status uses the latest lap's track deterministically.
     from simcoach.lmu import smm
-    monkeypatch.setattr(smm, "read_session_track_car", lambda: None)
+    monkeypatch.setattr(smm, "read_live_status", lambda: None)
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     pos = store.save(_curve_lap("Curveland", "GT3", 90.0))
     coach = Coach(FakeModel(), "simcoach/knowledge")

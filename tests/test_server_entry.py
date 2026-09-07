@@ -35,9 +35,10 @@ def test_build_app_lmu_running(tmp_path, monkeypatch, mem_keyring):
 
     fake_cmap = object()
 
-    # /status reads the live track via `from ..lmu.smm import read_session_track_car`
-    # at call time, so patch it on smm (the source), not on the __main__ re-export.
-    monkeypatch.setattr(smm, "read_session_track_car", lambda: ("test_track", "test_car"))
+    # /status reads live state via `from ..lmu.smm import read_live_status` at call
+    # time, so patch it on smm (the source), not on the __main__ re-export.
+    monkeypatch.setattr(smm, "read_live_status",
+                        lambda: {"track": "test_track", "car": "test_car", "state": "track"})
     monkeypatch.setattr(m, "LmuRest", FakeRest)
     monkeypatch.setattr(m, "resolve_track_map", lambda track, tracks_dir: "fake/path.json")
     monkeypatch.setattr(m, "CornerMap", type("CM", (), {"load": staticmethod(lambda p: fake_cmap)}))
@@ -116,15 +117,18 @@ def test_status_detects_track_change_over_stale_latest(tmp_path, monkeypatch):
     tc = TestClient(app, base_url="http://127.0.0.1")
 
     # Same track live -> the captured lap supplies the rich context.
-    monkeypatch.setattr(smm, "read_session_track_car", lambda: ("Algarve", "CarA"))
+    monkeypatch.setattr(smm, "read_live_status",
+                        lambda: {"track": "Algarve", "car": "CarA", "state": "track"})
     s = tc.get("/status", headers={"host": "127.0.0.1"}).json()
     assert s["track"] == "Algarve" and s["on_track"] is True and s["lap_id"] == 42
 
-    # Driver moved to track B -> live read wins, stale lap context dropped.
-    monkeypatch.setattr(smm, "read_session_track_car", lambda: ("Imola", "CarB"))
+    # Driver moved to track B -> live read wins (track/car + live on_track), but the
+    # stale lap context is dropped (no captured lap for B yet).
+    monkeypatch.setattr(smm, "read_live_status",
+                        lambda: {"track": "Imola", "car": "CarB", "state": "track"})
     s = tc.get("/status", headers={"host": "127.0.0.1"}).json()
     assert s["track"] == "Imola" and s["car"] == "CarB"
-    assert s["on_track"] is False and s["session_id"] is None and s["lap_id"] is None
+    assert s["on_track"] is True and s["session_id"] is None and s["lap_id"] is None
 
 
 def test_status_probe_is_rate_capped(tmp_path):
@@ -167,7 +171,8 @@ def test_build_app_lmu_rest_failure_still_resolves_cmap(tmp_path, monkeypatch, m
 
     fake_cmap = object()
 
-    monkeypatch.setattr(smm, "read_session_track_car", lambda: ("test_track", "test_car"))
+    monkeypatch.setattr(smm, "read_live_status",
+                        lambda: {"track": "test_track", "car": "test_car", "state": "track"})
     monkeypatch.setattr(m, "LmuRest", BrokenRest)
     monkeypatch.setattr(m, "resolve_track_map", lambda track, tracks_dir: "fake/path.json")
     monkeypatch.setattr(m, "CornerMap", type("CM", (), {"load": staticmethod(lambda p: fake_cmap)}))
