@@ -125,7 +125,7 @@
         ...L.map((b, j) => (j === i ? Infinity : Math.hypot(a.ax - b.ax, a.ay - b.ay))),
       );
       const packed = nearest < (o.gap + hh) * 2.5;
-      const shoved = Math.hypot(a.x - a.sx, a.y - a.sy) > o.gap * 0.5;
+      const shoved = Math.hypot(a.x - a.sx, a.y - a.sy) > o.gap * 0.4;
       const leader: [number, number, number, number] | null =
         packed && shoved ? [a.ax, a.ay, edgeX, edgeY] : null;
       return { x, y, anchor, leader };
