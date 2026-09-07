@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/svelte";
+import { render, screen, cleanup, waitFor } from "@testing-library/svelte";
 import { getLapMap } from "./api";
 import TrackMap from "./TrackMap.svelte";
 
@@ -16,6 +16,7 @@ const mapFixture = {
     [10, 20],
     [30, 40],
   ] as [number, number][],
+  dist: [0, 50, 100],
   corners: [
     { number: 1, name: "First", direction: "right", x: 10, y: 20 },
     { number: 2, name: "Second", direction: "left", x: 30, y: 40 },
@@ -64,5 +65,24 @@ describe("TrackMap", () => {
     render(TrackMap, { props: { lapId: 7 } });
 
     expect(await screen.findByText(/no map for this track/i)).toBeTruthy();
+  });
+
+  it("renders a dot per live car, positioned by lap distance", async () => {
+    vi.mocked(getLapMap).mockResolvedValue(mapFixture);
+
+    const { container } = render(TrackMap, {
+      props: {
+        lapId: 1,
+        cars: [
+          { id: 1, lapDist: 0, cls: "GT3", isPlayer: false },
+          { id: 2, lapDist: 0, cls: "GT4", isPlayer: false },
+          { id: 3, lapDist: 100, cls: "Hypercar", isPlayer: true },
+        ],
+      },
+    });
+
+    await waitFor(() => expect(container.querySelectorAll(".car-dot").length).toBe(3));
+    const player = container.querySelector(".car-dot.player");
+    expect(player).not.toBeNull();
   });
 });

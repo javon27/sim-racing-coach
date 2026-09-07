@@ -1050,6 +1050,33 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 try: await ws.close()
                 except Exception: pass
 
+    _LIVE_PERIOD = 0.25  # ~4 Hz; the map/tower don't need capture-rate updates
+
+    @app.websocket("/live")
+    async def live_ws(ws: WebSocket):
+        # HTTP Host-guard middleware does NOT run for websockets — check here
+        # (same preamble as /coach).
+        host = (ws.headers.get("host") or "").split(":")[0].lower()
+        if host not in ALLOWED_HOSTS or _bad_origin(ws.headers.get("origin")):
+            await ws.close(code=1008)
+            return
+        await ws.accept()
+
+        from ..lmu.live import read_field_snapshot, snapshot_to_dict
+        loop = asyncio.get_running_loop()
+        try:
+            while True:
+                # Blocking mmap read off the event loop.
+                snap = await loop.run_in_executor(None, read_field_snapshot)
+                await ws.send_json(snapshot_to_dict(snap))
+                await asyncio.sleep(_LIVE_PERIOD)
+        except (WebSocketDisconnect, RuntimeError):
+            pass
+        finally:
+            if ws.client_state == WebSocketState.CONNECTED:
+                try: await ws.close()
+                except Exception: pass
+
     def _settings_view() -> dict:
         try:
             from importlib.metadata import version

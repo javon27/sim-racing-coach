@@ -9,6 +9,7 @@
   import TrackMapPane from "./TrackMapPane.svelte";
   import SessionsScreen from "./SessionsScreen.svelte";
   import SettingsScreen from "./SettingsScreen.svelte";
+  import PitWall from "./PitWall.svelte";
   import NestorMark from "./NestorMark.svelte";
   import Splash from "./Splash.svelte";
 
@@ -212,7 +213,9 @@
     <section class="screen" class:on={screen === "sessions"}>
       <SessionsScreen onselectSession={handleSelectSession} />
     </section>
-    <section class="screen" class:on={screen === "pitwall"}>Pit Wall (coming soon)</section>
+    <section class="screen" class:on={screen === "pitwall"}>
+      {#if screen === "pitwall"}<PitWall />{/if}
+    </section>
     <section class="screen" class:on={screen === "settings"}>
       <SettingsScreen />
     </section>

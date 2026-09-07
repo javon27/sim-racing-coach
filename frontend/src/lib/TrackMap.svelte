@@ -1,8 +1,12 @@
 <script lang="ts">
   import { getLapMap, type TrackMap } from "./api";
   import { nearestDistIndex, nearestPathIndex, layoutLabels, localOutward, type LabelItem, type PlacedLabel } from "./TrackMapEditor.svelte";
+  import { CLASS_COLOR } from "./live";
 
-  let { lapId }: { lapId: number | null } = $props();
+  let { lapId, cars = [] }: {
+    lapId: number | null;
+    cars?: { id: number; lapDist: number; cls: string; isPlayer: boolean }[];
+  } = $props();
 
   let map: TrackMap | null = $state(null);
   let phase: "empty" | "loading" | "none" = $state("empty");
@@ -98,6 +102,16 @@
   });
   const cornerLabels = $derived(laidOut.corners);
   const sectionLabels = $derived(laidOut.sections);
+
+  // Live car positions along the racing line, colored by class; player emphasized.
+  const carDots = $derived(
+    map
+      ? cars.map((c) => {
+          const [x, y] = map!.path[nearestDistIndex(map!.dist, c.lapDist)];
+          return { id: c.id, x, y, color: CLASS_COLOR[c.cls] ?? "var(--faint)", isPlayer: c.isPlayer };
+        })
+      : [],
+  );
 </script>
 
 <div class="panel">
@@ -144,6 +158,18 @@
           {/if}
           <text class="corner-lbl" x={cl.cx} y={cl.cy + cl.fontSize * 0.34} text-anchor="middle" font-size={cl.fontSize} fill="var(--accent)" paint-order="stroke" stroke="var(--surface, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">T{c.label || c.number}</text>
         {/if}
+      {/each}
+      {#each carDots as d (d.id)}
+        <circle
+          class="car-dot"
+          class:player={d.isPlayer}
+          cx={d.x}
+          cy={d.y}
+          r={d.isPlayer ? u * 0.03 : u * 0.022}
+          fill={d.color}
+          stroke={d.isPlayer ? "var(--text)" : "var(--surface)"}
+          stroke-width={u * (d.isPlayer ? 0.012 : 0.008)}
+        />
       {/each}
     </svg>
   {:else if phase === "none"}
