@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getLapMap, type TrackMap } from "./api";
-  import { nearestDistIndex } from "./TrackMapEditor.svelte";
+  import { nearestDistIndex, nearestPathIndex, layoutLabels, localOutward, type LabelItem, type PlacedLabel } from "./TrackMapEditor.svelte";
 
   let { lapId }: { lapId: number | null } = $props();
 
@@ -62,18 +62,6 @@
     return `${x + dx * len},${y + dy * len} ${x + px * wid},${y + py * wid} ${x - px * wid},${y - py * wid}`;
   }
 
-  // Place a label OUTWARD from the track centroid so labels sit off the track and
-  // cluster less than a fixed offset (mirrors TrackMapEditor.lblPos).
-  function lblPos(x: number, y: number, gap: number): { x: number; y: number; anchor: "start" | "middle" | "end" } {
-    if (!map) return { x: x + gap, y: y - gap, anchor: "start" };
-    let dx = x - map.width / 2;
-    let dy = y - map.height / 2;
-    const d = Math.hypot(dx, dy) || 1;
-    dx /= d;
-    dy /= d;
-    return { x: x + dx * gap, y: y + dy * gap + gap * 0.28, anchor: dx > 0.3 ? "start" : dx < -0.3 ? "end" : "middle" };
-  }
-
   // Path slice + midpoint for a named section span (start_dist..end_dist).
   function sectionSeg(s: { start_dist: number; end_dist: number }) {
     if (!map) return { pts: "", mid: [0, 0] as [number, number] };
@@ -83,6 +71,33 @@
     const mid = seg.length ? seg[Math.floor(seg.length / 2)] : map.path[a];
     return { pts: seg.map(([x, y]) => `${x},${y}`).join(" "), mid };
   }
+
+  // Ring-placed corner/section labels (shared with the editor). Corners sit on their
+  // perpendicular a few px off the dot; sections hug their dot too, routing around the
+  // corner labels (one combined layout), and wrap long names. Results split for the template.
+  const laidOut = $derived.by(() => {
+    const empty = { corners: [] as PlacedLabel[], sections: [] as PlacedLabel[] };
+    if (!map || !map.path.length) return empty;
+    const path = map.path, N = path.length, k = Math.max(2, Math.round(N * 0.02));
+    const cx = map.width / 2, cy = map.height / 2, gap = u * 0.008;
+    const secs = map.sections ?? [];
+    const centroidOut = (p: [number, number]): [number, number] => { let dx = p[0] - cx, dy = p[1] - cy; const d = Math.hypot(dx, dy) || 1; return [dx / d, dy / d]; };
+    const cornerAnchors = map.corners.map((c) => [c.x, c.y] as [number, number]);
+    const sectionAnchors = secs.map((s) => sectionSeg(s).mid);
+    const markers: [number, number][] = [...cornerAnchors, ...sectionAnchors];
+    const items: LabelItem[] = [
+      ...map.corners.map((c, i) => {
+        const lo = localOutward(path, nearestPathIndex(path, c.x, c.y), k);
+        const outward = lo.curv > 1e-4 ? [lo.ox, lo.oy] as [number, number] : centroidOut(cornerAnchors[i]);
+        return { anchor: cornerAnchors[i], text: `T${c.label || c.number}`, outward, fontSize: u * 0.032, gap, wrap: false, priority: 0 };
+      }),
+      ...secs.map((s, i) => ({ anchor: sectionAnchors[i], text: s.name, outward: centroidOut(sectionAnchors[i]), fontSize: u * 0.027, gap, wrap: true, priority: 1 })),
+    ];
+    const res = layoutLabels(items, { bounds: [-pad, -pad, map.width + pad, map.height + pad], markers, line: path });
+    return { corners: res.slice(0, map.corners.length), sections: res.slice(map.corners.length) };
+  });
+  const cornerLabels = $derived(laidOut.corners);
+  const sectionLabels = $derived(laidOut.sections);
 </script>
 
 <div class="panel">
@@ -104,19 +119,31 @@
         <polygon points={arrow(startDir.xj, startDir.yj, startDir.ang, u * 0.05, u * 0.028)} fill="var(--text)" />
         <text class="sf" x={startDir.x0} y={startDir.y0 - u * 0.04} font-size={u * 0.032} fill="var(--text)" text-anchor="middle">S/F</text>
       {/if}
-      {#each map.sections ?? [] as sec (sec.name + sec.start_dist)}
+      {#each map.sections ?? [] as sec, i (sec.name + sec.start_dist)}
         {@const seg = sectionSeg(sec)}
         <polyline points={seg.pts} fill="none" stroke="var(--good, #3a7)" stroke-width={u * 0.02} stroke-linecap="round" opacity="0.35" />
-        {@const sl = lblPos(seg.mid[0], seg.mid[1], u * 0.04)}
-        <text class="section-lbl" x={sl.x} y={sl.y} text-anchor={sl.anchor} font-size={u * 0.026} fill="var(--good, #3a7)" paint-order="stroke" stroke="var(--surface, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">{sec.name}</text>
+        {@const sl = sectionLabels[i]}
+        {#if sl}
+          {#if sl.leader}
+            <line x1={sl.leader[0]} y1={sl.leader[1]} x2={sl.leader[2]} y2={sl.leader[3]} stroke="var(--good, #3a7)" stroke-width={u * 0.004} opacity="0.6" />
+          {/if}
+          <text class="section-lbl" text-anchor="middle" font-size={sl.fontSize} fill="var(--good, #3a7)" paint-order="stroke" stroke="var(--surface, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">
+            {#each sl.lines as ln, li}<tspan x={sl.cx} y={sl.cy - (sl.lines.length - 1) * sl.fontSize * 0.51 + li * sl.fontSize * 1.02 + sl.fontSize * 0.34}>{ln}</tspan>{/each}
+          </text>
+        {/if}
       {/each}
-      {#each map.corners as c (c.number)}
+      {#each map.corners as c, i (c.number)}
         {#each c.apexes ?? [c.apex_dist] as ad, ai}
           {@const p = ai === 0 ? [c.x, c.y] : map.path[nearestDistIndex(map.dist, ad)]}
           <circle cx={p[0]} cy={p[1]} r={u * 0.011} fill="var(--accent)"><title>{c.name}</title></circle>
         {/each}
-        {@const cl = lblPos(c.x, c.y, u * 0.034)}
-        <text class="corner-lbl" x={cl.x} y={cl.y} text-anchor={cl.anchor} font-size={u * 0.03} fill="var(--accent)" paint-order="stroke" stroke="var(--surface, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">T{c.label || c.number}</text>
+        {@const cl = cornerLabels[i]}
+        {#if cl}
+          {#if cl.leader}
+            <line x1={cl.leader[0]} y1={cl.leader[1]} x2={cl.leader[2]} y2={cl.leader[3]} stroke="var(--accent)" stroke-width={u * 0.004} opacity="0.6" />
+          {/if}
+          <text class="corner-lbl" x={cl.cx} y={cl.cy + cl.fontSize * 0.34} text-anchor="middle" font-size={cl.fontSize} fill="var(--accent)" paint-order="stroke" stroke="var(--surface, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">T{c.label || c.number}</text>
+        {/if}
       {/each}
     </svg>
   {:else if phase === "none"}
