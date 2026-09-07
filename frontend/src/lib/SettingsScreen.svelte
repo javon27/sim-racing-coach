@@ -135,87 +135,111 @@
   {:else if phase === "error"}
     <p class="empty">Could not load settings.</p>
   {:else if settings}
+    <header class="page-head">
+      <h2>Settings</h2>
+      <p>How the coach reads your laps, talks to you, and stores your data.</p>
+    </header>
+
     <section class="grp">
       <h3>Display</h3>
-      <div class="row">
+      <div class="field">
         <span class="lbl">Units<InfoTip text="Metric (km/h, °C) or imperial (mph, °F) for coach + telemetry readouts." /></span>
-        <select bind:value={settings.units} onchange={saveConfig}>
-          <option value="metric">Metric</option>
-          <option value="imperial">Imperial</option>
-        </select>
+        <div class="control">
+          <select bind:value={settings.units} onchange={saveConfig}>
+            <option value="metric">Metric</option>
+            <option value="imperial">Imperial</option>
+          </select>
+        </div>
       </div>
     </section>
 
     <section class="grp">
       <h3>AI / Coach</h3>
-      <div class="row">
+      <div class="field">
         <span class="lbl">Model<InfoTip text="Which Claude model answers — Opus (deepest), Sonnet (balanced), Haiku (fastest)." /></span>
-        <select bind:value={settings.model} onchange={saveConfig}>
-          <option value="opus">Opus</option>
-          <option value="sonnet">Sonnet</option>
-          <option value="haiku">Haiku</option>
-        </select>
+        <div class="control">
+          <select bind:value={settings.model} onchange={saveConfig}>
+            <option value="opus">Opus</option>
+            <option value="sonnet">Sonnet</option>
+            <option value="haiku">Haiku</option>
+          </select>
+        </div>
       </div>
-      <div class="row">
+      <div class="field">
         <span class="lbl">API key<InfoTip text="Your Anthropic API key. Stored in the OS keyring, never in a file. Save, then Test to verify." /></span>
-        <span class="badge">{settings.api_key_set ? "set ✓" : "not set"}</span>
+        <div class="control">
+          <input
+            type="password"
+            aria-label="API key"
+            placeholder="sk-ant-..."
+            bind:value={apiKeyInput}
+          />
+          <span class="badge" class:set={settings.api_key_set}>{settings.api_key_set ? "set ✓" : "not set"}</span>
+          <div class="btns">
+            <button type="button" class="primary" onclick={saveKey}>Save key</button>
+            <button type="button" onclick={runTestKey}>Test key</button>
+          </div>
+        </div>
       </div>
-      <div class="row keyrow">
-        <input
-          type="password"
-          aria-label="API key"
-          placeholder="sk-ant-..."
-          bind:value={apiKeyInput}
-        />
-        <button type="button" onclick={saveKey}>Save key</button>
-        <button type="button" onclick={runTestKey}>Test key</button>
-      </div>
-      {#if keyStatus}<p class="status">{keyStatus}</p>{/if}
-      {#if testStatus}<p class="status">{testStatus}</p>{/if}
+      {#if keyStatus || testStatus}
+        <p class="status">{[keyStatus, testStatus].filter(Boolean).join(" · ")}</p>
+      {/if}
     </section>
 
     <section class="grp">
       <h3>Driver profile</h3>
-      <div class="row">
+      <div class="field">
         <span class="lbl">Braking style<InfoTip text="Part of your driver profile — e.g. trail-braker vs early-and-off. The coach factors this in." /></span>
-        <input type="text" bind:value={settings.driver.braking_style} onchange={saveConfig} />
+        <div class="control">
+          <input type="text" placeholder="e.g. trail-braker" bind:value={settings.driver.braking_style} onchange={saveConfig} />
+        </div>
       </div>
-      <div class="row">
+      <div class="field">
         <span class="lbl">Balance preference<InfoTip text="Part of your driver profile — e.g. prefer understeer vs oversteer. The coach factors this in." /></span>
-        <input type="text" bind:value={settings.driver.balance_preference} onchange={saveConfig} />
+        <div class="control">
+          <input type="text" placeholder="e.g. slight oversteer" bind:value={settings.driver.balance_preference} onchange={saveConfig} />
+        </div>
       </div>
-      <div class="row">
+      <div class="field">
         <span class="lbl">Risk tolerance<InfoTip text="Part of your driver profile — e.g. conservative vs aggressive. The coach factors this in." /></span>
-        <input type="text" bind:value={settings.driver.risk_tolerance} onchange={saveConfig} />
+        <div class="control">
+          <input type="text" placeholder="e.g. aggressive" bind:value={settings.driver.risk_tolerance} onchange={saveConfig} />
+        </div>
       </div>
     </section>
 
     <section class="grp">
       <h3>LMU history</h3>
-      <div class="row">
+      <div class="field">
         <span class="lbl">LMU dir<InfoTip text="Folder where LMU stores UserData (result logs). Auto-detected; override if needed." /></span>
-        <input type="text" bind:value={settings.lmu_dir} />
-        {#if isTauri}
-          <button type="button" onclick={browseLmuDir}>Browse…</button>
-        {/if}
+        <div class="control">
+          <input type="text" placeholder="Auto-detected" bind:value={settings.lmu_dir} />
+          {#if isTauri}
+            <button type="button" onclick={browseLmuDir}>Browse…</button>
+          {/if}
+        </div>
       </div>
       {#if browseStatus}<p class="status">{browseStatus}</p>{/if}
-      <div class="row names">
+      <div class="field">
         <span class="lbl">Player names<InfoTip text="Your in-game driver name(s), used to pick your own laps out of result logs." /></span>
-        <ul>
-          {#each settings.lmu_player_names as name, i (name + i)}
-            <li>
-              {name}
-              <button type="button" aria-label={`remove ${name}`} onclick={() => removePlayerName(i)}
-                >&times;</button
-              >
-            </li>
-          {/each}
-        </ul>
-      </div>
-      <div class="row">
-        <input type="text" placeholder="add alias…" bind:value={newPlayerName} />
-        <button type="button" onclick={addPlayerName}>Add</button>
+        <div class="control names">
+          {#if settings.lmu_player_names?.length}
+            <ul>
+              {#each settings.lmu_player_names as name, i (name + i)}
+                <li>
+                  {name}
+                  <button type="button" aria-label={`remove ${name}`} onclick={() => removePlayerName(i)}
+                    >&times;</button
+                  >
+                </li>
+              {/each}
+            </ul>
+          {/if}
+          <div class="addrow">
+            <input type="text" placeholder="add alias…" bind:value={newPlayerName} />
+            <button type="button" onclick={addPlayerName}>Add</button>
+          </div>
+        </div>
       </div>
       <p class="help">
         <strong>Import history</strong> scans LMU's result logs in the folder above and
@@ -224,35 +248,43 @@
         incidents). It reads finished-session logs only; it doesn't capture live laps and
         skips sessions already imported.
       </p>
-      <div class="row">
+      <div class="actions">
         <button type="button" onclick={saveLmuSettings}>Save LMU settings</button>
-        {#if lmuStatus}<span class="status inline">{lmuStatus}</span>{/if}
-        <button type="button" onclick={runImport} disabled={importing}>
+        <button type="button" class="primary" onclick={runImport} disabled={importing}>
           {importing ? "Importing…" : "Import history"}
         </button>
+        {#if lmuStatus}<span class="status inline">{lmuStatus}</span>{/if}
       </div>
       {#if importStatus}<p class="status">{importStatus}</p>{/if}
     </section>
 
     <section class="grp">
       <h3>Data</h3>
-      <div class="row">
+      <div class="field">
         <span class="lbl">Data dir<InfoTip text="Where SimCoach stores its database, telemetry, and logs." /></span>
-        <span class="val">{settings.data_dir}</span>
+        <div class="control"><span class="val">{settings.data_dir}</span></div>
       </div>
-      <div class="row">
+      <div class="field">
         <span class="lbl">Logging<InfoTip text="Verbose adds DEBUG detail to the log file for troubleshooting." /></span>
-        <select bind:value={settings.log_level} onchange={saveConfig}>
-          <option value="INFO">Normal</option>
-          <option value="DEBUG">Verbose</option>
-        </select>
+        <div class="control">
+          <select bind:value={settings.log_level} onchange={saveConfig}>
+            <option value="INFO">Normal</option>
+            <option value="DEBUG">Verbose</option>
+          </select>
+        </div>
       </div>
-      <div class="row">
+      <div class="danger-zone">
         {#if confirmingReset}
           <span class="warn">Erase all laps, chats, and telemetry?</span>
-          <button type="button" class="danger" onclick={confirmReset}>Confirm</button>
-          <button type="button" onclick={() => (confirmingReset = false)}>Cancel</button>
+          <div class="btns">
+            <button type="button" class="danger" onclick={confirmReset}>Confirm</button>
+            <button type="button" onclick={() => (confirmingReset = false)}>Cancel</button>
+          </div>
         {:else}
+          <div>
+            <span class="lbl">Reset all data</span>
+            <p class="sub">Erases every lap, chat, and telemetry file. Can't be undone.</p>
+          </div>
           <button type="button" class="danger" onclick={() => (confirmingReset = true)}>
             Reset / clear data
           </button>
@@ -263,17 +295,17 @@
 
     <section class="grp">
       <h3>About</h3>
-      <div class="row">
+      <div class="field">
         <span class="lbl">App version</span>
-        <span class="val">{settings.app_version}</span>
+        <div class="control"><span class="val">{settings.app_version}</span></div>
       </div>
-      <div class="row">
+      <div class="field">
         <span class="lbl">LMU build</span>
-        <span class="val">{settings.lmu_build ?? "unknown"}</span>
+        <div class="control"><span class="val">{settings.lmu_build ?? "unknown"}</span></div>
       </div>
-      <div class="row">
+      <div class="field">
         <span class="lbl">API key</span>
-        <span class="val">{settings.api_key_set ? "set ✓" : "not set"}</span>
+        <div class="control"><span class="val">{settings.api_key_set ? "set ✓" : "not set"}</span></div>
       </div>
     </section>
   {/if}
@@ -286,72 +318,112 @@
     height: 100%;
   }
   .settings-inner {
-    max-width: 800px;
+    max-width: 720px;
     margin: 0 auto;
-    padding: 20px 26px;
+    padding: 28px 26px 48px;
   }
   .empty {
     color: var(--faint);
     font-family: var(--mono);
     font-size: 12px;
   }
+
+  .page-head {
+    margin: 0 0 22px;
+  }
+  .page-head h2 {
+    margin: 0;
+    font-family: var(--display);
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .page-head p {
+    margin: 4px 0 0;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
   .grp {
     background: var(--surface);
     border: 1px solid var(--line);
-    border-radius: 12px;
-    padding: 16px 18px;
-    margin-bottom: 16px;
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+    padding: 6px 20px 14px;
+    margin-bottom: 18px;
   }
+  /* Section title sits on its own baseline row above a hairline, so the aligned
+     field grid below reads as one block. */
   .grp h3 {
-    margin: 0 0 10px;
+    margin: 0;
+    padding: 14px 0 12px;
     font-family: var(--display);
     font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: var(--faint);
+    letter-spacing: 0.12em;
+    color: var(--accent);
   }
-  .row {
-    display: flex;
+
+  /* The core fix: every row is a fixed label column + a shared control column,
+     so all controls line up on one left edge instead of scattering right. */
+  .field {
+    display: grid;
+    grid-template-columns: 172px minmax(0, 1fr);
     align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 6px 0;
-  }
-  .row.names {
-    align-items: flex-start;
+    gap: 8px 18px;
+    padding: 11px 0;
+    border-top: 1px solid var(--line);
   }
   .lbl {
-    color: var(--muted);
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    color: var(--text);
     font-size: 13px;
+    font-weight: 500;
   }
-  .row > select,
-  .row > input[type="text"],
-  .row > input[type="password"] {
-    min-width: 200px;
+  .control {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
   }
-  /* Input + Save/Test in one row: input fills, buttons group at the right (no
-     space-between scatter). */
-  .row.keyrow {
-    justify-content: flex-start;
+  .control.names {
+    flex-direction: column;
+    align-items: stretch;
   }
-  .row.keyrow > input[type="password"] {
-    flex: 1 1 auto;
+  /* A lone control fills the column up to a sane cap so selects and text inputs
+     share one width; buttons/badges keep their natural size beside it. */
+  .control > select,
+  .control > input[type="text"],
+  .control > input[type="password"] {
+    flex: 1 1 200px;
     min-width: 0;
+    max-width: 340px;
   }
-  .row.keyrow > button {
-    flex: none;
-  }
+
   .val {
     font-family: var(--mono);
     font-weight: 600;
     font-size: 13px;
+    color: var(--text);
+    word-break: break-all;
   }
   .badge {
     font-family: var(--mono);
-    font-size: 12px;
-    color: var(--good);
+    font-size: 11px;
+    color: var(--faint);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 2px 9px;
   }
+  .badge.set {
+    color: var(--good);
+    border-color: var(--good);
+    background: var(--good-soft);
+  }
+
   select,
   input[type="text"],
   input[type="password"] {
@@ -361,7 +433,22 @@
     background: var(--bg);
     border: 1px solid var(--line);
     border-radius: 8px;
-    padding: 6px 10px;
+    padding: 7px 10px;
+  }
+  input::placeholder {
+    color: var(--faint);
+  }
+  select:focus,
+  input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+
+  .btns {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
   }
   button {
     font-family: var(--display);
@@ -372,60 +459,141 @@
     color: var(--text);
     border: 1px solid var(--line);
     border-radius: 8px;
-    padding: 7px 12px;
+    padding: 7px 13px;
     cursor: pointer;
+  }
+  button:hover:not(:disabled) {
+    border-color: var(--faint);
+  }
+  button:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+  button.primary {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+  button.primary:hover:not(:disabled) {
+    background: var(--accent-2);
+    border-color: var(--accent-2);
+  }
+  :root[data-theme="dark"] button.primary {
+    color: #160f2b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) button.primary {
+      color: #160f2b;
+    }
   }
   button.danger {
     background: var(--bad-soft);
     color: var(--bad);
     border-color: var(--bad);
   }
-  ul {
+
+  /* Player-name aliases: chips wrap, add-row sits under them within the column. */
+  .names ul {
     list-style: none;
-    margin: 0;
+    margin: 0 0 4px;
     padding: 0;
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
   }
-  ul li {
+  .names li {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 5px;
     background: var(--surface-2);
     border: 1px solid var(--line);
-    border-radius: 6px;
-    padding: 3px 6px;
+    border-radius: 999px;
+    padding: 3px 6px 3px 11px;
     font-family: var(--mono);
     font-size: 12px;
   }
-  ul li button {
+  .names li button {
     background: none;
     border: none;
-    padding: 0 2px;
+    padding: 0 3px;
+    font-size: 15px;
+    line-height: 1;
     color: var(--faint);
   }
+  .names li button:hover {
+    color: var(--bad);
+  }
+  .addrow {
+    display: flex;
+    gap: 8px;
+  }
+  .addrow input {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 340px;
+  }
+
+  /* Per-section action bar: buttons grouped, right-aligned, above a hairline. */
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-top: 14px;
+    margin-top: 4px;
+    border-top: 1px solid var(--line);
+    justify-content: flex-end;
+  }
+
+  .danger-zone {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 0 4px;
+    margin-top: 4px;
+    border-top: 1px solid var(--line);
+  }
+  .danger-zone .sub {
+    margin: 2px 0 0;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
   .status {
-    margin: 6px 0 0;
+    margin: 10px 0 0;
     font-family: var(--mono);
     font-size: 12px;
     color: var(--muted);
   }
   .status.inline {
     margin: 0;
-    align-self: center;
   }
   .help {
-    margin: 4px 0 8px;
+    margin: 14px 0 0;
     font-size: 12px;
-    line-height: 1.5;
+    line-height: 1.55;
     color: var(--muted);
   }
   .help strong {
     color: var(--text);
+    font-weight: 600;
   }
   .warn {
     color: var(--bad);
     font-size: 13px;
+    font-weight: 500;
+  }
+
+  /* Stack label over control on narrow widths so nothing gets crushed. */
+  @media (max-width: 540px) {
+    .field {
+      grid-template-columns: 1fr;
+      gap: 6px;
+    }
+    .control > select,
+    .control > input[type="text"],
+    .control > input[type="password"] {
+      max-width: none;
+    }
   }
 </style>

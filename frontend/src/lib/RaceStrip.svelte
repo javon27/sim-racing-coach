@@ -55,8 +55,10 @@
   .race-strip {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 6px 12px;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    margin: 10px 12px 2px;
+    padding: 7px 12px;
     font-size: 12px;
     background: var(--surface-2, var(--surface));
     border: 1px solid var(--line);

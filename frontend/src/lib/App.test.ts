@@ -74,6 +74,8 @@ describe("Coach screen assembly", () => {
       data_dir: "x",
       app_version: "0.1",
       lmu_build: null,
+      lmu_dir: null,
+      lmu_player_names: [],
     });
     vi.mocked(getHealth).mockResolvedValue({ status: "ok" });
     vi.mocked(getSessions).mockResolvedValue({

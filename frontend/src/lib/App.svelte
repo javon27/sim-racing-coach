@@ -123,9 +123,9 @@
     <section class="screen" class:on={screen === "coach"}>
       <div class="app">
         <SessionBar />
-        <RaceStrip sessionId={selectedSessionId} />
         <div class="main">
           <aside class="rail" style="--laps-h: {lapsH}px">
+            <RaceStrip sessionId={selectedSessionId} />
             <LapList
               sessionId={activeSessionId}
               selectedLapId={selectedLapId ?? null}
