@@ -62,26 +62,46 @@ test("shows the map pane empty state when the track has no layout", async () => 
   expect(await screen.findByText(/no layout for this track yet/i)).toBeTruthy();
 });
 
-test("corner-notes list is driven by the map, orphaned notes flagged", async () => {
+function fourCornerMap() {
+  const mk = (n: number) => ({
+    number: n, label: String(n), name: `Turn ${n}`, direction: "right",
+    x: n, y: n, apex_dist: n, apexes: [n], start_dist: 0, end_dist: 10,
+  });
+  return {
+    width: 100, height: 100, path: [[0, 0], [1, 1]], dist: [0, 1], sectors: [], sections: [],
+    corners: [mk(1), mk(2), mk(3), mk(4)],
+  } as unknown as api.TrackMap;
+}
+
+test("corner-notes list is driven by the map, true orphans flagged", async () => {
   vi.spyOn(api, "getTrackNotes").mockResolvedValue({
     overview: "", corners: { "1": "brake late", "9": "stale note" }, reference_times: {}, source: "",
   });
-  // A map with corners T1 and T3; note "9" matches no corner -> unmapped.
-  vi.spyOn(api, "getTrackMap").mockResolvedValue({
-    width: 100, height: 100, path: [[0, 0], [1, 1]], dist: [0, 1], sectors: [], sections: [],
-    corners: [
-      { number: 1, label: "1", name: "Turn 1", direction: "right", x: 0, y: 0, apex_dist: 0, apexes: [0], start_dist: 0, end_dist: 1 },
-      { number: 2, label: "3", name: "Turn 3", direction: "left", x: 1, y: 1, apex_dist: 1, apexes: [1], start_dist: 0, end_dist: 1 },
-    ],
-  } as unknown as api.TrackMap);
+  vi.spyOn(api, "getTrackMap").mockResolvedValue(fourCornerMap());
   render(TracksScreen);
   await fireEvent.click(await screen.findByText("Algarve"));
-  // Rows come from the map corners (labels 1 and 3), keyed via the textarea aria-label.
   expect(await screen.findByLabelText("corner note 1")).toBeTruthy();
-  expect(screen.getByLabelText("corner note 3")).toBeTruthy();
-  // Note "9" matches no map corner -> surfaced as unmapped, not dropped.
-  expect(screen.getByText(/don't match any corner/i)).toBeTruthy();
+  expect(screen.getByLabelText("corner note 4")).toBeTruthy();
+  // "9" matches no corner and no range -> surfaced as orphan, not dropped.
+  expect(screen.getByText(/match no corner/i)).toBeTruthy();
   expect(screen.getByLabelText("corner note 9")).toBeTruthy();
+});
+
+test("a hyphen-range note collapses its covered corners into one row", async () => {
+  vi.spyOn(api, "getTrackNotes").mockResolvedValue({
+    overview: "", corners: { "1": "a", "2-3": "double apex", "4": "d" }, reference_times: {}, source: "",
+  });
+  vi.spyOn(api, "getTrackMap").mockResolvedValue(fourCornerMap());
+  render(TracksScreen);
+  await fireEvent.click(await screen.findByText("Algarve"));
+  // Corners 2 and 3 collapse under the "2-3" range row; no separate 2/3 rows.
+  expect(await screen.findByLabelText("corner note 2-3")).toBeTruthy();
+  expect(screen.queryByLabelText("corner note 2")).toBeNull();
+  expect(screen.queryByLabelText("corner note 3")).toBeNull();
+  expect(screen.getByLabelText("corner note 1")).toBeTruthy();
+  expect(screen.getByLabelText("corner note 4")).toBeTruthy();
+  // The range is valid -> no orphan warning.
+  expect(screen.queryByText(/match no corner/i)).toBeNull();
 });
 
 test("save sends the edited notes for the selected track", async () => {

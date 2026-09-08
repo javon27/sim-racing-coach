@@ -16,20 +16,41 @@
   let newRefClass = $state("");
   let newRefTime = $state("");
 
-  // The corner-notes list is DRIVEN BY the corner mapping: one row per map corner,
-  // in map order, keyed on the corner's label. Corners are owned by the map (edit
-  // them in the map editor), so there's no free-form add here. Authored notes whose
-  // key matches no map corner are surfaced separately as "unmapped" so an edit to
-  // the map never silently drops a note.
-  const mapLabels = $derived(map ? map.corners.map((c) => c.label || String(c.number)) : []);
-  const orphanLabels = $derived(
-    map ? Object.keys(notes.corners).filter((k) => !mapLabels.includes(k)) : Object.keys(notes.corners),
-  );
-  // Seed a blank note for every map corner so binding + word count are safe and the
-  // row shows even before it's written.
+  // The corner-notes list is DRIVEN BY the corner mapping: one row per map corner in
+  // map order, keyed on the corner's label. A note may also be keyed by a hyphen range
+  // ("10-11") that covers several corners -- an intended construct the coach resolves
+  // the same way (coach_tools._corner_note). Such a range collapses its covered corners
+  // into a single row; only a key that matches no corner and no covering range is a
+  // true orphan (surfaced, never silently dropped). Corners are owned by the map (edit
+  // them via the map editor), so there's no free-form add here.
+  const rangeOf = (k: string): [number, number] | null => {
+    const m = /^(\d+)-(\d+)$/.exec(k);
+    return m ? [Number(m[1]), Number(m[2])] : null;
+  };
+  const cornerView = $derived.by(() => {
+    const keys = Object.keys(notes.corners);
+    if (!map) return { rows: keys.map((k) => ({ key: k, label: k })), orphans: [] as string[] };
+    const ranges = keys.map((k) => ({ key: k, r: rangeOf(k) })).filter((x) => x.r) as { key: string; r: [number, number] }[];
+    const rows: { key: string; label: string }[] = [];
+    const usedRange = new Set<string>();
+    for (const c of map.corners) {
+      const label = c.label || String(c.number);
+      const n = Number(label);
+      const cover = Number.isInteger(n) ? ranges.find(({ r }) => n >= r[0] && n <= r[1]) : undefined;
+      if (cover) {
+        if (!usedRange.has(cover.key)) { usedRange.add(cover.key); rows.push({ key: cover.key, label: cover.key }); }
+        continue; // a covered corner shows under its range row, not its own
+      }
+      rows.push({ key: label, label });
+    }
+    const valid = new Set(rows.map((row) => row.key));
+    return { rows, orphans: keys.filter((k) => !valid.has(k)) };
+  });
+  // Seed a blank note for every per-corner row so binding + word count are safe and
+  // the row shows before it's written (range rows already exist as keys).
   $effect(() => {
-    for (const label of mapLabels) {
-      if (!(label in notes.corners)) notes.corners[label] = "";
+    for (const row of cornerView.rows) {
+      if (!(row.key in notes.corners)) notes.corners[row.key] = "";
     }
   });
 
@@ -156,24 +177,24 @@
 
       <div class="fld">
         <span class="lbl">Corner notes</span>
-        {#if mapLabels.length === 0}
+        {#if cornerView.rows.length === 0}
           <p class="hint">No corners on this track's map yet. Add them with <strong>Edit</strong> on the map — corner notes follow the map.</p>
         {/if}
-        {#each mapLabels as label (label)}
+        {#each cornerView.rows as row (row.key)}
           <div class="corner-row">
-            <span class="clabel">T{label}</span>
-            <textarea rows="2" bind:value={notes.corners[label]} aria-label={`corner note ${label}`}></textarea>
-            <span class="wc">{wordCount(notes.corners[label] ?? "")}/40</span>
+            <span class="clabel">T{row.label}</span>
+            <textarea rows="2" bind:value={notes.corners[row.key]} aria-label={`corner note ${row.key}`}></textarea>
+            <span class="wc">{wordCount(notes.corners[row.key] ?? "")}/40</span>
           </div>
         {/each}
-        {#if orphanLabels.length}
-          <p class="hint warn">These notes don't match any corner on the map. Rename the corner in the map editor, or remove the note.</p>
-          {#each orphanLabels as label (label)}
+        {#if cornerView.orphans.length}
+          <p class="hint warn">These notes match no corner (or corner range) on the map. Rename the corner in the map editor, or remove the note.</p>
+          {#each cornerView.orphans as key (key)}
             <div class="corner-row">
-              <span class="clabel orphan">{label}</span>
-              <textarea rows="2" bind:value={notes.corners[label]} aria-label={`corner note ${label}`}></textarea>
-              <span class="wc">{wordCount(notes.corners[label] ?? "")}/40</span>
-              <button type="button" class="rm" aria-label={`remove corner note ${label}`} onclick={() => removeCorner(label)}>×</button>
+              <span class="clabel orphan">{key}</span>
+              <textarea rows="2" bind:value={notes.corners[key]} aria-label={`corner note ${key}`}></textarea>
+              <span class="wc">{wordCount(notes.corners[key] ?? "")}/40</span>
+              <button type="button" class="rm" aria-label={`remove corner note ${key}`} onclick={() => removeCorner(key)}>×</button>
             </div>
           {/each}
         {/if}
