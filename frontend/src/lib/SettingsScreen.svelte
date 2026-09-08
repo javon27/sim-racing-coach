@@ -135,6 +135,8 @@
     confirmingReset = false;
   }
 
+  // Display-only hint; keep in sync with store.active_learnings' default `limit`
+  // (simcoach/store.py). Not an enforced constraint — just shows active vs cap.
   const MEMORY_CAP = 50;
 
   let profile: DriverProfileData | null = $state(null);

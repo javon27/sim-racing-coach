@@ -542,14 +542,6 @@ export function getProfile(): Promise<DriverProfileData> {
   return request<DriverProfileData>("/profile");
 }
 
-export function putProfilePrefs(prefs: DriverPrefs): Promise<DriverProfileData> {
-  return request<DriverProfileData>("/profile", {
-    method: "PUT",
-    headers: JSON_HEADERS,
-    body: JSON.stringify({ prefs }),
-  });
-}
-
 export function putProfileSummary(
   text: string,
   status: "pending" | "active",

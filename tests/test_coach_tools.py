@@ -408,6 +408,25 @@ def test_get_last_setup_none_stored(tmp_path):
     assert "no stored setup" in ctx.get_last_setup().lower()
 
 
+def test_get_last_setup_excludes_current_session(tmp_path):
+    # "what did we run here LAST time?" must return the PRIOR session's setup,
+    # not the one the current session already autosaved.
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    store.save_session_setup("prev--online", "spa", "gt3",
+                             {"VM_WING_REAR": {"stringValue": "6", "isFreeSetting": True}})
+    store.save_session_setup("cur--online", "spa", "gt3",
+                             {"VM_WING_REAR": {"stringValue": "9", "isFreeSetting": True}})
+    ctx = CoachContext(store, track="spa", car="gt3", session_id="cur--online")
+    out = ctx.get_last_setup()
+    assert "Wing Rear: 6" in out          # prior session
+    assert "Wing Rear: 9" not in out       # current session excluded
+    # Only the current session on record -> nothing prior to report.
+    solo = CoachContext(store, track="spa", car="gt3", session_id="prev--online")
+    # (prev is now the "current" here; cur--online is newer but different combo? no —
+    #  both same combo, so prev-as-current excludes prev, leaving cur as the prior)
+    assert "Wing Rear: 9" in solo.get_last_setup()
+
+
 def test_current_lap_resolved_from_store_when_not_pinned(tmp_path, synthetic_lap):
     # The coach is no longer handed a lap (record=None). 'latest' and the corner
     # tools resolve the most-recent stored lap on demand — the fix for the coach

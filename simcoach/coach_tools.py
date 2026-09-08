@@ -624,7 +624,9 @@ class CoachContext:
         track, car = track or self.track, car or self.car
         if not (track and car):
             return "No track/car resolved yet — no setup on record."
-        row = self.store.last_setup(track, car)
+        # Exclude the current session so this returns the PRIOR session's setup
+        # ("what did we run here last time?"), not the one this session autosaved.
+        row = self.store.last_setup(track, car, exclude_session_id=self.session_id)
         if row is None:
             return f"No stored setup for {track} / {car} yet."
         when = time.strftime("%Y-%m-%d", time.localtime(row["updated_ts"]))

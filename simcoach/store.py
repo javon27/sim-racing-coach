@@ -913,14 +913,22 @@ class LapStore:
                 (session_id, track, car, json.dumps(setup), time.time()),
             )
 
-    def last_setup(self, track: str, car: str) -> dict | None:
-        """Most recent session_setups row for this track/car, or None."""
+    def last_setup(self, track: str, car: str,
+                   exclude_session_id: str | None = None) -> dict | None:
+        """Most recent session_setups row for this track/car, or None.
+
+        `exclude_session_id` drops the current live session so a "what did we run
+        here LAST time?" query returns a prior session's setup, not the one the
+        current session already autosaved."""
+        sql = ("SELECT session_id, track, car, setup_json, updated_ts FROM session_setups "
+               "WHERE track = ? AND car = ?")
+        params: list = [track, car]
+        if exclude_session_id is not None:
+            sql += " AND session_id != ?"
+            params.append(exclude_session_id)
+        sql += " ORDER BY updated_ts DESC LIMIT 1"
         with self._lock:
-            row = self.conn.execute(
-                "SELECT session_id, track, car, setup_json, updated_ts FROM session_setups "
-                "WHERE track = ? AND car = ? ORDER BY updated_ts DESC LIMIT 1",
-                (track, car),
-            ).fetchone()
+            row = self.conn.execute(sql, params).fetchone()
         if not row:
             return None
         session_id, track, car, setup_json, updated_ts = row
