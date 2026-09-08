@@ -86,12 +86,22 @@ file path keeps the same URL.
 
 ## Deploy to Railway
 
-1. **New service → Deploy from GitHub repo** (this repo).
-2. Service **Settings → Build** → set **Root Directory** to `site/`. Railway detects
-   the `Dockerfile` and builds it (Caddy listens on `$PORT`).
-3. Deploy; you get a `*.up.railway.app` URL to sanity-check.
+The **nestor** service is connected to this GitHub repo and deploys itself — no
+manual step per change:
 
-CLI alternative from this folder: `railway up`.
+- **Source:** `javon27/sim-racing-coach`, branch `main`, **Root Directory** `/site`.
+  Railway builds `site/Dockerfile` (Caddy, listening on `$PORT`).
+- **Watch paths:** `/site/**` — a push to `main` deploys **only** when files under
+  `site/` change. Commits that touch just the app (`simcoach/`, `frontend/`, …) are
+  skipped, so the site isn't rebuilt for unrelated work.
+- **App sleep:** off, so the public page has no cold-start delay.
+
+**To ship a site change:** commit under `site/` and push to `main`. Railway builds
+and deploys automatically. Live at `https://nestor-production-83cb.up.railway.app`.
+
+Manual deploy (rarely needed — e.g. redeploy without a commit): from this folder,
+`railway up --service nestor --ci`. Reconfigure source/root/watch-paths via the
+service's **Settings → Source**, or `railway link` then the Railway MCP/CLI.
 
 ## Custom domain (CNAME under jaysontrades.com)
 

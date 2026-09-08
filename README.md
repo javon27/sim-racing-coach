@@ -112,10 +112,12 @@ python -m venv .venv
 ## Marketing site
 
 A standalone landing page for Nestor lives in [`site/`](site/) — a single static
-page (Caddy + Dockerfile) meant to be hosted on Railway under a `jaysontrades.com`
-subdomain. Its screenshots are real captures of this app. See
-[`site/README.md`](site/README.md) for local preview, how to refresh the
-screenshots and brand assets, and the Railway deploy + CNAME steps.
+page (Caddy + Dockerfile) hosted on Railway (service `nestor`, live at
+`nestor-production-83cb.up.railway.app`). It **auto-deploys from GitHub**: a push to
+`main` that changes anything under `site/` triggers a build; unrelated commits are
+skipped (watch path `/site/**`). Its screenshots are real captures of this app. See
+[`site/README.md`](site/README.md) for local preview, how to refresh the screenshots
+and brand assets, and the deploy + CNAME details.
 
 ## Status
 
