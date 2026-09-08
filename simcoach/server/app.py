@@ -732,7 +732,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         system = (
             "You are drafting OWNED, author-time track notes a human will verify. "
             "Return STRICT JSON: {\"overview\": str, \"corners\": {label: str}, \"source\": str}. "
-            "Keep the overview under 80 words and each corner note under 40 words. "
+            "Keep the overview under 120 words and each corner note under 50 words. "
             "Ground every claim in the geometry and provided guides; do NOT invent corner "
             "names, numbers, or directions -- those are given.")
         user = "Corner geometry:\n" + "\n".join(digest_lines)

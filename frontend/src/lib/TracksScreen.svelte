@@ -171,7 +171,7 @@
       </header>
 
       <label class="fld">
-        <span class="lbl">Overview <span class="wc">{wordCount(notes.overview)}/80 words</span></span>
+        <span class="lbl">Overview <span class="wc">{wordCount(notes.overview)}/120 words</span></span>
         <textarea rows="3" bind:value={notes.overview}></textarea>
       </label>
 
@@ -184,7 +184,7 @@
           <div class="corner-row">
             <span class="clabel">T{row.label}</span>
             <textarea rows="2" bind:value={notes.corners[row.key]} aria-label={`corner note ${row.key}`}></textarea>
-            <span class="wc">{wordCount(notes.corners[row.key] ?? "")}/40</span>
+            <span class="wc">{wordCount(notes.corners[row.key] ?? "")}/50</span>
           </div>
         {/each}
         {#if cornerView.orphans.length}
@@ -193,7 +193,7 @@
             <div class="corner-row">
               <span class="clabel orphan">{key}</span>
               <textarea rows="2" bind:value={notes.corners[key]} aria-label={`corner note ${key}`}></textarea>
-              <span class="wc">{wordCount(notes.corners[key] ?? "")}/40</span>
+              <span class="wc">{wordCount(notes.corners[key] ?? "")}/50</span>
               <button type="button" class="rm" aria-label={`remove corner note ${key}`} onclick={() => removeCorner(key)}>×</button>
             </div>
           {/each}
