@@ -289,6 +289,100 @@ git commit -m "feat(coach): get_track_notes tool + per-corner note append + prom
 
 ---
 
+### Task 2b: Surface community reference lap times in `get_track_notes`
+
+Added 2026-09-08 per user: fold community/benchmark lap times into the track notes as
+a `notes.reference_times` field — per track and optional class, `{class: "m:ss.xxx"}`
+(key `"default"` when unclassed). Times only (no telemetry); the coach cites them as an
+absolute yardstick. `notes` is already a free-form dict riding the overlay merge
+(Task 1), so no storage/schema change is needed — only `get_track_notes`'s output.
+
+**Files:**
+- Modify: `simcoach/coach_tools.py` (`get_track_notes` — append a reference-times line)
+- Modify: `simcoach/coach.py` (`AGENTIC_SYSTEM_PROMPT` — one clause on using reference times)
+- Test: `tests/test_coach_tools.py`
+
+**Interfaces:**
+- Consumes: `CornerMap.notes["reference_times"]` (optional `{class: str}` dict) from the merged map.
+- Produces: `get_track_notes()` (no `corner` arg) output includes a reference-times line when present; `get_track_notes(corner=...)` does NOT (it's whole-track context).
+
+- [ ] **Step 1: Write the failing tests**
+
+Add to `tests/test_coach_tools.py` (reuse the `_ctx_with_notes` helper added in Task 2):
+
+```python
+def test_get_track_notes_includes_reference_times():
+    ctx = _ctx_with_notes({"overview": "rhythm track", "corners": {},
+                           "reference_times": {"LMGT3": "1:41.500", "Hypercar": "1:35.200"}})
+    out = ctx.get_track_notes()
+    assert "1:41.500" in out and "LMGT3" in out
+    assert "1:35.200" in out and "Hypercar" in out
+    assert "reference" in out.lower()
+
+def test_get_track_notes_no_reference_times_omits_line():
+    ctx = _ctx_with_notes({"overview": "rhythm track", "corners": {"1": "brake late"}})
+    assert "reference" not in ctx.get_track_notes().lower()
+
+def test_reference_times_not_in_single_corner_view():
+    ctx = _ctx_with_notes({"overview": "x", "corners": {"1": "brake late"},
+                           "reference_times": {"LMGT3": "1:41.500"}})
+    assert "1:41.500" not in ctx.get_track_notes(corner="1")
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `.venv/Scripts/python.exe -m pytest tests/test_coach_tools.py -k "reference_times or reference" -v`
+Expected: FAIL — no reference-times line emitted.
+
+- [ ] **Step 3: Implement**
+
+In `simcoach/coach_tools.py`, in `get_track_notes`, in the whole-track branch only
+(i.e. when `corner is None`), after the per-corner lines, append a reference-times line
+when present:
+
+```python
+        if corner is None:
+            refs = notes.get("reference_times") or {}
+            if refs:
+                pairs = "; ".join(f"{cls} {t}" for cls, t in refs.items())
+                lines.append(f"Reference lap times (community benchmark): {pairs}")
+```
+
+(Place this inside the existing `else:` whole-track branch of `get_track_notes`, after
+the per-corner loop and before the return. The `corner is not None` branch is untouched,
+so single-corner views never include reference times.)
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `.venv/Scripts/python.exe -m pytest tests/test_coach_tools.py -k "reference_times or reference" -v`
+Expected: PASS
+
+- [ ] **Step 5: Add prompt guidance**
+
+In `simcoach/coach.py`, extend the `get_track_notes` guidance line in
+`AGENTIC_SYSTEM_PROMPT` with a clause:
+
+```
+"When reference lap times are given, you MAY compare the driver's time to the "
+"benchmark for their class as an absolute yardstick — but these are community times, "
+"not the driver's data; frame them as a reference, not a verdict. "
+```
+
+- [ ] **Step 6: Run the full coach-tools suite + ruff**
+
+Run: `.venv/Scripts/python.exe -m pytest tests/test_coach_tools.py -v`
+Then: `.venv/Scripts/python.exe -m ruff check simcoach/coach_tools.py simcoach/coach.py`
+Expected: PASS, clean.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add simcoach/coach_tools.py simcoach/coach.py tests/test_coach_tools.py
+git commit -m "feat(coach): surface community reference lap times in get_track_notes"
+```
+
+---
+
 ### Task 3: Migrate `knowledge/*.md` → `notes`, retire the legacy track-note path
 
 **Files:**
@@ -604,6 +698,7 @@ Expected: FAIL — routes not defined.
         raw = body.get("notes") or {}
         notes = {"overview": str(raw.get("overview", "")),
                  "corners": {str(k): str(v) for k, v in (raw.get("corners") or {}).items()},
+                 "reference_times": {str(k): str(v) for k, v in (raw.get("reference_times") or {}).items()},
                  "source": str(raw.get("source", ""))}
         data = dict(_track_file_data(track))       # merged shipped+overlay
         if not data:
@@ -677,7 +772,7 @@ In `frontend/src/lib/api.ts`, following the existing fetch-wrapper pattern (matc
 
 ```ts
 export type TrackRow = { slug: string; name: string; has_map: boolean; has_notes: boolean; user_edited: boolean };
-export type TrackNotes = { overview: string; corners: Record<string, string>; source: string };
+export type TrackNotes = { overview: string; corners: Record<string, string>; reference_times: Record<string, string>; source: string };
 
 export const listTracks = (): Promise<TrackRow[]> => api("/tracks");
 export const draftNotes = (slug: string, track: string, guides: string): Promise<{ draft: TrackNotes }> =>
@@ -751,7 +846,7 @@ Expected: FAIL — component does not exist.
 
 Create `frontend/src/lib/TracksScreen.svelte` following the repo's Svelte 5 runes style (see `SessionsScreen.svelte` / `SettingsScreen.svelte` for structure and CSS conventions). It must:
 - On mount, call `listTracks()` and render a list; each row shows name + coverage badges (`has_map`, `has_notes` → "notes"/"no notes", `user_edited` → "edited"/"shipped").
-- On selecting a track: show the notes editor — `overview` textarea, a per-corner note field per corner (keyed by label), a `source` field, a live word-count hint (overview ≤80, corner ≤40), and a guides paste textarea.
+- On selecting a track: show the notes editor — `overview` textarea, a per-corner note field per corner (keyed by label), a **reference-times editor** (add/remove `{class: "m:ss.xxx"}` rows for `notes.reference_times`), a `source` field, a live word-count hint (overview ≤80, corner ≤40), and a guides paste textarea. The full notes object saved/loaded includes `reference_times` (may be empty/absent).
 - **Generate draft** button → `draftNotes(slug, name, guides)` → populate the editor fields from the returned draft.
 - **Save** button → `saveNotes(slug, name, notes)` (primary-button style — reuse the app's primary button class).
 - Host `<TrackMapEditor .../>` for the selected track (import and mount it as-is; pass the props it already expects).

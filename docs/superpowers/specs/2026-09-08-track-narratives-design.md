@@ -60,6 +60,7 @@ file.
     "1": "Heavy downhill braking, compression at the apex — brake earlier than it looks. Late apex; avoid the sausage kerb.",
     "10-11": "Double-apex right: straight-line brake to the first apex, trail to rotate for a late second apex."
   },
+  "reference_times": { "LMGT3": "1:41.500", "Hypercar": "1:35.200" },
   "source": "LMU wiki (lemansultimate.wiki.gg), CC-BY-SA; driver-verified 2026-09-08"
 }
 ```
@@ -68,6 +69,12 @@ file.
   `cmap.corners[].label` uses, e.g. `"1"`, `"10-11"`, `"8A"`), so they join the map
   directly.
 - `overview` is a short track-level blurb; `source` is free-text attribution.
+- `reference_times` is an OPTIONAL community/benchmark lap-time reference, per **track
+  and (optionally) class** — a `{class: "m:ss.xxx"}` map (use the key `"default"` when
+  unclassed). Times only; we cannot get others' telemetry, but the time alone gives the
+  coach an absolute yardstick beyond the driver's own best lap. Curated/owned data,
+  authored/verified like the rest — never scraped or live-guessed. The coach cites it
+  ("you're ~1.2s off a competitive LMGT3 lap here"). Absent key → no reference offered.
 - User edits write the **full merged `notes`** back to the app-data overlay
   (`<data_dir>/tracks/<slug>.json`), identical to how corner edits work today
   (editor loads merged view, saves the whole field). `_write_track_json` and the
@@ -86,10 +93,13 @@ word count). Not a hard validation error — a knob, not a gate.
 get_track_notes(corner: str | None = None)
 ```
 
-- No `corner`: returns the overview + all per-corner notes.
+- No `corner`: returns the overview + all per-corner notes + any `reference_times`.
 - With `corner`: returns the overview + just that corner's note (bounded token cost).
+  Reference times ride the no-`corner` (whole-track) response.
 - Reads the merged map (`self.cmap` already carries the merged `notes`). No telemetry
   needed — works pre-lap.
+- When `reference_times` is present, appends a line listing them by class (e.g.
+  "Reference lap times (community benchmark): LMGT3 1:41.500; Hypercar 1:35.200").
 - Deterministic text summary, like the other tools. Missing notes → a clean
   "No authored notes for this track yet."
 
