@@ -885,3 +885,35 @@ class LapStore:
                 "text = excluded.text, status = excluded.status, updated_ts = excluded.updated_ts",
                 (text, status, time.time()),
             )
+
+    def save_session_setup(self, session_id: str, track: str, car: str, setup: dict) -> None:
+        """Persist the current setup for a live session (latest-wins upsert on
+        session_id) so the driver profile can recall "what did we run here
+        last time?" even if the session ends abruptly."""
+        with self._lock, self.conn:
+            self.conn.execute(
+                "INSERT INTO session_setups (session_id, track, car, setup_json, updated_ts) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET "
+                "track = excluded.track, car = excluded.car, setup_json = excluded.setup_json, "
+                "updated_ts = excluded.updated_ts",
+                (session_id, track, car, json.dumps(setup), time.time()),
+            )
+
+    def last_setup(self, track: str, car: str) -> dict | None:
+        """Most recent session_setups row for this track/car, or None."""
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT session_id, track, car, setup_json, updated_ts FROM session_setups "
+                "WHERE track = ? AND car = ? ORDER BY updated_ts DESC LIMIT 1",
+                (track, car),
+            ).fetchone()
+        if not row:
+            return None
+        session_id, track, car, setup_json, updated_ts = row
+        return {
+            "session_id": session_id,
+            "track": track,
+            "car": car,
+            "setup": json.loads(setup_json),
+            "updated_ts": updated_ts,
+        }

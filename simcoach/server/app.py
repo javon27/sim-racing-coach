@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import os
 import sys
@@ -26,11 +27,11 @@ from .. import config, logging_setup, paths, secrets
 from ..analysis import analyze_lap
 from ..car_lookup import resolve_car
 from ..coach_tools import CoachContext
+from ..corners import CornerMap, in_window
 from ..lmu.ingest import ingest_all
 from ..model.factory import CoachUserError, make_model
-from ..tiers import legal_adjustments
-from ..corners import CornerMap, in_window
 from ..ribbon import multi_signal_direction, reconstruct_surface, ribbon_to_screen
+from ..tiers import adjustable_from_setup, legal_adjustments
 from ..track_lookup import load_map_data, track_slug
 from ..trackmap import average_racing_line, build_track_map, direction_from_path
 
@@ -990,9 +991,22 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         if not rest:
             return {}
         try:
-            return rest.get_setup()
+            data = rest.get_setup()
         except Exception:
             return {}
+        # Continuous capture: every time the Setup panel pulls the live setup and
+        # we know which session it belongs to, persist the real-adjustable subset
+        # (same isFreeSetting filter as the panel) so "what did we run here last
+        # time?" survives a session ending. Best-effort — never break the fetch.
+        if data:
+            try:
+                st = status()
+                if st["track"] and st["car"] and st["session_id"]:
+                    free = {k: data[k].get("stringValue") for k in adjustable_from_setup(data)}
+                    store.save_session_setup(st["session_id"], st["track"], st["car"], free)
+            except Exception:
+                logging.getLogger(__name__).warning("session setup capture failed", exc_info=True)
+        return data
 
     @app.get("/chats")
     def chats():

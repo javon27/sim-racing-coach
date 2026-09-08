@@ -663,3 +663,17 @@ def test_schema_migrates_from_v10(tmp_path):
     s2 = LapStore(db, str(tmp_path / "telem"))   # should migrate to 11 without error
     assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     s2.add_learning("x", status="active", source="manual")  # new table usable
+
+
+def test_session_setup_upsert_and_last(tmp_path):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    assert s.last_setup("Monza", "GT3") is None
+    s.save_session_setup("sess-1", "Monza", "GT3", {"wing": 5})
+    s.save_session_setup("sess-1", "Monza", "GT3", {"wing": 7})   # same session -> upsert, no dup
+    s.save_session_setup("sess-2", "Monza", "GT3", {"wing": 8})   # newer session
+    rows = s.conn.execute("SELECT COUNT(*) FROM session_setups").fetchone()[0]
+    assert rows == 2                                              # upsert kept sess-1 as one row
+    last = s.last_setup("Monza", "GT3")
+    assert last["setup"] == {"wing": 8} and last["session_id"] == "sess-2"
+    assert s.last_setup("Spa", "GT3") is None
