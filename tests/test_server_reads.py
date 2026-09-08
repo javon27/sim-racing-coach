@@ -426,7 +426,30 @@ def test_setup_fetch_captures_session_setup(tmp_path, synthetic_lap):
     _tc(app).get("/setup")
     last = store.last_setup(synthetic_lap.track, synthetic_lap.car)
     assert last["session_id"] == "s1"
-    assert last["setup"] == {"VM_WING_REAR": "5"}  # only the real-adjustable param
+    # Nested shape (same as get_setup reads) -- only the real-adjustable param.
+    assert last["setup"] == {"VM_WING_REAR": {"stringValue": "5", "isFreeSetting": True}}
+
+
+def test_setup_fetch_capture_renders_via_get_last_setup(tmp_path, synthetic_lap):
+    # Anti-recurrence: the /setup capture path must store a shape get_last_setup can
+    # actually render, not just a shape that round-trips through last_setup().
+    from simcoach.coach_tools import CoachContext
+
+    class FakeRest:
+        def get_setup(self):
+            return {"VM_WING_REAR": {"stringValue": "5", "isFreeSetting": True}}
+
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    synthetic_lap.session_id = "s1"
+    coach = Coach(FakeModel(), "simcoach/knowledge")
+    app = create_app(store, coach, rest=FakeRest())
+    app.state.latest = {"record": synthetic_lap, "lap_id": 1}
+    _tc(app).get("/setup")
+
+    ctx = CoachContext(store, track=synthetic_lap.track, car=synthetic_lap.car)
+    out = ctx.get_last_setup()
+    assert "no adjustable parameters" not in out.lower()
+    assert "Wing Rear: 5" in out
 
 
 def test_setup_fetch_without_known_session_does_not_capture(tmp_path):

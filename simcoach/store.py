@@ -353,10 +353,16 @@ class LapStore:
                          "AND (phase IS NULL OR phase != 'mapping')")
                 params: list = [session_id]
             else:
-                query = ("SELECT id FROM laps WHERE track = ? AND car = ? AND valid = 1 "
+                # `car` may be a resolved display model while laps store the raw entry
+                # name (see recent_laps) -- expand to every raw entry that resolves to
+                # it, same as _session_where. Falls back to the literal value when
+                # nothing resolves to it (an exact raw-name match, as before).
+                teams = [c for c in self._distinct_db_cars() if resolve_car(c) == car] or [car]
+                query = (f"SELECT id FROM laps WHERE track = ? "
+                         f"AND car IN ({','.join('?' * len(teams))}) AND valid = 1 "
                          "AND telemetry_path IS NOT NULL "
                          "AND (phase IS NULL OR phase != 'mapping')")
-                params = [track, car]
+                params = [track, *teams]
             if exclude_lap_id is not None:
                 query += " AND id != ?"
                 params.append(exclude_lap_id)
@@ -877,7 +883,15 @@ class LapStore:
             ).fetchone()
         return {"text": row[0], "status": row[1]} if row else {"text": "", "status": "active"}
 
+    _SUMMARY_WORD_CAP = 60
+
     def set_driver_summary(self, text: str, status: str) -> None:
+        # The always-on summary rides in every coach prompt -- cap it here (the one
+        # place both the manual-edit and approve paths go through) so it can't grow
+        # past the spec's ~60-word budget.
+        words = text.split()
+        if len(words) > self._SUMMARY_WORD_CAP:
+            text = " ".join(words[: self._SUMMARY_WORD_CAP])
         with self._lock, self.conn:
             self.conn.execute(
                 "INSERT INTO driver_summary (id, text, status, updated_ts) "

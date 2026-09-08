@@ -162,6 +162,10 @@
   });
 
   async function saveSummary() {
+    // A proposed (pending) summary is persisted only via the explicit Approve
+    // action -- auto-saving on blur here would silently overwrite the single
+    // active driver_summary row with unreviewed text.
+    if (summaryStatus !== "active") return;
     const res = await putProfileSummary(summaryText, summaryStatus);
     if (profile) profile = { ...profile, summary: res };
   }

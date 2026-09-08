@@ -218,6 +218,21 @@ def test_best_lap_phase_filter(tmp_path, synthetic_lap):
     assert s.best_lap("test_track", "test_car").lap_time == 90.0
 
 
+def test_best_lap_all_time_ignores_car_model(tmp_path, synthetic_lap, monkeypatch):
+    # The coach's all-time best-lap lookup (no session_id) queries with a RESOLVED
+    # display model while laps are stored under the raw entry name -- same gap
+    # session_id-scoped queries were already fixed for (see the test above).
+    from simcoach import store as store_mod
+    from simcoach.store import LapStore
+    monkeypatch.setattr(store_mod, "resolve_car",
+                        lambda c: "BMW M4 LMGT3" if c == "test_car" else c)
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    s.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "sess-1"}))
+
+    best = s.best_lap("test_track", "BMW M4 LMGT3")
+    assert best is not None and best.lap_time == 92.5
+
+
 def test_best_lap_session_filter(tmp_path, synthetic_lap):
     from simcoach.store import LapStore
     s = LapStore(str(tmp_path/"c.sqlite"), str(tmp_path/"data"))
@@ -652,6 +667,16 @@ def test_driver_summary_roundtrip_and_default(tmp_path):
     assert s.get_driver_summary() == {"text": "", "status": "active"}
     s.set_driver_summary("Smooth trail-braker, works on late apexes.", "active")
     assert s.get_driver_summary()["text"].startswith("Smooth trail-braker")
+
+
+def test_driver_summary_truncated_to_word_cap(tmp_path):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    over_long = " ".join(f"word{i}" for i in range(100))
+    s.set_driver_summary(over_long, "active")
+    stored = s.get_driver_summary()["text"]
+    assert len(stored.split()) == 60
+    assert stored == " ".join(f"word{i}" for i in range(60))
 
 
 def test_schema_migrates_from_v10(tmp_path):

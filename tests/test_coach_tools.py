@@ -332,6 +332,21 @@ def test_get_personal_best_no_laps(tmp_path):
     assert "no recorded laps" in ctx.get_personal_best().lower()
 
 
+def test_get_personal_best_finds_laps_under_raw_entry_name(tmp_path, synthetic_lap, monkeypatch):
+    # ctx.car is the RESOLVED model ("BMW M4 LMGT3"); laps are stored under the raw
+    # team entry name ("test_car"). get_personal_best must still find them (matches
+    # how the other history tools already resolve this via store.session_summary).
+    import simcoach.store as store_mod
+    monkeypatch.setattr(store_mod, "resolve_car",
+                        lambda c: "BMW M4 LMGT3" if c == "test_car" else c)
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    from simcoach.model_types import LapRecord
+    store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1--online"}))
+    ctx = CoachContext(store, track=synthetic_lap.track, car="BMW M4 LMGT3")
+    out = ctx.dispatch("get_personal_best", {})
+    assert "1:32.500" in out
+
+
 def test_get_progress_lists_sessions_in_order(tmp_path, synthetic_lap):
     from simcoach.model_types import LapRecord
     store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))

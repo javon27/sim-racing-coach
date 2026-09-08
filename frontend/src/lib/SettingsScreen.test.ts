@@ -400,6 +400,20 @@ describe("SettingsScreen", () => {
     expect(putProfileSummary).toHaveBeenCalledWith("New candidate summary text.", "active");
   });
 
+  it("does not auto-save a pending summary on blur -- only Approve persists it", async () => {
+    vi.mocked(getSettings).mockResolvedValue(baseSettings());
+    vi.mocked(getProfile).mockResolvedValue(
+      baseProfile({ summary: { text: "New candidate summary text.", status: "pending" } }),
+    );
+
+    render(SettingsScreen);
+
+    const textarea = await screen.findByDisplayValue("New candidate summary text.");
+    await fireEvent.change(textarea, { target: { value: "Edited proposed text." } });
+
+    expect(putProfileSummary).not.toHaveBeenCalled();
+  });
+
   it("Review session learnings distills the current session and surfaces proposals", async () => {
     vi.mocked(getSettings).mockResolvedValue(baseSettings());
     vi.mocked(getStatus).mockResolvedValue(baseStatus({ session_id: "sess-42" }));

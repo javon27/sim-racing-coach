@@ -1003,7 +1003,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             try:
                 st = status()
                 if st["track"] and st["car"] and st["session_id"]:
-                    free = {k: data[k].get("stringValue") for k in adjustable_from_setup(data)}
+                    free = {k: data[k] for k in adjustable_from_setup(data)}
                     store.save_session_setup(st["session_id"], st["track"], st["car"], free)
             except Exception:
                 logging.getLogger(__name__).warning("session setup capture failed", exc_info=True)
@@ -1287,8 +1287,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 analysis = analyze_lap(record, cmap, reference=best)
                 for cm in analysis.corners:
                     if cm.min_spd_delta is not None and cm.min_spd_delta < -1.0:
-                        key = cm.label or cm.corner_no
-                        weak_counts[key] = weak_counts.get(key, 0) + 1
+                        weak_counts[cm.corner_no] = weak_counts.get(cm.corner_no, 0) + 1
             recurring = [f"T{k} slower than best in {v} lap(s)"
                         for k, v in sorted(weak_counts.items(), key=lambda kv: -kv[1]) if v >= 2]
             if recurring:
