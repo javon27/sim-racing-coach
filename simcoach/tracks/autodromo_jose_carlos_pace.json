@@ -9735,7 +9735,7 @@
     ]
   },
   "notes": {
-    "overview": "4.309 km, 15 turns, WEC layout. A short, technical \"rhythm track\" with constant elevation change and short straights -- lap time comes from smooth, consistent exits rather than raw entry speed, and tyres (front and rear) wear quickly if corners are overdriven. - [LMU] Overdriving downhill corners (Mergulho, Descida do Lago) destabilizes the rear. - [LMU] Brake earlier than instinct suggests on uphill sections to avoid lock-ups. - [LMU] Hypercar guide adds that early throttle on uphill corners overloads the rear tyres and costs traction. Overdriving downhill corners (especially Mergulho and Descida do Lago), late braking into hairpins stressing tyres, jerky steering in medium-speed kinks killing exit speed, early throttle on uphill corners, excessive kerb use on fast corners.",
+    "overview": "4.309 km, 15 turns, WEC layout. A short, technical \"rhythm track\" with constant elevation change and short straights -- lap time comes from smooth, consistent exits rather than raw entry speed, and tyres (front and rear) wear quickly if corners are overdriven. - [LMU] Overdriving downhill corners (Mergulho, Descida do Lago) destabilizes the rear. - [LMU] Brake earlier than instinct suggests on uphill sections to avoid lock-ups. - [LMU] Hypercar guide adds that early throttle on uphill corners overloads the rear tyres and costs traction. Overdriving downhill corners (especially Mergulho and Descida do Lago), late braking into hairpins stressing tyres, jerky steering in medium-speed kinks killing exit speed, early throttle on uphill corners, excessive kerb use on fast corners. `simcoach/tracks/autodromo_jos_carlos_pace.json` covers 13 of the 15 corners. T2 (second apex of the Senna S) and T9 (Pinheirinho) are omitted because the wiki source never states a left/right direction for them -- left out per the never-invent-direction rule rather than guessed.",
     "corners": {
       "1-2": "Heavy braking into T1 (left), late apex, position left for T2 (mid-apex, full throttle).",
       "3": "High-speed downhill right, flat out normally, avoid aggressive kerb use; lift slightly if understeering.",
@@ -9747,7 +9747,9 @@
       "10": "Tight right hairpin, heavy braking with trail-brake rotation, late apex, enter wide and exit toward the middle of the track.",
       "11": "Fast downhill left, flat out, lift gently only if understeering.",
       "12": "Medium-speed left, late apex, use full track width.",
-      "13": "All slight left-hand kinks -- minimal steering and the inside line to reduce drag and keep the shortest path onto the front straight."
+      "13": "All slight left-hand kinks -- minimal steering and the inside line to reduce drag and keep the shortest path onto the front straight.",
+      "14": "All slight left-hand kinks -- minimal steering and the inside line to reduce drag and keep the shortest path onto the front straight.",
+      "15": "All slight left-hand kinks -- minimal steering and the inside line to reduce drag and keep the shortest path onto the front straight."
     },
     "source": "LMU wiki (lemansultimate.wiki.gg), CC-BY-SA, summarized 2026-08-29."
   }

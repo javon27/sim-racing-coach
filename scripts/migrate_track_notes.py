@@ -9,7 +9,8 @@ import json
 import re
 from pathlib import Path
 
-_CORNER_RE = re.compile(r"^\s*-\s*\*\*T([0-9]+(?:-[0-9]+)?[A-Za-z]?)\b[^:]*:\*\*\s*(.+)$")
+_CORNER_HEAD_RE = re.compile(r"^\s*-\s*\*\*(T[0-9][^:]*):\*\*\s*(.+)$")
+_LABEL_RE = re.compile(r"T([0-9]+(?:-[0-9]+)?[A-Za-z]?)\b")
 _SOURCE_RE = re.compile(r"^Source:\s*(.+)$", re.MULTILINE)
 
 
@@ -18,21 +19,29 @@ def parse_md(md_text: str) -> dict:
     corners: dict[str, str] = {}
     overview_parts: list[str] = []
     in_corners = False
-    cur_label: str | None = None
+    cur_labels: list[str] = []
     for ln in lines:
         if ln.startswith("#"):                       # heading
-            in_corners = ln.lower().startswith("## corner")
-            cur_label = None
+            # Exact match: other "## Corner*" headings (e.g. "## Corner-map
+            # completeness") are prose, not the per-corner bullet list.
+            in_corners = ln.lower().startswith("## corner-by-corner")
+            cur_labels = []
             continue
-        m = _CORNER_RE.match(ln)
+        m = _CORNER_HEAD_RE.match(ln)
         if m:
-            cur_label, text = m.group(1), m.group(2).strip()
-            corners[cur_label] = text
+            header, text = m.group(1), m.group(2).strip()
+            # A bullet can name several corners at once (e.g. "T13 .. / T14
+            # .. / T15 ..:"); give each label the same (shared, not invented)
+            # text rather than collapsing them under the first label only.
+            cur_labels = _LABEL_RE.findall(header)
+            for label in cur_labels:
+                corners[label] = text
             continue
-        if in_corners and cur_label and ln.strip() and not ln.startswith("-"):
-            corners[cur_label] += " " + ln.strip()   # wrapped continuation line
+        if in_corners and cur_labels and ln.strip() and not ln.startswith("-"):
+            for label in cur_labels:
+                corners[label] += " " + ln.strip()   # wrapped continuation line
             continue
-        if not in_corners and ln.strip() and not ln.startswith(("Source:", "`")):
+        if not in_corners and ln.strip() and not ln.startswith("Source:"):
             overview_parts.append(ln.strip())
     src = _SOURCE_RE.search(md_text)
     overview = " ".join(p for p in overview_parts if not p.startswith("#")).strip()
