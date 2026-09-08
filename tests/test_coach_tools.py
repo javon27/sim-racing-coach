@@ -311,6 +311,88 @@ def test_agentic_system_prompt_has_units_and_tools_guidance(tmp_path, synthetic_
     assert "tool" in model.last_system.lower()
 
 
+def test_get_personal_best_all_time_and_session_contrast(tmp_path, synthetic_lap):
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    # Older session: a 91.0s lap. Current session: a 93.0s lap (slower).
+    store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1--online",
+                            "timestamp": 1000.0, "lap_time": 91.0}))
+    store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "s2--online",
+                            "timestamp": 2000.0, "lap_time": 93.0}))
+    ctx = CoachContext(store, track=synthetic_lap.track, car=synthetic_lap.car,
+                       session_id="s2--online")
+    out = ctx.dispatch("get_personal_best", {})
+    assert "1:31.000" in out  # all-time best from the older session
+    assert "1:33.000" in out  # this session's best, contrasted
+
+
+def test_get_personal_best_no_laps(tmp_path):
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    ctx = CoachContext(store, track="nowhere", car="nocar")
+    assert "no recorded laps" in ctx.get_personal_best().lower()
+
+
+def test_get_progress_lists_sessions_in_order(tmp_path, synthetic_lap):
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1--online",
+                            "timestamp": 1000.0, "lap_time": 95.0}))
+    store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "s2--online",
+                            "timestamp": 2000.0, "lap_time": 92.0}))
+    ctx = CoachContext(store, track=synthetic_lap.track, car=synthetic_lap.car)
+    out = ctx.dispatch("get_progress", {})
+    assert out.index("1:35.000") < out.index("1:32.000")  # chronological order
+    assert "faster" in out.lower()
+
+
+def test_get_progress_no_history(tmp_path):
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    ctx = CoachContext(store, track="nowhere", car="nocar")
+    assert "no session history" in ctx.get_progress().lower()
+
+
+def test_list_past_sessions_excludes_current_and_shows_result(tmp_path, synthetic_lap):
+    from simcoach.lmu.results import ResultSession
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "past--online",
+                            "timestamp": 1000.0, "lap_time": 95.0}))
+    rs = ResultSession(sim="lmu", track=synthetic_lap.track, car=synthetic_lap.car,
+                       car_class="GT3", date_ts=1, session_type="race", position=4,
+                       class_position=1, best_lap=95.0, finish_status="Finished",
+                       laps=[], incidents=[], penalties=[])
+    store.save_result_session(rs, session_id="past--online")
+    store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "current--online",
+                            "timestamp": 2000.0, "lap_time": 92.0}))
+    ctx = CoachContext(store, track=synthetic_lap.track, car=synthetic_lap.car,
+                       session_id="current--online")
+    out = ctx.dispatch("list_past_sessions", {})
+    assert "P4" in out
+    assert "1:35.000" in out
+    assert "1:32.000" not in out  # current session excluded
+
+
+def test_list_past_sessions_none_recorded(tmp_path):
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    ctx = CoachContext(store, track="nowhere", car="nocar")
+    assert "no past sessions" in ctx.list_past_sessions().lower()
+
+
+def test_get_last_setup_returns_stored_setup(tmp_path):
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    setup = {"VM_WING_REAR": {"stringValue": "6", "isFreeSetting": True}}
+    store.save_session_setup("s1--online", "spa", "gt3", setup)
+    ctx = CoachContext(store, track="spa", car="gt3")
+    out = ctx.dispatch("get_last_setup", {})
+    assert "Wing Rear: 6" in out
+
+
+def test_get_last_setup_none_stored(tmp_path):
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    ctx = CoachContext(store, track="spa", car="gt3")
+    assert "no stored setup" in ctx.get_last_setup().lower()
+
+
 def test_current_lap_resolved_from_store_when_not_pinned(tmp_path, synthetic_lap):
     # The coach is no longer handed a lap (record=None). 'latest' and the corner
     # tools resolve the most-recent stored lap on demand — the fix for the coach
