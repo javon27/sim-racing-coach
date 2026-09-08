@@ -679,6 +679,44 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         _invalidate_canon(rec.track)
         return _canonical_map(rec.track, rec.car, force=False)
 
+    @app.post("/tracks/{slug}/draft-notes")
+    def draft_notes(slug: str, body: dict = Body(...)):
+        # Author-time drafting only: builds a geometry digest, asks the model for a
+        # narrative, and RETURNS it -- never persisted here. The human reviews/edits
+        # and a separate save endpoint (later) writes to disk.
+        track = body.get("track") or slug
+        if track_slug(track) != slug:
+            raise HTTPException(400, "slug/track mismatch")
+        cmap = _cmap_for_map(track)
+        if cmap is None or not cmap.corners:
+            raise HTTPException(404, "no corner map for this track")
+        digest_lines = [
+            f"T{c.label or c.number} {c.name}: {c.direction}, "
+            f"apex@{c.apex_dist:.0f}m, span {c.start_dist:.0f}-{c.end_dist:.0f}m"
+            for c in cmap.corners
+        ]
+        guides = (body.get("guides") or "").strip()
+        system = (
+            "You are drafting OWNED, author-time track notes a human will verify. "
+            "Return STRICT JSON: {\"overview\": str, \"corners\": {label: str}, \"source\": str}. "
+            "Keep the overview under 80 words and each corner note under 40 words. "
+            "Ground every claim in the geometry and provided guides; do NOT invent corner "
+            "names, numbers, or directions -- those are given.")
+        user = "Corner geometry:\n" + "\n".join(digest_lines)
+        if guides:
+            user += "\n\nExternal guide material (reference):\n" + guides
+        raw = app.state.coach.model.complete(system, [{"role": "user", "content": user}])
+        try:
+            draft = json.loads(raw)
+        except (ValueError, TypeError):
+            draft = None
+        if not isinstance(draft, dict):
+            raise HTTPException(502, "model did not return valid notes JSON")
+        draft = {"overview": str(draft.get("overview", "")),
+                 "corners": {str(k): str(v) for k, v in (draft.get("corners") or {}).items()},
+                 "source": str(draft.get("source", ""))}
+        return {"draft": draft}
+
     @app.post("/laps/{lap_id}/rotation")
     def set_rotation(lap_id: int, body: dict = Body(...)):
         # Persist a per-track display rotation (degrees). Body required -> preflight
