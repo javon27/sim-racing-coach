@@ -28,6 +28,7 @@ from ..analysis import analyze_lap
 from ..car_lookup import resolve_car
 from ..coach_tools import CoachContext
 from ..corners import CornerMap, in_window
+from ..driver import DriverProfile
 from ..lmu.ingest import ingest_all
 from ..model.factory import CoachUserError, make_model
 from ..ribbon import multi_signal_direction, reconstruct_surface, ribbon_to_screen
@@ -1112,12 +1113,29 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             # the session stamp.
             if eff_session_id is None and app.state.latest is not None:
                 eff_session_id = app.state.latest["record"].session_id
+            cfg = config.load_config()
             ctx = CoachContext(app.state.store, record=None, lap_id=None, cmap=cmap,
-                               units=config.load_config().get("units", "metric"),
+                               units=cfg.get("units", "metric"),
                                setup=setup, track=track, car=car, on_track=on_track,
                                allowed_adjustments=(legal_adjustments(setup) if setup else None),
                                session_id=eff_session_id)
             car = ctx.car or "car"
+
+            # Concise always-on profile tier: static prefs from settings + the active
+            # driver_summary only — NOT the full memory list (that's a pull tool, later
+            # task). Best-effort: a missing/empty summary just means no learned_notes.
+            d = cfg.get("driver") or {}
+            try:
+                summary = app.state.store.get_driver_summary()
+            except Exception:
+                summary = {}
+            notes = [summary["text"]] if summary.get("status") == "active" and summary.get("text") else []
+            driver_profile = DriverProfile(
+                braking_style=d.get("braking_style") or None,
+                balance_preference=d.get("balance_preference") or None,
+                risk_tolerance=d.get("risk_tolerance") or None,
+                learned_notes=notes,
+            )
 
             # Thread the chat's prior turns so the coach continues the conversation
             # instead of treating each question standalone (the system prompt tells it
@@ -1138,7 +1156,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             try:
                 for ev in app.state.coach.ask_agentic_stream(
                         ctx, question, car=car, input_device=req.get("input_device"),
-                        history=history, units=ctx.units):
+                        history=history, units=ctx.units, driver_profile=driver_profile):
                     if ev["type"] == "text":
                         text += ev["text"]       # accumulate streamed deltas into the full answer
                     _emit(ev)

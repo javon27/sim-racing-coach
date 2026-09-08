@@ -10,9 +10,10 @@ from pathlib import Path
 
 from simcoach.app import run_repl
 from simcoach.car_lookup import resolve_car
-from simcoach.config import load_config
 from simcoach.coach import Coach
+from simcoach.config import load_config
 from simcoach.corners import CornerMap
+from simcoach.driver import DriverProfile
 from simcoach.lmu.rest import LmuRest
 from simcoach.lmu.smm import LmuSource, read_session_track_car
 from simcoach.mapbuild import build_map
@@ -115,9 +116,26 @@ def main():
     def resolver(track_name, vehicle, channels):
         return resolve_context(rest, TRACKS_DIR, track_name, vehicle, channels)
 
+    # Concise always-on profile tier: static prefs from settings + the active
+    # driver_summary only — NOT the full memory list (that's a pull tool, later task).
+    # Best-effort: a missing/empty summary just means no learned_notes.
+    d = config.get("driver") or {}
+    try:
+        summary = store.get_driver_summary()
+    except Exception:
+        summary = {}
+    notes = [summary["text"]] if summary.get("status") == "active" and summary.get("text") else []
+    driver_profile = DriverProfile(
+        braking_style=d.get("braking_style") or None,
+        balance_preference=d.get("balance_preference") or None,
+        risk_tolerance=d.get("risk_tolerance") or None,
+        learned_notes=notes,
+    )
+
     run_repl(LmuSource(), store, cmap, coach, car, rest=rest, track_note=map_path.stem,
              input_device=config["input_device"], units=config["units"],
-             resolver=resolver, peek=read_session_track_car, initial_key=(track_name, vehicle))
+             resolver=resolver, peek=read_session_track_car, initial_key=(track_name, vehicle),
+             driver_profile=driver_profile)
 
 
 if __name__ == "__main__":
