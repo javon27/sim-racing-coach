@@ -1,8 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "simcoach"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = ["numpy>=1.26", "anthropic>=0.40", "keyring>=25", "fastapi>=0.115", "uvicorn>=0.30", "websockets>=13"]
+
+# Explicit discovery: the repo is a flat layout with sibling non-package dirs
+# (site/, brand/, frontend/, packaging/), so setuptools auto-discovery bails with
+# "Multiple top-level packages discovered". Scope it to the one Python package so
+# `pip install -e .` works in a fresh worktree venv (editable install then points at
+# THAT worktree's source, not the main checkout).
+[tool.setuptools.packages.find]
+include = ["simcoach*"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6"]
