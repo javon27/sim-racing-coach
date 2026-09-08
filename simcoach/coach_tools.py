@@ -9,9 +9,10 @@ current session (track/car/lap), which the live-session re-resolution keeps fres
 """
 from __future__ import annotations
 
+import re
+
 from simcoach.analysis import analyze_lap
 from simcoach.coach import _setup_lines
-from simcoach.fuel import fuel_per_lap_from_channel, laps_remaining
 from simcoach.format import (
     find_corner,
     format_corner_line,
@@ -20,6 +21,7 @@ from simcoach.format import (
     format_tire_report,
     format_wheel_report,
 )
+from simcoach.fuel import fuel_per_lap_from_channel, laps_remaining
 
 # Tool specs advertised to the model (Anthropic tool-use format).
 TOOLS = [
@@ -337,10 +339,25 @@ class CoachContext:
         return f"{line}\nAuthored note: {note}" if note else line
 
     def _corner_note(self, label) -> str | None:
-        """Authored note for one corner label from the merged map, or None."""
+        """Authored note for one corner label from the merged map, or None.
+
+        Notes may be keyed by a hyphen range ("10-11") covering several
+        corners, while corner maps label corners individually ("10", "11").
+        Fall back to a range match when the label is a plain integer.
+        """
         notes = getattr(self.cmap, "notes", None) or {}
         by_corner = notes.get("corners") or {}
-        return by_corner.get(str(label))
+        label = str(label)
+        if label in by_corner:
+            return by_corner[label]
+        if not label.isdigit():
+            return None
+        n = int(label)
+        for key, text in by_corner.items():
+            m = re.fullmatch(r"(\d+)-(\d+)", key)
+            if m and int(m.group(1)) <= n <= int(m.group(2)):
+                return text
+        return None
 
     def get_track_notes(self, corner=None):
         notes = getattr(self.cmap, "notes", None) or {}

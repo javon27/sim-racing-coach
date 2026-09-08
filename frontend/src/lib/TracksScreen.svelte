@@ -73,7 +73,8 @@
       const { draft } = await draftNotes(selected.slug, selected.name, guides);
       notes.overview = draft.overview ?? "";
       notes.corners = { ...(draft.corners ?? {}) };
-      notes.reference_times = { ...(draft.reference_times ?? {}) };
+      // reference_times is deliberately left untouched: the draft endpoint
+      // never returns it, and overwriting would wipe saved community times.
       notes.source = draft.source ?? "";
     } finally {
       drafting = false;

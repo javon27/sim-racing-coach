@@ -26,6 +26,23 @@ test("generate draft fills the notes editor", async () => {
   expect(await screen.findByDisplayValue(/rhythm track/)).toBeTruthy();
 });
 
+test("generate draft preserves saved reference times", async () => {
+  vi.spyOn(api, "getTrackNotes").mockResolvedValue({
+    overview: "long straight into a heavy braking chicane",
+    corners: { "1": "brake late" },
+    reference_times: { GT3: "1:32.500" },
+    source: "driver notes",
+  });
+  vi.spyOn(api, "draftNotes").mockResolvedValue({
+    draft: { overview: "rhythm track", corners: { "1": "brake late" }, reference_times: {}, source: "draft" },
+  });
+  render(TracksScreen);
+  await fireEvent.click(await screen.findByText("Algarve"));
+  await fireEvent.click(screen.getByRole("button", { name: /generate draft/i }));
+  await screen.findByDisplayValue(/rhythm track/);
+  expect((screen.getByLabelText("reference time GT3") as HTMLInputElement).value).toBe("1:32.500");
+});
+
 test("selecting a track pre-fills the editor from its existing notes", async () => {
   vi.spyOn(api, "getTrackNotes").mockResolvedValue({
     overview: "long straight into a heavy braking chicane",

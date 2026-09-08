@@ -229,6 +229,30 @@ def test_get_corner_appends_authored_note():
     assert ctx._corner_note("99") is None
 
 
+def test_corner_note_resolves_ranged_key():
+    # A wiki note can cover a span of corners ("10-11"), but shipped corner
+    # maps label corners as individual integers ("10", "11"). Both ends of
+    # the range must resolve to the same authored note.
+    ctx = _ctx_with_notes({"corners": {"10-11": "double-apex, brake early"}})
+    assert ctx._corner_note("10") == "double-apex, brake early"
+    assert ctx._corner_note("11") == "double-apex, brake early"
+    assert ctx._corner_note("12") is None
+    assert ctx._corner_note("8A") is None  # non-numeric label: exact match only, no crash
+
+
+def test_corner_note_resolves_ranged_key_on_real_track():
+    # Regression guard: synthetic single-corner maps in this file can't catch
+    # a range-vs-integer-label mismatch. Algarve's real shipped notes have a
+    # "10-11" range key while its real corner map labels corners "10"/"11".
+    cmap = CornerMap.load("simcoach/tracks/algarve_international_circuit.json")
+    assert "10-11" in (cmap.notes.get("corners") or {})
+    labels = {c.label or str(c.number) for c in cmap.corners}
+    assert {"10", "11"} <= labels
+    ctx = CoachContext(store=None, cmap=cmap, track="Algarve", car="GT3")
+    assert "brake earlier than it looks" in ctx.get_track_notes(corner="10")
+    assert ctx._corner_note("10") == ctx._corner_note("11")
+
+
 def test_get_corner_output_includes_authored_note(tmp_path, synthetic_lap):
     ctx, _, _ = _ctx(tmp_path, synthetic_lap)
     ctx.cmap.notes = {"corners": {"1": "brake earlier than it looks"}}
