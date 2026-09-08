@@ -717,6 +717,48 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                  "source": str(draft.get("source", ""))}
         return {"draft": draft}
 
+    @app.put("/tracks/{slug}/notes")
+    def save_notes(slug: str, body: dict = Body(...)):
+        # Persist human-edited/reviewed notes onto the map file's overlay (shipped
+        # track in dev curation, app-data otherwise -- same split as _write_track_json).
+        track = body.get("track") or slug
+        if track_slug(track) != slug:
+            raise HTTPException(400, "slug/track mismatch")
+        raw = body.get("notes") or {}
+        notes = {"overview": str(raw.get("overview", "")),
+                 "corners": {str(k): str(v) for k, v in (raw.get("corners") or {}).items()},
+                 "reference_times": {str(k): str(v) for k, v in (raw.get("reference_times") or {}).items()},
+                 "source": str(raw.get("source", ""))}
+        data = dict(_track_file_data(track))       # merged shipped+overlay
+        if not data:
+            raise HTTPException(404, "no track file to annotate")
+        data["notes"] = notes
+        _write_track_json(track, data)
+        _invalidate_canon(track)                    # same cache-clear as PUT /laps/{id}/map
+        return {"ok": True}
+
+    @app.get("/tracks")
+    def list_tracks():
+        # Coverage listing across bundled (shipped) + user-overlay track dirs, for the
+        # track-management UI. Reuses _track_file_data's shipped+overlay merge per slug.
+        user_dir, bundled = _map_dirs()
+        slugs = set()
+        for base in (bundled, user_dir):
+            if base.exists():
+                slugs.update(p.stem for p in base.glob("*.json"))
+        out = []
+        for slug in sorted(slugs):
+            merged = _track_file_data(slug)
+            notes = merged.get("notes") or {}
+            out.append({
+                "slug": slug,
+                "name": merged.get("name") or slug.replace("_", " ").title(),
+                "has_map": bool(merged.get("path") or merged.get("corners")),
+                "has_notes": bool(notes.get("overview") or notes.get("corners")),
+                "user_edited": (user_dir / f"{slug}.json").exists(),
+            })
+        return out
+
     @app.post("/laps/{lap_id}/rotation")
     def set_rotation(lap_id: int, body: dict = Body(...)):
         # Persist a per-track display rotation (degrees). Body required -> preflight

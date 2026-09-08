@@ -50,3 +50,21 @@ def test_draft_notes_bad_model_json_502(tmp_path):
     r = client.post("/tracks/algarve_international_circuit/draft-notes",
                      json={"track": "Algarve International Circuit"})
     assert r.status_code == 502
+
+
+def test_put_notes_persists_and_reads_back(tmp_path):
+    client, _ = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    r = client.put("/tracks/algarve_international_circuit/notes", json={
+        "track": "Algarve International Circuit",
+        "notes": {"overview": "rhythm", "corners": {"1": "brake late"}, "source": "me"}})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    # A fresh GET of the track's map data now carries the notes overlay.
+    got = client.get("/tracks").json()
+    row = next(t for t in got if t["slug"] == "algarve_international_circuit")
+    assert row["has_notes"] is True
+
+
+def test_get_tracks_lists_coverage(tmp_path):
+    client, _ = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    rows = client.get("/tracks").json()
+    assert any(t["slug"] == "algarve_international_circuit" and t["has_map"] for t in rows)
