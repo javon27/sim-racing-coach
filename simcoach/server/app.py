@@ -737,6 +737,19 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         _invalidate_canon(track)                    # same cache-clear as PUT /laps/{id}/map
         return {"ok": True}
 
+    @app.get("/tracks/{slug}/notes")
+    def get_notes(slug: str):
+        # Merged (shipped+overlay) notes for the editor to pre-fill, normalized to
+        # the same 4-field shape PUT persists. No notes (or no track) yet -> all-empty
+        # defaults, NOT 404 -- the editor needs a blank-but-valid shape to edit.
+        if track_slug(slug) != slug:
+            raise HTTPException(400, "invalid slug")
+        raw = _track_file_data(slug).get("notes") or {}
+        return {"overview": str(raw.get("overview", "")),
+                "corners": {str(k): str(v) for k, v in (raw.get("corners") or {}).items()},
+                "reference_times": {str(k): str(v) for k, v in (raw.get("reference_times") or {}).items()},
+                "source": str(raw.get("source", ""))}
+
     @app.get("/tracks")
     def list_tracks():
         # Coverage listing across bundled (shipped) + user-overlay track dirs, for the

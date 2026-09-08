@@ -93,3 +93,29 @@ def test_put_notes_reference_times_roundtrip(tmp_path):
     assert r.status_code == 200
     written = json.loads((tmp_path / "tracks" / "algarve_international_circuit.json").read_text())
     assert written["notes"]["reference_times"] == {"GT3": "1:32.500"}
+
+
+def test_get_notes_no_notes_returns_empty_shape(tmp_path):
+    client, _ = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    r = client.get("/tracks/algarve_international_circuit/notes")
+    assert r.status_code == 200
+    assert r.json() == {"overview": "", "corners": {}, "reference_times": {}, "source": ""}
+
+
+def test_get_notes_missing_track_returns_empty_shape(tmp_path):
+    client, _ = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    r = client.get("/tracks/nonexistent_track_xyz/notes")
+    assert r.status_code == 200
+    assert r.json() == {"overview": "", "corners": {}, "reference_times": {}, "source": ""}
+
+
+def test_put_then_get_notes_roundtrip(tmp_path):
+    client, _ = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    client.put("/tracks/algarve_international_circuit/notes", json={
+        "track": "Algarve International Circuit",
+        "notes": {"overview": "rhythm track", "corners": {"1": "brake late"},
+                   "reference_times": {"GT3": "1:32.500"}, "source": "me"}})
+    r = client.get("/tracks/algarve_international_circuit/notes")
+    assert r.status_code == 200
+    assert r.json() == {"overview": "rhythm track", "corners": {"1": "brake late"},
+                         "reference_times": {"GT3": "1:32.500"}, "source": "me"}
