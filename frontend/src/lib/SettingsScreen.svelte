@@ -6,8 +6,16 @@
     testApiKey,
     clearData,
     ingestHistory,
+    getStatus,
+    getProfile,
+    putProfileSummary,
+    addMemory,
+    updateMemory,
+    distillProfile,
     type SettingsResponse,
     type IngestResult,
+    type DriverProfileData,
+    type DriverMemory,
   } from "./api";
   import InfoTip from "./InfoTip.svelte";
 
@@ -126,6 +134,145 @@
     resetStatus = res.cleared ? "Data cleared." : "Reset failed.";
     confirmingReset = false;
   }
+
+  const MEMORY_CAP = 50;
+
+  let profile: DriverProfileData | null = $state(null);
+  let currentSessionId: string | null = $state(null);
+  let summaryText = $state("");
+  let summaryStatus: "pending" | "active" = $state("active");
+  let newMemoryText = $state("");
+  let editingMemoryId: number | null = $state(null);
+  let editingText = $state("");
+  let distilling = $state(false);
+  let distillStatus: string | null = $state(null);
+
+  $effect(() => {
+    (async () => {
+      try {
+        const [p, st] = await Promise.all([getProfile(), getStatus()]);
+        profile = p;
+        summaryText = p.summary.text;
+        summaryStatus = p.summary.status;
+        currentSessionId = st.session_id;
+      } catch {
+        /* profile section just stays empty if this fails */
+      }
+    })();
+  });
+
+  async function saveSummary() {
+    // A proposed (pending) summary is persisted only via the explicit Approve
+    // action -- auto-saving on blur here would silently overwrite the single
+    // active driver_summary row with unreviewed text.
+    if (summaryStatus !== "active") return;
+    const res = await putProfileSummary(summaryText, summaryStatus);
+    if (profile) profile = { ...profile, summary: res };
+  }
+
+  async function approveSummary() {
+    const res = await putProfileSummary(summaryText, "active");
+    if (profile) profile = { ...profile, summary: res };
+    summaryStatus = "active";
+  }
+
+  function patchMemoryLists(fn: (list: DriverMemory[]) => DriverMemory[]) {
+    if (!profile) return;
+    profile = {
+      ...profile,
+      memories: { active: fn(profile.memories.active), pending: fn(profile.memories.pending) },
+    };
+  }
+
+  async function approveMemory(m: DriverMemory) {
+    await updateMemory(m.id, { status: "active" });
+    if (!profile) return;
+    profile = {
+      ...profile,
+      memories: {
+        active: [...profile.memories.active, { ...m, status: "active" }],
+        pending: profile.memories.pending.filter((x) => x.id !== m.id),
+      },
+    };
+  }
+
+  async function retireMemory(m: DriverMemory, fromList: "active" | "pending") {
+    await updateMemory(m.id, { status: "retired" });
+    if (!profile) return;
+    profile = {
+      ...profile,
+      memories: { ...profile.memories, [fromList]: profile.memories[fromList].filter((x) => x.id !== m.id) },
+    };
+  }
+
+  function startEditMemory(m: DriverMemory) {
+    editingMemoryId = m.id;
+    editingText = m.text;
+  }
+
+  async function saveMemoryEdit() {
+    if (editingMemoryId == null) return;
+    const id = editingMemoryId;
+    const text = editingText;
+    await updateMemory(id, { text });
+    patchMemoryLists((list) => list.map((m) => (m.id === id ? { ...m, text } : m)));
+    editingMemoryId = null;
+  }
+
+  async function addNewMemory() {
+    const text = newMemoryText.trim();
+    if (!text) return;
+    const res = await addMemory({ text });
+    newMemoryText = "";
+    if (!profile) return;
+    const item: DriverMemory = {
+      id: res.id,
+      text: res.text,
+      status: res.status,
+      track: res.track,
+      car: res.car,
+      source: "manual",
+      session_id: null,
+      created_ts: Date.now() / 1000,
+      updated_ts: Date.now() / 1000,
+    };
+    const list = res.status === "active" ? "active" : "pending";
+    profile = { ...profile, memories: { ...profile.memories, [list]: [...profile.memories[list], item] } };
+  }
+
+  async function reviewSessionLearnings() {
+    if (!currentSessionId) {
+      distillStatus = "No active session to review.";
+      return;
+    }
+    distilling = true;
+    distillStatus = null;
+    try {
+      const res = await distillProfile(currentSessionId);
+      if (profile) {
+        const proposed: DriverMemory[] = res.memories.map((m) => ({
+          id: m.id,
+          text: m.text,
+          status: "pending",
+          track: m.track,
+          car: m.car,
+          source: "distill",
+          session_id: currentSessionId,
+          created_ts: Date.now() / 1000,
+          updated_ts: Date.now() / 1000,
+        }));
+        profile = {
+          ...profile,
+          memories: { ...profile.memories, pending: [...profile.memories.pending, ...proposed] },
+        };
+      }
+      summaryText = res.summary;
+      summaryStatus = "pending";
+      distillStatus = "New proposals ready for review below.";
+    } finally {
+      distilling = false;
+    }
+  }
 </script>
 
 <div class="settings">
@@ -187,7 +334,7 @@
     </section>
 
     <section class="grp">
-      <h3>Driver profile</h3>
+      <h3>Driver Memories</h3>
       <div class="field">
         <span class="lbl">Braking style<InfoTip text="Part of your driver profile — e.g. trail-braker vs early-and-off. The coach factors this in." /></span>
         <div class="control">
@@ -206,6 +353,103 @@
           <input type="text" placeholder="e.g. aggressive" bind:value={settings.driver.risk_tolerance} onchange={saveConfig} />
         </div>
       </div>
+
+      {#if profile}
+        <div class="field mem-summary">
+          <span class="lbl">Summary<InfoTip text="The concise, always-on impression of you the coach carries into every conversation." /></span>
+          <div class="control mem-summary-control">
+            <textarea rows="2" bind:value={summaryText} onchange={saveSummary}></textarea>
+            {#if summaryStatus === "pending"}
+              <div class="mem-row-actions">
+                <span class="badge pending">proposed</span>
+                <button type="button" class="primary" onclick={approveSummary}>Approve summary</button>
+              </div>
+            {/if}
+          </div>
+        </div>
+
+        <div class="mem-section">
+          <div class="mem-head">
+            <span class="lbl">Memories</span>
+            <span class="status inline">{profile.memories.active.length} / {MEMORY_CAP} active</span>
+          </div>
+          {#if profile.memories.active.length === 0}
+            <p class="help">No memories yet.</p>
+          {:else}
+            <ul class="mem-list">
+              {#each profile.memories.active as m (m.id)}
+                <li class="mem-row">
+                  {#if editingMemoryId === m.id}
+                    <input type="text" bind:value={editingText} />
+                    <div class="mem-row-actions">
+                      <button type="button" class="primary" onclick={saveMemoryEdit}>Save</button>
+                      <button type="button" onclick={() => (editingMemoryId = null)}>Cancel</button>
+                    </div>
+                  {:else}
+                    <p class="mem-text">{m.text}</p>
+                    <div class="mem-meta">
+                      {#if m.track}<span class="badge">{m.track}</span>{/if}
+                      {#if m.car}<span class="badge">{m.car}</span>{/if}
+                      <span class="badge">{m.source}</span>
+                    </div>
+                    <div class="mem-row-actions">
+                      <button type="button" onclick={() => startEditMemory(m)}>Edit</button>
+                      <button type="button" class="danger" onclick={() => retireMemory(m, "active")}>Delete</button>
+                    </div>
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          {/if}
+          <div class="addrow">
+            <input
+              type="text"
+              placeholder="add a memory…"
+              bind:value={newMemoryText}
+              onkeydown={(e) => e.key === "Enter" && addNewMemory()}
+            />
+            <button type="button" onclick={addNewMemory}>+ Add memory</button>
+          </div>
+        </div>
+
+        {#if profile.memories.pending.length > 0}
+          <div class="mem-section">
+            <div class="mem-head"><span class="lbl">Pending review</span></div>
+            <ul class="mem-list">
+              {#each profile.memories.pending as m (m.id)}
+                <li class="mem-row">
+                  {#if editingMemoryId === m.id}
+                    <input type="text" bind:value={editingText} />
+                    <div class="mem-row-actions">
+                      <button type="button" class="primary" onclick={saveMemoryEdit}>Save</button>
+                      <button type="button" onclick={() => (editingMemoryId = null)}>Cancel</button>
+                    </div>
+                  {:else}
+                    <p class="mem-text">{m.text}</p>
+                    <div class="mem-meta">
+                      {#if m.track}<span class="badge">{m.track}</span>{/if}
+                      {#if m.car}<span class="badge">{m.car}</span>{/if}
+                      <span class="badge">{m.source}</span>
+                    </div>
+                    <div class="mem-row-actions">
+                      <button type="button" class="primary" onclick={() => approveMemory(m)}>Approve</button>
+                      <button type="button" onclick={() => startEditMemory(m)}>Edit</button>
+                      <button type="button" class="danger" onclick={() => retireMemory(m, "pending")}>Reject</button>
+                    </div>
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          </div>
+        {/if}
+
+        <div class="actions">
+          <button type="button" onclick={reviewSessionLearnings} disabled={distilling}>
+            {distilling ? "Reviewing…" : "Review session learnings"}
+          </button>
+        </div>
+        {#if distillStatus}<p class="status">{distillStatus}</p>{/if}
+      {/if}
     </section>
 
     <section class="grp">
@@ -426,7 +670,8 @@
 
   select,
   input[type="text"],
-  input[type="password"] {
+  input[type="password"],
+  textarea {
     font: inherit;
     font-size: 13px;
     color: var(--text);
@@ -439,10 +684,68 @@
     color: var(--faint);
   }
   select:focus,
-  input:focus {
+  input:focus,
+  textarea:focus {
     outline: none;
     border-color: var(--accent);
     box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  textarea {
+    width: 100%;
+    resize: vertical;
+    font-family: inherit;
+  }
+
+  /* Driver Memories: summary + active/pending lists. */
+  .mem-summary-control {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .mem-section {
+    padding: 11px 0;
+    border-top: 1px solid var(--line);
+  }
+  .mem-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .mem-list {
+    list-style: none;
+    margin: 0 0 10px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .mem-row {
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 12px;
+  }
+  .mem-text {
+    margin: 0 0 6px;
+    font-size: 13px;
+    color: var(--text);
+  }
+  .mem-meta {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+  }
+  .mem-row-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .badge.pending {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: var(--accent-soft);
   }
 
   .btns {

@@ -503,3 +503,117 @@ export function saveNotes(slug: string, track: string, notes: TrackNotes): Promi
 export function getTrackNotes(slug: string): Promise<TrackNotes> {
   return request<TrackNotes>(`/tracks/${slug}/notes`);
 }
+
+// --- Driver Profile & Memories
+
+export interface DriverMemory {
+  id: number;
+  text: string;
+  status: "pending" | "active" | "retired";
+  track: string | null;
+  car: string | null;
+  source: "coach_tool" | "distill" | "manual";
+  session_id: string | null;
+  created_ts: number;
+  updated_ts: number;
+}
+
+export interface DriverSummary {
+  text: string;
+  status: "pending" | "active";
+}
+
+export interface DriverPrefs {
+  braking_style: string | null;
+  balance_preference: string | null;
+  risk_tolerance: string | null;
+}
+
+export interface DriverProfileData {
+  prefs: DriverPrefs;
+  summary: DriverSummary;
+  memories: {
+    active: DriverMemory[];
+    pending: DriverMemory[];
+  };
+}
+
+export function getProfile(): Promise<DriverProfileData> {
+  return request<DriverProfileData>("/profile");
+}
+
+export function putProfilePrefs(prefs: DriverPrefs): Promise<DriverProfileData> {
+  return request<DriverProfileData>("/profile", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ prefs }),
+  });
+}
+
+export function putProfileSummary(
+  text: string,
+  status: "pending" | "active",
+): Promise<DriverSummary> {
+  return request<DriverSummary>("/profile/summary", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ text, status }),
+  });
+}
+
+export interface AddMemoryInput {
+  text: string;
+  track?: string | null;
+  car?: string | null;
+}
+
+export interface AddMemoryResponse {
+  id: number;
+  text: string;
+  status: "active" | "pending";
+  track: string | null;
+  car: string | null;
+}
+
+export function addMemory(m: AddMemoryInput): Promise<AddMemoryResponse> {
+  return request<AddMemoryResponse>("/profile/memories", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(m),
+  });
+}
+
+export interface UpdateMemoryPatch {
+  text?: string;
+  status?: "pending" | "active" | "retired";
+}
+
+export function updateMemory(
+  id: number,
+  patch: UpdateMemoryPatch,
+): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/profile/memories/${id}`, {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(patch),
+  });
+}
+
+export interface DistillProposals {
+  memories: Array<{
+    id: number;
+    text: string;
+    status: "pending";
+    track: string | null;
+    car: string | null;
+  }>;
+  summary: string;
+}
+
+export function distillProfile(sessionId: string): Promise<DistillProposals> {
+  return request<DistillProposals>("/profile/distill", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ session_id: sessionId }),
+  });
+}

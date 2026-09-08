@@ -10,6 +10,7 @@ current session (track/car/lap), which the live-session re-resolution keeps fres
 from __future__ import annotations
 
 import re
+import time
 
 from simcoach.analysis import analyze_lap
 from simcoach.coach import _setup_lines
@@ -128,6 +129,93 @@ TOOLS = [
                        "position, incidents, penalties. Call this for questions about the "
                        "race/result/how it went overall.",
         "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "record_driver_learning",
+        "description": "Propose a durable observation about the driver (a cross-lap tendency "
+                       "worth remembering, not per-lap noise) for the driver's long-term profile. "
+                       "It is saved for the driver's review, not applied immediately — tell them "
+                       "so after calling this.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "The observation, in plain language."},
+                "track": {"type": "string",
+                          "description": "Optional: scope this to the current track only."},
+                "car": {"type": "string",
+                        "description": "Optional: scope this to the current car only."},
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "get_driver_memories",
+        "description": "The driver's reviewed, active long-term memories — tendencies and notes "
+                       "beyond what's already in the profile summary. Call this when tailoring "
+                       "advice would benefit from the driver's history.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "track": {"type": "string", "description": "Optional: scope to this track."},
+                "car": {"type": "string", "description": "Optional: scope to this car."},
+                "topic": {"type": "string",
+                          "description": "Optional: filter to memories mentioning this topic."},
+            },
+        },
+    },
+    {
+        "name": "get_personal_best",
+        "description": "The all-time fastest recorded lap for a track/car (defaults to the "
+                       "current one) and when it was set, contrasted with this session's best "
+                       "if different. Use for 'what's my personal best / all-time fastest here'.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "track": {"type": "string", "description": "Optional: defaults to the current track."},
+                "car": {"type": "string", "description": "Optional: defaults to the current car."},
+            },
+        },
+    },
+    {
+        "name": "get_progress",
+        "description": "Best-lap-per-session progression over time for a track/car (defaults "
+                       "to the current one) — use for 'am I improving / how has my pace "
+                       "trended' questions that span multiple sessions, not just this one.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "track": {"type": "string", "description": "Optional: defaults to the current track."},
+                "car": {"type": "string", "description": "Optional: defaults to the current car."},
+            },
+        },
+    },
+    {
+        "name": "list_past_sessions",
+        "description": "Recent PAST sessions (excluding the current one) for a track/car "
+                       "(defaults to the current one): date, online/offline, lap count, best "
+                       "lap, and finishing result if raced. Use for 'how did my last sessions "
+                       "here go'.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "track": {"type": "string", "description": "Optional: defaults to the current track."},
+                "car": {"type": "string", "description": "Optional: defaults to the current car."},
+                "limit": {"type": "integer", "description": "Max sessions to list (default 5)."},
+            },
+        },
+    },
+    {
+        "name": "get_last_setup",
+        "description": "The most recently saved setup for a track/car (defaults to the current "
+                       "one), from a PAST session — not the live current setup (use get_setup "
+                       "for that). Use for 'what setup did we run here last time'.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "track": {"type": "string", "description": "Optional: defaults to the current track."},
+                "car": {"type": "string", "description": "Optional: defaults to the current car."},
+            },
+        },
     },
 ]
 
@@ -465,6 +553,86 @@ class CoachContext:
             out += "\nLegal to change this tier: " + ", ".join(self.allowed_adjustments)
         return out
 
+    def record_driver_learning(self, text, track=None, car=None):
+        self.store.add_learning(text, status="pending", track=track or self.track,
+                                car=car or self.car, source="coach_tool",
+                                session_id=self.session_id)
+        return "Saved for your review."
+
+    def get_driver_memories(self, track=None, car=None, topic=None):
+        rows = self.store.active_learnings(track=track or self.track, car=car or self.car)
+        if topic:
+            topic = topic.lower()
+            rows = [r for r in rows if topic in r["text"].lower()]
+        if not rows:
+            return "No saved memories yet."
+        return "\n".join(f"- {r['text']}" for r in rows)
+
+    def get_personal_best(self, track=None, car=None):
+        track, car = track or self.track, car or self.car
+        if not (track and car):
+            return "No track/car resolved yet — no personal best available."
+        best = self.store.best_lap(track, car)
+        if best is None:
+            return f"No recorded laps yet for {track} / {car}."
+        when = time.strftime("%Y-%m-%d", time.localtime(best.timestamp))
+        out = f"All-time personal best at {track} in {car}: {format_laptime(best.lap_time)}, set {when}."
+        if self.session_id:
+            session_best = self.store.best_lap(track, car, session_id=self.session_id)
+            if session_best is not None and session_best.lap_time != best.lap_time:
+                out += f" This session's best so far: {format_laptime(session_best.lap_time)}."
+        return out
+
+    def get_progress(self, track=None, car=None):
+        track, car = track or self.track, car or self.car
+        if not (track and car):
+            return "No track/car resolved yet — no progress to show."
+        summary = self.store.session_summary(track=track, car=car)
+        points = summary["series"][0]["points"] if summary["series"] else []
+        if not points:
+            return f"No session history yet for {track} / {car} to show progress."
+        parts = [f"{time.strftime('%Y-%m-%d', time.localtime(p['x']))} {format_laptime(p['value'])}"
+                 for p in points]
+        out = (f"Best-lap progression at {track} in {car} ({len(points)} sessions): "
+               + " -> ".join(parts) + ".")
+        if summary["improvement"] is not None:
+            direction = "faster" if summary["improvement"] > 0 else "slower"
+            out += (f" Net {format_laptime(abs(summary['improvement']))} {direction} from "
+                    "first to most recent session.")
+        return out
+
+    def list_past_sessions(self, track=None, car=None, limit=5):
+        track, car = track or self.track, car or self.car
+        if not (track and car):
+            return "No track/car resolved yet — no past sessions to list."
+        rows = self.store.race_sessions_page(track=track, car=car, limit=int(limit or 5))["rows"]
+        rows = [r for r in rows if r["session_id"] != self.session_id]
+        if not rows:
+            return f"No past sessions recorded for {track} / {car}."
+        out = []
+        for r in rows:
+            date = time.strftime("%Y-%m-%d", time.localtime(r["started"]))
+            sid = r["session_id"] or ""
+            kind = "online" if "online" in sid else ("offline" if "offline" in sid else "session")
+            best = format_laptime(r["best"]) if r["best"] is not None else "no valid lap"
+            rr = self.store.race_session(r["session_id"])
+            result = f", finished P{rr['position']}" if rr and rr.get("position") is not None else ""
+            out.append(f"{date} ({kind}, {r['laps']} laps, best {best}{result})")
+        return f"Recent sessions at {track} / {car}:\n" + "\n".join(out)
+
+    def get_last_setup(self, track=None, car=None):
+        track, car = track or self.track, car or self.car
+        if not (track and car):
+            return "No track/car resolved yet — no setup on record."
+        row = self.store.last_setup(track, car)
+        if row is None:
+            return f"No stored setup for {track} / {car} yet."
+        when = time.strftime("%Y-%m-%d", time.localtime(row["updated_ts"]))
+        lines = _setup_lines(row["setup"])
+        if not lines:
+            return f"Setup stored for {track} / {car} ({when}) but no adjustable parameters were captured."
+        return f"Last setup run at {track} / {car} ({when}):\n" + "\n".join(lines)
+
     def dispatch(self, name: str, args: dict) -> str:
         """Execute one tool call by name. Unknown tool -> error string."""
         args = args or {}
@@ -481,6 +649,15 @@ class CoachContext:
             "get_energy_report": lambda: self.get_energy_report(),
             "get_race_result": lambda: self.get_race_result(),
             "get_setup": lambda: self.get_setup(),
+            "record_driver_learning": lambda: self.record_driver_learning(
+                args.get("text", ""), args.get("track"), args.get("car")),
+            "get_driver_memories": lambda: self.get_driver_memories(
+                args.get("track"), args.get("car"), args.get("topic")),
+            "get_personal_best": lambda: self.get_personal_best(args.get("track"), args.get("car")),
+            "get_progress": lambda: self.get_progress(args.get("track"), args.get("car")),
+            "list_past_sessions": lambda: self.list_past_sessions(
+                args.get("track"), args.get("car"), args.get("limit", 5)),
+            "get_last_setup": lambda: self.get_last_setup(args.get("track"), args.get("car")),
         }.get(name)
         if handler is None:
             return f"error: unknown tool {name!r}"

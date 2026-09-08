@@ -1,10 +1,11 @@
 import importlib.util
 
 from fastapi.testclient import TestClient
-from simcoach.server.app import create_app
-from simcoach.store import LapStore
+
 from simcoach.coach import Coach
 from simcoach.model.fake import FakeModel
+from simcoach.server.app import create_app
+from simcoach.store import LapStore
 
 
 def test_ws_protocol_library_installed():
@@ -79,10 +80,10 @@ def test_ws_coach_malformed_message_errors_not_crash(tmp_path):
 def test_ws_coach_through_lazymodel(tmp_path, monkeypatch):
     # Covers the production delegation path (Coach(LazyModel(...))), which the
     # FakeModel tests bypass — this is where the missing run_stream bit.
-    from simcoach.store import LapStore
     from simcoach.coach import Coach
     from simcoach.model import factory
     from simcoach.model.fake import FakeModel
+    from simcoach.store import LapStore
     monkeypatch.setattr(factory, "make_model",
                         lambda provider=None, model=None: FakeModel(reply="ok"))
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
@@ -131,6 +132,34 @@ def test_ws_coach_error_no_key_is_curated(tmp_path, monkeypatch):
             ev = ws.receive_json();  events2.append(ev)
             if ev["type"] in ("done", "error"): break
     assert events2[-1] == {"type": "error", "message": "coach error"}
+
+
+def test_ws_coach_injects_concise_driver_profile(tmp_path, monkeypatch):
+    # Static prefs (settings "driver" block) + the active driver_summary must reach
+    # the coach's system prompt; a full memory (driver_learnings row) must NOT.
+    from simcoach import config as config_mod
+
+    monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
+    cfg = config_mod.load_config()
+    cfg["driver"]["braking_style"] = "trail-braker"
+    config_mod.save_config(cfg)
+
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    store.set_driver_summary("Works on late apexes.", "active")
+    store.add_learning("Locks the rears at Turn 3.", status="active", source="manual")
+
+    model = FakeModel(reply="ok")
+    app = create_app(store, Coach(model, "simcoach/knowledge"))
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "hi"})
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"): break
+
+    assert "trail-braker" in model.last_system
+    assert "Works on late apexes" in model.last_system
+    assert "Locks the rears at Turn 3" not in model.last_system
 
 
 class _DeltaModel:

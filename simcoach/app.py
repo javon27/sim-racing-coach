@@ -4,6 +4,7 @@ import time
 from simcoach.coach import Coach
 from simcoach.coach_tools import CoachContext
 from simcoach.corners import CornerMap
+from simcoach.driver import DriverProfile
 from simcoach.session import CoachSession
 from simcoach.source import TelemetrySource
 from simcoach.store import LapStore
@@ -13,7 +14,8 @@ from simcoach.tiers import legal_adjustments
 def run_repl(source: TelemetrySource, store: LapStore, cmap: CornerMap, coach: Coach,
              car: str, rest=None, track_note: str | None = None,
              input_device: str | None = None, units: str = "metric",
-             resolver=None, peek=None, initial_key: tuple[str, str] | None = None) -> None:
+             resolver=None, peek=None, initial_key: tuple[str, str] | None = None,
+             driver_profile: DriverProfile | None = None) -> None:
     """Background thread captures laps from `source` into `store` (silently, no
     per-lap print). Foreground loop answers questions — including BEFORE any lap is
     captured (general track/car/setup guidance), and lap-specific once you've driven.
@@ -59,7 +61,8 @@ def run_repl(source: TelemetrySource, store: LapStore, cmap: CornerMap, coach: C
     session_id = time.strftime("%Y-%m-%dT%H%M%S")
     chat_id = store.create_chat()
     session = CoachSession(coach, car, track_note=track_note, input_device=input_device,
-                           store=store, session_id=session_id, units=units, chat_id=chat_id)
+                           store=store, session_id=session_id, units=units, chat_id=chat_id,
+                           driver_profile=driver_profile)
 
     ctx_key = (initial_key[0].strip(), initial_key[1].strip()) if initial_key else None
 

@@ -218,6 +218,21 @@ def test_best_lap_phase_filter(tmp_path, synthetic_lap):
     assert s.best_lap("test_track", "test_car").lap_time == 90.0
 
 
+def test_best_lap_all_time_ignores_car_model(tmp_path, synthetic_lap, monkeypatch):
+    # The coach's all-time best-lap lookup (no session_id) queries with a RESOLVED
+    # display model while laps are stored under the raw entry name -- same gap
+    # session_id-scoped queries were already fixed for (see the test above).
+    from simcoach import store as store_mod
+    from simcoach.store import LapStore
+    monkeypatch.setattr(store_mod, "resolve_car",
+                        lambda c: "BMW M4 LMGT3" if c == "test_car" else c)
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    s.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "sess-1"}))
+
+    best = s.best_lap("test_track", "BMW M4 LMGT3")
+    assert best is not None and best.lap_time == 92.5
+
+
 def test_best_lap_session_filter(tmp_path, synthetic_lap):
     from simcoach.store import LapStore
     s = LapStore(str(tmp_path/"c.sqlite"), str(tmp_path/"data"))
@@ -620,3 +635,70 @@ def test_session_position_arc_none_without_positions(tmp_path, synthetic_lap):
     s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     s.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "prac", "position": None}))
     assert s.session_position_arc("prac") is None
+
+
+def test_driver_learnings_crud_and_active_scope(tmp_path):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    gid = s.add_learning("brakes early into slow corners", status="active", source="manual")
+    s.add_learning("struggles at Monza T1", status="active", track="Monza", car="GT3", source="coach_tool")
+    pid = s.add_learning("maybe overdrives entry", status="pending", source="distill")
+    # active_learnings: general + matching tag, excludes pending and non-matching tag
+    active_monza = s.active_learnings(track="Monza", car="GT3")
+    texts = [l["text"] for l in active_monza]
+    assert "brakes early into slow corners" in texts          # general
+    assert "struggles at Monza T1" in texts                    # tag match
+    assert "maybe overdrives entry" not in texts               # pending excluded
+    active_spa = s.active_learnings(track="Spa", car="GT3")
+    assert "struggles at Monza T1" not in [l["text"] for l in active_spa]  # non-matching tag excluded
+    # status change + update
+    s.set_learning_status(pid, "active")
+    assert any(l["id"] == pid for l in s.active_learnings())
+    s.update_learning(gid, "brakes early, especially downhill")
+    updated = next(l for l in s.list_learnings() if l["id"] == gid)
+    assert updated["text"] == "brakes early, especially downhill"
+    # cap
+    assert len(s.active_learnings(limit=1)) == 1
+
+
+def test_driver_summary_roundtrip_and_default(tmp_path):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    assert s.get_driver_summary() == {"text": "", "status": "active"}
+    s.set_driver_summary("Smooth trail-braker, works on late apexes.", "active")
+    assert s.get_driver_summary()["text"].startswith("Smooth trail-braker")
+
+
+def test_driver_summary_truncated_to_word_cap(tmp_path):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    over_long = " ".join(f"word{i}" for i in range(100))
+    s.set_driver_summary(over_long, "active")
+    stored = s.get_driver_summary()["text"]
+    assert len(stored.split()) == 60
+    assert stored == " ".join(f"word{i}" for i in range(60))
+
+
+def test_schema_migrates_from_v10(tmp_path):
+    from simcoach.store import SCHEMA_VERSION, LapStore
+    db = str(tmp_path / "db.sqlite")
+    # simulate a v10 db: create the connection, set user_version=10, close
+    s = LapStore(db, str(tmp_path / "telem"))
+    s.conn.execute("PRAGMA user_version = 10"); s.conn.commit(); s.conn.close()
+    s2 = LapStore(db, str(tmp_path / "telem"))   # should migrate to 11 without error
+    assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    s2.add_learning("x", status="active", source="manual")  # new table usable
+
+
+def test_session_setup_upsert_and_last(tmp_path):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    assert s.last_setup("Monza", "GT3") is None
+    s.save_session_setup("sess-1", "Monza", "GT3", {"wing": 5})
+    s.save_session_setup("sess-1", "Monza", "GT3", {"wing": 7})   # same session -> upsert, no dup
+    s.save_session_setup("sess-2", "Monza", "GT3", {"wing": 8})   # newer session
+    rows = s.conn.execute("SELECT COUNT(*) FROM session_setups").fetchone()[0]
+    assert rows == 2                                              # upsert kept sess-1 as one row
+    last = s.last_setup("Monza", "GT3")
+    assert last["setup"] == {"wing": 8} and last["session_id"] == "sess-2"
+    assert s.last_setup("Spa", "GT3") is None

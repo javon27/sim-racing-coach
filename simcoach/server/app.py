@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import os
 import sys
@@ -26,11 +27,12 @@ from .. import config, logging_setup, paths, secrets
 from ..analysis import analyze_lap
 from ..car_lookup import resolve_car
 from ..coach_tools import CoachContext
+from ..corners import CornerMap, in_window
+from ..driver import DriverProfile
 from ..lmu.ingest import ingest_all
 from ..model.factory import CoachUserError, make_model
-from ..tiers import legal_adjustments
-from ..corners import CornerMap, in_window
 from ..ribbon import multi_signal_direction, reconstruct_surface, ribbon_to_screen
+from ..tiers import adjustable_from_setup, legal_adjustments
 from ..track_lookup import load_map_data, track_slug
 from ..trackmap import average_racing_line, build_track_map, direction_from_path
 
@@ -1033,9 +1035,22 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         if not rest:
             return {}
         try:
-            return rest.get_setup()
+            data = rest.get_setup()
         except Exception:
             return {}
+        # Continuous capture: every time the Setup panel pulls the live setup and
+        # we know which session it belongs to, persist the real-adjustable subset
+        # (same isFreeSetting filter as the panel) so "what did we run here last
+        # time?" survives a session ending. Best-effort — never break the fetch.
+        if data:
+            try:
+                st = status()
+                if st["track"] and st["car"] and st["session_id"]:
+                    free = {k: data[k] for k in adjustable_from_setup(data)}
+                    store.save_session_setup(st["session_id"], st["track"], st["car"], free)
+            except Exception:
+                logging.getLogger(__name__).warning("session setup capture failed", exc_info=True)
+        return data
 
     @app.get("/chats")
     def chats():
@@ -1141,12 +1156,29 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             # the session stamp.
             if eff_session_id is None and app.state.latest is not None:
                 eff_session_id = app.state.latest["record"].session_id
+            cfg = config.load_config()
             ctx = CoachContext(app.state.store, record=None, lap_id=None, cmap=cmap,
-                               units=config.load_config().get("units", "metric"),
+                               units=cfg.get("units", "metric"),
                                setup=setup, track=track, car=car, on_track=on_track,
                                allowed_adjustments=(legal_adjustments(setup) if setup else None),
                                session_id=eff_session_id)
             car = ctx.car or "car"
+
+            # Concise always-on profile tier: static prefs from settings + the active
+            # driver_summary only — NOT the full memory list (that's a pull tool, later
+            # task). Best-effort: a missing/empty summary just means no learned_notes.
+            d = cfg.get("driver") or {}
+            try:
+                summary = app.state.store.get_driver_summary()
+            except Exception:
+                summary = {}
+            notes = [summary["text"]] if summary.get("status") == "active" and summary.get("text") else []
+            driver_profile = DriverProfile(
+                braking_style=d.get("braking_style") or None,
+                balance_preference=d.get("balance_preference") or None,
+                risk_tolerance=d.get("risk_tolerance") or None,
+                learned_notes=notes,
+            )
 
             # Thread the chat's prior turns so the coach continues the conversation
             # instead of treating each question standalone (the system prompt tells it
@@ -1167,7 +1199,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             try:
                 for ev in app.state.coach.ask_agentic_stream(
                         ctx, question, car=car, input_device=req.get("input_device"),
-                        history=history, units=ctx.units):
+                        history=history, units=ctx.units, driver_profile=driver_profile):
                     if ev["type"] == "text":
                         text += ev["text"]       # accumulate streamed deltas into the full answer
                     _emit(ev)
@@ -1205,6 +1237,134 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             if ws.client_state == WebSocketState.CONNECTED:
                 try: await ws.close()
                 except Exception: pass
+
+    _PROFILE_PREF_KEYS = ("braking_style", "balance_preference", "risk_tolerance")
+    _LEARNING_STATUSES = ("active", "pending", "retired")
+
+    def _profile_view() -> dict:
+        d = config.load_config().get("driver") or {}
+        return {
+            "prefs": {k: d.get(k) for k in _PROFILE_PREF_KEYS},
+            "summary": app.state.store.get_driver_summary(),
+            "memories": {
+                "active": app.state.store.list_learnings(status="active"),
+                "pending": app.state.store.list_learnings(status="pending"),
+            },
+        }
+
+    @app.get("/profile")
+    def get_profile():
+        return _profile_view()
+
+    @app.put("/profile")
+    def put_profile(body: dict = Body(...)):
+        prefs = body.get("prefs") or {}
+        driver = {k: prefs[k] for k in _PROFILE_PREF_KEYS if k in prefs}
+        config.save_config({"driver": driver})  # merges over existing driver keys (see config.save_config)
+        return _profile_view()
+
+    @app.put("/profile/summary")
+    def put_profile_summary(body: dict = Body(...)):
+        status = body.get("status") or "active"
+        if status not in _LEARNING_STATUSES:
+            raise HTTPException(422, "invalid status")
+        app.state.store.set_driver_summary(str(body.get("text", "")).strip(), status)
+        return app.state.store.get_driver_summary()
+
+    @app.post("/profile/memories")
+    def add_profile_memory(body: dict = Body(...)):
+        text = str(body.get("text", "")).strip()
+        if not text:
+            raise HTTPException(422, "text is required")
+        mid = app.state.store.add_learning(text, status="active", source="manual",
+                                            track=body.get("track"), car=body.get("car"))
+        return {"id": mid, "text": text, "status": "active",
+                "track": body.get("track"), "car": body.get("car")}
+
+    @app.put("/profile/memories/{learning_id}")
+    def update_profile_memory(learning_id: int, body: dict = Body(...)):
+        if "text" in body:
+            text = str(body["text"]).strip()
+            if not text:
+                raise HTTPException(422, "text must not be empty")
+            app.state.store.update_learning(learning_id, text)
+        if "status" in body:
+            status = body["status"]
+            if status not in _LEARNING_STATUSES:
+                raise HTTPException(422, "invalid status")
+            app.state.store.set_learning_status(learning_id, status)
+        return {"ok": True}
+
+    @app.post("/profile/distill")
+    def distill_profile(body: dict = Body(...)):
+        # On-demand only, never on the hot chat path: assembles a deterministic
+        # digest from this session's laps/arc/chat, then asks the model to PROPOSE
+        # memories + an updated summary (mirrors /tracks/{slug}/draft-notes). Every
+        # proposal lands as status='pending' -- approval is a separate PUT, and the
+        # single-row driver_summary is never touched here (that would clobber the
+        # driver's currently-active summary), so the proposed summary text is
+        # returned only, not persisted.
+        session_id = body.get("session_id")
+        if not session_id:
+            raise HTTPException(422, "session_id is required")
+        laps = app.state.store.session_laps(session_id)
+        if not laps:
+            raise HTTPException(404, "no laps for that session")
+        track, car = laps[0]["track"], laps[0]["car"]
+
+        digest = [f"Session {session_id} -- track {track}, car {car}, {len(laps)} lap(s)."]
+        arc = app.state.store.session_position_arc(session_id)
+        if arc:
+            digest.append(f"Race arc: started P{arc['start']}, best P{arc['best']}, "
+                          f"worst P{arc['worst']}, finished P{arc['last']}.")
+
+        cmap = _cmap_for_map(track)
+        if cmap and cmap.corners:
+            best = app.state.store.best_lap(track, car, session_id=session_id)
+            weak_counts: dict = {}
+            for row in laps:
+                try:
+                    record = app.state.store.load(row["id"])
+                except Exception:
+                    continue
+                analysis = analyze_lap(record, cmap, reference=best)
+                for cm in analysis.corners:
+                    if cm.min_spd_delta is not None and cm.min_spd_delta < -1.0:
+                        weak_counts[cm.corner_no] = weak_counts.get(cm.corner_no, 0) + 1
+            recurring = [f"T{k} slower than best in {v} lap(s)"
+                        for k, v in sorted(weak_counts.items(), key=lambda kv: -kv[1]) if v >= 2]
+            if recurring:
+                digest.append("Recurring weak corners: " + "; ".join(recurring))
+
+        chats = app.state.store.chats_for_session(session_id)
+        if chats:
+            for m in app.state.store.chat_messages(chats[0]["chat_id"])[-6:]:
+                if m.get("question"):
+                    digest.append(f"Driver asked: {m['question']}")
+                if m.get("answer"):
+                    digest.append(f"Coach answered: {m['answer'][:200]}")
+
+        system = (
+            "You are distilling durable driver-profile observations from one session's "
+            "data. Return STRICT JSON: {\"memories\": [str, ...], \"summary\": str}. Each "
+            "memory is one short, durable observation about THIS DRIVER (not the car or "
+            "track), grounded only in the digest below -- do not invent facts. summary is "
+            "an updated 1-2 sentence always-on profile blurb.")
+        raw = app.state.coach.model.complete(system, [{"role": "user", "content": "\n".join(digest)}])
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, TypeError):
+            parsed = None
+        if not isinstance(parsed, dict):
+            raise HTTPException(502, "model did not return valid distill JSON")
+
+        memories = [str(m).strip() for m in (parsed.get("memories") or []) if str(m).strip()]
+        created = []
+        for text in memories:
+            mid = app.state.store.add_learning(text, status="pending", source="distill",
+                                                track=track, car=car, session_id=session_id)
+            created.append({"id": mid, "text": text, "status": "pending", "track": track, "car": car})
+        return {"memories": created, "summary": str(parsed.get("summary", "")).strip()}
 
     _LIVE_PERIOD = 0.25  # ~4 Hz; the map/tower don't need capture-rate updates
 
