@@ -83,7 +83,7 @@ def test_status_lmu_connected_reflects_disconnect(tmp_path, monkeypatch):
             return {"carClass": "GT3"}
 
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    coach = Coach(FakeModel(reply="ok"), "simcoach/knowledge")
+    coach = Coach(FakeModel(reply="ok"))
     app = create_app(store, coach, rest_factory=FakeRest)
     tc = TestClient(app, base_url="http://127.0.0.1")
 
@@ -109,7 +109,7 @@ def test_status_detects_track_change_over_stale_latest(tmp_path, monkeypatch):
     from simcoach.lmu import smm
 
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    coach = Coach(FakeModel(reply="ok"), "simcoach/knowledge")
+    coach = Coach(FakeModel(reply="ok"))
     app = create_app(store, coach, rest_factory=lambda: None)
     rec = LapRecord("lmu", "Algarve", "CarA", 90.0, True, 0.0, {},
                     session_id="algarve--cara--offline")
@@ -149,7 +149,7 @@ def test_status_probe_is_rate_capped(tmp_path):
             return {"x": 1}
 
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    coach = Coach(FakeModel(reply="ok"), "simcoach/knowledge")
+    coach = Coach(FakeModel(reply="ok"))
     app = create_app(store, coach, rest_factory=CountingRest)
     tc = TestClient(app, base_url="http://127.0.0.1")
 

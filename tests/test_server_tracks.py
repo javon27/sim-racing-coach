@@ -24,7 +24,7 @@ def _seed_track(tracks_dir: Path, slug: str = "algarve_international_circuit") -
 
 def _make_client_with_fake_model(tmp_path, model_reply):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    coach = Coach(FakeModel(model_reply), "simcoach/knowledge")
+    coach = Coach(FakeModel(model_reply))
     tracks_dir = tmp_path / "tracks"
     _seed_track(tracks_dir)
     client = TestClient(create_app(store, coach, tracks_dir=str(tracks_dir)),
@@ -126,7 +126,7 @@ def test_track_map_by_slug_returns_layout(tmp_path):
     # A track file with a frozen path yields a built canonical map (path + corners),
     # no lap needed -- the Tracks-screen view path.
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    coach = Coach(FakeModel("{}"), "simcoach/knowledge")
+    coach = Coach(FakeModel("{}"))
     tracks_dir = tmp_path / "tracks"
     tracks_dir.mkdir(parents=True, exist_ok=True)
     path = [[float(i), float(i % 3)] for i in range(120)]
@@ -147,7 +147,7 @@ def test_track_map_by_slug_returns_layout(tmp_path):
 
 def _client_with_frozen_path(tmp_path):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    coach = Coach(FakeModel("{}"), "simcoach/knowledge")
+    coach = Coach(FakeModel("{}"))
     tracks_dir = tmp_path / "tracks"
     tracks_dir.mkdir(parents=True, exist_ok=True)
     (tracks_dir / "algarve_international_circuit.json").write_text(json.dumps({

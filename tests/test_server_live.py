@@ -10,7 +10,7 @@ from simcoach.lmu.live import FieldSnapshot, SessionState, VehicleState
 
 def _client(tmp_path):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     return TestClient(create_app(store, coach), base_url="http://127.0.0.1")
 
 

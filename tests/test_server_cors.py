@@ -7,7 +7,7 @@ from simcoach.model.fake import FakeModel
 
 def _tc(tmp_path):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    return TestClient(create_app(store, Coach(FakeModel(), "simcoach/knowledge")),
+    return TestClient(create_app(store, Coach(FakeModel())),
                       base_url="http://127.0.0.1")
 
 

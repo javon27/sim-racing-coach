@@ -117,6 +117,16 @@ TOOLS = [
         },
     },
     {
+        "name": "get_car_notes",
+        "description": "Authored knowledge for the CURRENT car (handling character, setup "
+                       "concepts, driver aids like ABS/TC) plus the shared LMU setup principles "
+                       "that apply to any car, as OWNED data. Call this for car-handling, setup-"
+                       "direction, or driver-aid questions. Works with NO laps captured. Quote "
+                       "these notes and respect their provenance tags ([LMU]/[general-sim]/"
+                       "[needs-refinement] are tentative — hedge); never invent car character.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "get_energy_report",
         "description": "Fuel and virtual-energy usage for the latest lap: per-lap burn, amount "
                        "remaining, and roughly how many laps that lasts — for fuel/energy saving "
@@ -225,7 +235,8 @@ class CoachContext:
 
     def __init__(self, store, units="metric", record=None, lap_id=None, cmap=None,
                  setup=None, track=None, car=None, on_track=None,
-                 allowed_adjustments=None, session_id=None):
+                 allowed_adjustments=None, session_id=None,
+                 car_notes=None, setup_concepts=None):
         self.store = store
         self.units = units
         self.record = record
@@ -236,6 +247,10 @@ class CoachContext:
         self.car = car or (record.car if record else None)
         self.on_track = on_track
         self.allowed_adjustments = allowed_adjustments
+        # Authored car knowledge (merged shipped+overlay `notes` dict) and the shared
+        # LMU setup-concepts doc; loaded per turn like cmap. Empty {} when none.
+        self.car_notes = car_notes or {}
+        self.setup_concepts = setup_concepts or {}
         # The current on-track stint (practice/qualy/race), for scoping laps and the
         # reference to this session rather than all-time. From the live lap's stamp.
         self.session_id = session_id or (record.session_id if record else None)
@@ -469,6 +484,46 @@ class CoachContext:
         head = f"Authored notes for {self.track or 'this track'}:\n" if overview or by_corner else ""
         return head + "\n".join(lines)
 
+    def _format_car_notes(self, notes: dict) -> list[str]:
+        """The authored per-car note fields, in order, as labeled lines. Skips empties."""
+        lines = []
+        for key, label in (("overview", "Overview"), ("handling", "Handling"),
+                            ("setup_concepts", "Setup concepts"),
+                            ("driver_aids", "Driver aids")):
+            val = (notes.get(key) or "").strip()
+            if val:
+                lines.append(f"{label}: {val}")
+        sources = notes.get("sources") or []
+        if sources:
+            lines.append("Sources: " + "; ".join(sources))
+        return lines
+
+    def _format_concepts(self) -> str:
+        """The shared LMU setup-concepts doc as text, or '' if none is shipped."""
+        c = self.setup_concepts.get("notes") if "notes" in self.setup_concepts else self.setup_concepts
+        c = c or {}
+        lines = []
+        overview = (c.get("overview") or "").strip()
+        if overview:
+            lines.append(overview)
+        for step in c.get("method") or []:
+            lines.append(f"- {step}")
+        for lever, text in (c.get("levers") or {}).items():
+            lines.append(f"{lever}: {text}")
+        return "\n".join(lines)
+
+    def get_car_notes(self):
+        concepts = self._format_concepts()
+        car = self.car or "this car"
+        car_lines = self._format_car_notes(self.car_notes)
+        if not car_lines:
+            head = f"No car-specific notes for {car} yet — general LMU setup principles:"
+            return f"{head}\n{concepts}" if concepts else f"No authored notes for {car} yet."
+        out = f"Authored notes for {car}:\n" + "\n".join(car_lines)
+        if concepts:
+            out += "\n\nShared LMU setup concepts (apply to any car):\n" + concepts
+        return out
+
     def get_tire_report(self):
         analysis = self._latest_analysis()
         if analysis is None:
@@ -648,6 +703,7 @@ class CoachContext:
             "get_tire_report": lambda: self.get_tire_report(),
             "get_wheel_report": lambda: self.get_wheel_report(),
             "get_track_notes": lambda: self.get_track_notes(args.get("corner")),
+            "get_car_notes": lambda: self.get_car_notes(),
             "get_energy_report": lambda: self.get_energy_report(),
             "get_race_result": lambda: self.get_race_result(),
             "get_setup": lambda: self.get_setup(),

@@ -106,7 +106,7 @@ def main():
     print(f"Corner map: {map_path.stem}")
     cmap = CornerMap.load(str(map_path))
     config = load_config()
-    coach = Coach(make_model(model=config["model"]), str(PKG_DIR / "knowledge"))
+    coach = Coach(make_model(model=config["model"]))
     print(f"Units: {config['units']}")
 
     # The context (map/car/note) resolved above is a startup snapshot; it can be stale

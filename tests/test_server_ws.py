@@ -21,8 +21,7 @@ def test_ws_protocol_library_installed():
 def _client(tmp_path):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     coach = Coach(FakeModel(reply="Brake later into Turn 1.",
-                            tool_script=[("get_corner", {"corner": "1"})]),
-                  "simcoach/knowledge")
+                            tool_script=[("get_corner", {"corner": "1"})]))
     app = create_app(store, coach)
     return TestClient(app, base_url="http://127.0.0.1"), store
 
@@ -87,7 +86,7 @@ def test_ws_coach_through_lazymodel(tmp_path, monkeypatch):
     monkeypatch.setattr(factory, "make_model",
                         lambda provider=None, model=None: FakeModel(reply="ok"))
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    app = create_app(store, Coach(factory.LazyModel(), "simcoach/knowledge"))
+    app = create_app(store, Coach(factory.LazyModel()))
     c = TestClient(app, base_url="http://127.0.0.1")
     with c.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
         ws.send_json({"question": "hi"})
@@ -107,7 +106,7 @@ def test_ws_coach_error_no_key_is_curated(tmp_path, monkeypatch):
                         lambda provider=None, model=None: (_ for _ in ()).throw(
                             CoachUserError("No Anthropic API key set — add one in Settings.")))
     store = LapStore(str(tmp_path / "c1.sqlite"), str(tmp_path / "data1"))
-    app = create_app(store, Coach(factory.LazyModel(), "simcoach/knowledge"))
+    app = create_app(store, Coach(factory.LazyModel()))
     client = TestClient(app, base_url="http://127.0.0.1")
     with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
         ws.send_json({"question": "hi"})
@@ -119,7 +118,7 @@ def test_ws_coach_error_no_key_is_curated(tmp_path, monkeypatch):
     assert "API key" in events[-1]["message"]
 
     # A generic internal error must NOT leak its text to the client.
-    coach2 = Coach(FakeModel(reply="x"), "simcoach/knowledge")
+    coach2 = Coach(FakeModel(reply="x"))
     monkeypatch.setattr(coach2, "ask_agentic_stream",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("secret internal detail")))
     store2 = LapStore(str(tmp_path / "c2.sqlite"), str(tmp_path / "data2"))
@@ -149,7 +148,7 @@ def test_ws_coach_injects_concise_driver_profile(tmp_path, monkeypatch):
     store.add_learning("Locks the rears at Turn 3.", status="active", source="manual")
 
     model = FakeModel(reply="ok")
-    app = create_app(store, Coach(model, "simcoach/knowledge"))
+    app = create_app(store, Coach(model))
     client = TestClient(app, base_url="http://127.0.0.1")
     with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
         ws.send_json({"question": "hi"})
@@ -180,7 +179,7 @@ class _DeltaModel:
 
 def test_ws_coach_persists_full_streamed_answer(tmp_path):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    coach = Coach(_DeltaModel(), "simcoach/knowledge")
+    coach = Coach(_DeltaModel())
     app = create_app(store, coach)
     client = TestClient(app, base_url="http://127.0.0.1")
     with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
@@ -212,7 +211,7 @@ def test_ws_coach_allows_tauri_origin(tmp_path):
 
 def test_ws_coach_error_without_text_persists_nothing(tmp_path, monkeypatch):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    coach = Coach(FakeModel(reply="x"), "simcoach/knowledge")
+    coach = Coach(FakeModel(reply="x"))
     monkeypatch.setattr(coach, "ask_agentic_stream",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
     app = create_app(store, coach)
@@ -234,7 +233,7 @@ def test_ws_coach_threads_prior_chat_history(tmp_path):
     # ("lost thread mid conversation"). Verify via FakeModel.last_messages.
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     fake = FakeModel(reply="Second answer.")
-    coach = Coach(fake, "simcoach/knowledge")
+    coach = Coach(fake)
     app = create_app(store, coach)
     store.save_chat("c1", "s1", "trk", "car", None,
                     "first question", "first answer", None)
@@ -257,7 +256,7 @@ def test_ws_coach_no_history_for_new_chat(tmp_path):
     # A brand-new chat (no chat_id) threads no history -> just the question.
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     fake = FakeModel(reply="Answer.")
-    coach = Coach(fake, "simcoach/knowledge")
+    coach = Coach(fake)
     app = create_app(store, coach)
 
     client = TestClient(app, base_url="http://127.0.0.1")
@@ -280,7 +279,7 @@ def test_ws_coach_auto_anchors_to_live_session(tmp_path, synthetic_lap):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     rec = LapRecord(**{**synthetic_lap.__dict__, "session_id": "live-s"})
     lap_id = store.save(rec)
-    coach = Coach(FakeModel(reply="ok"), "simcoach/knowledge")
+    coach = Coach(FakeModel(reply="ok"))
     app = create_app(store, coach)
     app.state.latest = {"record": rec, "lap_id": lap_id}
 
@@ -306,7 +305,7 @@ def test_ws_coach_respects_imperial_units(tmp_path, monkeypatch):
                         lambda *a, **k: {**config.DEFAULTS, "units": "imperial"})
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     fake = FakeModel(reply="ok")
-    coach = Coach(fake, "simcoach/knowledge")
+    coach = Coach(fake)
     app = create_app(store, coach)
 
     client = TestClient(app, base_url="http://127.0.0.1")

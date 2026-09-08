@@ -44,7 +44,7 @@ def test_session_threads_history_and_persists(tmp_path):
     from simcoach.coach_tools import CoachContext
     store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
     model = FakeModel(reply="got it")
-    session = CoachSession(Coach(model, str(tmp_path)), "car",
+    session = CoachSession(Coach(model), "car",
                            store=store, session_id="s1")
 
     ctx = CoachContext(store, track="spa", car="car")   # no lap: tools report none
@@ -67,7 +67,7 @@ def test_tool_calls_are_logged(tmp_path):
     store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
     model = FakeModel(reply="ok", tool_script=[("get_session_status", {}),
                                                ("get_corner", {"corner": "1"})])
-    session = CoachSession(Coach(model, str(tmp_path)), "car",
+    session = CoachSession(Coach(model), "car",
                            store=store, session_id="s1")
     session.ask(CoachContext(store, track="spa", car="car"), "q")
     calls = store.session_chat("s1")[0]["tool_calls"]

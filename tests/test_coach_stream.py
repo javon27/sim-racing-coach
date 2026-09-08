@@ -8,8 +8,7 @@ def test_ask_agentic_stream_passes_events_and_dispatches(tmp_path):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     ctx = CoachContext(store, track="T", car="C")
     coach = Coach(FakeModel(reply="Brake later into 1.",
-                            tool_script=[("get_corner", {"corner": "1"})]),
-                  "simcoach/knowledge")
+                            tool_script=[("get_corner", {"corner": "1"})]))
     events = list(coach.ask_agentic_stream(ctx, "where do I lose time?", car="C"))
     assert {"type": "tool", "name": "get_corner", "input": {"corner": "1"}} in events
     assert events[-1] == {"type": "text", "text": "Brake later into 1."}
@@ -24,12 +23,12 @@ def test_ask_agentic_and_stream_build_same_system_prompt(tmp_path):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     ctx = CoachContext(store, track="T", car="C")
 
-    coach = Coach(FakeModel(reply="ok"), "simcoach/knowledge")
+    coach = Coach(FakeModel(reply="ok"))
     coach.ask_agentic(ctx, "where do I lose time?", car="C")
     system_from_ask = coach.model.last_system
 
     stream_model = FakeModel(reply="ok")
-    coach_stream = Coach(stream_model, "simcoach/knowledge")
+    coach_stream = Coach(stream_model)
     list(coach_stream.ask_agentic_stream(ctx, "where do I lose time?", car="C"))
     system_from_stream = stream_model.last_system
 

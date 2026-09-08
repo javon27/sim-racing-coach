@@ -1,6 +1,7 @@
 import threading
 import time
 
+from simcoach.car_notes import load_car_notes, load_setup_concepts
 from simcoach.coach import Coach
 from simcoach.coach_tools import CoachContext
 from simcoach.corners import CornerMap
@@ -134,6 +135,10 @@ def run_repl(source: TelemetrySource, store: LapStore, cmap: CornerMap, coach: C
             store, units=units, record=record, lap_id=latest["lap_id"], cmap=cmap,
             setup=setup, track=track, car=car_raw, on_track=record is not None,
             allowed_adjustments=allowed,
+            # Car knowledge keys off the RESOLVED model name (session.car), not the
+            # raw store name; reloaded each turn so a mid-session car switch follows.
+            car_notes=load_car_notes(session.car),
+            setup_concepts=load_setup_concepts(),
         )
         try:
             answer = session.ask(context, question)

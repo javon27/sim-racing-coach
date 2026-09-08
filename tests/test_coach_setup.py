@@ -6,7 +6,7 @@ from simcoach.model.fake import FakeModel
 
 def test_setup_values_included_and_metadata_skipped(synthetic_lap):
     a = analyze_lap(synthetic_lap, CornerMap.load("simcoach/tracks/test_track.json"))
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     setup = {
         "carClass": "GT3",  # metadata (not a dict-with-stringValue) — must be skipped
         "VM_REARWING": {"stringValue": "6", "isFreeSetting": True},
@@ -25,14 +25,14 @@ def test_setup_values_included_and_metadata_skipped(synthetic_lap):
 
 def test_no_setup_section_when_absent(synthetic_lap):
     a = analyze_lap(synthetic_lap, CornerMap.load("simcoach/tracks/test_track.json"))
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     _system, user = coach.build_prompt(a, "test_car", "help me")
     assert "Current car setup" not in user
 
 
 def test_prelap_question_without_analysis():
     """A question with no lap yet: no corner facts, still answerable from knowledge."""
-    coach = Coach(FakeModel(reply="ok"), "simcoach/knowledge")
+    coach = Coach(FakeModel(reply="ok"))
     _system, user = coach.build_prompt(None, "test_car", "how do I approach this track?")
     assert "No lap captured yet" in user
     assert "Corner facts" not in user
@@ -41,7 +41,7 @@ def test_prelap_question_without_analysis():
 
 def test_controller_caveat_in_system(synthetic_lap):
     a = analyze_lap(synthetic_lap, CornerMap.load("simcoach/tracks/test_track.json"))
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     sys_ctrl, _ = coach.build_prompt(a, "test_car", "q", input_device="controller")
     sys_wheel, _ = coach.build_prompt(a, "test_car", "q", input_device="wheel")
     assert "input-device artifacts" in sys_ctrl and "controller" in sys_ctrl

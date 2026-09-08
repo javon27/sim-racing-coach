@@ -10,11 +10,12 @@ from PyInstaller.utils.hooks import collect_submodules
 
 ROOT = os.path.dirname(SPECPATH)  # packaging/ -> repo root
 
-# knowledge always ships; tracks only if the curated maps have been committed.
+# knowledge always ships; tracks/cars only if the curated data has been committed.
 datas = [(os.path.join(ROOT, "simcoach", "knowledge"), "simcoach/knowledge")]
-_tracks = os.path.join(ROOT, "simcoach", "tracks")
-if os.path.isdir(_tracks):
-    datas.append((_tracks, "simcoach/tracks"))
+for _sub in ("tracks", "cars"):
+    _dir = os.path.join(ROOT, "simcoach", _sub)
+    if os.path.isdir(_dir):
+        datas.append((_dir, f"simcoach/{_sub}"))
 
 a = Analysis(
     [os.path.join(ROOT, "packaging", "run_sidecar.py")],
