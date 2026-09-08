@@ -264,6 +264,11 @@ export function getLapMap(id: number, avg?: boolean): Promise<TrackMap | Record<
   return request<TrackMap | Record<string, never>>(`/laps/${id}/map${avg ? "?avg=1" : ""}`);
 }
 
+// Canonical map for the current LIVE track (Pit Wall) — no completed lap needed.
+export function getCurrentMap(): Promise<TrackMap | Record<string, never>> {
+  return request<TrackMap | Record<string, never>>("/track/map");
+}
+
 export function setMapRotation(id: number, degrees: number): Promise<TrackMap> {
   return request<TrackMap>(`/laps/${id}/rotation`, {
     method: "POST",

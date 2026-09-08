@@ -16,11 +16,13 @@ def _client(tmp_path):
 
 def _snap(live):
     session = SessionState(live=live, phase="race", current_lap=9, max_laps=24,
-                           elapsed=100.0, end_time=0.0, cur_s1=None, cur_s2=None,
-                           best_s1=None, best_s2=None, last_lap=None, best_lap=None)
+                           track_len=4000.0, elapsed=100.0, end_time=0.0, cur_s1=None,
+                           cur_s2=None, best_s1=None, best_s2=None, last_s1=None, last_s2=None,
+                           last_lap=None, best_lap=None)
     cars = [VehicleState(id=2, place=9, class_position=3, driver="You", car="Corvette",
-                         cls="GT3", lap_dist=500.0, sector=1, laps=8, in_pits=False,
-                         is_player=True, gap_leader=31.5, laps_behind_leader=0,
+                         cls="GT3", lap_dist=500.0, speed=55.0, sector=1, laps=8, in_pits=False,
+                         is_player=True, best_lap=91.9, last_lap=92.5, best_s1=29.8,
+                         best_s2=61.5, gap_leader=31.5, laps_behind_leader=0,
                          gap_next=2.4, laps_behind_next=0)] if live else []
     return FieldSnapshot(session=session, cars=cars)
 

@@ -22,10 +22,15 @@ class VehicleState:
     car: str
     cls: str
     lap_dist: float
+    speed: float  # m/s, |mLocalVel|; used for the Pit Wall relative-gap estimate
     sector: int
     laps: int
     in_pits: bool
     is_player: bool
+    best_lap: float | None  # this car's best lap (for the class-fastest marker)
+    last_lap: float | None  # this car's last completed lap (flashed on line-cross)
+    best_s1: float | None   # this car's best cumulative sector splits (for session-class bests)
+    best_s2: float | None
     gap_leader: float | None
     laps_behind_leader: int
     gap_next: float | None
@@ -38,12 +43,15 @@ class SessionState:
     phase: str
     current_lap: int | None
     max_laps: int | None
+    track_len: float  # meters (ScoringInfo.mLapDist); 0 when unknown
     elapsed: float
     end_time: float
     cur_s1: float | None
     cur_s2: float | None
     best_s1: float | None
     best_s2: float | None
+    last_s1: float | None  # completed last lap's cumulative sector splits
+    last_s2: float | None
     last_lap: float | None
     best_lap: float | None
 
@@ -67,8 +75,9 @@ def empty_snapshot() -> FieldSnapshot:
     return FieldSnapshot(
         session=SessionState(
             live=False, phase="", current_lap=None, max_laps=None,
-            elapsed=0.0, end_time=0.0, cur_s1=None, cur_s2=None,
-            best_s1=None, best_s2=None, last_lap=None, best_lap=None,
+            track_len=0.0, elapsed=0.0, end_time=0.0, cur_s1=None, cur_s2=None,
+            best_s1=None, best_s2=None, last_s1=None, last_s2=None,
+            last_lap=None, best_lap=None,
         ),
         cars=[],
     )
@@ -80,6 +89,11 @@ def _phase(m_session: int) -> str:
     return session_phase(m_session)
 
 
+def _speed(v: VehicleScoringInfoV01) -> float:
+    lv = v.mLocalVel
+    return (float(lv.x) ** 2 + float(lv.y) ** 2 + float(lv.z) ** 2) ** 0.5
+
+
 def _vehicle_state(v: VehicleScoringInfoV01, class_position: int) -> VehicleState:
     return VehicleState(
         id=int(v.mID),
@@ -89,10 +103,15 @@ def _vehicle_state(v: VehicleScoringInfoV01, class_position: int) -> VehicleStat
         car=_decode(v.mVehicleName),
         cls=_decode(v.mVehicleClass),
         lap_dist=float(v.mLapDist),
+        speed=_speed(v),
         sector=int(v.mSector),
         laps=int(v.mTotalLaps),
         in_pits=bool(v.mInPits),
         is_player=bool(v.mIsPlayer),
+        best_lap=_pos(v.mBestLapTime),
+        last_lap=_pos(v.mLastLapTime),
+        best_s1=_pos(v.mBestSector1),
+        best_s2=_pos(v.mBestSector2),
         gap_leader=None if v.mLapsBehindLeader else float(v.mTimeBehindLeader),
         laps_behind_leader=int(v.mLapsBehindLeader),
         gap_next=None if v.mLapsBehindNext else float(v.mTimeBehindNext),
@@ -122,23 +141,29 @@ def read_field(scoring: rF2Scoring) -> FieldSnapshot:
     cars = [_vehicle_state(v, class_pos[int(v.mID)]) for v in raw]
     player = next((v for v in raw if v.mIsPlayer), None)
 
-    if player is None:
-        snap = empty_snapshot()
-        snap.cars = cars
-        return snap
+    # Not actually running: no player (menus) or sitting in the garage stall. Report
+    # not-live AND drop the field so neither the map nor the timing tower shows a
+    # stale grid — mirrors read_live_status's garage check (which drives the header).
+    if player is None or player.mInGarageStall:
+        return empty_snapshot()
 
     return FieldSnapshot(
         session=SessionState(
             live=True,
             phase=_phase(int(info.mSession)),
             current_lap=int(player.mTotalLaps) + 1,
-            max_laps=int(info.mMaxLaps) or None,
+            # Practice/timed sessions report an INT_MAX-ish sentinel for "unlimited"
+            # — only show a lap target for a real lap-count race.
+            max_laps=(lambda ml: ml if 0 < ml <= 1000 else None)(int(info.mMaxLaps)),
+            track_len=float(info.mLapDist),
             elapsed=float(info.mCurrentET),
             end_time=float(info.mEndET),
             cur_s1=_pos(player.mCurSector1),
             cur_s2=_pos(player.mCurSector2),
             best_s1=_pos(player.mBestSector1),
             best_s2=_pos(player.mBestSector2),
+            last_s1=_pos(player.mLastSector1),
+            last_s2=_pos(player.mLastSector2),
             last_lap=_pos(player.mLastLapTime),
             best_lap=_pos(player.mBestLapTime),
         ),

@@ -17,6 +17,27 @@ from simcoach.model_types import LapRecord
 # not listed sorts after these, alphabetically.
 _CLASS_ORDER = ["Hyper", "LMP2", "LMP2_ELMS", "LMP3", "GT3", "GTE"]
 
+# The deterministic (track, car, online|offline) session id merges every stint of
+# that combo forever — so a NEW race weekend at the same track/car collapses into
+# the previous one. Split by a time gap: within this window a lap continues the
+# current weekend (survives a sidecar restart), beyond it starts a new instance.
+_SESSION_GAP_S = 6 * 3600  # 6 hours
+
+
+def _is_deterministic_sid(sid: str) -> bool:
+    return sid.endswith("--online") or sid.endswith("--offline")
+
+
+# Instance separator: '~' is URL-unreserved (RFC 3986), so a suffixed id stays safe
+# in the /sessions/{sid} path. NEVER use '#' — the browser would treat it as a URL
+# fragment and drop the suffix, breaking session loads.
+_SESSION_SEP = "~"
+
+
+def _session_base(sid: str) -> str:
+    """The (track, car, mode) base of a session id, dropping any ~<instance> suffix."""
+    return sid.split(_SESSION_SEP, 1)[0]
+
 SCHEMA_VERSION = 10
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
@@ -201,10 +222,36 @@ class LapStore:
             self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self.conn.commit()
 
+    def _resolve_session_instance(self, base: str, ts: float) -> str:
+        """Map a deterministic base id to the right weekend instance: reuse the
+        current one if the last lap was within _SESSION_GAP_S, else start a new
+        instance (`base#<date>`). The first weekend keeps the clean base id.
+        Non-deterministic ids (e.g. the REPL's timestamp) pass through. Must be
+        called under self._lock (reads the laps table)."""
+        if not base or not _is_deterministic_sid(base):
+            return base
+        base = _session_base(base)
+        # Newest lap in ANY instance of this base (exact base, or base + '#...').
+        row = self.conn.execute(
+            "SELECT session_id, ts FROM laps "
+            "WHERE substr(session_id, 1, ?) = ? "
+            "  AND (length(session_id) = ? OR substr(session_id, ?, 1) = ?) "
+            "ORDER BY ts DESC LIMIT 1",
+            (len(base), base, len(base), len(base) + 1, _SESSION_SEP),
+        ).fetchone()
+        if row is None:
+            return base  # first ever for this combo
+        if abs(ts - row[1]) <= _SESSION_GAP_S:
+            return row[0]  # same weekend (or a sidecar restart) -> continue it
+        return f"{base}{_SESSION_SEP}{time.strftime('%Y%m%dT%H%M', time.localtime(ts))}"
+
     def save(self, record: LapRecord, metrics: list | None = None) -> int:
         telemetry_path = None
         try:
             with self._lock, self.conn:
+                sid = self._resolve_session_instance(record.session_id, record.timestamp) \
+                    if record.session_id else None
+
                 def _sec(i):
                     return record.sectors[i] if record.sectors and len(record.sectors) > i else None
                 bounds = json.dumps(record.sector_bounds) if record.sector_bounds else None
@@ -214,7 +261,7 @@ class LapStore:
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (record.timestamp, record.sim, record.track, record.car,
                      record.lap_time, int(record.valid), None,
-                     record.phase, record.session_id, _sec(0), _sec(1), _sec(2),
+                     record.phase, sid, _sec(0), _sec(1), _sec(2),
                      record.position, bounds),
                 )
                 lap_id = cur.lastrowid
@@ -262,19 +309,25 @@ class LapStore:
         with self._lock:
             # Exclude mapping-capture laps (slow weave/boundary laps) so a fresh
             # track with only mapping laps doesn't pick one as the reference best.
-            query = ("SELECT id FROM laps WHERE track = ? AND car = ? AND valid = 1 "
-                     "AND telemetry_path IS NOT NULL "
-                     "AND (phase IS NULL OR phase != 'mapping')")
-            params: list = [track, car]
+            # session_id alone scopes the stint; when given, don't also match on car
+            # (the caller may pass a resolved display model while laps store the raw
+            # entry name — see recent_laps).
+            if session_id is not None:
+                query = ("SELECT id FROM laps WHERE session_id = ? AND valid = 1 "
+                         "AND telemetry_path IS NOT NULL "
+                         "AND (phase IS NULL OR phase != 'mapping')")
+                params: list = [session_id]
+            else:
+                query = ("SELECT id FROM laps WHERE track = ? AND car = ? AND valid = 1 "
+                         "AND telemetry_path IS NOT NULL "
+                         "AND (phase IS NULL OR phase != 'mapping')")
+                params = [track, car]
             if exclude_lap_id is not None:
                 query += " AND id != ?"
                 params.append(exclude_lap_id)
             if phase is not None:
                 query += " AND phase = ?"
                 params.append(phase)
-            if session_id is not None:
-                query += " AND session_id = ?"
-                params.append(session_id)
             query += " ORDER BY lap_time ASC LIMIT 1"
             row = self.conn.execute(query, params).fetchone()
             if row is None:
@@ -315,16 +368,78 @@ class LapStore:
         telemetry loaded — so a tool can list laps for the model to choose from.
         Pass session_id to scope to the current stint."""
         with self._lock:
-            query = "SELECT id, lap_time, valid, phase FROM laps WHERE track = ? AND car = ?"
-            params: list = [track, car]
+            # session_id uniquely scopes a stint (track+car+online), so when it's
+            # given, filter by it ALONE — the caller's `car` may be a resolved display
+            # model ("BMW M4 LMGT3") while laps are stored under the raw entry name, so
+            # matching on car would wrongly return nothing (matches the UI, which
+            # scopes by session_id).
             if session_id is not None:
-                query += " AND session_id = ?"
-                params.append(session_id)
+                query = "SELECT id, lap_time, valid, phase FROM laps WHERE session_id = ?"
+                params: list = [session_id]
+            else:
+                query = "SELECT id, lap_time, valid, phase FROM laps WHERE track = ? AND car = ?"
+                params = [track, car]
             query += " ORDER BY id DESC LIMIT ?"
             params.append(limit)
             rows = self.conn.execute(query, params).fetchall()
             keys = ("lap_id", "lap_time", "valid", "phase")
             return [dict(zip(keys, r)) for r in rows]
+
+    def split_merged_sessions(self) -> dict:
+        """One-time migration: split deterministic sessions that merged multiple
+        weekends (same track/car/mode across a long gap) into per-weekend instances
+        by _SESSION_GAP_S. The oldest weekend keeps the clean base id; later ones
+        become `base#<date>`. A race result sitting on the base is moved to the newest
+        instance (results carry no timestamp; the stored one is the last ingested).
+        Idempotent — re-running reproduces the same ids and changes nothing."""
+        with self._lock, self.conn:
+            rows = self.conn.execute(
+                "SELECT id, ts, session_id FROM laps WHERE session_id IS NOT NULL ORDER BY ts"
+            ).fetchall()
+            by_base: dict[str, list] = {}
+            for lap_id, ts, sid in rows:
+                base = _session_base(sid)
+                if _is_deterministic_sid(base):
+                    by_base.setdefault(base, []).append((lap_id, ts))
+
+            split = 0
+            reassigned = 0
+            for base, laps in by_base.items():
+                instances: list[tuple[str, list[int]]] = []
+                cur_sid, cur_ids, prev_ts = base, [], None
+                for lap_id, ts in laps:  # ts-ordered
+                    if prev_ts is not None and (ts - prev_ts) > _SESSION_GAP_S:
+                        instances.append((cur_sid, cur_ids))
+                        cur_ids = []
+                        cur_sid = f"{base}{_SESSION_SEP}{time.strftime('%Y%m%dT%H%M', time.localtime(ts))}"
+                    cur_ids.append(lap_id)
+                    prev_ts = ts
+                instances.append((cur_sid, cur_ids))
+                if len(instances) <= 1:
+                    continue  # single weekend — nothing merged
+                split += 1
+                for sid, ids in instances:
+                    if sid == base:
+                        continue  # oldest weekend keeps the clean base id
+                    self.conn.executemany(
+                        "UPDATE laps SET session_id = ? WHERE id = ?",
+                        [(sid, lap_id) for lap_id in ids],
+                    )
+                    reassigned += len(ids)
+                # Move a base race result to the newest instance, unless that instance
+                # already has its own result row (avoid a PK clash).
+                newest = instances[-1][0]
+                if newest != base:
+                    exists = self.conn.execute(
+                        "SELECT 1 FROM race_sessions WHERE session_id = ?", (newest,)
+                    ).fetchone()
+                    if not exists:
+                        self.conn.execute(
+                            "UPDATE race_sessions SET session_id = ? WHERE session_id = ?",
+                            (newest, base),
+                        )
+            self.conn.commit()
+        return {"split_sessions": split, "reassigned_laps": reassigned}
 
     def session_lap_ids(self, session_id: str) -> list[int]:
         with self._lock:
@@ -545,16 +660,20 @@ class LapStore:
                 out.append(d)
             return out
 
-    def session_position_arc(self, session_id: str) -> dict | None:
+    def session_position_arc(self, session_id: str, phase: str | None = None) -> dict | None:
         """The session's live per-lap race-position arc, or None if no lap carried
         a position. Lower place number = better, so best = min. Ordered by ts so
-        start/last are the first/last lap actually driven."""
+        start/last are the first/last lap actually driven. Pass phase='race' to scope
+        to the race stint — a session_id spans practice/qualy/race, and positions from
+        those earlier phases would otherwise pollute the start/worst/finish figures."""
+        query = "SELECT position FROM laps WHERE session_id = ? AND position IS NOT NULL"
+        params: list = [session_id]
+        if phase is not None:
+            query += " AND phase = ?"
+            params.append(phase)
+        query += " ORDER BY ts"
         with self._lock:
-            rows = self.conn.execute(
-                "SELECT position FROM laps WHERE session_id = ? AND position IS NOT NULL "
-                "ORDER BY ts",
-                (session_id,),
-            ).fetchall()
+            rows = self.conn.execute(query, params).fetchall()
         places = [r[0] for r in rows]
         if not places:
             return None

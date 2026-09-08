@@ -14,6 +14,16 @@ import {
 } from "./api";
 import App from "./App.svelte";
 
+// App starts the shared live feed on mount; stub it so tests don't open a real
+// WebSocket (keep the module's other exports — CLASS_COLOR etc. — intact).
+vi.mock("./live", async () => {
+  const actual = await vi.importActual<typeof import("./live")>("./live");
+  return {
+    ...actual,
+    liveField: { start() {}, stop() {}, subscribe: () => () => {}, snapshot: null },
+  };
+});
+
 vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
   return {

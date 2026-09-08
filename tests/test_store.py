@@ -19,6 +19,64 @@ def test_save_load_and_best(tmp_path, synthetic_lap):
     assert s.best_lap("test_track", "test_car").lap_time == 92.5
 
 
+def test_session_scoped_queries_ignore_car_model(tmp_path, synthetic_lap):
+    # The coach queries with a RESOLVED display model ("BMW M4 LMGT3") while laps are
+    # stored under the raw entry name ("test_car"); session_id must scope them anyway.
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    s.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "sess-1"}))
+
+    assert len(s.recent_laps("test_track", "BMW M4 LMGT3", session_id="sess-1")) == 1
+    assert s.recent_laps("test_track", "test_car", session_id="other") == []
+    assert s.best_lap("test_track", "BMW M4 LMGT3", session_id="sess-1") is not None
+
+
+def test_save_splits_weekends_by_time_gap(tmp_path, synthetic_lap):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    base = "algarve--car--online"
+    t0 = 1_000_000.0
+    sid = lambda i: s.load(i).session_id
+    a = s.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": base, "timestamp": t0}))
+    b = s.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": base, "timestamp": t0 + 600}))
+    assert sid(a) == base and sid(b) == base  # same weekend keeps the clean base id
+    c = s.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": base, "timestamp": t0 + 7 * 3600}))
+    assert sid(c) != base and sid(c).startswith(base + "~")  # >6h later -> new weekend
+    assert "#" not in sid(c)  # separator must be URL-safe (not a fragment char)
+    d = s.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": base, "timestamp": t0 + 7 * 3600 + 300}))
+    assert sid(d) == sid(c)  # a restart minutes later rejoins the same weekend
+
+
+def test_split_merged_sessions_migration(tmp_path):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    base = "algarve--car--online"
+    t0 = 1_000_000.0
+
+    def ins(ts):  # legacy merged rows (bypass the save-time resolver)
+        s.conn.execute(
+            "INSERT INTO laps (ts, sim, track, car, lap_time, valid, phase, session_id) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (ts, "lmu", "Algarve", "car", 90.0, 1, "race", base),
+        )
+    for t in (t0, t0 + 600, t0 + 7 * 3600, t0 + 7 * 3600 + 600):
+        ins(t)
+    s.conn.execute("INSERT INTO race_sessions (session_id, position) VALUES (?, ?)", (base, 9))
+    s.conn.commit()
+
+    res = s.split_merged_sessions()
+    assert res["split_sessions"] == 1
+    assert res["reassigned_laps"] == 2  # the second weekend's two laps
+    sids = [r[0] for r in s.conn.execute("SELECT session_id FROM laps ORDER BY ts")]
+    assert sids[0] == base and sids[1] == base
+    assert sids[2].startswith(base + "~") and sids[2] == sids[3]
+    # the stored race result follows the newest weekend
+    assert s.conn.execute("SELECT session_id FROM race_sessions").fetchone()[0] == sids[2]
+    # idempotent: re-running leaves the ids unchanged
+    s.split_merged_sessions()
+    assert [r[0] for r in s.conn.execute("SELECT session_id FROM laps ORDER BY ts")] == sids
+
+
 def test_sector_bounds_from_latest_capturing_lap(tmp_path, synthetic_lap):
     from simcoach.store import LapStore
     s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))

@@ -160,6 +160,7 @@
 
 <script lang="ts">
   import { onDestroy } from "svelte";
+  import { attachWheelZoom, attachPan, type Box } from "./mapzoom";
   import {
     getLapMap,
     saveLapMap,
@@ -221,6 +222,9 @@
   // What the pointer is currently dragging. `ai` = apex index for kind "apex".
   type DragKind = "corner" | "sector" | "apex" | "secstart" | "secend";
   let drag: { kind: DragKind; i: number; ai?: number } | null = null;
+  // Reactive mirror of `drag` used to FREEZE the label layout mid-drag: the O(n)
+  // label-routing pass was the drag lag, so we defer it until the marker is dropped.
+  let dragging = $state(false);
   let addMode = $state(false);
   let addSectionMode = $state(false);
 
@@ -444,6 +448,45 @@
   // the getScreenCTM pointer transform stays correct because it honors the viewBox).
   const pad = $derived(u * 0.09);
 
+  // Scroll-wheel zoom (esp. for placing corners on long tracks like Le Mans). The
+  // viewBox shrinks toward the cursor; because click→world mapping goes through
+  // getScreenCTM, placement stays accurate at any zoom. Resets when the map changes.
+  let view: Box | null = $state(null);
+  const fullBox = $derived(map ? { x: -pad, y: -pad, w: map.width + pad * 2, h: map.height + pad * 2 } : null);
+  const vb = $derived.by(() => {
+    const b = view ?? fullBox;
+    return b ? `${b.x} ${b.y} ${b.w} ${b.h}` : "0 0 100 100";
+  });
+  // Markers/labels scale by the zoom factor so they keep a ~constant on-screen
+  // size — essential for placing corners in tight sections.
+  const z = $derived(fullBox && view ? view.w / fullBox.w : 1);
+  const suLive = $derived(u * z);
+  // Debounce the size scale: the viewBox keeps zooming live, but the expensive
+  // label re-layout only re-runs 250ms after scrolling stops (not per wheel tick).
+  let suDeb = $state(0);
+  const su = $derived(suDeb || suLive);
+  $effect(() => { void map; view = null; suDeb = u; });
+  $effect(() => {
+    const target = suLive;
+    const id = setTimeout(() => (suDeb = target), 250);
+    return () => clearTimeout(id);
+  });
+  $effect(() => {
+    if (!svgEl || !fullBox) return;
+    const box = () => ({ view: view ?? fullBox, full: fullBox });
+    const set = (v: Box) => (view = v);
+    const offWheel = attachWheelZoom(svgEl, box, set);
+    // Pan on empty-space drag only: never while placing (add mode) or when the
+    // pointer went down on an interactive marker (a <circle>/<rect> handle), so
+    // dragging corners still works.
+    const offPan = attachPan(svgEl, box, set, (e) => {
+      if (addMode || addSectionMode) return false;
+      const tag = (e.target as Element).tagName.toLowerCase();
+      return tag !== "circle" && tag !== "rect";
+    });
+    return () => { offWheel(); offPan(); };
+  });
+
   // World point on the racing line for a given lap_distance (for placing markers).
   function ptAtDist(d: number): [number, number] {
     if (!map) return [0, 0];
@@ -453,11 +496,11 @@
   // Ring-placed labels: corners on their perpendicular (tight ring), sections routed around
   // the corner labels (same tight ring, expanding only when blocked). One combined layout so
   // sections avoid the corner label boxes; results are split back out for the template.
-  const laidOut = $derived.by(() => {
+  function computeLaidOut() {
     const empty = { corners: [] as PlacedLabel[], sections: [] as PlacedLabel[] };
     if (!map || !map.path.length) return empty;
     const path = map.path, N = path.length, k = Math.max(2, Math.round(N * 0.02));
-    const cx = map.width / 2, cy = map.height / 2, gap = u * 0.008;
+    const cx = map.width / 2, cy = map.height / 2, gap = su * 0.008;
     const centroidOut = (p: [number, number]): [number, number] => { let dx = p[0] - cx, dy = p[1] - cy; const d = Math.hypot(dx, dy) || 1; return [dx / d, dy / d]; };
     const cornerAnchors = corners.map((c) => ptAtDist(c.apex_dist));
     const sectionAnchors = sections.map((s) => sectionSeg(s).mid);
@@ -466,12 +509,21 @@
       ...corners.map((c, i) => {
         const lo = localOutward(path, nearestDistIndex(map!.dist, c.apex_dist), k);
         const outward = lo.curv > 1e-4 ? [lo.ox, lo.oy] as [number, number] : centroidOut(cornerAnchors[i]);
-        return { anchor: cornerAnchors[i], text: `T${c.label || c.number}`, outward, fontSize: u * 0.032, gap, wrap: false, priority: 0 };
+        return { anchor: cornerAnchors[i], text: `T${c.label || c.number}`, outward, fontSize: su * 0.032, gap, wrap: false, priority: 0 };
       }),
-      ...sections.map((s, i) => ({ anchor: sectionAnchors[i], text: s.name, outward: centroidOut(sectionAnchors[i]), fontSize: u * 0.027, gap, wrap: true, priority: 1 })),
+      ...sections.map((s, i) => ({ anchor: sectionAnchors[i], text: s.name, outward: centroidOut(sectionAnchors[i]), fontSize: su * 0.027, gap, wrap: true, priority: 1 })),
     ];
     const res = layoutLabels(items, { bounds: [-pad, -pad, map.width + pad, map.height + pad], markers, line: path });
     return { corners: res.slice(0, corners.length), sections: res.slice(corners.length) };
+  }
+  // Recompute labels on any change EXCEPT while dragging a marker (the expensive
+  // routing pass caused the drag lag). Reading `dragging` first and bailing means a
+  // mid-drag corner move doesn't retrigger this; dropping the marker flips
+  // `dragging` false, which re-runs it once with the final positions.
+  let laidOut = $state<{ corners: PlacedLabel[]; sections: PlacedLabel[] }>({ corners: [], sections: [] });
+  $effect(() => {
+    if (dragging) return;
+    laidOut = computeLaidOut();
   });
   const cornerLabels = $derived(laidOut.corners);
   const sectionLabels = $derived(laidOut.sections);
@@ -542,6 +594,7 @@
   function endDrag() {
     const wasCorner = drag?.kind === "corner";
     drag = null;
+    dragging = false; // unfreeze -> the label layout recomputes once, at rest
     // Dragging a corner past another changes track order → renumber.
     if (wasCorner) renumber();
   }
@@ -555,6 +608,7 @@
   function startDrag(kind: DragKind, i: number, e: PointerEvent, ai?: number) {
     e.stopPropagation();
     drag = { kind, i, ai };
+    dragging = true; // freeze the label layout until endDrag
     (e.target as Element).setPointerCapture?.(e.pointerId);
   }
 
@@ -779,7 +833,8 @@
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <svg
             bind:this={svgEl}
-            viewBox="{-pad} {-pad} {map.width + pad * 2} {map.height + pad * 2}"
+            viewBox={vb}
+            style="touch-action:none"
             class:add={editMode && (addMode || addSectionMode)}
             class:ro={!editMode}
             role="application"
@@ -791,7 +846,7 @@
               points={map.path.map(([x, y]) => `${x},${y}`).join(" ")}
               fill="none"
               stroke="var(--muted)"
-              stroke-width={u * 0.007}
+              stroke-width={su * 0.007}
               stroke-linejoin="round"
               stroke-linecap="round"
             />
@@ -799,28 +854,28 @@
               {@const seg = sectionSeg(sec)}
               {@const ps = ptAtDist(sec.start_dist)}
               {@const pe = ptAtDist(sec.end_dist)}
-              <polyline class="section-band" points={seg.pts} fill="none" stroke="var(--good, #3a7)" stroke-width={u * 0.02} stroke-linecap="round" opacity="0.35" />
+              <polyline class="section-band" points={seg.pts} fill="none" stroke="var(--good, #3a7)" stroke-width={su * 0.02} stroke-linecap="round" opacity="0.35" />
               {@const sl = sectionLabels[i]}
               {#if sl}
                 {#if sl.leader}
-                  <line class="lbl-leader" x1={sl.leader[0]} y1={sl.leader[1]} x2={sl.leader[2]} y2={sl.leader[3]} stroke="var(--good, #3a7)" stroke-width={u * 0.004} opacity="0.6" />
+                  <line class="lbl-leader" x1={sl.leader[0]} y1={sl.leader[1]} x2={sl.leader[2]} y2={sl.leader[3]} stroke="var(--good, #3a7)" stroke-width={su * 0.004} opacity="0.6" />
                 {/if}
-                <text class="section-lbl" text-anchor="middle" font-size={sl.fontSize} fill="var(--good, #3a7)" paint-order="stroke" stroke="var(--bg, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">
+                <text class="section-lbl" text-anchor="middle" font-size={sl.fontSize} fill="var(--good, #3a7)" paint-order="stroke" stroke="var(--bg, #1a1a1a)" stroke-width={su * 0.012} stroke-linejoin="round">
                   {#each sl.lines as ln, li}<tspan x={sl.cx} y={sl.cy - (sl.lines.length - 1) * sl.fontSize * 0.51 + li * sl.fontSize * 1.02 + sl.fontSize * 0.34}>{ln}</tspan>{/each}
                 </text>
               {/if}
               <!-- svelte-ignore a11y_no_static_element_interactions -->
               {#if editMode}
-                <circle class="sec-handle" cx={ps[0]} cy={ps[1]} r={u * 0.012} fill="var(--good, #3a7)" role="slider" aria-label="{sec.name} start" aria-valuenow={sec.start_dist} tabindex="-1" onpointerdown={(e) => startDrag("secstart", i, e)}><title>{sec.name} start</title></circle>
+                <circle class="sec-handle" cx={ps[0]} cy={ps[1]} r={su * 0.012} fill="var(--good, #3a7)" role="slider" aria-label="{sec.name} start" aria-valuenow={sec.start_dist} tabindex="-1" onpointerdown={(e) => startDrag("secstart", i, e)}><title>{sec.name} start</title></circle>
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
-                <circle class="sec-handle" cx={pe[0]} cy={pe[1]} r={u * 0.012} fill="var(--good, #3a7)" role="slider" aria-label="{sec.name} end" aria-valuenow={sec.end_dist} tabindex="-1" onpointerdown={(e) => startDrag("secend", i, e)}><title>{sec.name} end</title></circle>
+                <circle class="sec-handle" cx={pe[0]} cy={pe[1]} r={su * 0.012} fill="var(--good, #3a7)" role="slider" aria-label="{sec.name} end" aria-valuenow={sec.end_dist} tabindex="-1" onpointerdown={(e) => startDrag("secend", i, e)}><title>{sec.name} end</title></circle>
               {/if}
             {/each}
             {#if startDir}
-              {@const b = sfBar(startDir.x0, startDir.y0, startDir.ang, u * 0.03)}
-              <line x1={b.x1} y1={b.y1} x2={b.x2} y2={b.y2} stroke="var(--text)" stroke-width={u * 0.008} />
-              <polygon points={arrow(startDir.xj, startDir.yj, startDir.ang, u * 0.05, u * 0.028)} fill="var(--text)" />
-              <text class="sf" x={startDir.x0} y={startDir.y0 - u * 0.04} font-size={u * 0.032} fill="var(--text)" text-anchor="middle">S/F</text>
+              {@const b = sfBar(startDir.x0, startDir.y0, startDir.ang, su * 0.03)}
+              <line x1={b.x1} y1={b.y1} x2={b.x2} y2={b.y2} stroke="var(--text)" stroke-width={su * 0.008} />
+              <polygon points={arrow(startDir.xj, startDir.yj, startDir.ang, su * 0.05, su * 0.028)} fill="var(--text)" />
+              <text class="sf" x={startDir.x0} y={startDir.y0 - su * 0.04} font-size={su * 0.032} fill="var(--text)" text-anchor="middle">S/F</text>
             {/if}
             {#each sectors as s, i (i)}
               {@const p = ptAtDist(s)}
@@ -828,10 +883,10 @@
               <rect
                 class="sector"
                 class:ro={!editMode}
-                x={p[0] - u * 0.014}
-                y={p[1] - u * 0.014}
-                width={u * 0.028}
-                height={u * 0.028}
+                x={p[0] - su * 0.014}
+                y={p[1] - su * 0.014}
+                width={su * 0.028}
+                height={su * 0.028}
                 fill="var(--text)"
                 role="slider"
                 aria-label="Sector split {i + 1}"
@@ -849,10 +904,10 @@
                   class:ro={!editMode}
                   cx={p[0]}
                   cy={p[1]}
-                  r={u * 0.014}
+                  r={su * 0.014}
                   fill={ai === 0 ? "var(--accent)" : "var(--bg, #1a1a1a)"}
                   stroke="var(--accent)"
-                  stroke-width={ai === 0 ? 0 : u * 0.005}
+                  stroke-width={ai === 0 ? 0 : su * 0.005}
                   role="slider"
                   aria-label="{c.name} apex {ai + 1}"
                   aria-valuenow={ad}
@@ -863,9 +918,9 @@
               {@const cl = cornerLabels[i]}
               {#if cl}
                 {#if cl.leader}
-                  <line class="lbl-leader" x1={cl.leader[0]} y1={cl.leader[1]} x2={cl.leader[2]} y2={cl.leader[3]} stroke="var(--accent)" stroke-width={u * 0.004} opacity="0.6" />
+                  <line class="lbl-leader" x1={cl.leader[0]} y1={cl.leader[1]} x2={cl.leader[2]} y2={cl.leader[3]} stroke="var(--accent)" stroke-width={su * 0.004} opacity="0.6" />
                 {/if}
-                <text class="corner-lbl" x={cl.cx} y={cl.cy + cl.fontSize * 0.34} text-anchor="middle" font-size={cl.fontSize} fill="var(--accent)" paint-order="stroke" stroke="var(--bg, #1a1a1a)" stroke-width={u * 0.012} stroke-linejoin="round">T{c.label || c.number}</text>
+                <text class="corner-lbl" x={cl.cx} y={cl.cy + cl.fontSize * 0.34} text-anchor="middle" font-size={cl.fontSize} fill="var(--accent)" paint-order="stroke" stroke="var(--bg, #1a1a1a)" stroke-width={su * 0.012} stroke-linejoin="round">T{c.label || c.number}</text>
               {/if}
             {/each}
             </g>

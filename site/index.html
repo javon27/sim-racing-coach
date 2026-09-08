@@ -31,6 +31,8 @@
   }
   *{box-sizing:border-box}
   html{scroll-behavior:smooth}
+  /* Offset in-page anchor jumps so the sticky 64px header doesn't cover the target. */
+  :where(#top,#features,#sims,#pitwall,#name,#download){scroll-margin-top:80px}
   body{
     margin:0; background:var(--bg); color:var(--text);
     font-family:var(--body); font-size:16px; line-height:1.6;
@@ -57,6 +59,8 @@
     transition:transform .12s ease, background .12s ease, border-color .12s ease;
   }
   .btn:active{transform:translateY(1px)}
+  .btn:disabled{opacity:.6; cursor:not-allowed; box-shadow:none}
+  .btn:disabled:hover{background:var(--accent)}
   .btn-primary{background:var(--accent); color:#fff; box-shadow:0 8px 24px rgba(109,74,255,.30)}
   .btn-primary:hover{background:var(--accent-2)}
   .btn-ghost{background:transparent; color:var(--text); border-color:var(--line)}
@@ -98,6 +102,36 @@
     box-shadow:0 24px 70px rgba(0,0,0,.55); background:var(--surface)}
   .hero .shot{margin:48px auto 0; max-width:1040px}
 
+  /* Hero carousel — native scroll-snap, no deps. Each slide is a click-to-enlarge button. */
+  .carousel{position:relative; max-width:1040px; margin:48px auto 0}
+  .car-track{display:flex; overflow-x:auto; scroll-snap-type:x mandatory; scrollbar-width:none}
+  .car-track::-webkit-scrollbar{display:none}
+  .car-slide{flex:0 0 100%; scroll-snap-align:center; margin:0; padding:0 1px}
+  .car-zoom{display:block; width:100%; padding:0; font:inherit; color:inherit; cursor:zoom-in}
+  .car-zoom img{display:block; width:100%}
+  .car-arrow{position:absolute; top:calc(50% - 26px); transform:translateY(-50%); z-index:2;
+    width:44px; height:44px; border-radius:50%; border:1px solid var(--line);
+    background:rgba(21,26,34,.82); color:var(--text); backdrop-filter:blur(6px);
+    cursor:pointer; font-family:var(--display); font-size:22px; line-height:1;
+    display:grid; place-items:center; transition:border-color .12s, background .12s}
+  .car-arrow:hover{border-color:var(--accent-2); background:rgba(29,35,45,.92)}
+  .car-arrow.prev{left:-10px} .car-arrow.next{right:-10px}
+  @media(max-width:1080px){ .car-arrow.prev{left:8px} .car-arrow.next{right:8px} }
+  .car-dots{display:flex; gap:9px; justify-content:center; margin-top:18px}
+  .car-dots .dot{width:8px; height:8px; border-radius:50%; border:0; padding:0;
+    background:var(--line); cursor:pointer; transition:background .12s}
+  .car-dots .dot.on{background:var(--accent-2)}
+
+  /* Lightbox */
+  .lightbox{border:0; padding:0; background:transparent; max-width:min(1240px,94vw); max-height:94vh; overflow:visible}
+  .lightbox::backdrop{background:rgba(5,7,10,.84); backdrop-filter:blur(3px)}
+  .lightbox img{display:block; width:100%; height:auto; max-height:90vh; object-fit:contain;
+    border-radius:12px; box-shadow:0 30px 80px rgba(0,0,0,.6)}
+  .lb-close{position:fixed; top:18px; right:22px; width:42px; height:42px; border-radius:50%;
+    border:1px solid var(--line); background:rgba(21,26,34,.9); color:var(--text);
+    font-size:24px; line-height:1; cursor:pointer; z-index:2}
+  .lb-close:hover{border-color:var(--accent-2)}
+
   /* Trust strip */
   .trust{border-top:1px solid var(--line); border-bottom:1px solid var(--line); margin-top:64px;
     background:linear-gradient(180deg, rgba(21,26,34,.5), transparent)}
@@ -128,6 +162,12 @@
     .feat .row.reverse .copy{order:0}
     section.feat{padding:56px 0}
   }
+
+  /* Pit Wall — full-width intro over a two-up screenshot pair */
+  .pw-head{max-width:720px; margin:0 auto; text-align:center}
+  .pw-head .pw-lead{color:var(--muted); font-size:17px; margin-top:16px}
+  .pw-grid{display:grid; grid-template-columns:1fr 1fr; gap:28px; margin-top:44px}
+  @media(max-width:860px){ .pw-grid{grid-template-columns:1fr; gap:32px} }
 
   /* The name */
   .name-sec{padding:88px 0; border-top:1px solid var(--line);
@@ -189,15 +229,54 @@
       telemetry and current setup.
     </p>
     <div class="cta-row">
-      <a class="btn btn-primary" href="#download">Get Nestor <span class="soon">soon</span></a>
+      <button type="button" class="btn btn-primary" disabled>Get Nestor <span class="soon">soon</span></button>
       <a class="btn btn-ghost" href="#features">See how it works</a>
     </div>
     <div class="cta-note">Windows desktop app · bring your own Anthropic API key</div>
 
-    <div class="shot">
-      <img src="assets/coach-app.png" alt="Nestor desktop app: a coaching conversation beside live lap times, a per-corner breakdown, and the track map." loading="lazy">
+    <div class="carousel" id="hero-carousel">
+      <button class="car-arrow prev" type="button" aria-label="Previous screenshot">‹</button>
+      <div class="car-track">
+        <figure class="car-slide">
+          <button class="shot car-zoom" type="button" data-full="assets/coach-app.png" data-alt="Nestor desktop app: a coaching conversation beside live lap times, a per-corner breakdown, and the track map.">
+            <img src="assets/coach-app.png" alt="Nestor desktop app: a coaching conversation beside live lap times, a per-corner breakdown, and the track map." fetchpriority="high">
+          </button>
+          <figcaption class="caption">The coach reads your telemetry — you just ask.</figcaption>
+        </figure>
+        <figure class="car-slide">
+          <button class="shot car-zoom" type="button" data-full="assets/coach-chat.png" data-alt="A coaching conversation in Nestor about trail-braking, with per-corner numbers.">
+            <img src="assets/coach-chat.png" alt="A coaching conversation in Nestor about trail-braking, with per-corner numbers." loading="lazy">
+          </button>
+          <figcaption class="caption">Between-laps coaching, grounded in the lap you just drove.</figcaption>
+        </figure>
+        <figure class="car-slide">
+          <button class="shot car-zoom" type="button" data-full="assets/pit-wall.jpg" data-alt="Nestor's Pit Wall in Position view: a live timing tower beside a track map with every car placed.">
+            <img src="assets/pit-wall.jpg" alt="Nestor's Pit Wall in Position view: a live timing tower beside a track map with every car placed." loading="lazy">
+          </button>
+          <figcaption class="caption">Pit Wall — live timing and the whole field, mid-race.</figcaption>
+        </figure>
+        <figure class="car-slide">
+          <button class="shot car-zoom" type="button" data-full="assets/pit-wall-relative.jpg" data-alt="Nestor's Pit Wall in Relative view: the cars nearest you, ahead and behind, with live time gaps.">
+            <img src="assets/pit-wall-relative.jpg" alt="Nestor's Pit Wall in Relative view: the cars nearest you, ahead and behind, with live time gaps." loading="lazy">
+          </button>
+          <figcaption class="caption">Relative view — the cars nearest you, ahead and behind.</figcaption>
+        </figure>
+        <figure class="car-slide">
+          <button class="shot car-zoom" type="button" data-full="assets/track-map.png" data-alt="Nestor's track map with every corner numbered, named, and marked left or right.">
+            <img src="assets/track-map.png" alt="Nestor's track map with every corner numbered, named, and marked left or right." loading="lazy">
+          </button>
+          <figcaption class="caption">Every corner measured — numbered, named, direction known.</figcaption>
+        </figure>
+        <figure class="car-slide">
+          <button class="shot car-zoom" type="button" data-full="assets/sessions-trend.png" data-alt="Nestor's sessions view: a best-lap trend line showing improvement over a session.">
+            <img src="assets/sessions-trend.png" alt="Nestor's sessions view: a best-lap trend line showing improvement over a session." loading="lazy">
+          </button>
+          <figcaption class="caption">Your best-lap trend, session over session.</figcaption>
+        </figure>
+      </div>
+      <button class="car-arrow next" type="button" aria-label="Next screenshot">›</button>
+      <div class="car-dots" id="hero-dots"></div>
     </div>
-    <div class="caption">A real session in Nestor — the coach reads your telemetry, you just ask.</div>
   </div>
 </section>
 
@@ -282,6 +361,30 @@
   </div>
 </section>
 
+<section class="feat" style="padding-top:0" id="pitwall">
+  <div class="wrap">
+    <div class="pw-head">
+      <div class="eyebrow">Live race dashboard</div>
+      <h2>The whole field, on your pit wall.</h2>
+      <p class="pw-lead">
+        While you drive, the Pit Wall shows live timing, the gap to every car and
+        where each one sits on track — across every class — so you know who’s
+        coming and how hard to push.
+      </p>
+    </div>
+    <div class="pw-grid">
+      <div>
+        <div class="shot"><img src="assets/pit-wall.jpg" alt="Nestor's Pit Wall in Position view: a live timing tower with the full GT3 field in race order beside a Monza track map with every car placed." loading="lazy"></div>
+        <div class="caption">Position — the full field in race order, class gaps and fastest laps.</div>
+      </div>
+      <div>
+        <div class="shot"><img src="assets/pit-wall-relative.jpg" alt="Nestor's Pit Wall in Relative view: the cars nearest you, ahead and behind across GT3 and Hypercar, with live time gaps." loading="lazy"></div>
+        <div class="caption">Relative — the cars nearest you, ahead and behind, with live time gaps.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <section class="name-sec" id="name">
   <div class="wrap">
     <img class="helm helm-ol" src="assets/helm-color.svg" alt="The Nestor helm">
@@ -308,13 +411,13 @@
       <h2>Coming to Patreon.</h2>
       <p>
         Nestor will be available to download through Patreon. The page isn’t live
-        yet — drop your name and you’ll be first to know when it opens.
+        yet — check back soon.
       </p>
       <div class="cta-row">
-        <!-- TODO: replace href with the real Patreon URL once the account exists -->
-        <a class="btn btn-primary" href="#" aria-disabled="true" data-patreon-placeholder>
+        <!-- TODO: restore as <a href="<patreon-url>"> once the Patreon account exists -->
+        <button type="button" class="btn btn-primary" disabled data-patreon-placeholder>
           Support on Patreon <span class="soon">soon</span>
-        </a>
+        </button>
       </div>
       <div class="steps">
         <span class="step"><b>1.</b> Join on Patreon</span>
@@ -339,6 +442,50 @@
   </div>
 </footer>
 
-<script>document.getElementById('yr').textContent=new Date().getFullYear();</script>
+<dialog class="lightbox" id="lb">
+  <button class="lb-close" type="button" aria-label="Close">×</button>
+  <img id="lb-img" src="" alt="">
+</dialog>
+
+<script>
+document.getElementById('yr').textContent=new Date().getFullYear();
+
+// Hero carousel: arrows + dots synced to native scroll-snap position.
+(function(){
+  var car=document.getElementById('hero-carousel'); if(!car) return;
+  var track=car.querySelector('.car-track');
+  var slides=Array.prototype.slice.call(track.children);
+  var dotsWrap=document.getElementById('hero-dots');
+  var dots=slides.map(function(_,i){
+    var d=document.createElement('button');
+    d.className='dot'; d.type='button'; d.setAttribute('aria-label','Screenshot '+(i+1));
+    d.addEventListener('click',function(){ track.scrollTo({left:i*track.clientWidth,behavior:'smooth'}); });
+    dotsWrap.appendChild(d); return d;
+  });
+  function sync(){
+    var i=Math.round(track.scrollLeft/track.clientWidth);
+    dots.forEach(function(d,j){ d.classList.toggle('on',j===i); });
+  }
+  track.addEventListener('scroll',sync,{passive:true});
+  car.querySelector('.prev').addEventListener('click',function(){ track.scrollBy({left:-track.clientWidth,behavior:'smooth'}); });
+  car.querySelector('.next').addEventListener('click',function(){ track.scrollBy({left:track.clientWidth,behavior:'smooth'}); });
+  sync();
+})();
+
+// Lightbox: click any carousel shot to enlarge (native <dialog>; Esc + backdrop close).
+(function(){
+  var lb=document.getElementById('lb'), img=document.getElementById('lb-img');
+  if(!lb) return;
+  document.querySelectorAll('.car-zoom').forEach(function(b){
+    b.addEventListener('click',function(){
+      img.src=b.getAttribute('data-full'); img.alt=b.getAttribute('data-alt')||'';
+      if(typeof lb.showModal==='function') lb.showModal(); else lb.setAttribute('open','');
+    });
+  });
+  lb.querySelector('.lb-close').addEventListener('click',function(){ lb.close(); });
+  lb.addEventListener('click',function(e){ if(e.target===lb) lb.close(); }); // click outside the image
+  lb.addEventListener('close',function(){ img.removeAttribute('src'); });
+})();
+</script>
 </body>
 </html>

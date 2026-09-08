@@ -86,6 +86,15 @@ def test_no_player_is_not_live():
     assert snap.session.live is False
 
 
+def test_player_in_garage_is_not_live():
+    # In the garage (or menus with stale scoring) the Pit Wall must NOT show a live
+    # field — matches the GARAGE header from read_live_status.
+    s = _scoring([_veh(mID=2, mPlace=1, mVehicleClass="GT3", mVehicleName="G1",
+                       mIsPlayer=True, mInGarageStall=1)])
+    snap = read_field(s)
+    assert snap.session.live is False
+
+
 def test_clamps_to_num_vehicles():
     s = _scoring([_veh(mID=1, mPlace=1, mVehicleClass="GT3", mVehicleName="G1", mIsPlayer=True)])
     s.mScoringInfo.mNumVehicles = 1

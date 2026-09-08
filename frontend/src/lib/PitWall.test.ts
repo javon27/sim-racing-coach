@@ -1,25 +1,16 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, waitFor, cleanup } from "@testing-library/svelte";
 
-// Stub the network + WS deps before importing the component.
+// Stub the network dep before importing the component.
 vi.mock("./api", () => ({
-  getStatus: vi.fn(async () => ({ track: "Le Mans", car: "Corvette", car_model: null,
-    on_track: true, activity: "track", has_map: true, lmu_connected: true,
-    session_id: "s", lap_id: 42 })),
-  getSettings: vi.fn(async () => ({ units: "metric" })),
-  withRetry: (fn: () => unknown) => fn(),
-  getLapMap: vi.fn(async () => ({})),
+  getCurrentMap: vi.fn(async () => ({})),
 }));
 
 import PitWall from "./PitWall.svelte";
-import { LiveField } from "./live";
+import { liveField } from "./live";
 
-beforeEach(() => {
-  vi.spyOn(LiveField.prototype, "start").mockImplementation(function (this: LiveField) {});
-  vi.spyOn(LiveField.prototype, "stop").mockImplementation(function (this: LiveField) {});
-});
 afterEach(() => {
-  cleanup(); // unmount so onDestroy runs before spies are restored
+  cleanup();
   vi.restoreAllMocks();
 });
 
@@ -29,9 +20,10 @@ describe("PitWall", () => {
     await waitFor(() => expect(getByText(/waiting for lmu/i)).toBeTruthy());
   });
 
-  it("stops the live field on destroy", async () => {
+  it("does NOT stop the shared live field on destroy (it streams app-wide)", async () => {
+    const stop = vi.spyOn(liveField, "stop");
     const { unmount } = render(PitWall);
     unmount();
-    expect(LiveField.prototype.stop).toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
   });
 });

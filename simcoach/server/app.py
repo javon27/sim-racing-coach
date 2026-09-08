@@ -538,6 +538,26 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                  "track_name": _track_file_data(rec.track).get("name") or rec.track}
         return m
 
+    @app.get("/track/map")
+    def track_map():
+        # The current LIVE track's canonical map — for the Pit Wall, which needs the
+        # layout keyed on the track itself (a practice session has no completed lap_id
+        # to route through /laps/{id}/map).
+        try:
+            from ..lmu.smm import read_live_status
+            live = read_live_status()
+        except Exception:
+            live = None
+        if not live or not live.get("track"):
+            return {}
+        track, car = live["track"], live["car"]
+        m = _canonical_map(track, car, force=False)
+        if m:
+            m = {**m, "detected_sectors": store.sector_bounds(track, car) or [],
+                 "shipped": _is_shipped(track), "curating": _curating(),
+                 "track_name": _track_file_data(track).get("name") or track}
+        return m
+
     @app.put("/laps/{lap_id}/map")
     def save_lap_map(lap_id: int, body: dict = Body(...)):
         # SAVE the editor's corner map + sectors as shipped owned data. Direction
@@ -1068,7 +1088,12 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             while True:
                 # Blocking mmap read off the event loop.
                 snap = await loop.run_in_executor(None, read_field_snapshot)
-                await ws.send_json(snapshot_to_dict(snap))
+                payload = snapshot_to_dict(snap)
+                # Live scoring only carries the team/entry name; map it to the car
+                # MODEL the same way /status does (raw name stays the resolve key).
+                for c in payload["cars"]:
+                    c["car"] = resolve_car(c["car"], c["cls"])
+                await ws.send_json(payload)
                 await asyncio.sleep(_LIVE_PERIOD)
         except (WebSocketDisconnect, RuntimeError):
             pass

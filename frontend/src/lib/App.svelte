@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { tick } from "svelte";
+  import { onMount, tick } from "svelte";
+  import { liveField } from "./live";
   import { nextTheme, applyTheme, loadTheme, saveTheme, THEME_LABELS, THEME_ICONS, type ThemeMode } from "./theme";
   import SessionBar from "./SessionBar.svelte";
   import RaceStrip from "./RaceStrip.svelte";
@@ -26,6 +27,10 @@
   // null = a session was opened that has NO chat (show an empty new chat);
   // string = open that specific chat.
   let activeChatId: string | null | undefined = $state(undefined);
+
+  // Start the shared live feed once, for the whole app lifetime, so the Pit Wall
+  // reflects live data no matter which view is active (e.g. while mapping a track).
+  onMount(() => liveField.start());
 
   function toggleTheme() {
     theme = nextTheme(theme);
@@ -156,10 +161,14 @@
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
     </button>
   </nav>
-  <div class="screens">
+  <div class="content">
+    <!-- One shared header for Coach + Pit Wall: a single instance (kept mounted
+         across a coach<->pitwall switch) so the two views can never show different
+         status/track/car for a frame. Sessions/Settings have their own headers. -->
+    {#if screen === "coach" || screen === "pitwall"}<SessionBar />{/if}
+    <div class="screens">
     <section class="screen" class:on={screen === "coach"}>
       <div class="app">
-        <SessionBar />
         <div class="main" class:rail-open={railOpen}>
           <!-- Narrow-width only: the rail is hidden by default; this tab slides
                it in as an overlay drawer, dismissed by the scrim. -->
@@ -219,6 +228,7 @@
     <section class="screen" class:on={screen === "settings"}>
       <SettingsScreen />
     </section>
+    </div>
   </div>
 </div>
 {/if}

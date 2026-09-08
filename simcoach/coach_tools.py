@@ -55,14 +55,29 @@ TOOLS = [
         },
     },
     {
+        "name": "list_track_corners",
+        "description": "The AUTHORITATIVE corner list for the current track from its saved "
+                       "corner map: each corner's number/label, name, and direction (and any "
+                       "double-apex). Works even with NO laps captured yet. Use this for track "
+                       "orientation or ANY corner reference before you have telemetry — never "
+                       "recall or guess corner names, numbers, or directions from memory.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "get_corner",
-        "description": "The telemetry facts for ONE corner of the latest lap, by number "
-                       "(e.g. '10') or name (e.g. 'Village'). Use this for a question about "
-                       "a specific corner instead of pulling the whole lap.",
+        "description": "The telemetry facts for ONE corner, by number (e.g. '10') or name "
+                       "(e.g. 'Village'). Use this for a question about a specific corner "
+                       "instead of pulling the whole lap. Pass `which` to target a specific "
+                       "lap — do this whenever the conversation is about a particular lap "
+                       "(e.g. 'race lap 2'); it defaults to the latest lap otherwise.",
         "input_schema": {
             "type": "object",
-            "properties": {"corner": {"type": "string",
-                                      "description": "Corner number or name."}},
+            "properties": {
+                "corner": {"type": "string", "description": "Corner number or name."},
+                "which": {"type": "string",
+                          "description": "Which lap: 'latest' (default), 'best', or an "
+                                         "in-session lap number like 'race lap 2'."},
+            },
             "required": ["corner"],
         },
     },
@@ -244,9 +259,13 @@ class CoachContext:
             laps_txt = f"{head}session total: {n_sess}, all-time this track/car: {n_all}"
         else:
             laps_txt = f"this track/car: {n_all} (no session split)"
+        n_corners = len(self.cmap.corners) if (self.cmap and self.cmap.corners) else 0
+        cmap_txt = (f"yes ({n_corners} corners — use list_track_corners)" if n_corners
+                    else "no")
         return (f"Track: {self.track or 'unknown'} | Car: {self.car or 'unknown'} | "
                 f"Session type: {phase or 'unknown'} | State: {on} | Current lap: {lap} | "
-                f"Laps ({laps_txt}) | Reference (best) lap available: {'yes' if has_ref else 'no'}")
+                f"Laps ({laps_txt}) | Corner map: {cmap_txt} | "
+                f"Reference (best) lap available: {'yes' if has_ref else 'no'}")
 
     def list_recent_laps(self, limit=10):
         if not (self.track and self.car):
@@ -278,10 +297,24 @@ class CoachContext:
         analysis = self._analysis_for(record, lap_id)
         return format_lap_facts(analysis, self.units)
 
-    def get_corner(self, corner):
-        analysis = self._latest_analysis()
-        if analysis is None:
-            return "No lap captured yet (or no corner map for this track)."
+    def list_track_corners(self):
+        if self.cmap is None or not self.cmap.corners:
+            return "No corner map for this track yet — no corner list available."
+        parts = []
+        for c in self.cmap.corners:
+            label = c.label or str(c.number)
+            multi = " (double-apex)" if c.apexes and len(c.apexes) > 1 else ""
+            parts.append(f"T{label} {c.name} — {c.direction}{multi}")
+        return (f"Corners for {self.track or 'this track'} ({len(parts)}), from the saved map:\n"
+                + "\n".join(parts))
+
+    def get_corner(self, corner, which="latest"):
+        record, lap_id = self._resolve_lap(which)
+        if record is None:
+            return "No lap available for that request (none captured yet, or unknown lap)."
+        if self.cmap is None:
+            return "No corner map for this track yet — can't break the lap into corners."
+        analysis = self._analysis_for(record, lap_id)
         cm = find_corner(analysis, corner)
         if cm is None:
             names = ", ".join(f"T{c.label or c.corner_no} {c.name}" for c in analysis.corners)
@@ -329,7 +362,9 @@ class CoachContext:
 
     def get_race_result(self):
         rr = self.store.race_session(self.session_id) if self.session_id else None
-        arc = self.store.session_position_arc(self.session_id) if self.session_id else None
+        # Race stint only — a session_id spans practice/qualy/race, so an all-phase arc
+        # would read the start/worst from an earlier phase (wrong start position).
+        arc = self.store.session_position_arc(self.session_id, phase="race") if self.session_id else None
         if not rr and not arc:
             return ("No race result recorded for this session (practice/qualy, or not a "
                     "completed race).")
@@ -378,7 +413,8 @@ class CoachContext:
             "get_session_status": lambda: self.get_session_status(),
             "list_recent_laps": lambda: self.list_recent_laps(args.get("limit", 10)),
             "get_lap_summary": lambda: self.get_lap_summary(args.get("which", "latest")),
-            "get_corner": lambda: self.get_corner(args.get("corner", "")),
+            "list_track_corners": lambda: self.list_track_corners(),
+            "get_corner": lambda: self.get_corner(args.get("corner", ""), args.get("which", "latest")),
             "get_tire_report": lambda: self.get_tire_report(),
             "get_wheel_report": lambda: self.get_wheel_report(),
             "get_energy_report": lambda: self.get_energy_report(),

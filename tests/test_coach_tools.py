@@ -26,6 +26,21 @@ def test_get_corner_returns_one_corner(tmp_path, synthetic_lap):
     assert "No corner matching" in ctx.get_corner("Nonexistent")
 
 
+def test_get_corner_targets_a_specific_lap(tmp_path, synthetic_lap):
+    # A corner question during a lap-2 discussion must read THAT lap, not always latest.
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    lap = LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1", "phase": "race"})
+    store.save(lap)
+    ctx = CoachContext(store, cmap=cmap, track=lap.track, car=lap.car,
+                       session_id="s1", on_track=True)
+    assert ctx.get_corner("1", which="race lap 1").startswith("T1 ")
+    assert ctx.dispatch("get_corner", {"corner": "1", "which": "race lap 1"}).startswith("T1 ")
+    # a lap that doesn't exist is honest, not silently the latest lap
+    assert "no lap" in ctx.get_corner("1", which="race lap 9").lower()
+
+
 def test_get_lap_summary_and_tires(tmp_path, synthetic_lap):
     ctx, _, _ = _ctx(tmp_path, synthetic_lap)
     summary = ctx.get_lap_summary("latest")
@@ -120,16 +135,20 @@ def test_get_race_result_formats_and_falls_back(tmp_path, synthetic_lap):
     assert "No race result recorded" in ctx.get_race_result()
 
 
-def test_get_race_result_includes_live_arc(tmp_path, synthetic_lap):
+def test_get_race_result_arc_is_race_phase_only(tmp_path, synthetic_lap):
     from simcoach.model_types import LapRecord
     ctx, store, _ = _ctx(tmp_path, synthetic_lap)
     ctx.session_id = "arc-1"
+    # An earlier practice lap (P14) in the SAME session must not pollute the race arc.
+    store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "arc-1",
+                            "timestamp": -1.0, "position": 14, "phase": "practice"}))
     # A live race with no result log yet: P5 -> P8 -> P10 -> P3.
     for i, place in enumerate((5, 8, 10, 3)):
         store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "arc-1",
-                                "timestamp": float(i), "position": place}))
+                                "timestamp": float(i), "position": place, "phase": "race"}))
     out = ctx.get_race_result()
     assert "started P5" in out and "as low as P10" in out and "P3" in out
+    assert "P14" not in out  # practice position excluded
 
 
 def test_no_lap_context_is_honest(tmp_path):
@@ -137,6 +156,20 @@ def test_no_lap_context_is_honest(tmp_path):
     ctx = CoachContext(store, track="spa", car="car", on_track=False)
     assert "no lap captured yet" in ctx.get_session_status().lower()
     assert "no lap" in ctx.get_corner("1").lower()
+
+
+def test_list_track_corners_works_without_a_lap(tmp_path):
+    # With a saved map but NO laps, the coach must still get corners FROM THE MAP
+    # (authoritative), not recall them from memory.
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    ctx = CoachContext(store, track="test_track", car="car", cmap=cmap, on_track=True)
+    out = ctx.list_track_corners()
+    assert "T1 " in out
+    assert cmap.corners[0].name in out  # the map's real corner name, not invented
+    assert ctx.dispatch("list_track_corners", {}).startswith("Corners for")
+    # session status advertises the map so the model knows the tool is worth calling
+    assert "Corner map: yes" in ctx.get_session_status()
 
 
 def test_dispatch_routes_and_handles_unknown(tmp_path, synthetic_lap):

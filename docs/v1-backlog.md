@@ -192,3 +192,58 @@ can REUSE the persisted raw captures (`<data_dir>/captures/<slug>.npz`, pos_x/y/
   x, z, y_center, width, bank -> enough to extrude a 3D banked ribbon mesh.
   Note: only tracks with a saved <slug>.npz get 3D from captures; tracks mapped
   before raw-capture-persist would need one re-drive to record the cloud.
+
+## Pit Wall input graphs (2026-09-07)
+Requested: show driver-input graphs (throttle / brake / steering vs lap_distance)
+at the bottom of the Pit Wall, comparing the current lap against LAST and BEST.
+
+- LAST / BEST traces: reuse the stored per-lap telemetry (`telemetry/<lap_id>.npz`,
+  full-rate, keyed on lap_distance) resolved via the session's laps — same
+  lap_distance axis the future replay overlay uses, so traces align directly.
+  Resolve last = newest completed lap, best = `store.best_lap(..., session_id)`.
+- CURRENT lap (live, in progress) is the gap: the `/live` WS streams SCORING only
+  (positions/timing), not the player's full-rate inputs. Adding a live current-lap
+  trace needs a player-input stream (throttle/brake/steer + lap_distance) — either
+  extend `/live` or a small dedicated channel. Static last-vs-best works today
+  without it.
+- Fits under the map in the existing Pit Wall left column (its own resizable pane),
+  reusing the lap-distance alignment already in place.
+- COACH reuse: the same lap_distance-aligned current/last/best input traces feed
+  the coach — a tool returning per-corner input deltas (brake point, throttle
+  application, trail-brake overlap) of current vs last/best, or "where inputs
+  diverge" spans. Extends the existing deterministic per-corner extractor (which
+  already computes these from stored laps) to live current-vs-reference; the input
+  stream above is the shared prerequisite.
+
+## Track narratives + Track management view (2026-09-07)
+Motivation: corner maps give GEOMETRY (numbers, names, direction, apexes) but not
+KNOWLEDGE. With a map but no laps, the coach was caught inventing corner character
+from model memory (e.g. Algarve "Turn 1 Ayrton Senna … Turn 15 technically") —
+violating the owned-data invariant. Fix shipped so far: `list_track_corners` tool +
+prompt ban on memory-recall of corner identity. But identity isn't enough; the coach
+needs AUTHORED per-track narrative (character, cues, hazards) as owned data, shipped
+with the app like the curated layouts.
+
+Design seams (for the spec):
+- DATA: per-track authored notes stored alongside the layout. Candidate shape — a
+  track-level overview + per-corner notes (keyed by corner number/label so they join
+  the map), plus reference points, elevation/camber warnings, typical mistakes. Ship
+  curated defaults in `simcoach/tracks/` (authoritative, like shipped geometry) with a
+  user-overlay in app-data for edits — reuse the shipped-authoritative + user-overlay
+  storage split already used for maps.
+- COACH: a `get_track_notes` tool (sibling to `list_track_corners`) returns the
+  authored narrative so the coach quotes it instead of memory. Prompt: prefer authored
+  notes; never fabricate track character. Works pre-lap (no telemetry needed). Feeds
+  the pre-lap "track walkthrough" cleanly.
+- UI: a dedicated Track list / management view (new nav screen) to add and manage
+  tracks in one place — narrative (view/edit), the corner map/editor, and coverage
+  status (has map? has notes? shipped vs user-edited?). Likely absorbs/《links》the
+  existing TrackMapEditor.
+
+Open questions to settle in the spec:
+- Narrative schema: freeform markdown vs structured per-corner fields (or both)?
+- Authoring workflow: hand-write the shipped set, or seed from a one-time LLM pass
+  the driver then verifies (like driver-verified map rebuilds)? Keep authored notes
+  owned/verified, never live-LLM-guessed, to preserve the invariant.
+- Do notes live IN the track JSON or a sibling file? (Editing/versioning implications.)
+- Coverage: which tracks ship with notes at v1 vs. added over time.

@@ -149,8 +149,27 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
     apex_i = int(np.argmin(np.abs(win_dist - corner.apex_dist)))
     apex_spd = float(win_speed[apex_i])
 
-    braking = np.where(win_brake > 0.1)[0]
-    brake_point = float(win_dist[braking[0]]) if braking.size else corner.end_dist
+    # Braking for a corner usually STARTS in the approach — before the corner window
+    # (turn-in) — so a window-only search misses it and falls back to the "no brake"
+    # sentinel (this is why heavy-braking corners like Parabolica showed "—"). Search
+    # an approach-extended region up to the apex, then isolate the braking run that
+    # leads INTO this corner (contiguous brake at/before the apex) so a nearby earlier
+    # corner's braking doesn't bleed in.
+    # ponytail: fixed 250 m look-back; the contiguous-run isolation guards the common
+    # case, but two heavy-braking corners <250 m apart could still confuse it.
+    appr = np.where(in_window(dist, corner.start_dist - 250.0, corner.apex_dist))[0]
+    brake_point = corner.end_dist
+    if appr.size:
+        ad, on = dist[appr], brake[appr] > 0.1
+        aj = int(np.argmin(np.abs(ad - corner.apex_dist)))
+        j = aj
+        while j >= 0 and not on[j]:  # nearest braking sample at/before the apex
+            j -= 1
+        if j >= 0:
+            k = j
+            while k > 0 and on[k - 1]:  # walk back through its contiguous run
+                k -= 1
+            brake_point = float(ad[k])
 
     after_min = np.where(win_throttle[min_i:] > 0.8)[0]
     throttle_point = (

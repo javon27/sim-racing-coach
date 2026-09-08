@@ -12,6 +12,27 @@ def test_analyze_lap_metrics(synthetic_lap):
     assert c1.trailbrake_overlap > 0.0
 
 
+def test_brake_point_found_when_braking_is_in_the_approach(synthetic_lap):
+    # Braking that happens BEFORE the corner window (the approach to a fast corner
+    # like Parabolica) must still be detected, not fall back to the "no brake"
+    # sentinel — a window-only search regressed here.
+    import numpy as np
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap
+    from simcoach.model_types import LapRecord
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    c = cmap.corners[0]
+    ch = dict(synthetic_lap.channels)
+    dist = ch["lap_distance"]
+    brake = np.zeros_like(dist)
+    brake[(dist >= c.start_dist - 120) & (dist < c.start_dist)] = 0.8  # approach only
+    lap = LapRecord(**{**synthetic_lap.__dict__, "channels": {**ch, "brake": brake}})
+    c1 = analyze_lap(lap, cmap).corners[0]
+    assert c1.brake_point < c.start_dist           # captured in the approach
+    assert c1.brake_point < c1.apex_dist           # sane "before apex" readout
+    assert c1.brake_point != c.end_dist            # not the no-brake sentinel
+
+
 def test_tire_summary_and_prompt(synthetic_lap):
     from simcoach.analysis import analyze_lap
     from simcoach.coach import Coach
