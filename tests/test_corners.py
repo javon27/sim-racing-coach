@@ -1,8 +1,8 @@
-import pytest
 import json
-import tempfile
-from pathlib import Path
+
 import numpy as np
+import pytest
+
 from simcoach.model_types import LapRecord
 
 
@@ -20,7 +20,7 @@ def test_map_directions_consistent(synthetic_lap):
 
 def test_verify_map_directions_detects_wrong_direction(synthetic_lap):
     """Detection test: verify_map_directions catches a flipped direction in the map."""
-    from simcoach.corners import CornerMap, verify_map_directions, Corner
+    from simcoach.corners import Corner, CornerMap, verify_map_directions
 
     # Load correct map, mutate one corner's direction
     cmap = CornerMap.load("simcoach/tracks/test_track.json")
@@ -189,7 +189,7 @@ def test_load_accepts_wrap_rejects_degenerate(tmp_path):
 
 def test_verify_map_directions_flags_undetermined_corner(synthetic_lap):
     """verify_map_directions marks out-of-range corners as undetermined."""
-    from simcoach.corners import CornerMap, verify_map_directions, Corner
+    from simcoach.corners import Corner, CornerMap, verify_map_directions
 
     # Create a map with an out-of-range corner
     out_of_range_corner = Corner(
@@ -203,3 +203,22 @@ def test_verify_map_directions_flags_undetermined_corner(synthetic_lap):
     mismatches = verify_map_directions(synthetic_lap, cmap)
     # Corner 3 declared "left" but computed "undetermined"
     assert (3, "left", "undetermined") in mismatches
+
+
+def test_corner_map_carries_notes():
+    from simcoach.corners import CornerMap
+    data = {
+        "corners": [{"number": 1, "name": "T1", "direction": "left",
+                     "apex_dist": 50.0, "start_dist": 10.0, "end_dist": 90.0}],
+        "notes": {"overview": "rhythm track", "corners": {"1": "brake earlier than it looks"},
+                  "source": "LMU wiki"},
+    }
+    cm = CornerMap.from_data(data)
+    assert cm.notes["overview"] == "rhythm track"
+    assert cm.notes["corners"]["1"].startswith("brake")
+
+
+def test_corner_map_notes_default_empty():
+    from simcoach.corners import CornerMap
+    cm = CornerMap.from_data({"corners": []})
+    assert cm.notes == {}

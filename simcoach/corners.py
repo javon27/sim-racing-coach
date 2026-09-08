@@ -1,10 +1,9 @@
-from dataclasses import dataclass
-from pathlib import Path
 import json
-from typing import Optional
-import numpy as np
-from simcoach.model_types import LapRecord
+from dataclasses import dataclass
 
+import numpy as np
+
+from simcoach.model_types import LapRecord
 
 # Calibration knob: true value for LMU confirmed by feasibility spike (Task 2)
 RIGHT_IS_POSITIVE = True
@@ -28,7 +27,7 @@ class Corner:
     apex_dist: float
     end_dist: float
     label: str = ""                       # displayed designation ("8A"); defaults to str(number)
-    apexes: Optional[list[float]] = None  # lap_distances; defaults to [apex_dist] (double-apex -> 2)
+    apexes: list[float] | None = None  # lap_distances; defaults to [apex_dist] (double-apex -> 2)
 
 
 def _load_sections(data: dict) -> list[dict]:
@@ -48,9 +47,11 @@ def _load_sections(data: dict) -> list[dict]:
 class CornerMap:
     """Loads and queries corner data from a track map JSON file."""
 
-    def __init__(self, corners: list[Corner], sections: Optional[list[dict]] = None):
+    def __init__(self, corners: list[Corner], sections: list[dict] | None = None,
+                 notes: dict | None = None):
         self.corners = corners
         self.sections = sections or []
+        self.notes = notes or {}
 
     @classmethod
     def load(cls, path: str) -> "CornerMap":
@@ -83,9 +84,9 @@ class CornerMap:
                 c.label = str(c.number)
             if not c.apexes:                      # back-compat: single-apex default
                 c.apexes = [c.apex_dist]
-        return cls(corners, _load_sections(data))
+        return cls(corners, _load_sections(data), data.get("notes") or {})
 
-    def corner_at(self, dist: float) -> Optional[Corner]:
+    def corner_at(self, dist: float) -> Corner | None:
         """Return the first corner whose window contains dist (inclusive; wrap-aware)."""
         for corner in self.corners:
             if in_window(dist, corner.start_dist, corner.end_dist):

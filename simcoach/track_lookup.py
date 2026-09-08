@@ -13,7 +13,7 @@ from pathlib import Path
 # Annotation fields a user may customize on a SHIPPED track (saved to app-data and
 # merged over the shipped map on read). Everything else — path/dist/edges/sectors
 # and other reconstructed geometry — is authoritative and ships with the app.
-_ANNOTATION_FIELDS = ("corners", "sections", "rotation")
+_ANNOTATION_FIELDS = ("corners", "sections", "rotation", "notes")
 
 # Championship suffix the game appends to the same physical track ('... - ELMS' /
 # '- WEC'). Stripped so one map/knowledge note is shared across series (identical
@@ -55,7 +55,7 @@ def load_map_data(
     """Merged track-map dict for a live track name, or {} if we have none.
 
     Authoritative geometry (path/dist/edges/sectors/…) comes from the shipped map in
-    ``tracks_dir``; the user's annotation overlay (corners/sections/rotation) in
+    ``tracks_dir``; the user's annotation overlay (corners/sections/rotation/notes) in
     ``user_dir`` is layered on top so a re-named/re-annotated shipped track keeps the
     app's layout while honouring the user's edits. An UNSHIPPED track (no shipped map)
     falls back to the user's file as the whole map. Slug-built paths only — no traversal."""

@@ -1,6 +1,8 @@
 """Track resolution: a live track name maps to a corner-map file by a deterministic
 slug of the (series-suffix-stripped, accent-normalized) full name — distinct layouts
 get distinct files, and an unknown layout resolves to None so the caller auto-builds."""
+import json
+
 import pytest
 
 from simcoach.track_lookup import resolve_track_map, track_slug
@@ -97,3 +99,17 @@ def test_load_map_data_unshipped_track_is_wholly_user(tmp_path):
     assert d["path"] == [[0, 0]] and d["corners"][0]["name"] == "T1"
     # Neither shipped nor user -> empty.
     assert load_map_data("Nope Raceway", str(bundled), user_dir=str(user)) == {}
+
+
+def test_load_map_data_merges_notes_overlay(tmp_path):
+    from simcoach.track_lookup import load_map_data
+    bundled = tmp_path / "bundled"; user = tmp_path / "user"
+    bundled.mkdir(); user.mkdir()
+    (bundled / "spa.json").write_text(json.dumps({
+        "path": [[0, 0]], "corners": [], "notes": {"overview": "shipped", "corners": {}}}))
+    (user / "spa.json").write_text(json.dumps({
+        "notes": {"overview": "edited", "corners": {"1": "brake late"}}}))
+    merged = load_map_data("Spa", str(bundled), str(user))
+    assert merged["path"] == [[0, 0]]            # geometry from shipped
+    assert merged["notes"]["overview"] == "edited"  # notes from overlay
+    assert merged["notes"]["corners"]["1"] == "brake late"
