@@ -2721,7 +2721,7 @@
   ],
   "length": 4268.32,
   "rotation": 0.0,
-  "name": "Aut\u00f3dromo Jos\u00e9 Carlos Pace",
+  "name": "Autódromo José Carlos Pace",
   "ribbon": {
     "left": [
       [
@@ -9735,7 +9735,7 @@
     ]
   },
   "notes": {
-    "overview": "4.309 km, 15 turns, WEC layout. A short, technical \"rhythm track\" with constant elevation change and short straights -- lap time comes from smooth, consistent exits rather than raw entry speed, and tyres (front and rear) wear quickly if corners are overdriven. - [LMU] Overdriving downhill corners (Mergulho, Descida do Lago) destabilizes the rear. - [LMU] Brake earlier than instinct suggests on uphill sections to avoid lock-ups. - [LMU] Hypercar guide adds that early throttle on uphill corners overloads the rear tyres and costs traction. Overdriving downhill corners (especially Mergulho and Descida do Lago), late braking into hairpins stressing tyres, jerky steering in medium-speed kinks killing exit speed, early throttle on uphill corners, excessive kerb use on fast corners. `simcoach/tracks/autodromo_jos_carlos_pace.json` covers 13 of the 15 corners. T2 (second apex of the Senna S) and T9 (Pinheirinho) are omitted because the wiki source never states a left/right direction for them -- left out per the never-invent-direction rule rather than guessed.",
+    "overview": "4.309 km, 15 turns, WEC layout. A short, technical rhythm track with constant elevation change and short straights -- lap time comes from smooth, consistent exits rather than raw entry speed, and both axles wear quickly if corners are overdriven. Overdriving the downhill corners (Mergulho, Descida do Lago) destabilises the rear; brake earlier than instinct on uphill sections to avoid lock-ups, and feed throttle patiently uphill or you overload the rears. Common mistakes: overdriving downhill, late braking into the hairpins, jerky steering in medium kinks killing exit speed, early uphill throttle, and excessive kerb use on the fast corners.",
     "corners": {
       "1-2": "Heavy braking into T1 (left), late apex, position left for T2 (mid-apex, full throttle).",
       "3": "High-speed downhill right, flat out normally, avoid aggressive kerb use; lift slightly if understeering.",

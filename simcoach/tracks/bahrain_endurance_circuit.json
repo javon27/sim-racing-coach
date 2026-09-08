@@ -4,7 +4,7 @@
     {
       "number": 1,
       "label": "1",
-      "name": "Turn 1",
+      "name": "Michael Schumacher Corner",
       "direction": "right",
       "start_dist": 664.3,
       "apex_dist": 739.5,
@@ -9810,5 +9810,36 @@
       -0.0407,
       -0.0407
     ]
+  },
+  "notes": {
+    "overview": "The 6.3 km Endurance layout: abrasive, low-grip tarmac and heavy braking after long straights, so tyre and brake management matter all stint. T1-T4 and the final corners mirror the GP circuit; the tight, technical T6-T16 infield is a slow rhythm section with no room to pass, rewarding flow and clean exits over aggressive entries. Watch for sand/dust off-line.",
+    "corners": {
+      "1": "Hardest stop of the lap off the long pit straight. Right-hander: brake late but straight, don't over-slow into understeer. Tight, slightly late apex to protect the exit toward the following left.",
+      "2": "Quick left flowing straight out of T1. Get the car settled and rotated early so you can carry speed and line up the following right; don't sacrifice exit for entry.",
+      "3": "Right that closes the opening esses. Roll speed through and prioritise a clean, straight exit onto the run toward T4; abrasive surface punishes wheelspin.",
+      "4": "Braking zone off the preceding straight, right-hander that sets up entry to the twisty infield loop. Finish braking before turn-in, get the car pointed, then feed throttle early for the tight section ahead.",
+      "5": "Left entering the technical infield. Slow and tight, no passing room. Be patient on entry, sacrifice a little to nail the exit into the rhythm sequence.",
+      "6": "Right, part of the tight T6-T16 infield. Short braking, prioritise a clean line that flows into the next corner rather than maximum entry speed.",
+      "7": "Left in the infield rhythm section. Smooth, connected inputs; a tidy exit here lines up the following right. Low grip rewards patience over aggression.",
+      "8": "Right, tight infield. Brake early and straight, rotate cleanly, then progressive throttle. Getting greedy here compromises the whole following sequence.",
+      "9": "Right in the technical loop. Keep the car settled and flowing; the corners come in quick succession so exit line matters more than entry.",
+      "10": "Left, part of the infield rhythm. Smooth turn-in, avoid over-slowing, carry momentum into the next change of direction.",
+      "11": "Right in the tight infield. Connect it to the surrounding corners with minimal steering correction; abrasive tarmac makes mid-corner slides costly.",
+      "12": "Left, technical infield. Patience on power, clean exit line. No room to pass, so focus on a repeatable rhythm rather than lap-time heroics.",
+      "13": "Right in the infield sequence. Keep inputs smooth and the car balanced; a stable exit sets up the next left.",
+      "14": "Left, tight infield. Roll the car through and prioritise flow into the following right rather than a sharp, speed-killing entry.",
+      "15": "Right near the end of the twisty section. Start thinking about a clean exit to carry speed out of the infield toward the return to the GP loop.",
+      "16": "Left that closes the infield rhythm section. Get the car settled and pointed for the run back toward the main circuit; smooth throttle on low grip.",
+      "17": "Right where the Endurance loop rejoins the faster main circuit. Braking zone, straighten the car and get good drive onto the following stretch.",
+      "18": "Left leading the flowing back-section corners. Keep the car balanced; exit speed here feeds a quick sequence.",
+      "19": "Left following T18, connected change of direction. Smooth, minimal correction; protect momentum toward the next braking zone.",
+      "20": "Left, a braking zone off the preceding run. Brake straight, rotate, and set up a strong exit for the fast corners that lead to the final complex.",
+      "21": "Right in the closing sequence. Clean, committed line; a good exit lines up the run to the final two corners.",
+      "22": "Right following T21. Keep the car settled and flowing so you carry speed into the last complex before the pit straight.",
+      "23": "Right, part of the final complex mirroring the GP circuit's end. Set up so that the last corner, not this one, is compromised.",
+      "24": "Final right onto the long pit straight. Priority is exit: sacrifice entry, get the car straight early and hard on throttle for the biggest straight of the lap."
+    },
+    "reference_times": {},
+    "source": "Le Mans Ultimate Bahrain track guides (RaceControl, LMU Wiki); general Bahrain International Circuit corner guides (TrackTitan, sim-racing guides); Wikipedia (Endurance Circuit 6.299 km, 23 turns). Reference times omitted: no credible class times exist for the 6.3 km Endurance layout (WEC/F1 records are for the 5.412 km GP circuit)."
   }
 }

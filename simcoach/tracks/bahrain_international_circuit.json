@@ -4,7 +4,7 @@
     {
       "number": 1,
       "label": "1",
-      "name": "Turn 1",
+      "name": "Michael Schumacher Corner",
       "direction": "right",
       "start_dist": 657.8,
       "apex_dist": 744.1,
@@ -9679,8 +9679,23 @@
   "length": 5381.29,
   "rotation": 0.0,
   "notes": {
-    "overview": "5.412 km, 15 turns. A stop-and-go, traction-heavy circuit with high thermal load on tyres and brakes \u2014 the wiki's guide is split into separate GT3 and Hypercar sections, summarized here. - [LMU] Extremely punishing on rear tyres for GT3; success favors smooth exits over aggressive entries. High in-sim track temps accelerate wear. - [LMU] Hypercar guide frames the lap around braking precision and hybrid energy deployment discipline rather than outright entry speed. - **Turns 1-3 (heavy braking complex):** Compromise Turn 1 entry slightly to set up a better Turn 2 exit; Turn 2 is flat/near-flat. Both classes stress avoiding ABS/over-braking here; Hypercar notes the brake marker is the end of the left-side fencing. - **Turn 4 (right-hander, both classes):** Mid/medium-speed corner easy to over-drive. Mid-apex, then use full exit width. Hypercar guide adds that hitting a consistent minimum speed matters more than entry speed. - **Turns 5-7 (fast left-right-left sequence):** Prioritize a good Turn 7 entry over a perfect Turn 6 exit. Attack the kerbs; GT3 guide recommends positioning left afterward to set up the hairpin. Hypercar favors light brake taps through the sequence rather than full lifts. - **Turn 8 (hairpin):** Downhill braking zone; brake earlier than instinct suggests, rotate the car before applying throttle, and stay off the exit kerb. Hypercar guide adds that hybrid torque needs patient throttle to avoid rear instability. - **Turns 9-10 (technical, combined braking/turning):** Early turn-in, trail-brake into Turn 9, keep exit stable, avoid aggressive kerb use. - **Turns 11-13:** Turn 11 brakes around the 100 m marker with light inside kerb use; Turn 12 is an early, controlled turn-in; Turn 13 is a late turn-in with full-width, full-throttle exit. - **Final corner (Turns 14-15):** Called out as one of the most lap-time-critical sections in both guides. Late turn-in, progressive throttle only \u2014 getting greedy here costs the following straight. Hypercar guide specifically warns hybrid boost \"magnifies mistakes\" if the exit isn't clean. **GT3:** medium-to-high rear wing for traction/stability; traction control slightly above default; conservative tyre pressures to manage heat; brake bias slightly forward. Common mistakes: overheating the rears early, over-attacking kerbs, trying to rotate the car with throttle instead of brake/steering. **Hypercar:** medium-high downforce for a stable platform; brake bias slightly forward; conservative energy deployment early in corners, more aggressive on exits; front-tyre-focused pressure management. Common mistakes: over-attacking braking zones, excess mid-corner steering input, triggering ABS, poor hybrid throttle discipline. The main circuit page lists \"Endurance Circuit\" and \"Outer Circuit\" as additional configurations at this venue but gives no length, corner count, or corner data for either \u2014 not enough to seed `bahrain_outer_circuit` or `bahrain_paddock_circuit` from the wiki. Both skipped.",
-    "corners": {},
-    "source": "LMU wiki (lemansultimate.wiki.gg), CC-BY-SA, summarized 2026-08-29."
+    "overview": "5.412 km, 15 turns. A stop-and-go, traction-heavy circuit with high thermal load on tyres and brakes -- lap time comes from smooth exits, not aggressive entries. Turns 1-4 and the final complex are the big braking zones; the T5-T7 esses reward rhythm and kerb use. GT3 punishes the rears (manage heat, smooth throttle); Hypercar rewards braking precision and patient hybrid deployment on exits. Common mistakes: over-attacking braking zones and triggering ABS, overheating the rears early, over-using kerbs, and rotating with throttle instead of brake and steering.",
+    "corners": {
+      "1": "Hardest braking of the lap into the right-hander; the brake marker is the end of the left-side fencing. Compromise entry slightly to set up a better T2 exit and avoid triggering ABS.",
+      "2": "Flat or near-flat left flowing out of T1. Minimal input, keep the car settled and set up for T3; don't fight for the T1 apex at its expense.",
+      "3": "Right closing the opening complex. Rotate the car and prioritise a clean, stable exit onto the run down to T4; the abrasive surface punishes wheelspin.",
+      "4": "Medium-speed right, easy to over-drive. Take a mid-apex then use full exit width; a consistent minimum speed matters more than entry speed here.",
+      "5": "Left opening the fast left-right-left sequence. Attack the kerbs and keep the car flowing; prioritise a good T7 entry over a perfect exit here.",
+      "6": "Right in the middle of the sequence. Light brake taps rather than full lifts; stay smooth so the change of direction into T7 stays settled.",
+      "7": "Left completing the sequence. Use the kerb, then position left on exit to set up the T8 hairpin braking zone.",
+      "8": "The hairpin: downhill braking, so brake earlier than instinct suggests. Rotate the car before throttle and stay off the exit kerb; feed torque patiently to protect the rear.",
+      "9": "Technical left, combined braking and turning. Early turn-in with a trail-brake; keep the exit stable and avoid aggressive kerb use into T10.",
+      "10": "Left continuing the technical section. Be patient on entry and keep the car balanced; a stable exit carries speed toward the final sector.",
+      "11": "Right braking around the 100 m marker with light inside-kerb use. Settle the car and set up the linked T12.",
+      "12": "Right with an early, controlled turn-in. Keep it tidy and progressive so you're positioned for the critical final corner.",
+      "13": "The lap-time-critical final right onto the pit straight. Late turn-in, progressive throttle only -- getting greedy magnifies mistakes and costs the whole straight."
+    },
+    "source": "LMU wiki (lemansultimate.wiki.gg), CC-BY-SA, summarized 2026-08-29.",
+    "reference_times": {}
   }
 }

@@ -4,7 +4,7 @@
     {
       "number": 1,
       "label": "1",
-      "name": "Turn 1",
+      "name": "Michael Schumacher Corner",
       "direction": "right",
       "start_dist": 653.9,
       "apex_dist": 731.3,
@@ -9654,5 +9654,23 @@
       -0.0252,
       -0.0252
     ]
+  },
+  "notes": {
+    "overview": "A very short (~3.5 km), ultra-fast layout with lap times near 55s in F1 and roughly 74-80% of the lap at full throttle. It shares Bahrain's right/left/right T1-T3 opening, then runs a fast outer loop of near-flat kinks broken by one medium chicane, before a double-right final complex feeds the 1.12 km main straight. Only a few real braking zones (T1, the chicane, the final complex); everything else is minimal-input and high-speed. Nail the final exit for your biggest gain.",
+    "corners": {
+      "1": "Heavy braking at the end of the main straight into a sharp right. Get the slowing done in a straight line, hit the apex, and protect the exit for the short run to T2.",
+      "2": "Quick left kink, effectively flat or a light lift. Minimal steering, keep the car settled, and set up on the right for T3.",
+      "3": "Right-hander closing the opening complex. Medium speed, so smooth entry and don't over-slow; carry momentum onto the run toward T4.",
+      "4": "Fast right that opens onto the top section with a wide exit. Light brake or lift only; use the full exit road and stay committed as it feeds the T5 kink.",
+      "5": "Left kink onto the outer loop, taken flat. Minimal input, hold your line, and keep the throttle pinned.",
+      "6": "Flat-out right on the fast outer loop. Barely a lift; commit, stay smooth, and avoid unsettling the car before the chicane.",
+      "7": "Entry to the medium-speed left/right chicane. Brake in a straight line, take a tidy left, and sacrifice it slightly to square up the T8 right.",
+      "8": "Right half of the chicane. Rotate and straighten the car early, then get hard on throttle; this exit feeds the return straight.",
+      "9": "Fast right kink onto the return straight. Light lift at most, hold a tight line, and stay committed toward the final complex.",
+      "10": "Braking zone into the double-right final complex. Slow in a straight line, take a patient entry, and don't apex early; the T11 exit is what matters.",
+      "11": "Final right onto the 1.12 km main straight. Get the car straight and back to full throttle as early as possible; this exit sets your speed down the longest straight on the lap."
+    },
+    "reference_times": {},
+    "source": "the-race.com (Bahrain Outer 'wacky' race explainer), f1-fansite.com Bahrain Outer Track layout/lap records, formula1.com Sakhir outer track article. No credible GT3/LMP2/Hypercar times were found for this specific layout, so reference_times left empty (F1's 55.404/53.377 are not LMU classes)."
   }
 }

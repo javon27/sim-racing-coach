@@ -16,7 +16,7 @@
     {
       "number": 2,
       "label": "2",
-      "name": "Turn 2",
+      "name": "Variante della Roggia",
       "direction": "left",
       "start_dist": 2012.7,
       "apex_dist": 2093.2,
@@ -64,7 +64,7 @@
     {
       "number": 6,
       "label": "6",
-      "name": "Turn 6",
+      "name": "Variante Ascari",
       "direction": "left",
       "start_dist": 3829.9,
       "apex_dist": 3910.4,
@@ -9655,5 +9655,21 @@
       -0.0094,
       -0.0095
     ]
+  },
+  "notes": {
+    "overview": "Monza's Curva Grande layout skips the opening chicane, so the lap launches straight into the flat-out Curva Grande. A low-downforce power circuit: long straights, hard braking zones, and three tight sections (Roggia, the Lesmi, Ascari) that reward traction and stability under braking, plus the long Parabolica onto the pit straight. Trim wing for straight-line speed but keep enough braking stability and kerb compliance for the chicanes. Exits onto the straights matter more than raw apex speed.",
+    "corners": {
+      "1": "Flat-out or near-flat right-hand sweep off the long start straight. Stay committed, let the car run to the exit kerb, and carry maximum speed down toward the Roggia braking zone.",
+      "2": "Heavy braking from top speed into the left-right Roggia chicane. Brake in a straight line and take a tight first left, sacrificing entry to square off the exit. Kerbs usable but don't launch the car.",
+      "3": "Second half of the Roggia. Get the car rotated and feed the power down early for the straight. The exit kerb is usable, but too much unsettles the car on the run to Lesmo.",
+      "4": "Medium-speed right-hander, blind on entry; brake early to a single smooth apex. Don't run wide onto the exit kerb or you compromise the short link into Lesmo 2.",
+      "5": "Faster right than Lesmo 1. Get to throttle early and use the exit kerb, but avoid the understeer that pushes you wide, since a clean exit fires you down the long run to Ascari.",
+      "6": "Braking from high speed into the left-right-left Ascari complex, the lap's most technical section. Brake straight, take a tight first left, and set the car up for the sequence; rhythm beats a single apex.",
+      "7": "Middle right of Ascari; keep the car flowing out of the first left. Don't over-slow, a clean line here sets up the final left and the long run to Parabolica. Kerbs fine if the car stays settled.",
+      "8": "Final left of Ascari onto the back straight, where exit is everything. Get the power down early and let the car run to the exit kerb, dragging speed all the way to the Parabolica braking zone.",
+      "9": "Long increasing-radius right onto the start straight. Brake early, be patient on entry, hold one long apex, then unwind gradually and feed throttle so you're flat well before track-out. A great exit defines your straight-line speed."
+    },
+    "reference_times": {},
+    "source": "Corner names and character grounded in Monza corner guides (Formula1.com 'How every corner got its name', Mercedes-AMG F1, monzanet.it) and the LMU Curva-Grande variant confirmation (lemansultimate.wiki.gg Track Guide: Monza). Directions/apex % taken as authoritative from the app's corner map. Roggia = left-right chicane (T2/T3), Lesmi = T4/T5, Ascari = left-right-left complex (T6/T7/T8), Parabolica = T9. No credible layout-specific reference lap times found (variant differs from full GP; full-GP times do not transfer), so reference_times left empty."
   }
 }

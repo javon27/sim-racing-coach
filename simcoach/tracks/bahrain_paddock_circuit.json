@@ -4,7 +4,7 @@
     {
       "number": 1,
       "label": "1",
-      "name": "Turn 1",
+      "name": "Michael Schumacher Corner",
       "direction": "right",
       "start_dist": 648.2,
       "apex_dist": 732.1,
@@ -9642,5 +9642,22 @@
       -0.026,
       -0.026
     ]
+  },
+  "notes": {
+    "overview": "Bahrain's short Paddock loop shares the GP's heavy-braking opening (T1-T5), then takes a tighter return loop home. Abrasive, low-grip tarmac punishes wheelspin and overheats fronts, so exits are traction-limited and tyre management matters. Reward smooth, straight braking into the big stops and progressive throttle out of the slow corners rather than aggressive rotation.",
+    "corners": {
+      "1": "The circuit's biggest stop. Brake hard and straight from the main straight, staying left on entry off the kerb; a compromised, patient exit sets up the immediate left of T2. Prime overtaking spot.",
+      "2": "Quick left flick straight after T1. Don't sacrifice it fighting for the T1 apex; roll speed and get the car pointed early to launch toward T3.",
+      "3": "Right kink taken near-flat as the track climbs toward the straight. Sacrifice nothing here, just carry speed and settle the car for the next braking zone.",
+      "4": "Heavy braking again at the end of the run. Wide entry allows alternate lines; take a mid-to-late apex, keep steering smooth to save the fronts, and use all the exit road.",
+      "5": "Left that opens the flowing section. Light braking or a lift depending on fuel and tyres; be smooth and progressive to keep the rear settled on the low-grip surface.",
+      "6": "Left in the return loop after a connecting run. Brake straight, take a clean single apex and prioritise a stable exit onto the following stretch.",
+      "7": "Right following T6. Position for a tidy line through here rather than overdriving entry; progressive throttle on exit to avoid wheelspin on the abrasive tarmac.",
+      "8": "Tight right, easy to lock up or run wide on worn tyres. Rotate the car first, then feed in throttle; short-shifting helps traction out.",
+      "9": "Right leading into the final complex. Combined braking and turning, so be measured on entry and keep the car stable for the linked T10.",
+      "10": "Last right before the line. Late apex and progressive throttle only, guarding against a wide exit that would cost you all the way down the straight."
+    },
+    "reference_times": {},
+    "source": "Bahrain International Circuit corner guides (Honda F1, RaceControl/Le Mans Ultimate wiki, Senate GP corner-by-corner, tracktitan.io); directions/apex positions taken from the app's computed corner map. T6-T10 return-loop notes grounded in geometry + Bahrain surface character; opening T1-T5 grounded in shared Bahrain GP knowledge."
   }
 }

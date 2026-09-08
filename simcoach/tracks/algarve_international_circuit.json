@@ -112,7 +112,7 @@
     {
       "number": 10,
       "label": "10",
-      "name": "Portim\u00e3o",
+      "name": "Portimão",
       "direction": "right",
       "start_dist": 2590.3,
       "apex_dist": 2673.8,
@@ -9704,7 +9704,7 @@
     ]
   },
   "notes": {
-    "overview": "4.653 km, 15 turns, WEC layout. Extreme elevation change and blind crests make this a confidence/rhythm track rather than an aggression track -- several corners can't be seen on entry, so braking references matter more than what the driver can see. - [LMU] Overdriving an entry causes snap oversteer more readily here than on flatter tracks, because elevation change amplifies weight transfer. - [LMU] Brake release must be smooth over the many crests/compressions to avoid front lock-up. - [LMU] Hypercar guide frames the lap around aero trust and brake precision; crests reduce downforce right when braking load is highest. Braking too late into downhill zones, hesitating in blind corners, overusing kerbs at high speed, throttle too early while unloaded, fighting the car instead of letting it flow. `simcoach/tracks/algarve_international_circuit.json` covers 10 of the 15 corners. T1, T3, T5, T8, T9 are omitted because the wiki source never states a left/right direction for them (confirmed by direct re-query of both the GT3 and Hypercar sections) -- left out per the never-invent-direction rule rather than guessed.",
+    "overview": "4.653 km, 15 turns, WEC layout. Extreme elevation change and blind crests make this a confidence/rhythm track rather than an aggression track -- several corners can't be seen on entry, so braking references matter more than what you can see. Overdriving an entry causes snap oversteer more readily than on flatter tracks, because elevation amplifies weight transfer. Release the brakes smoothly over the many crests and compressions to avoid front lock-up; crests cut downforce right when braking load is highest. Common mistakes: braking too late into downhill zones, hesitating in blind corners, over-using high-speed kerbs, early throttle while unloaded, and fighting the car instead of letting it flow.",
     "corners": {
       "1": "Heavy downhill braking, compression right at the apex means braking earlier than it looks. Late apex; avoid the sausage kerb (very unstable) and don't trail-brake too far into the corner.",
       "2": "Flat out, minimal input, set up left for T3.",
