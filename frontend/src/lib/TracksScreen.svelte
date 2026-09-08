@@ -1,10 +1,12 @@
 <script lang="ts">
-  import { listTracks, draftNotes, saveNotes, getTrackNotes, type TrackRow, type TrackNotes } from "./api";
+  import { listTracks, draftNotes, saveNotes, getTrackNotes, getTrackMap, type TrackRow, type TrackNotes, type TrackMap } from "./api";
   import TrackMapEditor from "./TrackMapEditor.svelte";
+  import TrackMapView from "./TrackMap.svelte";
 
   let tracks: TrackRow[] = $state([]);
   let selected: TrackRow | null = $state(null);
   let notes: TrackNotes = $state({ overview: "", corners: {}, reference_times: {}, source: "" });
+  let map: TrackMap | null = $state(null);
   let guides = $state("");
   let drafting = $state(false);
   let saving = $state(false);
@@ -25,6 +27,12 @@
     selected = t;
     guides = "";
     saveStatus = null;
+    // Read-only layout for the map pane. {} (no map yet) -> null so the pane shows
+    // its empty state rather than rendering a pathless map.
+    map = null;
+    getTrackMap(t.slug)
+      .then((m) => (map = "path" in m && m.path.length > 0 ? m : null))
+      .catch(() => (map = null));
     // Pre-fill from the track's existing (migrated) notes so Save can't clobber
     // them with blanks -- fall back to empty fields if the fetch fails.
     try {
@@ -184,6 +192,14 @@
       </div>
     </div>
 
+    <div class="mappane">
+      {#if map}
+        <TrackMapView mapData={map} fill />
+      {:else}
+        <p class="nomap">No layout for this track yet.</p>
+      {/if}
+    </div>
+
     <TrackMapEditor lapId={null} open={mapOpen} onClose={() => (mapOpen = false)} />
   {/if}
 </div>
@@ -269,6 +285,21 @@
     overflow-y: auto;
     padding: 20px 26px 48px;
     max-width: 720px;
+  }
+  .mappane {
+    flex: 1 1 0;
+    min-width: 0;
+    border-left: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    overflow: hidden;
+  }
+  .nomap {
+    color: var(--faint);
+    font-family: var(--mono);
+    font-size: 12px;
   }
   .editor header {
     display: flex;

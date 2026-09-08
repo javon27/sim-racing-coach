@@ -109,6 +109,42 @@ def test_get_notes_missing_track_returns_empty_shape(tmp_path):
     assert r.json() == {"overview": "", "corners": {}, "reference_times": {}, "source": ""}
 
 
+def test_track_map_by_slug_no_path_returns_empty(tmp_path):
+    # The seed fixture has corners but no frozen path -> no canonical layout yet.
+    client, _ = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    r = client.get("/tracks/algarve_international_circuit/map")
+    assert r.status_code == 200 and r.json() == {}
+
+
+def test_track_map_by_slug_bad_slug_400(tmp_path):
+    client, _ = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    r = client.get("/tracks/..%2f..%2fetc/map")
+    assert r.status_code in (400, 404)
+
+
+def test_track_map_by_slug_returns_layout(tmp_path):
+    # A track file with a frozen path yields a built canonical map (path + corners),
+    # no lap needed -- the Tracks-screen view path.
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    coach = Coach(FakeModel("{}"), "simcoach/knowledge")
+    tracks_dir = tmp_path / "tracks"
+    tracks_dir.mkdir(parents=True, exist_ok=True)
+    path = [[float(i), float(i % 3)] for i in range(120)]
+    (tracks_dir / "algarve_international_circuit.json").write_text(json.dumps({
+        "track": "algarve_international_circuit",
+        "path": path,
+        "path_dist": [float(i) for i in range(120)],
+        "corners": [{"number": 1, "name": "Turn 1", "direction": "right",
+                     "start_dist": 0.0, "apex_dist": 50.0, "end_dist": 100.0}],
+    }))
+    client = TestClient(create_app(store, coach, tracks_dir=str(tracks_dir)),
+                        base_url="http://127.0.0.1")
+    r = client.get("/tracks/algarve_international_circuit/map")
+    assert r.status_code == 200
+    m = r.json()
+    assert m.get("path") and len(m["corners"]) == 1
+
+
 def test_put_then_get_notes_roundtrip(tmp_path):
     client, _ = _make_client_with_fake_model(tmp_path, model_reply="{}")
     client.put("/tracks/algarve_international_circuit/notes", json={

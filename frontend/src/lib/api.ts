@@ -269,6 +269,11 @@ export function getCurrentMap(): Promise<TrackMap | Record<string, never>> {
   return request<TrackMap | Record<string, never>>("/track/map");
 }
 
+// Canonical map by track slug (Tracks screen) — no lap needed.
+export function getTrackMap(slug: string): Promise<TrackMap | Record<string, never>> {
+  return request<TrackMap | Record<string, never>>(`/tracks/${encodeURIComponent(slug)}/map`);
+}
+
 export function setMapRotation(id: number, degrees: number): Promise<TrackMap> {
   return request<TrackMap>(`/laps/${id}/rotation`, {
     method: "POST",

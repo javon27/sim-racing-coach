@@ -558,6 +558,17 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                  "track_name": _track_file_data(track).get("name") or track}
         return m
 
+    @app.get("/tracks/{slug}/map")
+    def track_map_by_slug(slug: str):
+        # The track's canonical map keyed on its slug -- for the Tracks screen, which
+        # selects a track without any completed lap_id to route through /laps/{id}/map.
+        # Track files are slug-keyed (same as the notes endpoints), and a shipped
+        # layout carries a frozen path, so no car is needed to build it. {} -> the
+        # pane shows "no map yet" (a user track with no driven lap).
+        if track_slug(slug) != slug:
+            raise HTTPException(400, "invalid slug")
+        return _canonical_map(slug, "", force=False)
+
     @app.put("/laps/{lap_id}/map")
     def save_lap_map(lap_id: int, body: dict = Body(...)):
         # SAVE the editor's corner map + sectors as shipped owned data. Direction

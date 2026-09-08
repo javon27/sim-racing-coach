@@ -9,6 +9,7 @@ vi.spyOn(api, "listTracks").mockResolvedValue([
   { slug: "algarve_international_circuit", name: "Algarve", has_map: true, has_notes: false, user_edited: false },
 ]);
 vi.spyOn(api, "getTrackNotes").mockResolvedValue({ overview: "", corners: {}, reference_times: {}, source: "" });
+vi.spyOn(api, "getTrackMap").mockResolvedValue({});
 
 test("lists tracks with coverage badges", async () => {
   render(TracksScreen);
@@ -53,6 +54,12 @@ test("selecting a track pre-fills the editor from its existing notes", async () 
   render(TracksScreen);
   await fireEvent.click(await screen.findByText("Algarve"));
   expect(await screen.findByDisplayValue(/long straight into a heavy braking chicane/)).toBeTruthy();
+});
+
+test("shows the map pane empty state when the track has no layout", async () => {
+  render(TracksScreen);
+  await fireEvent.click(await screen.findByText("Algarve"));
+  expect(await screen.findByText(/no layout for this track yet/i)).toBeTruthy();
 });
 
 test("save sends the edited notes for the selected track", async () => {
