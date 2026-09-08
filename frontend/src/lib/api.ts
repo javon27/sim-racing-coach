@@ -304,6 +304,26 @@ export function saveLapMap(
   });
 }
 
+// Edit a track's owned map by slug (Tracks screen) — no driven lap needed.
+export function saveTrackMap(
+  slug: string,
+  body: { corners: CornerEdit[]; sectors: number[]; sections: Section[]; name?: string },
+): Promise<TrackMap> {
+  return request<TrackMap>(`/tracks/${encodeURIComponent(slug)}/map`, {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(body),
+  });
+}
+
+export function setTrackMapRotation(slug: string, degrees: number): Promise<TrackMap> {
+  return request<TrackMap>(`/tracks/${encodeURIComponent(slug)}/rotation`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ degrees }),
+  });
+}
+
 // --- Dedicated mapping capture (drive two boundary laps -> reconstruct a track ribbon).
 // These laps are NOT persisted to the store; they route to a transient buffer.
 export interface MapCaptureStatus {

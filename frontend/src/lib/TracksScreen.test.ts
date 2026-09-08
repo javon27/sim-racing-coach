@@ -62,6 +62,28 @@ test("shows the map pane empty state when the track has no layout", async () => 
   expect(await screen.findByText(/no layout for this track yet/i)).toBeTruthy();
 });
 
+test("corner-notes list is driven by the map, orphaned notes flagged", async () => {
+  vi.spyOn(api, "getTrackNotes").mockResolvedValue({
+    overview: "", corners: { "1": "brake late", "9": "stale note" }, reference_times: {}, source: "",
+  });
+  // A map with corners T1 and T3; note "9" matches no corner -> unmapped.
+  vi.spyOn(api, "getTrackMap").mockResolvedValue({
+    width: 100, height: 100, path: [[0, 0], [1, 1]], dist: [0, 1], sectors: [], sections: [],
+    corners: [
+      { number: 1, label: "1", name: "Turn 1", direction: "right", x: 0, y: 0, apex_dist: 0, apexes: [0], start_dist: 0, end_dist: 1 },
+      { number: 2, label: "3", name: "Turn 3", direction: "left", x: 1, y: 1, apex_dist: 1, apexes: [1], start_dist: 0, end_dist: 1 },
+    ],
+  } as unknown as api.TrackMap);
+  render(TracksScreen);
+  await fireEvent.click(await screen.findByText("Algarve"));
+  // Rows come from the map corners (labels 1 and 3), keyed via the textarea aria-label.
+  expect(await screen.findByLabelText("corner note 1")).toBeTruthy();
+  expect(screen.getByLabelText("corner note 3")).toBeTruthy();
+  // Note "9" matches no map corner -> surfaced as unmapped, not dropped.
+  expect(screen.getByText(/don't match any corner/i)).toBeTruthy();
+  expect(screen.getByLabelText("corner note 9")).toBeTruthy();
+});
+
 test("save sends the edited notes for the selected track", async () => {
   const saveSpy = vi.spyOn(api, "saveNotes").mockResolvedValue({ ok: true });
   render(TracksScreen);

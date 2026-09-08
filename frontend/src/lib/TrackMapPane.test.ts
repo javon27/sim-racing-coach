@@ -38,17 +38,12 @@ describe("TrackMapPane", () => {
 
   afterEach(cleanup);
 
-  it("shows the empty state with no session, but still offers Generate map", () => {
+  it("shows the empty state with no session, pointing editing to Track view", () => {
     render(TrackMapPane, { props: { sessionId: undefined } });
     expect(screen.getByText(/no map yet/i)).toBeTruthy();
-    expect(screen.getByText("Generate map")).toBeTruthy(); // capture entry with no lap
+    // Editing/capture moved to Track view — the rail no longer offers Generate map.
+    expect(screen.queryByText("Generate map")).toBeNull();
     expect(getSessionLaps).not.toHaveBeenCalled();
-  });
-
-  it("opens the capture editor from Generate map with no session", async () => {
-    render(TrackMapPane, { props: { sessionId: undefined } });
-    await fireEvent.click(screen.getByText("Generate map"));
-    expect(await screen.findByRole("dialog")).toBeTruthy();
   });
 
   it("resolves the session's first lap and renders its canonical map", async () => {
@@ -59,13 +54,13 @@ describe("TrackMapPane", () => {
     expect(container.querySelector("polyline")).toBeTruthy();
   });
 
-  it("opens the map in a read-only VIEW modal from the magnifier", async () => {
+  it("opens the map strictly read-only from the magnifier", async () => {
     render(TrackMapPane, { props: { sessionId: "s1" } });
     await fireEvent.click(await screen.findByLabelText("Enlarge track map"));
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toBeTruthy();
-    // View mode: header reads "Track map" (not "Edit"), no Save, offers a pencil.
-    expect(screen.getByLabelText("Edit map")).toBeTruthy(); // the pencil
+    // Read-only: no pencil to reveal edit tools, no Save. Editing lives in Track view.
+    expect(screen.queryByLabelText("Edit map")).toBeNull();
     expect(screen.queryByText("Save")).toBeNull();
   });
 });

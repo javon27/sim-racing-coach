@@ -13,9 +13,25 @@
   let saveStatus: string | null = $state(null);
   let mapOpen = $state(false);
 
-  let newCornerLabel = $state("");
   let newRefClass = $state("");
   let newRefTime = $state("");
+
+  // The corner-notes list is DRIVEN BY the corner mapping: one row per map corner,
+  // in map order, keyed on the corner's label. Corners are owned by the map (edit
+  // them in the map editor), so there's no free-form add here. Authored notes whose
+  // key matches no map corner are surfaced separately as "unmapped" so an edit to
+  // the map never silently drops a note.
+  const mapLabels = $derived(map ? map.corners.map((c) => c.label || String(c.number)) : []);
+  const orphanLabels = $derived(
+    map ? Object.keys(notes.corners).filter((k) => !mapLabels.includes(k)) : Object.keys(notes.corners),
+  );
+  // Seed a blank note for every map corner so binding + word count are safe and the
+  // row shows even before it's written.
+  $effect(() => {
+    for (const label of mapLabels) {
+      if (!(label in notes.corners)) notes.corners[label] = "";
+    }
+  });
 
   $effect(() => {
     listTracks()
@@ -27,12 +43,8 @@
     selected = t;
     guides = "";
     saveStatus = null;
-    // Read-only layout for the map pane. {} (no map yet) -> null so the pane shows
-    // its empty state rather than rendering a pathless map.
     map = null;
-    getTrackMap(t.slug)
-      .then((m) => (map = "path" in m && m.path.length > 0 ? m : null))
-      .catch(() => (map = null));
+    reloadMap();
     // Pre-fill from the track's existing (migrated) notes so Save can't clobber
     // them with blanks -- fall back to empty fields if the fetch fails.
     try {
@@ -49,16 +61,20 @@
     }
   }
 
+  // Read-only layout for the map pane. {} (no map yet) -> null so the pane shows
+  // its empty state rather than rendering a pathless map. Reused after an editor save.
+  function reloadMap() {
+    if (!selected) return;
+    const s = selected.slug;
+    getTrackMap(s)
+      .then((m) => { if (selected?.slug === s) map = "path" in m && m.path.length > 0 ? m : null; })
+      .catch(() => { if (selected?.slug === s) map = null; });
+  }
+
   function wordCount(s: string): number {
     return s.trim() ? s.trim().split(/\s+/).length : 0;
   }
 
-  function addCorner() {
-    const label = newCornerLabel.trim();
-    if (!label || label in notes.corners) return;
-    notes.corners[label] = "";
-    newCornerLabel = "";
-  }
   function removeCorner(label: string) {
     delete notes.corners[label];
   }
@@ -131,7 +147,6 @@
     <div class="editor">
       <header>
         <h2>{selected.name}</h2>
-        <button type="button" onclick={() => (mapOpen = true)}>Map</button>
       </header>
 
       <label class="fld">
@@ -141,18 +156,27 @@
 
       <div class="fld">
         <span class="lbl">Corner notes</span>
-        {#each Object.keys(notes.corners) as label (label)}
+        {#if mapLabels.length === 0}
+          <p class="hint">No corners on this track's map yet. Add them with <strong>Edit</strong> on the map — corner notes follow the map.</p>
+        {/if}
+        {#each mapLabels as label (label)}
           <div class="corner-row">
-            <span class="clabel">{label}</span>
+            <span class="clabel">T{label}</span>
             <textarea rows="2" bind:value={notes.corners[label]} aria-label={`corner note ${label}`}></textarea>
-            <span class="wc">{wordCount(notes.corners[label])}/40</span>
-            <button type="button" class="rm" aria-label={`remove corner note ${label}`} onclick={() => removeCorner(label)}>×</button>
+            <span class="wc">{wordCount(notes.corners[label] ?? "")}/40</span>
           </div>
         {/each}
-        <div class="addrow">
-          <input type="text" placeholder="corner label (e.g. T1)" bind:value={newCornerLabel} aria-label="New corner label" />
-          <button type="button" onclick={addCorner}>Add corner</button>
-        </div>
+        {#if orphanLabels.length}
+          <p class="hint warn">These notes don't match any corner on the map. Rename the corner in the map editor, or remove the note.</p>
+          {#each orphanLabels as label (label)}
+            <div class="corner-row">
+              <span class="clabel orphan">{label}</span>
+              <textarea rows="2" bind:value={notes.corners[label]} aria-label={`corner note ${label}`}></textarea>
+              <span class="wc">{wordCount(notes.corners[label] ?? "")}/40</span>
+              <button type="button" class="rm" aria-label={`remove corner note ${label}`} onclick={() => removeCorner(label)}>×</button>
+            </div>
+          {/each}
+        {/if}
       </div>
 
       <div class="fld">
@@ -193,6 +217,9 @@
     </div>
 
     <div class="mappane">
+      <button type="button" class="edit-map" onclick={() => (mapOpen = true)}>
+        {map ? "Edit" : "Add map"}
+      </button>
       {#if map}
         <TrackMapView mapData={map} fill />
       {:else}
@@ -200,7 +227,13 @@
       {/if}
     </div>
 
-    <TrackMapEditor lapId={null} open={mapOpen} onClose={() => (mapOpen = false)} />
+    <TrackMapEditor
+      lapId={null}
+      slug={selected.slug}
+      open={mapOpen}
+      onClose={() => (mapOpen = false)}
+      onSaved={() => reloadMap()}
+    />
   {/if}
 </div>
 
@@ -287,6 +320,7 @@
     max-width: 720px;
   }
   .mappane {
+    position: relative;
     flex: 1 1 0;
     min-width: 0;
     border-left: 1px solid var(--line);
@@ -296,10 +330,29 @@
     padding: 16px;
     overflow: hidden;
   }
+  .edit-map {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 1;
+  }
   .nomap {
     color: var(--faint);
     font-family: var(--mono);
     font-size: 12px;
+  }
+  .hint {
+    color: var(--faint);
+    font-size: 12px;
+    line-height: 1.5;
+    margin: 0 0 8px;
+  }
+  .hint.warn {
+    color: var(--bad, #e66);
+    margin-top: 10px;
+  }
+  .clabel.orphan {
+    color: var(--bad, #e66);
   }
   .editor header {
     display: flex;

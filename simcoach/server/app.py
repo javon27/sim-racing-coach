@@ -567,29 +567,35 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # pane shows "no map yet" (a user track with no driven lap).
         if track_slug(slug) != slug:
             raise HTTPException(400, "invalid slug")
-        return _canonical_map(slug, "", force=False)
+        m = _canonical_map(slug, "", force=False)
+        if m:
+            m = {**m, "detected_sectors": store.sector_bounds(slug, "") or [],
+                 "shipped": _is_shipped(slug), "curating": _curating(),
+                 "track_name": _track_file_data(slug).get("name") or slug}
+        return m
 
-    @app.put("/laps/{lap_id}/map")
-    def save_lap_map(lap_id: int, body: dict = Body(...)):
+    def _persist_map(track: str, car: str, body: dict) -> dict:
         # SAVE the editor's corner map + sectors as shipped owned data. Direction
         # is ALWAYS re-derived from the averaged path geometry here (never trusted
-        # from the client) -- the CLAUDE.md corner-direction invariant.
-        try:
-            rec = store.load(lap_id)
-        except (KeyError, FileNotFoundError):
-            raise HTTPException(404, "lap not found")
-
+        # from the client) -- the CLAUDE.md corner-direction invariant. Keyed on
+        # (track, car); the lap route resolves those from a lap, the slug route
+        # passes the slug with no car (a shipped track edits its frozen ribbon path).
         # If the track already has a reconstructed ribbon, its centerline IS the
         # canonical geometry -- keep it (and re-derive direction on it), don't
         # revert path to the racing-line average on a corner/label/section edit.
-        existing = _track_file_data(rec.track)
+        existing = _track_file_data(track)
         keep_ribbon = existing.get("ribbon")
         ep, epd = existing.get("path"), existing.get("path_dist")
         if keep_ribbon and isinstance(ep, list) and ep and isinstance(epd, list) and len(ep) == len(epd):
             path, dist = ep, epd
         else:
-            laps = _clean_lap_channels(rec.track, rec.car)
+            laps = _clean_lap_channels(track, car)
             path, dist = average_racing_line(laps) if laps else ([], [])
+            if not path and isinstance(ep, list) and ep and isinstance(epd, list) and len(ep) == len(epd):
+                # No laps to re-average (e.g. a slug edit with no driven lap): keep the
+                # track's existing frozen path rather than fail. Editing labels/apexes
+                # on an owned layout shouldn't require re-driving it.
+                path, dist = ep, epd
             if not path:
                 raise HTTPException(422, "no clean laps with position telemetry to build an outline")
         length = float(dist[-1])
@@ -669,26 +675,42 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # the bundled name); a dev/user-map edit lands in the map itself.
         new_name = body.get("name")
         name = (new_name.strip()[:80] if isinstance(new_name, str) and new_name.strip()
-                else _track_file_data(rec.track).get("name"))
+                else _track_file_data(track).get("name"))
         out = {
-            "track": track_slug(rec.track),
+            "track": track_slug(track),
             "corners": corners,
             "path": path,
             "path_dist": dist,
             "sectors": sectors,
             "sections": sections,
             "length": length,
-            "rotation": _track_rotation(rec.track),  # preserve existing rotation
+            "rotation": _track_rotation(track),  # preserve existing rotation
         }
         if name:
             out["name"] = name
         if keep_ribbon:
             out["ribbon"] = keep_ribbon  # keep the reconstructed surface across edits
-        _write_track_json(rec.track, out)
+        _write_track_json(track, out)
         # Invalidate cmap + canonical caches so the next GET returns the new
         # canonical map (now frozen into the file).
-        _invalidate_canon(rec.track)
-        return _canonical_map(rec.track, rec.car, force=False)
+        _invalidate_canon(track)
+        return _canonical_map(track, car, force=False)
+
+    @app.put("/laps/{lap_id}/map")
+    def save_lap_map(lap_id: int, body: dict = Body(...)):
+        try:
+            rec = store.load(lap_id)
+        except (KeyError, FileNotFoundError):
+            raise HTTPException(404, "lap not found")
+        return _persist_map(rec.track, rec.car, body)
+
+    @app.put("/tracks/{slug}/map")
+    def save_track_map(slug: str, body: dict = Body(...)):
+        # Edit a track's owned layout by slug -- the Tracks-screen editor, no driven
+        # lap required (a shipped track edits its frozen ribbon path directly).
+        if track_slug(slug) != slug:
+            raise HTTPException(400, "invalid slug")
+        return _persist_map(slug, "", body)
 
     @app.post("/tracks/{slug}/draft-notes")
     def draft_notes(slug: str, body: dict = Body(...)):
@@ -783,26 +805,20 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             })
         return out
 
-    @app.post("/laps/{lap_id}/rotation")
-    def set_rotation(lap_id: int, body: dict = Body(...)):
-        # Persist a per-track display rotation (degrees). Body required -> preflight
-        # (CSRF), like the mapcapture routes. Merges into the track JSON so corners/
-        # path survive.
-        try:
-            rec = store.load(lap_id)
-        except (KeyError, FileNotFoundError):
-            raise HTTPException(404, "lap not found")
+    def _persist_rotation(track: str, car: str, body: dict) -> dict:
+        # Persist a per-track display rotation (degrees). Merges into the track JSON
+        # so corners/path survive. Keyed on (track, car) like _persist_map.
         try:
             degrees = float(body["degrees"])
         except (KeyError, TypeError, ValueError):
             raise HTTPException(422, "degrees must be a number")
         if not math.isfinite(degrees):
             raise HTTPException(422, "degrees must be finite")
-        data = _track_file_data(rec.track)
+        data = _track_file_data(track)
         if not data.get("corners"):
             # No per-track JSON yet: carry the RESOLVED corners (fallback cmap /
             # auto-detect) into the file so persisting rotation can't zero them.
-            cmap = _cmap_for_map(rec.track)
+            cmap = _cmap_for_map(track)
             data["corners"] = [
                 {"number": c.number, "label": c.label or str(c.number), "name": c.name,
                  "direction": c.direction, "start_dist": c.start_dist,
@@ -814,9 +830,25 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             if secs and "sections" not in data:
                 data["sections"] = secs
         data["rotation"] = degrees % 360.0
-        _write_track_json(rec.track, data)
-        _invalidate_canon(rec.track)
-        return _canonical_map(rec.track, rec.car, force=False)
+        _write_track_json(track, data)
+        _invalidate_canon(track)
+        return _canonical_map(track, car, force=False)
+
+    @app.post("/laps/{lap_id}/rotation")
+    def set_rotation(lap_id: int, body: dict = Body(...)):
+        # Body required -> preflight (CSRF), like the mapcapture routes.
+        try:
+            rec = store.load(lap_id)
+        except (KeyError, FileNotFoundError):
+            raise HTTPException(404, "lap not found")
+        return _persist_rotation(rec.track, rec.car, body)
+
+    @app.post("/tracks/{slug}/rotation")
+    def set_track_rotation(slug: str, body: dict = Body(...)):
+        # Rotate a track's map by slug -- the Tracks-screen editor. Body required.
+        if track_slug(slug) != slug:
+            raise HTTPException(400, "invalid slug")
+        return _persist_rotation(slug, "", body)
 
     def _place_corners(ribbon, edge_channels):
         # First-pass corners from the naive optimal-line solver over the corridor,

@@ -7,9 +7,7 @@
 
   let lapId: number | null = $state(null);
   let trackName: string | null = $state(null);
-  let editing = $state(false);
-  let editorMode: "view" | "edit" = $state("view"); // 🔍 opens view; "Generate" opens edit
-  let mapNonce = $state(0); // bump to force TrackMap to re-fetch after an edit save
+  let viewing = $state(false); // 🔍 opens the map enlarged, read-only (editing lives in Track view)
 
   // The map is canonical per-track: any lap of the selected session resolves it.
   $effect(() => {
@@ -42,33 +40,27 @@
     </div>
     <div class="acts">
       {#if lapId !== null}
-        <!-- Magnifier: opens the map enlarged in a read-only VIEW modal (a pencil in
-             the modal reveals the edit tools). -->
+        <!-- Magnifier: opens the map enlarged, read-only. Editing lives in Track view. -->
         <button type="button" class="icon" aria-label="Enlarge track map" title="View map"
-                onclick={() => { editorMode = "view"; editing = true; }}>
+                onclick={() => (viewing = true)}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
         </button>
-      {:else}
-        <!-- No stored lap: open the capture flow directly (uses the LIVE track). -->
-        <button type="button" onclick={() => { editorMode = "edit"; editing = true; }}>Generate map</button>
       {/if}
     </div>
   </header>
   <div class="map-body">
     {#if lapId !== null}
-      {#key mapNonce}
-        <TrackMap {lapId} />
-      {/key}
+      <TrackMap {lapId} />
     {:else}
-      <p class="empty">No map yet — “Generate map” records the live track and builds one.</p>
+      <p class="empty">No map yet — build one in Track view (Tracks → Edit).</p>
     {/if}
   </div>
   <TrackMapEditor
     {lapId}
-    open={editing}
-    startMode={editorMode}
-    onClose={() => (editing = false)}
-    onSaved={() => (mapNonce += 1)}
+    open={viewing}
+    startMode="view"
+    canEdit={false}
+    onClose={() => (viewing = false)}
   />
 </section>
 

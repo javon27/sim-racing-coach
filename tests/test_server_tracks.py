@@ -145,6 +145,51 @@ def test_track_map_by_slug_returns_layout(tmp_path):
     assert m.get("path") and len(m["corners"]) == 1
 
 
+def _client_with_frozen_path(tmp_path):
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    coach = Coach(FakeModel("{}"), "simcoach/knowledge")
+    tracks_dir = tmp_path / "tracks"
+    tracks_dir.mkdir(parents=True, exist_ok=True)
+    (tracks_dir / "algarve_international_circuit.json").write_text(json.dumps({
+        "track": "algarve_international_circuit",
+        "path": [[float(i), float(i % 3)] for i in range(120)],
+        "path_dist": [float(i) for i in range(120)],
+        "corners": [{"number": 1, "name": "Turn 1", "direction": "right",
+                     "start_dist": 0.0, "apex_dist": 50.0, "end_dist": 100.0}],
+    }))
+    client = TestClient(create_app(store, coach, tracks_dir=str(tracks_dir)),
+                        base_url="http://127.0.0.1")
+    return client, tracks_dir
+
+
+def test_save_track_map_by_slug_persists(tmp_path):
+    client, tracks_dir = _client_with_frozen_path(tmp_path)
+    r = client.put("/tracks/algarve_international_circuit/map", json={
+        "corners": [
+            {"number": 1, "label": "1", "name": "Turn 1", "apex_dist": 50.0},
+            {"number": 2, "label": "2", "name": "Turn 2", "apex_dist": 80.0},
+        ]})
+    assert r.status_code == 200, r.text
+    written = json.loads((tracks_dir / "algarve_international_circuit.json").read_text())
+    assert len(written["corners"]) == 2
+    # Direction is server-derived, never trusted from the client.
+    assert all(c["direction"] in ("left", "right", "straight") for c in written["corners"])
+
+
+def test_save_track_map_by_slug_rejects_empty_corners(tmp_path):
+    client, _ = _client_with_frozen_path(tmp_path)
+    r = client.put("/tracks/algarve_international_circuit/map", json={"corners": []})
+    assert r.status_code == 422
+
+
+def test_track_rotation_by_slug_persists(tmp_path):
+    client, tracks_dir = _client_with_frozen_path(tmp_path)
+    r = client.post("/tracks/algarve_international_circuit/rotation", json={"degrees": 90})
+    assert r.status_code == 200
+    written = json.loads((tracks_dir / "algarve_international_circuit.json").read_text())
+    assert written["rotation"] == 90.0
+
+
 def test_put_then_get_notes_roundtrip(tmp_path):
     client, _ = _make_client_with_fake_model(tmp_path, model_reply="{}")
     client.put("/tracks/algarve_international_circuit/notes", json={

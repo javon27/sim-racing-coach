@@ -163,8 +163,11 @@
   import { attachWheelZoom, attachPan, type Box } from "./mapzoom";
   import {
     getLapMap,
+    getTrackMap,
     saveLapMap,
+    saveTrackMap,
     setMapRotation,
+    setTrackMapRotation,
     startMapCapture,
     cancelMapCapture,
     mapCaptureStatus,
@@ -177,18 +180,22 @@
 
   let {
     lapId,
+    slug = null,
     open = false,
     onClose,
     onSaved,
     pollMs = 2000,
     startMode = "edit",
+    canEdit = true,
   }: {
-    lapId: number | null; // null = no lap yet (capture-only: generate/rebuild a map)
+    lapId: number | null; // null = no lap yet; with `slug` set, edit that track's owned map
+    slug?: string | null; // Tracks-screen editing: load/save the map by track slug (no lap)
     open?: boolean;
     onClose?: () => void;
     onSaved?: () => void;
     pollMs?: number;
     startMode?: "view" | "edit"; // pane opens the modal in "view"; pencil -> "edit"
+    canEdit?: boolean; // false = strictly read-only (no pencil/tools/save); editing lives in Track view
   } = $props();
 
   type EditCorner = {
@@ -216,7 +223,7 @@
   // it from startMode each time the modal opens.
   let editMode = $state(true);
   $effect(() => {
-    if (open) editMode = startMode === "edit";
+    if (open) editMode = canEdit && startMode === "edit";
   });
 
   // What the pointer is currently dragging. `ai` = apex index for kind "apex".
@@ -371,15 +378,37 @@
   // Open with the SAVED map (avg=0) — the frozen/canonical ribbon if one exists.
   // The fresh re-average/rebuild path is only "(Re)generate map layout" (mapcapture).
   let loadedFor = -1;
+  let loadedSlug: string | null = null;
   $effect(() => {
     if (!open) {
       loadedFor = -1;
+      loadedSlug = null;
       // Closing mid-capture must not leave the server buffering real laps into
       // mapping mode (silent data loss) — same teardown as the × button.
       if (genPhase !== "off") cancelGen();
       return;
     }
     if (lapId == null) {
+      if (slug) {
+        // Tracks-screen editing: load this track's owned map by slug (no lap). {}
+        // (unmapped track) leaves map null -> the capture panel offers to generate.
+        if (loadedSlug === slug) return;
+        loadedSlug = slug;
+        loadedFor = -1;
+        const s = slug;
+        error = null;
+        getTrackMap(s)
+          .then((res) => {
+            if (loadedSlug !== s) return;
+            if ("path" in res && res.path.length > 0) applyMap(res);
+            else map = null;
+          })
+          .catch(() => {
+            if (loadedSlug !== s) return;
+            map = null;
+          });
+        return;
+      }
       // Capture-only mode (fresh/unmapped track): no lap map to load. Return
       // BEFORE reading genPhase so this effect doesn't re-run on genPhase changes
       // and cancel the capture the instant startGen sets it to "capturing".
@@ -680,17 +709,18 @@
   }
 
   async function save() {
-    if (lapId == null) return;
+    if (lapId == null && !slug) return;
     saving = true;
     error = null;
     try {
       // Rotation is a pending edit too: bake a changed angle in first so the saved
       // corners sit on the rebaked path, then persist the corner map (which
-      // preserves the just-written rotation).
+      // preserves the just-written rotation). Route by lap or by slug (Tracks screen).
       if (map && angle !== (map.rotation ?? 0)) {
-        await setMapRotation(lapId, angle);
+        if (lapId != null) await setMapRotation(lapId, angle);
+        else await setTrackMapRotation(slug!, angle);
       }
-      const res = await saveLapMap(lapId, {
+      const payload = {
         corners: corners.map((c) => ({
           number: c.number,
           label: c.label,
@@ -703,7 +733,8 @@
         sectors,
         sections,
         ...(nameEditable && trackName.trim() ? { name: trackName.trim() } : {}),
-      });
+      };
+      const res = lapId != null ? await saveLapMap(lapId, payload) : await saveTrackMap(slug!, payload);
       applyMap(res);
       onSaved?.();
     } catch (e) {
@@ -756,7 +787,7 @@
             <button type="button" onclick={resetRotation}>0°</button>
           </div>
         {/if}
-        {#if map}
+        {#if map && canEdit}
           {#if editMode}
             <button type="button" class="pencil" aria-label="View map" title="View (hide edit tools)" onclick={() => (editMode = false)}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -993,7 +1024,7 @@
         </div>
       {:else if lapId != null && !error}
         <p class="msg">Loading…</p>
-      {:else}
+      {:else if canEdit}
         <!-- No map loaded (fresh/unmapped track): offer the capture flow directly so
              the first map can be generated without an existing lap. -->
         <div class="genpanel">
@@ -1007,6 +1038,8 @@
           </div>
           {#if error}<p class="msg err">{error}</p>{/if}
         </div>
+      {:else}
+        <p class="msg">No map for this track yet.</p>
       {/if}
 
       {#if error && map && genPhase === "off"}<p class="msg err">{error}</p>{/if}
