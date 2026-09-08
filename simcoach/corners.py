@@ -1,5 +1,5 @@
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 
 import numpy as np
 
@@ -68,7 +68,11 @@ class CornerMap:
         next). Raises ValueError only if start == end (degenerate) or an apex
         falls outside the (possibly wrapped) window.
         """
-        corners = [Corner(**c) for c in data["corners"]]
+        # Ignore keys Corner doesn't declare (e.g. baked geometry metrics
+        # radius_m/width_m/banking_deg/elev_delta_m live in the JSON for the coach
+        # digest but aren't corner-identity fields).
+        _cf = {f.name for f in fields(Corner)}
+        corners = [Corner(**{k: v for k, v in c.items() if k in _cf}) for c in data["corners"]]
         for c in corners:
             if c.start_dist == c.end_dist:
                 raise ValueError(

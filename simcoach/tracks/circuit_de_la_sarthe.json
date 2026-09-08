@@ -12,7 +12,11 @@
       "end_dist": 736.9,
       "apexes": [
         655.0
-      ]
+      ],
+      "radius_m": 171.7,
+      "width_m": 9.9,
+      "banking_deg": 1.3,
+      "elev_delta_m": 6.6
     },
     {
       "number": 2,
@@ -24,7 +28,11 @@
       "end_dist": 900.7,
       "apexes": [
         846.1
-      ]
+      ],
+      "radius_m": 61.2,
+      "width_m": 8.7,
+      "banking_deg": 1.5,
+      "elev_delta_m": 6.8
     },
     {
       "number": 3,
@@ -36,7 +44,11 @@
       "end_dist": 1009.8,
       "apexes": [
         928.0
-      ]
+      ],
+      "radius_m": 63.5,
+      "width_m": 9.0,
+      "banking_deg": 0.2,
+      "elev_delta_m": 3.2
     },
     {
       "number": 4,
@@ -48,7 +60,11 @@
       "end_dist": 1173.6,
       "apexes": [
         1119.0
-      ]
+      ],
+      "radius_m": 234.8,
+      "width_m": 9.5,
+      "banking_deg": -1.0,
+      "elev_delta_m": -3.8
     },
     {
       "number": 5,
@@ -60,7 +76,11 @@
       "end_dist": 1337.3,
       "apexes": [
         1255.5
-      ]
+      ],
+      "radius_m": 172.9,
+      "width_m": 9.6,
+      "banking_deg": 2.3,
+      "elev_delta_m": -8.4
     },
     {
       "number": 6,
@@ -72,7 +92,11 @@
       "end_dist": 1555.7,
       "apexes": [
         1501.1
-      ]
+      ],
+      "radius_m": 75.9,
+      "width_m": 7.7,
+      "banking_deg": -3.5,
+      "elev_delta_m": 1.4
     },
     {
       "number": 7,
@@ -84,7 +108,11 @@
       "end_dist": 1692.2,
       "apexes": [
         1610.3
-      ]
+      ],
+      "radius_m": 103.9,
+      "width_m": 8.2,
+      "banking_deg": 5.3,
+      "elev_delta_m": 1.2
     },
     {
       "number": 8,
@@ -96,7 +124,11 @@
       "end_dist": 2019.7,
       "apexes": [
         1937.8
-      ]
+      ],
+      "radius_m": 94.5,
+      "width_m": 8.6,
+      "banking_deg": 1.9,
+      "elev_delta_m": -2.4
     },
     {
       "number": 9,
@@ -108,7 +140,11 @@
       "end_dist": 2210.7,
       "apexes": [
         2128.8
-      ]
+      ],
+      "radius_m": 444.3,
+      "width_m": 8.5,
+      "banking_deg": 1.6,
+      "elev_delta_m": -5.9
     },
     {
       "number": 10,
@@ -120,7 +156,11 @@
       "end_dist": 4093.9,
       "apexes": [
         4039.3
-      ]
+      ],
+      "radius_m": 84.6,
+      "width_m": 8.6,
+      "banking_deg": 0.2,
+      "elev_delta_m": 0.0
     },
     {
       "number": 11,
@@ -132,7 +172,11 @@
       "end_dist": 4203.1,
       "apexes": [
         4148.5
-      ]
+      ],
+      "radius_m": 51.7,
+      "width_m": 8.3,
+      "banking_deg": -0.3,
+      "elev_delta_m": 0.2
     },
     {
       "number": 12,
@@ -144,7 +188,11 @@
       "end_dist": 4339.6,
       "apexes": [
         4257.7
-      ]
+      ],
+      "radius_m": 158.0,
+      "width_m": 8.6,
+      "banking_deg": 0.5,
+      "elev_delta_m": -0.3
     },
     {
       "number": 13,
@@ -156,7 +204,11 @@
       "end_dist": 6059.0,
       "apexes": [
         6031.7
-      ]
+      ],
+      "radius_m": 85.0,
+      "width_m": 9.0,
+      "banking_deg": -0.1,
+      "elev_delta_m": 1.4
     },
     {
       "number": 14,
@@ -168,7 +220,11 @@
       "end_dist": 6168.2,
       "apexes": [
         6113.6
-      ]
+      ],
+      "radius_m": 51.4,
+      "width_m": 8.9,
+      "banking_deg": 0.5,
+      "elev_delta_m": 1.6
     },
     {
       "number": 15,
@@ -180,7 +236,11 @@
       "end_dist": 6304.6,
       "apexes": [
         6222.8
-      ]
+      ],
+      "radius_m": 157.0,
+      "width_m": 9.4,
+      "banking_deg": -0.5,
+      "elev_delta_m": 1.4
     },
     {
       "number": 16,
@@ -192,7 +252,11 @@
       "end_dist": 7669.3,
       "apexes": [
         7587.4
-      ]
+      ],
+      "radius_m": 294.6,
+      "width_m": 7.2,
+      "banking_deg": 0.7,
+      "elev_delta_m": 2.2
     },
     {
       "number": 17,
@@ -204,7 +268,11 @@
       "end_dist": 7833.0,
       "apexes": [
         7751.2
-      ]
+      ],
+      "radius_m": 41.3,
+      "width_m": 7.1,
+      "banking_deg": 1.1,
+      "elev_delta_m": -1.1
     },
     {
       "number": 18,
@@ -216,7 +284,11 @@
       "end_dist": 9743.5,
       "apexes": [
         9661.7
-      ]
+      ],
+      "radius_m": 163.2,
+      "width_m": 8.0,
+      "banking_deg": 4.2,
+      "elev_delta_m": -2.3
     },
     {
       "number": 19,
@@ -228,7 +300,11 @@
       "end_dist": 9934.6,
       "apexes": [
         9852.7
-      ]
+      ],
+      "radius_m": 46.4,
+      "width_m": 6.4,
+      "banking_deg": -5.1,
+      "elev_delta_m": -0.7
     },
     {
       "number": 20,
@@ -240,7 +316,11 @@
       "end_dist": 10262.1,
       "apexes": [
         10180.2
-      ]
+      ],
+      "radius_m": 31.8,
+      "width_m": 8.9,
+      "banking_deg": 0.6,
+      "elev_delta_m": 0.0
     },
     {
       "number": 21,
@@ -252,7 +332,11 @@
       "end_dist": 11626.7,
       "apexes": [
         11544.9
-      ]
+      ],
+      "radius_m": 138.1,
+      "width_m": 8.8,
+      "banking_deg": 1.8,
+      "elev_delta_m": 2.3
     },
     {
       "number": 22,
@@ -264,7 +348,11 @@
       "end_dist": 11872.4,
       "apexes": [
         11790.5
-      ]
+      ],
+      "radius_m": 137.2,
+      "width_m": 7.8,
+      "banking_deg": -1.7,
+      "elev_delta_m": -0.3
     },
     {
       "number": 23,
@@ -276,7 +364,11 @@
       "end_dist": 12063.4,
       "apexes": [
         11981.5
-      ]
+      ],
+      "radius_m": 128.3,
+      "width_m": 7.8,
+      "banking_deg": -1.5,
+      "elev_delta_m": -3.0
     },
     {
       "number": 24,
@@ -288,7 +380,11 @@
       "end_dist": 12227.2,
       "apexes": [
         12172.6
-      ]
+      ],
+      "radius_m": 145.4,
+      "width_m": 7.4,
+      "banking_deg": 1.8,
+      "elev_delta_m": -3.3
     },
     {
       "number": 25,
@@ -300,7 +396,11 @@
       "end_dist": 12527.4,
       "apexes": [
         12445.5
-      ]
+      ],
+      "radius_m": 109.6,
+      "width_m": 7.1,
+      "banking_deg": 1.7,
+      "elev_delta_m": 0.9
     },
     {
       "number": 26,
@@ -312,7 +412,11 @@
       "end_dist": 12745.8,
       "apexes": [
         12691.2
-      ]
+      ],
+      "radius_m": 299.6,
+      "width_m": 7.2,
+      "banking_deg": 1.6,
+      "elev_delta_m": 0.8
     },
     {
       "number": 27,
@@ -324,7 +428,11 @@
       "end_dist": 12882.2,
       "apexes": [
         12800.3
-      ]
+      ],
+      "radius_m": 223.2,
+      "width_m": 7.6,
+      "banking_deg": 1.7,
+      "elev_delta_m": 0.8
     },
     {
       "number": 28,
@@ -336,7 +444,11 @@
       "end_dist": 13291.6,
       "apexes": [
         13237.0
-      ]
+      ],
+      "radius_m": 99.9,
+      "width_m": 6.9,
+      "banking_deg": 1.5,
+      "elev_delta_m": 0.8
     },
     {
       "number": 29,
@@ -348,7 +460,11 @@
       "end_dist": 13373.5,
       "apexes": [
         13318.9
-      ]
+      ],
+      "radius_m": 90.4,
+      "width_m": 7.0,
+      "banking_deg": 1.4,
+      "elev_delta_m": 0.5
     },
     {
       "number": 30,
@@ -360,7 +476,11 @@
       "end_dist": 13564.5,
       "apexes": [
         13482.6
-      ]
+      ],
+      "radius_m": 76.1,
+      "width_m": 12.7,
+      "banking_deg": 0.4,
+      "elev_delta_m": 0.9
     }
   ],
   "ribbon": {

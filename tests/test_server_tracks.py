@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 
+import numpy as np
 from fastapi.testclient import TestClient
 
 from simcoach.coach import Coach
@@ -200,3 +201,42 @@ def test_put_then_get_notes_roundtrip(tmp_path):
     assert r.status_code == 200
     assert r.json() == {"overview": "rhythm track", "corners": {"1": "brake late"},
                          "reference_times": {"GT3": "1:32.500"}, "source": "me"}
+
+
+def test_save_track_map_bakes_geometry_and_digest_uses_it(tmp_path):
+    slug = "algarve_international_circuit"
+    n = 120
+    R = 60.0
+    t = np.linspace(0.0, np.pi, n)                       # semicircle -> radius ~R
+    path = [[float(R * np.cos(a)), float(R * np.sin(a))] for a in t]
+    dist = [float(R * a) for a in t]                     # arc length
+    width = [12.0] * n
+    bank = [float(np.radians(2.0))] * n
+    s, apex, e = dist[n // 4], dist[n // 2], dist[3 * n // 4]
+
+    tracks_dir = tmp_path / "tracks"
+    tracks_dir.mkdir(parents=True, exist_ok=True)
+    (tracks_dir / f"{slug}.json").write_text(json.dumps({
+        "track": slug, "path": path, "path_dist": dist, "length": dist[-1],
+        "ribbon": {"left": path, "right": path, "center": path, "width": width, "bank": bank},
+        "corners": [{"number": 1, "label": "1", "name": "Turn 1", "direction": "left",
+                     "start_dist": s, "apex_dist": apex, "end_dist": e, "apexes": [apex]}],
+    }))
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    fake = FakeModel('{"overview": "o", "corners": {}, "source": ""}')
+    app = create_app(store, Coach(fake, "simcoach/knowledge"), tracks_dir=str(tracks_dir))
+    c = TestClient(app, base_url="http://127.0.0.1")
+
+    r = c.put(f"/tracks/{slug}/map", json={"corners": [
+        {"number": 1, "label": "1", "name": "Turn 1",
+         "apex_dist": apex, "apexes": [apex], "start_dist": s, "end_dist": e}]})
+    assert r.status_code == 200, r.text
+    cc = json.loads((tracks_dir / f"{slug}.json").read_text())["corners"][0]
+    assert abs(cc["radius_m"] - R) < 8.0                 # radius from path curvature
+    assert cc["width_m"] == 12.0                         # from the ribbon
+    assert abs(cc["banking_deg"] - 2.0) < 0.2            # radians -> degrees
+
+    d = c.post(f"/tracks/{slug}/draft-notes", json={"track": slug})
+    assert d.status_code == 200
+    prompt = fake.last_messages[0]["content"]            # the digest sent to the model
+    assert "radius ~" in prompt and "width 12m" in prompt

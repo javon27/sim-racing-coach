@@ -11,7 +11,11 @@
       "end_dist": 200.9,
       "apexes": [
         58.9
-      ]
+      ],
+      "radius_m": 535.0,
+      "width_m": 11.4,
+      "banking_deg": -0.0,
+      "elev_delta_m": 1.2
     },
     {
       "number": 2,
@@ -23,7 +27,11 @@
       "end_dist": 770.2,
       "apexes": [
         647.8
-      ]
+      ],
+      "radius_m": 128.8,
+      "width_m": 8.3,
+      "banking_deg": -0.9,
+      "elev_delta_m": -0.1
     },
     {
       "number": 3,
@@ -35,7 +43,11 @@
       "end_dist": 887.9,
       "apexes": [
         765.5
-      ]
+      ],
+      "radius_m": 128.8,
+      "width_m": 7.2,
+      "banking_deg": 0.4,
+      "elev_delta_m": 0.6
     },
     {
       "number": 4,
@@ -47,7 +59,11 @@
       "end_dist": 986.1,
       "apexes": [
         863.7
-      ]
+      ],
+      "radius_m": 152.4,
+      "width_m": 8.1,
+      "banking_deg": -0.6,
+      "elev_delta_m": 1.0
     },
     {
       "number": 5,
@@ -59,7 +75,11 @@
       "end_dist": 1417.9,
       "apexes": [
         1295.5
-      ]
+      ],
+      "radius_m": 95.8,
+      "width_m": 8.1,
+      "banking_deg": -0.3,
+      "elev_delta_m": 1.1
     },
     {
       "number": 6,
@@ -71,7 +91,11 @@
       "end_dist": 1535.7,
       "apexes": [
         1413.3
-      ]
+      ],
+      "radius_m": 95.8,
+      "width_m": 7.0,
+      "banking_deg": 0.6,
+      "elev_delta_m": 2.0
     },
     {
       "number": 7,
@@ -83,7 +107,11 @@
       "end_dist": 1830.2,
       "apexes": [
         1707.8
-      ]
+      ],
+      "radius_m": 26.5,
+      "width_m": 6.2,
+      "banking_deg": -2.5,
+      "elev_delta_m": 9.4
     },
     {
       "number": 8,
@@ -95,7 +123,11 @@
       "end_dist": 2203.1,
       "apexes": [
         2080.7
-      ]
+      ],
+      "radius_m": 477.9,
+      "width_m": 7.6,
+      "banking_deg": 0.4,
+      "elev_delta_m": 10.8
     },
     {
       "number": 9,
@@ -107,7 +139,11 @@
       "end_dist": 2419.1,
       "apexes": [
         2296.7
-      ]
+      ],
+      "radius_m": 81.9,
+      "width_m": 8.0,
+      "banking_deg": -2.4,
+      "elev_delta_m": -3.0
     },
     {
       "number": 10,
@@ -119,7 +155,11 @@
       "end_dist": 2595.7,
       "apexes": [
         2473.3
-      ]
+      ],
+      "radius_m": 98.0,
+      "width_m": 7.8,
+      "banking_deg": -2.4,
+      "elev_delta_m": -13.1
     },
     {
       "number": 11,
@@ -131,7 +171,11 @@
       "end_dist": 2831.3,
       "apexes": [
         2708.9
-      ]
+      ],
+      "radius_m": 70.2,
+      "width_m": 7.8,
+      "banking_deg": 0.7,
+      "elev_delta_m": -7.9
     },
     {
       "number": 12,
@@ -143,7 +187,11 @@
       "end_dist": 2968.7,
       "apexes": [
         2846.3
-      ]
+      ],
+      "radius_m": 67.7,
+      "width_m": 6.9,
+      "banking_deg": 0.3,
+      "elev_delta_m": 9.4
     },
     {
       "number": 13,
@@ -155,7 +203,11 @@
       "end_dist": 3066.8,
       "apexes": [
         2944.4
-      ]
+      ],
+      "radius_m": 67.7,
+      "width_m": 8.0,
+      "banking_deg": -0.0,
+      "elev_delta_m": 14.1
     },
     {
       "number": 14,
@@ -167,7 +219,11 @@
       "end_dist": 3400.5,
       "apexes": [
         3278.1
-      ]
+      ],
+      "radius_m": 122.3,
+      "width_m": 7.4,
+      "banking_deg": -0.1,
+      "elev_delta_m": 2.4
     },
     {
       "number": 15,
@@ -179,7 +235,11 @@
       "end_dist": 3518.3,
       "apexes": [
         3395.9
-      ]
+      ],
+      "radius_m": 122.3,
+      "width_m": 7.7,
+      "banking_deg": -0.5,
+      "elev_delta_m": -1.6
     },
     {
       "number": 16,
@@ -191,7 +251,11 @@
       "end_dist": 4067.9,
       "apexes": [
         3945.5
-      ]
+      ],
+      "radius_m": 197.2,
+      "width_m": 7.9,
+      "banking_deg": 1.0,
+      "elev_delta_m": -15.0
     },
     {
       "number": 17,
@@ -203,7 +267,11 @@
       "end_dist": 4244.6,
       "apexes": [
         4122.2
-      ]
+      ],
+      "radius_m": 51.2,
+      "width_m": 6.5,
+      "banking_deg": -0.4,
+      "elev_delta_m": -9.8
     },
     {
       "number": 18,
@@ -215,7 +283,11 @@
       "end_dist": 4401.6,
       "apexes": [
         4279.2
-      ]
+      ],
+      "radius_m": 60.2,
+      "width_m": 6.8,
+      "banking_deg": -0.7,
+      "elev_delta_m": -2.0
     },
     {
       "number": 19,
@@ -227,7 +299,11 @@
       "end_dist": 4735.3,
       "apexes": [
         4612.9
-      ]
+      ],
+      "radius_m": 384.9,
+      "width_m": 11.4,
+      "banking_deg": -0.0,
+      "elev_delta_m": 0.7
     }
   ],
   "path": [

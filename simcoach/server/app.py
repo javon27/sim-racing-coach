@@ -24,7 +24,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from .. import config, logging_setup, paths, secrets
-from ..analysis import analyze_lap
+from ..analysis import analyze_lap, corner_geometry, geometry_clause
 from ..car_lookup import resolve_car
 from ..car_notes import load_car_notes, load_setup_concepts
 from ..coach_tools import CoachContext
@@ -679,6 +679,22 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         new_name = body.get("name")
         name = (new_name.strip()[:80] if isinstance(new_name, str) and new_name.strip()
                 else _track_file_data(track).get("name"))
+
+        # Bake per-corner geometry: radius from the path, width/banking from the
+        # ribbon (index-aligned with the frozen path) when present. Elevation needs
+        # pos_y we don't have on a corner/label edit -> carry forward any baked value.
+        rib_w = keep_ribbon.get("width") if isinstance(keep_ribbon, dict) else None
+        rib_b = keep_ribbon.get("bank") if isinstance(keep_ribbon, dict) else None
+        geo = corner_geometry(path, dist, corners, width=rib_w, bank=rib_b)
+        prior = {str(pc.get("label") or pc.get("number")): pc
+                 for pc in (existing.get("corners") or [])}
+        for c in corners:
+            lab = str(c.get("label") or c.get("number"))
+            c.update(geo.get(lab, {}))
+            ped = prior.get(lab, {}).get("elev_delta_m")
+            if ped is not None:
+                c["elev_delta_m"] = ped
+
         out = {
             "track": track_slug(track),
             "corners": corners,
@@ -726,11 +742,19 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         cmap = _cmap_for_map(track)
         if cmap is None or not cmap.corners:
             raise HTTPException(404, "no corner map for this track")
-        digest_lines = [
-            f"T{c.label or c.number} {c.name}: {c.direction}, "
-            f"apex@{c.apex_dist:.0f}m, span {c.start_dist:.0f}-{c.end_dist:.0f}m"
-            for c in cmap.corners
-        ]
+        # Baked per-corner geometry (radius/elevation/width/banking), keyed by label,
+        # enriches each line -- omitted silently where a track hasn't been baked.
+        file_corners = {str(fc.get("label") or fc.get("number")): fc
+                        for fc in (_track_file_data(track).get("corners") or [])}
+        digest_lines = []
+        for c in cmap.corners:
+            lab = c.label or c.number
+            line = (f"T{lab} {c.name}: {c.direction}, "
+                    f"apex@{c.apex_dist:.0f}m, span {c.start_dist:.0f}-{c.end_dist:.0f}m")
+            clause = geometry_clause(file_corners.get(str(lab), {}))
+            if clause:
+                line += ", " + clause
+            digest_lines.append(line)
         guides = (body.get("guides") or "").strip()
         system = (
             "You are drafting OWNED, author-time track notes a human will verify. "

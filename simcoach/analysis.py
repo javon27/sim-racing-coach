@@ -4,6 +4,7 @@ import numpy as np
 
 from simcoach.model_types import LapRecord
 from simcoach.corners import Corner, CornerMap, compute_direction, in_window
+from simcoach.ribbon import _menger
 
 
 @dataclass
@@ -287,3 +288,70 @@ def analyze_lap(
         lap_time=record.lap_time, corners=corners, has_reference=has_reference,
         tire_means=tire_means, tire_warmup=tire_warmup, wheels=_wheel_summary(record),
     )
+
+
+def corner_geometry(path, dist, corners, *, width=None, bank=None, elev=None):
+    """Per-corner physical geometry for coach grounding (pure, deterministic).
+
+    path: Nx2 points parallel to `dist` (lap_distance). `corners`: dicts with
+    start_dist/apex_dist/end_dist and label (or number). Optional `width`, `bank`
+    (radians, as the ribbon emits), `elev` arrays index-aligned with `path`.
+    Returns {label: {radius_m?, width_m?, banking_deg?, elev_delta_m?}}, including
+    ONLY the metrics whose source data was supplied -- nothing is fabricated
+    (same never-invent rule as corner direction).
+    """
+    if not len(path) or not len(dist):
+        return {}
+    pa = np.asarray(path, dtype=float)
+    d = np.asarray(dist, dtype=float)
+    n = len(d)
+    k = _menger(pa[:, 0], pa[:, 1])  # per-station curvature, 1/m
+    w = np.asarray(width, dtype=float) if width is not None else None
+    b = np.asarray(bank, dtype=float) if bank is not None else None
+    e = np.asarray(elev, dtype=float) if elev is not None else None
+
+    def at(target: float) -> int:
+        return int(np.argmin(np.abs(d - target)))
+
+    def window(start: float, end: float) -> list[int]:
+        i, j = at(start), at(end)
+        return list(range(i, j + 1)) if i <= j else list(range(i, n)) + list(range(0, j + 1))
+
+    out: dict[str, dict] = {}
+    for c in corners:
+        label = str(c.get("label") or c.get("number"))
+        win = window(c["start_dist"], c["end_dist"])
+        m: dict = {}
+        kmax = float(np.max(k[win])) if win else 0.0
+        if kmax > 1e-4:  # tightest point in the window; <1e-4 (~>10 km) = effectively straight
+            m["radius_m"] = round(1.0 / kmax, 1)
+        ai = at(c["apex_dist"])
+        if w is not None and ai < len(w):
+            m["width_m"] = round(float(w[ai]), 1)
+        if b is not None and ai < len(b):
+            m["banking_deg"] = round(float(np.degrees(b[ai])), 1)
+        if e is not None:
+            si, ei = at(c["start_dist"]), at(c["end_dist"])
+            if si < len(e) and ei < len(e):
+                m["elev_delta_m"] = round(float(e[ei] - e[si]), 1)  # + = uphill
+        out[label] = m
+    return out
+
+
+def geometry_clause(metrics: dict) -> str:
+    """Render baked per-corner geometry as a digest clause, omitting absent
+    metrics. Elevation/banking below a threshold are dropped as noise."""
+    parts = []
+    r = metrics.get("radius_m")
+    if r is not None:
+        parts.append(f"radius ~{r:.0f}m")
+    ed = metrics.get("elev_delta_m")
+    if ed is not None and abs(ed) >= 1.0:
+        parts.append(f"{'uphill' if ed > 0 else 'downhill'} {abs(ed):.0f}m")
+    w = metrics.get("width_m")
+    if w is not None:
+        parts.append(f"width {w:.0f}m")
+    bk = metrics.get("banking_deg")
+    if bk is not None and abs(bk) >= 1.0:
+        parts.append(f"{abs(bk):.0f}\N{DEGREE SIGN} banking")
+    return ", ".join(parts)

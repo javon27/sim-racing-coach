@@ -11,7 +11,11 @@
       "end_dist": 436.2,
       "apexes": [
         376.4
-      ]
+      ],
+      "radius_m": 39.0,
+      "width_m": 9.7,
+      "banking_deg": -5.6,
+      "elev_delta_m": -8.9
     },
     {
       "number": 2,
@@ -23,7 +27,11 @@
       "end_dist": 547.4,
       "apexes": [
         479.0
-      ]
+      ],
+      "radius_m": 76.0,
+      "width_m": 10.4,
+      "banking_deg": 0.6,
+      "elev_delta_m": -7.5
     },
     {
       "number": 3,
@@ -35,7 +43,11 @@
       "end_dist": 624.4,
       "apexes": [
         607.3
-      ]
+      ],
+      "radius_m": 132.7,
+      "width_m": 11.7,
+      "banking_deg": -2.5,
+      "elev_delta_m": -1.5
     },
     {
       "number": 4,
@@ -47,7 +59,11 @@
       "end_dist": 1514.0,
       "apexes": [
         1428.5
-      ]
+      ],
+      "radius_m": 55.1,
+      "width_m": 11.5,
+      "banking_deg": -3.5,
+      "elev_delta_m": -7.7
     },
     {
       "number": 5,
@@ -59,7 +75,11 @@
       "end_dist": 1702.2,
       "apexes": [
         1616.7
-      ]
+      ],
+      "radius_m": 129.0,
+      "width_m": 11.0,
+      "banking_deg": -3.0,
+      "elev_delta_m": -0.2
     },
     {
       "number": 6,
@@ -71,7 +91,11 @@
       "end_dist": 2104.2,
       "apexes": [
         2052.9
-      ]
+      ],
+      "radius_m": 90.7,
+      "width_m": 10.5,
+      "banking_deg": 2.4,
+      "elev_delta_m": 6.8
     },
     {
       "number": 7,
@@ -83,7 +107,11 @@
       "end_dist": 2241.1,
       "apexes": [
         2155.6
-      ]
+      ],
+      "radius_m": 89.8,
+      "width_m": 10.7,
+      "banking_deg": 3.3,
+      "elev_delta_m": 6.2
     },
     {
       "number": 8,
@@ -95,7 +123,11 @@
       "end_dist": 2412.2,
       "apexes": [
         2352.3
-      ]
+      ],
+      "radius_m": 27.9,
+      "width_m": 8.6,
+      "banking_deg": 2.3,
+      "elev_delta_m": -2.4
     },
     {
       "number": 9,
@@ -107,7 +139,11 @@
       "end_dist": 2566.1,
       "apexes": [
         2480.6
-      ]
+      ],
+      "radius_m": 31.3,
+      "width_m": 9.8,
+      "banking_deg": -2.9,
+      "elev_delta_m": -4.3
     },
     {
       "number": 10,
@@ -119,7 +155,11 @@
       "end_dist": 2848.4,
       "apexes": [
         2762.9
-      ]
+      ],
+      "radius_m": 17.4,
+      "width_m": 7.8,
+      "banking_deg": 4.9,
+      "elev_delta_m": 0.8
     },
     {
       "number": 11,
@@ -131,7 +171,11 @@
       "end_dist": 3062.2,
       "apexes": [
         2976.7
-      ]
+      ],
+      "radius_m": 92.8,
+      "width_m": 10.9,
+      "banking_deg": -5.6,
+      "elev_delta_m": -9.2
     },
     {
       "number": 12,
@@ -143,7 +187,11 @@
       "end_dist": 3353.1,
       "apexes": [
         3267.5
-      ]
+      ],
+      "radius_m": 41.7,
+      "width_m": 9.0,
+      "banking_deg": -1.4,
+      "elev_delta_m": 6.3
     },
     {
       "number": 13,
@@ -155,7 +203,11 @@
       "end_dist": 3494.0,
       "apexes": [
         3387.3
-      ]
+      ],
+      "radius_m": 54.9,
+      "width_m": 10.9,
+      "banking_deg": -1.1,
+      "elev_delta_m": 16.5
     },
     {
       "number": 14,
@@ -167,7 +219,11 @@
       "end_dist": 3755.1,
       "apexes": [
         3669.6
-      ]
+      ],
+      "radius_m": 170.1,
+      "width_m": 14.1,
+      "banking_deg": -7.0,
+      "elev_delta_m": 5.0
     },
     {
       "number": 15,
@@ -179,7 +235,11 @@
       "end_dist": 4105.8,
       "apexes": [
         4020.3
-      ]
+      ],
+      "radius_m": 315.3,
+      "width_m": 16.1,
+      "banking_deg": -7.1,
+      "elev_delta_m": -1.9
     }
   ],
   "path": [
