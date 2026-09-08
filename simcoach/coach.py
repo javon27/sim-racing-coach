@@ -197,14 +197,6 @@ class Coach:
                 sections.append("\nCurrent car setup (adjust THESE for setup fixes):")
                 sections.extend(lines)
 
-        # Track note (already a resolved slug, e.g. the map filename stem); slugify
-        # again defensively so it can't escape the knowledge dir.
-        if track_note:
-            tslug = re.sub(r"[^a-z0-9]+", "_", track_note.lower()).strip("_")
-            tfile = Path(self.knowledge_dir) / f"{tslug}.md"
-            if tslug and tfile.exists():
-                sections.append(f"\nTrack notes:\n{tfile.read_text()}")
-
         # Load the car note by a filesystem-safe slug of the car name (slugifying also
         # neutralizes any path separators, so a crafted car name can't escape the dir).
         slug = re.sub(r"[^a-z0-9]+", "_", car.lower()).strip("_")

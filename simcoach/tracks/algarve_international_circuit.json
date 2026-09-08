@@ -9702,5 +9702,25 @@
       0.0089,
       0.009
     ]
+  },
+  "notes": {
+    "overview": "4.653 km, 15 turns, WEC layout. Extreme elevation change and blind crests make this a confidence/rhythm track rather than an aggression track -- several corners can't be seen on entry, so braking references matter more than what the driver can see. - [LMU] Overdriving an entry causes snap oversteer more readily here than on flatter tracks, because elevation change amplifies weight transfer. - [LMU] Brake release must be smooth over the many crests/compressions to avoid front lock-up. - [LMU] Hypercar guide frames the lap around aero trust and brake precision; crests reduce downforce right when braking load is highest. Braking too late into downhill zones, hesitating in blind corners, overusing kerbs at high speed, throttle too early while unloaded, fighting the car instead of letting it flow.",
+    "corners": {
+      "1": "Heavy downhill braking, compression right at the apex means braking earlier than it looks. Late apex; avoid the sausage kerb (very unstable) and don't trail-brake too far into the corner.",
+      "2": "Flat out, minimal input, set up left for T3.",
+      "3": "Strong braking, late apex with heavy trail-braking; avoid overdoing exit understeer since it costs the next corner.",
+      "4": "Fast uphill left, use full width; a light kerb touch can help rotate the car (but can also unsettle the rear).",
+      "5": "One of the slowest corners, heavy downhill-to-uphill braking in a straight line, gentle early rotation, no throttle until the car is nearly straight, only flat kerbs, let the car drift wide on exit.",
+      "6": "Flat out and blind -- stay smooth, sets up T7.",
+      "7": "Light brake/lift, entry speed sets exit stability, avoid aggressive kerb use, exit left for T8.",
+      "8": "Slow uphill signature corner; any mid-corner steering correction is heavily punished; throttle only once straight.",
+      "9": "Use all the track, prepare for T10 braking.",
+      "10-11": "Double-apex right-hander, brake earlier than it looks, straight-line braking to the first apex, then trail-brake to rotate for a late second apex; don't stay too tight after T10 or it closes off T11.",
+      "12": "Flat-out, long-radius, high front-tyre load from the downhill-to-uphill transition; smooth steering to cut drag.",
+      "13": "Strong uphill braking, deep trail-braking, kerb use is advised.",
+      "14": "Slow long right-hander (right per the Hypercar section), early apex, early progressive throttle, avoid the inside kerb, stay outside to set up T15.",
+      "15": "Very fast downhill right-hander with outside banking, small lift or flat depending on tyres/fuel, mid-corner apex used to rotate, clean exit is essential onto the front straight."
+    },
+    "source": "LMU wiki (lemansultimate.wiki.gg), CC-BY-SA, summarized 2026-08-29."
   }
 }
