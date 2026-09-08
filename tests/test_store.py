@@ -620,3 +620,46 @@ def test_session_position_arc_none_without_positions(tmp_path, synthetic_lap):
     s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     s.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "prac", "position": None}))
     assert s.session_position_arc("prac") is None
+
+
+def test_driver_learnings_crud_and_active_scope(tmp_path):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    gid = s.add_learning("brakes early into slow corners", status="active", source="manual")
+    s.add_learning("struggles at Monza T1", status="active", track="Monza", car="GT3", source="coach_tool")
+    pid = s.add_learning("maybe overdrives entry", status="pending", source="distill")
+    # active_learnings: general + matching tag, excludes pending and non-matching tag
+    active_monza = s.active_learnings(track="Monza", car="GT3")
+    texts = [l["text"] for l in active_monza]
+    assert "brakes early into slow corners" in texts          # general
+    assert "struggles at Monza T1" in texts                    # tag match
+    assert "maybe overdrives entry" not in texts               # pending excluded
+    active_spa = s.active_learnings(track="Spa", car="GT3")
+    assert "struggles at Monza T1" not in [l["text"] for l in active_spa]  # non-matching tag excluded
+    # status change + update
+    s.set_learning_status(pid, "active")
+    assert any(l["id"] == pid for l in s.active_learnings())
+    s.update_learning(gid, "brakes early, especially downhill")
+    updated = next(l for l in s.list_learnings() if l["id"] == gid)
+    assert updated["text"] == "brakes early, especially downhill"
+    # cap
+    assert len(s.active_learnings(limit=1)) == 1
+
+
+def test_driver_summary_roundtrip_and_default(tmp_path):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    assert s.get_driver_summary() == {"text": "", "status": "active"}
+    s.set_driver_summary("Smooth trail-braker, works on late apexes.", "active")
+    assert s.get_driver_summary()["text"].startswith("Smooth trail-braker")
+
+
+def test_schema_migrates_from_v10(tmp_path):
+    from simcoach.store import SCHEMA_VERSION, LapStore
+    db = str(tmp_path / "db.sqlite")
+    # simulate a v10 db: create the connection, set user_version=10, close
+    s = LapStore(db, str(tmp_path / "telem"))
+    s.conn.execute("PRAGMA user_version = 10"); s.conn.commit(); s.conn.close()
+    s2 = LapStore(db, str(tmp_path / "telem"))   # should migrate to 11 without error
+    assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    s2.add_learning("x", status="active", source="manual")  # new table usable

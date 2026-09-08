@@ -38,7 +38,7 @@ def _session_base(sid: str) -> str:
     """The (track, car, mode) base of a session id, dropping any ~<instance> suffix."""
     return sid.split(_SESSION_SEP, 1)[0]
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
@@ -59,6 +59,37 @@ CREATE TABLE IF NOT EXISTS coach_chat (
     question TEXT,
     answer TEXT,
     tool_calls TEXT
+);
+"""
+
+# Longitudinal driver profile: reviewed "memories" (driver_learnings), the
+# concise always-on summary the coach prompt carries (driver_summary, a single
+# row id=1), and a per-session setup snapshot (session_setups). Defined
+# separately so both fresh installs and the migration create identical tables.
+_PROFILE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS driver_learnings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    text TEXT NOT NULL,
+    status TEXT NOT NULL,
+    track TEXT,
+    car TEXT,
+    source TEXT,
+    session_id TEXT,
+    created_ts REAL NOT NULL,
+    updated_ts REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS driver_summary (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    text TEXT NOT NULL,
+    status TEXT NOT NULL,
+    updated_ts REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS session_setups (
+    session_id TEXT PRIMARY KEY,
+    track TEXT NOT NULL,
+    car TEXT NOT NULL,
+    setup_json TEXT NOT NULL,
+    updated_ts REAL NOT NULL
 );
 """
 
@@ -112,7 +143,7 @@ CREATE TABLE IF NOT EXISTS race_sessions (
     incidents TEXT,
     penalties TEXT
 );
-""" + _COACH_CHAT_SCHEMA
+""" + _COACH_CHAT_SCHEMA + _PROFILE_SCHEMA
 
 
 def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
@@ -218,6 +249,10 @@ class LapStore:
                 cols = [r[1] for r in self.conn.execute("PRAGMA table_info(laps)")]
                 if cols and "sector_bounds" not in cols:
                     _add_column(self.conn, "laps", "sector_bounds TEXT")
+            if current_version < 11:
+                # v10 -> v11: driver profile memories + maintained summary + per-session
+                # setup snapshots. Idempotent creates.
+                self.conn.executescript(_PROFILE_SCHEMA)
         if current_version != SCHEMA_VERSION:
             self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self.conn.commit()
@@ -772,3 +807,81 @@ class LapStore:
                 (limit,),
             ).fetchall()
             return [r[0] for r in rows]
+
+    _LEARNING_KEYS = ("id", "text", "status", "track", "car", "source", "session_id",
+                       "created_ts", "updated_ts")
+
+    def add_learning(self, text: str, *, status: str, track: str | None = None,
+                      car: str | None = None, source: str,
+                      session_id: str | None = None) -> int:
+        """Record a driver-profile memory (a distilled observation about the
+        driver). track/car NULL means it's a general learning, not tied to
+        a specific track/car combo."""
+        now = time.time()
+        with self._lock, self.conn:
+            cur = self.conn.execute(
+                "INSERT INTO driver_learnings (text, status, track, car, source, "
+                "session_id, created_ts, updated_ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (text, status, track, car, source, session_id, now, now),
+            )
+            return cur.lastrowid
+
+    def list_learnings(self, status: str | None = None) -> list[dict]:
+        with self._lock:
+            if status is not None:
+                rows = self.conn.execute(
+                    "SELECT id, text, status, track, car, source, session_id, "
+                    "created_ts, updated_ts FROM driver_learnings WHERE status = ? "
+                    "ORDER BY updated_ts DESC",
+                    (status,),
+                ).fetchall()
+            else:
+                rows = self.conn.execute(
+                    "SELECT id, text, status, track, car, source, session_id, "
+                    "created_ts, updated_ts FROM driver_learnings ORDER BY updated_ts DESC"
+                ).fetchall()
+            return [dict(zip(self._LEARNING_KEYS, r)) for r in rows]
+
+    def set_learning_status(self, learning_id: int, status: str) -> None:
+        with self._lock, self.conn:
+            self.conn.execute(
+                "UPDATE driver_learnings SET status = ?, updated_ts = ? WHERE id = ?",
+                (status, time.time(), learning_id),
+            )
+
+    def update_learning(self, learning_id: int, text: str) -> None:
+        with self._lock, self.conn:
+            self.conn.execute(
+                "UPDATE driver_learnings SET text = ?, updated_ts = ? WHERE id = ?",
+                (text, time.time(), learning_id),
+            )
+
+    def active_learnings(self, track: str | None = None, car: str | None = None,
+                          limit: int = 50) -> list[dict]:
+        """Active learnings for the coach prompt: general ones (track/car both
+        NULL) plus any tagged to match the given track/car, newest first."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT id, text, status, track, car, source, session_id, "
+                "created_ts, updated_ts FROM driver_learnings "
+                "WHERE status = 'active' AND (track IS NULL OR track = ?) "
+                "AND (car IS NULL OR car = ?) ORDER BY updated_ts DESC LIMIT ?",
+                (track, car, limit),
+            ).fetchall()
+            return [dict(zip(self._LEARNING_KEYS, r)) for r in rows]
+
+    def get_driver_summary(self) -> dict:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT text, status FROM driver_summary WHERE id = 1"
+            ).fetchone()
+        return {"text": row[0], "status": row[1]} if row else {"text": "", "status": "active"}
+
+    def set_driver_summary(self, text: str, status: str) -> None:
+        with self._lock, self.conn:
+            self.conn.execute(
+                "INSERT INTO driver_summary (id, text, status, updated_ts) "
+                "VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+                "text = excluded.text, status = excluded.status, updated_ts = excluded.updated_ts",
+                (text, status, time.time()),
+            )
