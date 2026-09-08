@@ -222,6 +222,28 @@ def test_reference_times_not_in_single_corner_view():
     assert "1:41.500" not in ctx.get_track_notes(corner="1")
 
 
+def test_record_driver_learning_writes_pending(tmp_path, synthetic_lap):
+    ctx, store, _ = _ctx(tmp_path, synthetic_lap)
+    out = ctx.record_driver_learning("consistently late on throttle")
+    assert "review" in out.lower()
+    rows = store.list_learnings(status="pending")
+    assert any(r["text"] == "consistently late on throttle" and r["source"] == "coach_tool"
+               for r in rows)
+    # not active -> not returned by get_driver_memories
+    assert "consistently late on throttle" not in ctx.get_driver_memories()
+
+
+def test_get_driver_memories_active_and_topic(tmp_path, synthetic_lap):
+    ctx, store, _ = _ctx(tmp_path, synthetic_lap)
+    store.add_learning("brakes early in the wet", status="active", source="manual")
+    store.add_learning("good tyre management", status="active", source="manual")
+    out = ctx.get_driver_memories()
+    assert "brakes early in the wet" in out and "good tyre management" in out
+    assert "tyre" in ctx.get_driver_memories(topic="tyre")
+    assert "brakes early" not in ctx.get_driver_memories(topic="tyre")   # topic filters
+    assert "no saved memories" in ctx.get_driver_memories(topic="nonexistent").lower()
+
+
 def test_get_corner_appends_authored_note():
     ctx = _ctx_with_notes({"corners": {"1": "brake earlier than it looks"}})
     note = ctx._corner_note("1")

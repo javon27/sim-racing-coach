@@ -129,6 +129,39 @@ TOOLS = [
                        "race/result/how it went overall.",
         "input_schema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "record_driver_learning",
+        "description": "Propose a durable observation about the driver (a cross-lap tendency "
+                       "worth remembering, not per-lap noise) for the driver's long-term profile. "
+                       "It is saved for the driver's review, not applied immediately — tell them "
+                       "so after calling this.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "The observation, in plain language."},
+                "track": {"type": "string",
+                          "description": "Optional: scope this to the current track only."},
+                "car": {"type": "string",
+                        "description": "Optional: scope this to the current car only."},
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "get_driver_memories",
+        "description": "The driver's reviewed, active long-term memories — tendencies and notes "
+                       "beyond what's already in the profile summary. Call this when tailoring "
+                       "advice would benefit from the driver's history.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "track": {"type": "string", "description": "Optional: scope to this track."},
+                "car": {"type": "string", "description": "Optional: scope to this car."},
+                "topic": {"type": "string",
+                          "description": "Optional: filter to memories mentioning this topic."},
+            },
+        },
+    },
 ]
 
 
@@ -465,6 +498,21 @@ class CoachContext:
             out += "\nLegal to change this tier: " + ", ".join(self.allowed_adjustments)
         return out
 
+    def record_driver_learning(self, text, track=None, car=None):
+        self.store.add_learning(text, status="pending", track=track or self.track,
+                                car=car or self.car, source="coach_tool",
+                                session_id=self.session_id)
+        return "Saved for your review."
+
+    def get_driver_memories(self, track=None, car=None, topic=None):
+        rows = self.store.active_learnings(track=track or self.track, car=car or self.car)
+        if topic:
+            topic = topic.lower()
+            rows = [r for r in rows if topic in r["text"].lower()]
+        if not rows:
+            return "No saved memories yet."
+        return "\n".join(f"- {r['text']}" for r in rows)
+
     def dispatch(self, name: str, args: dict) -> str:
         """Execute one tool call by name. Unknown tool -> error string."""
         args = args or {}
@@ -481,6 +529,10 @@ class CoachContext:
             "get_energy_report": lambda: self.get_energy_report(),
             "get_race_result": lambda: self.get_race_result(),
             "get_setup": lambda: self.get_setup(),
+            "record_driver_learning": lambda: self.record_driver_learning(
+                args.get("text", ""), args.get("track"), args.get("car")),
+            "get_driver_memories": lambda: self.get_driver_memories(
+                args.get("track"), args.get("car"), args.get("topic")),
         }.get(name)
         if handler is None:
             return f"error: unknown tool {name!r}"
