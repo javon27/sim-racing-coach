@@ -174,6 +174,7 @@
     buildRibbon,
     rebuildFromCapture,
     saveRibbon,
+    saveMapCloud,
     type TrackMap,
     type RibbonPreview,
   } from "./api";
@@ -336,6 +337,23 @@
       onClose?.();
     } catch {
       genErr = "Save failed.";
+    } finally {
+      saving = false;
+    }
+  }
+
+  // Persist the raw capture only -- keep this track's existing corner map, just
+  // record the point cloud so cross-section metrics (width/banking/elevation)
+  // can be extracted later. For a track you've already mapped (e.g. Laguna).
+  async function saveCloudOnly() {
+    saving = true;
+    genErr = null;
+    try {
+      await saveMapCloud();
+      resetGen();
+      onClose?.();
+    } catch {
+      genErr = "Couldn't save the capture — need at least two passes with elevation.";
     } finally {
       saving = false;
     }
@@ -808,12 +826,21 @@
             <p class="step">After your out lap, drive three full laps — one lap hugging the
               <strong>left</strong> boundary, one lightly <strong>weaving</strong> lap, and one lap
               hugging the <strong>right</strong> boundary — then click Build.</p>
-            <button
-              type="button"
-              class="primary"
-              onclick={buildGen}
-              disabled={capLaps.length < 1}
-            >Build</button>
+            <div class="tools">
+              <button
+                type="button"
+                class="primary"
+                onclick={buildGen}
+                disabled={capLaps.length < 1}
+              >Build</button>
+              {#if map}
+                <!-- This track already has a corner map: keep it, just save the
+                     capture for cross-section metrics (no geometry rebuild). -->
+                <button type="button" onclick={saveCloudOnly} disabled={saving || capLaps.length < 2}>
+                  {saving ? "Saving…" : "Save capture only"}
+                </button>
+              {/if}
+            </div>
           {/if}
           {#if capLaps.length}<p class="cap">{capLaps.length} lap(s) buffered</p>{/if}
         </div>

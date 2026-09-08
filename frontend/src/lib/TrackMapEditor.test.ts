@@ -10,6 +10,7 @@ import {
   buildRibbon,
   rebuildFromCapture,
   saveRibbon,
+  saveMapCloud,
 } from "./api";
 import TrackMapEditor, { nearestPathIndex, nearestDistIndex, layoutLabels, wrapLabel, localOutward, type LabelItem } from "./TrackMapEditor.svelte";
 
@@ -26,6 +27,7 @@ vi.mock("./api", async () => {
     buildRibbon: vi.fn(),
     rebuildFromCapture: vi.fn(),
     saveRibbon: vi.fn(),
+    saveMapCloud: vi.fn(),
   };
 });
 
@@ -331,6 +333,7 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     vi.mocked(buildRibbon).mockReset().mockResolvedValue(ribbonFix);
     vi.mocked(rebuildFromCapture).mockReset().mockResolvedValue(ribbonFix);
     vi.mocked(saveRibbon).mockReset().mockResolvedValue({ saved: true, slug: "monza" });
+    vi.mocked(saveMapCloud).mockReset().mockResolvedValue({ saved: true, slug: "monza" });
     cap.laps = [];
     vi.mocked(mapCaptureStatus).mockReset().mockImplementation(async () => ({ ...cap, laps: [...cap.laps] }));
   });
@@ -367,6 +370,30 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     await fireEvent.click(screen.getByText("Save ribbon"));
     await waitFor(() => expect(saveRibbon).toHaveBeenCalled());
     expect(onSaved).toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("'Save capture only' persists the cloud without rebuilding geometry", async () => {
+    const onSaved = vi.fn();
+    const onClose = vi.fn();
+    render(TrackMapEditor, { props: { lapId: 7, open: true, onSaved, onClose, pollMs: 5 } });
+    await screen.findByText("First"); // map (with corners) loaded
+
+    await fireEvent.click(screen.getByText("Generate map layout"));
+    await screen.findByText(/three full laps/i);
+
+    // Needs at least two passes; disabled until then.
+    const btn = await screen.findByText("Save capture only");
+    expect((btn as HTMLButtonElement).disabled).toBe(true);
+    cap.laps = [
+      { idx: 0, samples: 500, length: 5000 },
+      { idx: 1, samples: 480, length: 4800 },
+    ];
+    await waitFor(() => expect((screen.getByText("Save capture only") as HTMLButtonElement).disabled).toBe(false));
+
+    await fireEvent.click(screen.getByText("Save capture only"));
+    await waitFor(() => expect(saveMapCloud).toHaveBeenCalled());
+    expect(saveRibbon).not.toHaveBeenCalled(); // geometry untouched
     expect(onClose).toHaveBeenCalled();
   });
 

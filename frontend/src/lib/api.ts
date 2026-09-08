@@ -403,6 +403,16 @@ export function saveRibbon(): Promise<{ saved: boolean; slug: string }> {
   });
 }
 
+// Persist ONLY the raw capture (for cross-section metrics) without rebuilding
+// geometry -- for a track that already has a corner map you want to keep.
+export function saveMapCloud(): Promise<{ saved: boolean; slug: string }> {
+  return request<{ saved: boolean; slug: string }>("/mapcapture/save-cloud", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({}),
+  });
+}
+
 export function getChats(): Promise<ChatRow[]> {
   return request<ChatRow[]>("/chats");
 }

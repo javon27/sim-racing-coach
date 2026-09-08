@@ -26,6 +26,7 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 from .. import config, logging_setup, paths, secrets
 from ..analysis import analyze_lap
 from ..car_lookup import resolve_car
+from ..car_notes import load_car_notes, load_setup_concepts
 from ..coach_tools import CoachContext
 from ..corners import CornerMap, in_window
 from ..driver import DriverProfile
@@ -989,6 +990,27 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         _invalidate_canon(track)
         return {"saved": True, "slug": track_slug(track)}
 
+    @app.post("/mapcapture/save-cloud")
+    def mapcapture_save_cloud(body: dict = Body(...)):
+        # Persist ONLY the raw point cloud from the active buffer -- no ribbon
+        # rebuild, no track-map write. Lets a track that already has a
+        # driver-placed corner map (e.g. Laguna) gain a capture for later
+        # cross-section extraction (width/banking/elevation) WITHOUT replacing
+        # its geometry. See docs/superpowers/specs/2026-09-08-per-corner-
+        # geometry-metrics-design.md.
+        buf = app.state.map_buffer
+        if len(buf) < 2:
+            raise HTTPException(422, "need at least 2 passes across the width")
+        track = buf[0].track
+        raw = [{c: r.channels[c] for c in _POS_CHANNELS if c in r.channels} for r in buf]
+        if not any(all(c in lap for c in _POS_CHANNELS) for lap in raw):
+            raise HTTPException(422, "mapping laps lack position telemetry")
+        _save_cloud(_capture_path(track), raw)
+        app.state.mapping = False
+        app.state.map_buffer = []
+        app.state.last_ribbon = None
+        return {"saved": True, "slug": track_slug(track)}
+
     @app.post("/mapcapture/rebuild")
     def mapcapture_rebuild(body: dict = Body(...)):
         # Re-reconstruct from a SAVED raw cloud -- no active capture needed. Resolve
@@ -1161,7 +1183,10 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                                units=cfg.get("units", "metric"),
                                setup=setup, track=track, car=car, on_track=on_track,
                                allowed_adjustments=(legal_adjustments(setup) if setup else None),
-                               session_id=eff_session_id)
+                               session_id=eff_session_id,
+                               car_notes=load_car_notes(
+                                   car, user_dir=str(Path(store.data_dir) / "cars")),
+                               setup_concepts=load_setup_concepts())
             car = ctx.car or "car"
 
             # Concise always-on profile tier: static prefs from settings + the active
