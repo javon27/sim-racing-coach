@@ -266,19 +266,36 @@ class LapStore:
         if not base or not _is_deterministic_sid(base):
             return base
         base = _session_base(base)
-        # Newest lap in ANY instance of this base (exact base, or base + '#...').
+        # Newest ACTIVITY in any instance of this base (exact base, or base + '~...').
+        # Activity is laps OR coach chats: a pre-lap "garage" chat stamped with a fresh
+        # instance must be joined by the laps that follow (within the gap), so the chat
+        # stays linked to the session and resumable — else the first lap would mint a
+        # second instance minutes later and orphan the chat.
+        match = ("substr(session_id, 1, ?) = ? "
+                 "AND (length(session_id) = ? OR substr(session_id, ?, 1) = ?)")
+        args = (len(base), base, len(base), len(base) + 1, _SESSION_SEP)
         row = self.conn.execute(
-            "SELECT session_id, ts FROM laps "
-            "WHERE substr(session_id, 1, ?) = ? "
-            "  AND (length(session_id) = ? OR substr(session_id, ?, 1) = ?) "
-            "ORDER BY ts DESC LIMIT 1",
-            (len(base), base, len(base), len(base) + 1, _SESSION_SEP),
+            f"SELECT session_id, ts FROM ("
+            f"  SELECT session_id, ts FROM laps WHERE {match} "
+            f"  UNION ALL "
+            f"  SELECT session_id, ts FROM coach_chat WHERE session_id IS NOT NULL AND {match} "
+            f") ORDER BY ts DESC LIMIT 1",
+            args + args,
         ).fetchone()
         if row is None:
             return base  # first ever for this combo
         if abs(ts - row[1]) <= _SESSION_GAP_S:
             return row[0]  # same weekend (or a sidecar restart) -> continue it
         return f"{base}{_SESSION_SEP}{time.strftime('%Y%m%dT%H%M', time.localtime(ts))}"
+
+    def resolve_current_instance(self, base: str, ts: float | None = None) -> str:
+        """The current session-instance id for a deterministic base
+        (`track--car--online|offline`), for stamping activity that isn't a lap —
+        e.g. a coach chat started in the garage before any lap is captured. Reuses a
+        recent instance (lap or chat within the gap) so the upcoming laps share it,
+        else mints a fresh one. Non-deterministic bases pass through unchanged."""
+        with self._lock:
+            return self._resolve_session_instance(base, ts if ts is not None else time.time())
 
     def save(self, record: LapRecord, metrics: list | None = None) -> int:
         telemetry_path = None
@@ -317,6 +334,10 @@ class LapStore:
                             for m in metrics
                         ],
                     )
+            # Reflect the resolved instance back onto the record so live consumers
+            # (/status, lap list, coach auto-anchor) that read it point at THIS
+            # session, not the deterministic base (which is the oldest weekend).
+            record.session_id = sid
             return lap_id
         except Exception:
             if telemetry_path and os.path.exists(telemetry_path):

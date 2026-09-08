@@ -47,6 +47,57 @@ def test_save_splits_weekends_by_time_gap(tmp_path, synthetic_lap):
     assert sid(d) == sid(c)  # a restart minutes later rejoins the same weekend
 
 
+def test_save_writes_resolved_session_id_back_to_record(tmp_path, synthetic_lap):
+    """save() must reflect the resolved session INSTANCE back onto the in-memory
+    record. Live consumers (/status, the lap list, coach auto-anchor) read
+    app_state.latest["record"].session_id; if that stays the deterministic base
+    (`track--car--online`), it resolves to the OLDEST/days-ago weekend (which keeps
+    the clean base id) instead of today's freshly-minted instance."""
+    from simcoach.store import LapStore
+
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    base = "laguna--bmw--online"
+    t0 = 1_000_000.0
+    # A days-ago session already lives under the clean base id.
+    s.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": base, "timestamp": t0}))
+    # Today (>6h later): save() mints a fresh instance for the new lap.
+    today = LapRecord(**{**synthetic_lap.__dict__, "session_id": base, "timestamp": t0 + 7 * 3600})
+    lap_id = s.save(today)
+
+    stored = s.load(lap_id).session_id
+    assert stored.startswith(base + "~")     # stored under the NEW instance
+    assert today.session_id == stored        # the fix: record now reflects the instance
+    # A live view keyed on the record's session_id sees TODAY's lap, not the days-ago one.
+    assert s.session_lap_ids(today.session_id) == [lap_id]
+
+
+def test_garage_chat_and_following_laps_share_one_instance(tmp_path, synthetic_lap):
+    """A coach chat started in the garage (no lap yet) is stamped with the resolved
+    session instance; the laps driven minutes later must JOIN that same instance so
+    the chat stays linked to the session and resumable — not orphaned under a second
+    instance minted from the (slightly later) lap timestamp."""
+    from simcoach.store import LapStore
+
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    base = "laguna--bmw--online"
+    t0 = 1_000_000.0
+    # A days-ago session already lives under the clean base id.
+    s.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": base, "timestamp": t0}))
+
+    # Today (>6h later): a garage question resolves a FRESH instance and is saved under it.
+    tg = t0 + 7 * 3600
+    inst = s.resolve_current_instance(base, ts=tg)
+    assert inst.startswith(base + "~") and inst != base
+    s.save_chat("chat-1", inst, "Laguna", "BMW", None, "any prep tips?", "sure", ts=tg)
+
+    # The first lap, minutes later, joins the SAME instance (the chat counts as activity).
+    lap = LapRecord(**{**synthetic_lap.__dict__, "session_id": base, "timestamp": tg + 300})
+    s.save(lap)
+    assert lap.session_id == inst
+    # …so the garage chat is reachable from the session (Sessions -> click -> chat).
+    assert s.chats_for_session(inst)[0]["chat_id"] == "chat-1"
+
+
 def test_split_merged_sessions_migration(tmp_path):
     from simcoach.store import LapStore
     s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))

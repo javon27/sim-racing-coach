@@ -482,6 +482,27 @@ def read_live_status() -> dict | None:
     return {"track": track, "car": car, "state": state}
 
 
+def read_live_session_id() -> str | None:
+    """The deterministic base session id (`track--car--online|offline`) for the
+    CURRENT live session, or None if LMU isn't running / no player. Identical to the
+    id smm assigns captured laps (`session_id_for`), so a coach chat started before
+    any lap (in the garage) can be stamped with the session it belongs to."""
+    try:
+        telem = read_consistent(TELEMETRY_CANDIDATES[0], rF2Telemetry)
+        scoring = read_consistent(SCORING_CANDIDATES[0], rF2Scoring)
+    except Exception:
+        return None
+    player = _find_player(scoring)
+    vt = _find_telem_by_id(telem, player.mID) if player is not None else None
+    if vt is None:
+        return None
+    track = vt.mTrackName.decode(errors="replace").strip()
+    car = vt.mVehicleName.decode(errors="replace").strip()
+    if not (track and car):
+        return None
+    return session_id_for(track, car, _is_online(scoring))
+
+
 class LmuSource:
     """TelemetrySource backed by LMU's live shared memory.
 
