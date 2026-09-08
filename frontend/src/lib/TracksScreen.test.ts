@@ -8,6 +8,7 @@ afterEach(cleanup);
 vi.spyOn(api, "listTracks").mockResolvedValue([
   { slug: "algarve_international_circuit", name: "Algarve", has_map: true, has_notes: false, user_edited: false },
 ]);
+vi.spyOn(api, "getTrackNotes").mockResolvedValue({ overview: "", corners: {}, reference_times: {}, source: "" });
 
 test("lists tracks with coverage badges", async () => {
   render(TracksScreen);
@@ -23,6 +24,18 @@ test("generate draft fills the notes editor", async () => {
   await fireEvent.click(await screen.findByText("Algarve"));
   await fireEvent.click(screen.getByRole("button", { name: /generate draft/i }));
   expect(await screen.findByDisplayValue(/rhythm track/)).toBeTruthy();
+});
+
+test("selecting a track pre-fills the editor from its existing notes", async () => {
+  vi.spyOn(api, "getTrackNotes").mockResolvedValue({
+    overview: "long straight into a heavy braking chicane",
+    corners: { "1": "brake late" },
+    reference_times: { GT3: "1:32.500" },
+    source: "driver notes",
+  });
+  render(TracksScreen);
+  await fireEvent.click(await screen.findByText("Algarve"));
+  expect(await screen.findByDisplayValue(/long straight into a heavy braking chicane/)).toBeTruthy();
 });
 
 test("save sends the edited notes for the selected track", async () => {

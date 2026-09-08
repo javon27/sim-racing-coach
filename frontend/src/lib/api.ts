@@ -474,3 +474,7 @@ export function saveNotes(slug: string, track: string, notes: TrackNotes): Promi
     body: JSON.stringify({ track, notes }),
   });
 }
+
+export function getTrackNotes(slug: string): Promise<TrackNotes> {
+  return request<TrackNotes>(`/tracks/${slug}/notes`);
+}

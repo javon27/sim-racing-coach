@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { listTracks, draftNotes, saveNotes, type TrackRow, type TrackNotes } from "./api";
+  import { listTracks, draftNotes, saveNotes, getTrackNotes, type TrackRow, type TrackNotes } from "./api";
   import TrackMapEditor from "./TrackMapEditor.svelte";
 
   let tracks: TrackRow[] = $state([]);
@@ -21,14 +21,24 @@
       .catch(() => (tracks = []));
   });
 
-  function selectTrack(t: TrackRow) {
+  async function selectTrack(t: TrackRow) {
     selected = t;
-    notes.overview = "";
-    notes.corners = {};
-    notes.reference_times = {};
-    notes.source = "";
     guides = "";
     saveStatus = null;
+    // Pre-fill from the track's existing (migrated) notes so Save can't clobber
+    // them with blanks -- fall back to empty fields if the fetch fails.
+    try {
+      const loaded = await getTrackNotes(t.slug);
+      notes.overview = loaded.overview ?? "";
+      notes.corners = { ...(loaded.corners ?? {}) };
+      notes.reference_times = { ...(loaded.reference_times ?? {}) };
+      notes.source = loaded.source ?? "";
+    } catch {
+      notes.overview = "";
+      notes.corners = {};
+      notes.reference_times = {};
+      notes.source = "";
+    }
   }
 
   function wordCount(s: string): number {
