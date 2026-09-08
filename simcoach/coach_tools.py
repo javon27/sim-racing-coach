@@ -101,6 +101,19 @@ TOOLS = [
         "input_schema": {"type": "object", "properties": {}},
     },
     {
+        "name": "get_track_notes",
+        "description": "Authored track knowledge (character, cues, hazards) for the current "
+                       "track: a short overview plus per-corner notes, as OWNED data. Call this "
+                       "before describing how a track or corner drives. Pass `corner` (number or "
+                       "label) to get just that corner's note. Works with NO laps captured. "
+                       "Never invent track character from memory — quote these notes.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"corner": {"type": "string",
+                                      "description": "Optional corner number/label to scope to."}},
+        },
+    },
+    {
         "name": "get_energy_report",
         "description": "Fuel and virtual-energy usage for the latest lap: per-lap burn, amount "
                        "remaining, and roughly how many laps that lasts — for fuel/energy saving "
@@ -319,7 +332,33 @@ class CoachContext:
         if cm is None:
             names = ", ".join(f"T{c.label or c.corner_no} {c.name}" for c in analysis.corners)
             return f"No corner matching {corner!r}. Corners this track: {names}"
-        return format_corner_line(cm, self.units)
+        line = format_corner_line(cm, self.units)
+        note = self._corner_note(cm.label or cm.corner_no)
+        return f"{line}\nAuthored note: {note}" if note else line
+
+    def _corner_note(self, label) -> str | None:
+        """Authored note for one corner label from the merged map, or None."""
+        notes = getattr(self.cmap, "notes", None) or {}
+        by_corner = notes.get("corners") or {}
+        return by_corner.get(str(label))
+
+    def get_track_notes(self, corner=None):
+        notes = getattr(self.cmap, "notes", None) or {}
+        overview = (notes.get("overview") or "").strip()
+        by_corner = notes.get("corners") or {}
+        if not overview and not by_corner:
+            return f"No authored notes for {self.track or 'this track'} yet."
+        lines = []
+        if overview:
+            lines.append(overview)
+        if corner is not None:
+            note = self._corner_note(corner)
+            lines.append(f"T{corner}: {note}" if note else f"No authored note for corner {corner}.")
+        else:
+            for label, text in by_corner.items():
+                lines.append(f"T{label}: {text}")
+        head = f"Authored notes for {self.track or 'this track'}:\n" if overview or by_corner else ""
+        return head + "\n".join(lines)
 
     def get_tire_report(self):
         analysis = self._latest_analysis()
@@ -417,6 +456,7 @@ class CoachContext:
             "get_corner": lambda: self.get_corner(args.get("corner", ""), args.get("which", "latest")),
             "get_tire_report": lambda: self.get_tire_report(),
             "get_wheel_report": lambda: self.get_wheel_report(),
+            "get_track_notes": lambda: self.get_track_notes(args.get("corner")),
             "get_energy_report": lambda: self.get_energy_report(),
             "get_race_result": lambda: self.get_race_result(),
             "get_setup": lambda: self.get_setup(),

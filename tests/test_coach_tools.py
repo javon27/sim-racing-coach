@@ -172,6 +172,50 @@ def test_list_track_corners_works_without_a_lap(tmp_path):
     assert "Corner map: yes" in ctx.get_session_status()
 
 
+def _ctx_with_notes(notes):
+    from simcoach.corners import Corner, CornerMap
+    cm = CornerMap([Corner(number=1, name="Primeira", direction="left",
+                           apex_dist=50.0, start_dist=10.0, end_dist=90.0, label="1")],
+                   notes=notes)
+    return CoachContext(store=None, cmap=cm, track="Algarve", car="GT3")
+
+
+def test_get_track_notes_all():
+    ctx = _ctx_with_notes({"overview": "rhythm track",
+                           "corners": {"1": "brake earlier than it looks"}})
+    out = ctx.get_track_notes()
+    assert "rhythm track" in out
+    assert "brake earlier" in out
+    assert "T1" in out
+
+
+def test_get_track_notes_single_corner():
+    ctx = _ctx_with_notes({"overview": "rhythm track",
+                           "corners": {"1": "brake earlier", "2": "flat out"}})
+    out = ctx.get_track_notes(corner="1")
+    assert "brake earlier" in out
+    assert "flat out" not in out          # other corners excluded
+
+
+def test_get_track_notes_empty():
+    ctx = _ctx_with_notes({})
+    assert "no authored notes" in ctx.get_track_notes().lower()
+
+
+def test_get_corner_appends_authored_note():
+    ctx = _ctx_with_notes({"corners": {"1": "brake earlier than it looks"}})
+    note = ctx._corner_note("1")
+    assert note == "brake earlier than it looks"
+    assert ctx._corner_note("99") is None
+
+
+def test_get_corner_output_includes_authored_note(tmp_path, synthetic_lap):
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    ctx.cmap.notes = {"corners": {"1": "brake earlier than it looks"}}
+    out = ctx.get_corner("1")
+    assert "Authored note: brake earlier than it looks" in out
+
+
 def test_dispatch_routes_and_handles_unknown(tmp_path, synthetic_lap):
     ctx, _, _ = _ctx(tmp_path, synthetic_lap)
     assert ctx.dispatch("get_corner", {"corner": "1"}).startswith("T1 ")
