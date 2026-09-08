@@ -521,15 +521,15 @@ export function putProfilePrefs(prefs: DriverPrefs): Promise<DriverProfileData> 
   return request<DriverProfileData>("/profile", {
     method: "PUT",
     headers: JSON_HEADERS,
-    body: JSON.stringify({ driver: prefs }),
+    body: JSON.stringify({ prefs }),
   });
 }
 
 export function putProfileSummary(
   text: string,
   status: "pending" | "active",
-): Promise<DriverProfileData> {
-  return request<DriverProfileData>("/profile/summary", {
+): Promise<DriverSummary> {
+  return request<DriverSummary>("/profile/summary", {
     method: "PUT",
     headers: JSON_HEADERS,
     body: JSON.stringify({ text, status }),
@@ -542,8 +542,16 @@ export interface AddMemoryInput {
   car?: string | null;
 }
 
-export function addMemory(m: AddMemoryInput): Promise<DriverProfileData> {
-  return request<DriverProfileData>("/profile/memories", {
+export interface AddMemoryResponse {
+  id: number;
+  text: string;
+  status: "active" | "pending";
+  track: string | null;
+  car: string | null;
+}
+
+export function addMemory(m: AddMemoryInput): Promise<AddMemoryResponse> {
+  return request<AddMemoryResponse>("/profile/memories", {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify(m),
@@ -558,8 +566,8 @@ export interface UpdateMemoryPatch {
 export function updateMemory(
   id: number,
   patch: UpdateMemoryPatch,
-): Promise<DriverProfileData> {
-  return request<DriverProfileData>(`/profile/memories/${id}`, {
+): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/profile/memories/${id}`, {
     method: "PUT",
     headers: JSON_HEADERS,
     body: JSON.stringify(patch),
@@ -567,15 +575,14 @@ export function updateMemory(
 }
 
 export interface DistillProposals {
-  proposals: {
-    memories: Array<{
-      text: string;
-      track?: string | null;
-      car?: string | null;
-      source: "distill";
-    }>;
-    summary: string;
-  };
+  memories: Array<{
+    id: number;
+    text: string;
+    status: "pending";
+    track: string | null;
+    car: string | null;
+  }>;
+  summary: string;
 }
 
 export function distillProfile(sessionId: string): Promise<DistillProposals> {
