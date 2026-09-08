@@ -202,6 +202,26 @@ def test_get_track_notes_empty():
     assert "no authored notes" in ctx.get_track_notes().lower()
 
 
+def test_get_track_notes_includes_reference_times():
+    ctx = _ctx_with_notes({"overview": "rhythm track", "corners": {},
+                           "reference_times": {"LMGT3": "1:41.500", "Hypercar": "1:35.200"}})
+    out = ctx.get_track_notes()
+    assert "1:41.500" in out and "LMGT3" in out
+    assert "1:35.200" in out and "Hypercar" in out
+    assert "reference" in out.lower()
+
+
+def test_get_track_notes_no_reference_times_omits_line():
+    ctx = _ctx_with_notes({"overview": "rhythm track", "corners": {"1": "brake late"}})
+    assert "reference" not in ctx.get_track_notes().lower()
+
+
+def test_reference_times_not_in_single_corner_view():
+    ctx = _ctx_with_notes({"overview": "x", "corners": {"1": "brake late"},
+                           "reference_times": {"LMGT3": "1:41.500"}})
+    assert "1:41.500" not in ctx.get_track_notes(corner="1")
+
+
 def test_get_corner_appends_authored_note():
     ctx = _ctx_with_notes({"corners": {"1": "brake earlier than it looks"}})
     note = ctx._corner_note("1")

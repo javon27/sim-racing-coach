@@ -357,6 +357,10 @@ class CoachContext:
         else:
             for label, text in by_corner.items():
                 lines.append(f"T{label}: {text}")
+            refs = notes.get("reference_times") or {}
+            if refs:
+                pairs = "; ".join(f"{cls} {t}" for cls, t in refs.items())
+                lines.append(f"Reference lap times (community benchmark): {pairs}")
         head = f"Authored notes for {self.track or 'this track'}:\n" if overview or by_corner else ""
         return head + "\n".join(lines)
 
