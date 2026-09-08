@@ -164,6 +164,16 @@ describe("Coach screen assembly", () => {
     expect(await screen.findByText("Display")).toBeTruthy();
   });
 
+  it("switches to the Tracks screen when the Tracks nav item is clicked", async () => {
+    const { container } = render(App);
+    await screen.findByText("Pit Wall"); // shell mounts past the splash
+    const nav = within(container.querySelector(".nav") as HTMLElement);
+
+    await fireEvent.click(nav.getByText("Tracks"));
+
+    expect(await screen.findByRole("heading", { name: "Tracks" })).toBeTruthy();
+  });
+
   it("deep-links a clicked session row into the Coach screen and loads that session's laps", async () => {
     const { container } = render(App);
     await screen.findByText("Pit Wall"); // shell mounts past the splash

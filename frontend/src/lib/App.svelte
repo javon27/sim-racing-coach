@@ -10,11 +10,12 @@
   import TrackMapPane from "./TrackMapPane.svelte";
   import SessionsScreen from "./SessionsScreen.svelte";
   import SettingsScreen from "./SettingsScreen.svelte";
+  import TracksScreen from "./TracksScreen.svelte";
   import PitWall from "./PitWall.svelte";
   import NestorMark from "./NestorMark.svelte";
   import Splash from "./Splash.svelte";
 
-  type Screen = "coach" | "sessions" | "pitwall" | "settings";
+  type Screen = "coach" | "sessions" | "pitwall" | "tracks" | "settings";
 
   let booted = $state(false);
   let railOpen = $state(false); // narrow-width laps drawer
@@ -146,6 +147,15 @@
       <span class="lbl">Pit Wall</span>
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2.5 7 5-14 2.5 7H21"/></svg>
     </button>
+    <button
+      type="button"
+      class="nav-item"
+      class:on={screen === "tracks"}
+      onclick={() => (screen = "tracks")}
+    >
+      <span class="lbl">Tracks</span>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18l7-4 4 2 7-4V3l-7 4-4-2-7 4z"/><path d="M10 5v12M17 7v12"/></svg>
+    </button>
     <div class="sp"></div>
     <button type="button" class="nav-item" onclick={toggleTheme}>
       <span class="lbl">Theme · {THEME_LABELS[theme]}</span>
@@ -224,6 +234,9 @@
     </section>
     <section class="screen" class:on={screen === "pitwall"}>
       {#if screen === "pitwall"}<PitWall />{/if}
+    </section>
+    <section class="screen" class:on={screen === "tracks"}>
+      {#if screen === "tracks"}<TracksScreen />{/if}
     </section>
     <section class="screen" class:on={screen === "settings"}>
       <SettingsScreen />
