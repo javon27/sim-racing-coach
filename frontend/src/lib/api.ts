@@ -439,3 +439,38 @@ export interface IngestResult {
 export function ingestHistory(): Promise<IngestResult> {
   return request<IngestResult>("/ingest", { method: "POST" });
 }
+
+export interface TrackRow {
+  slug: string;
+  name: string;
+  has_map: boolean;
+  has_notes: boolean;
+  user_edited: boolean;
+}
+
+export interface TrackNotes {
+  overview: string;
+  corners: Record<string, string>;
+  reference_times: Record<string, string>;
+  source: string;
+}
+
+export function listTracks(): Promise<TrackRow[]> {
+  return request<TrackRow[]>("/tracks");
+}
+
+export function draftNotes(slug: string, track: string, guides: string): Promise<{ draft: TrackNotes }> {
+  return request<{ draft: TrackNotes }>(`/tracks/${slug}/draft-notes`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ track, guides }),
+  });
+}
+
+export function saveNotes(slug: string, track: string, notes: TrackNotes): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/tracks/${slug}/notes`, {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ track, notes }),
+  });
+}
