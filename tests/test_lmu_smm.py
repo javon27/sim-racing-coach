@@ -169,6 +169,44 @@ def test_sample_from_telem_maps_energy_channels():
     assert abs(sample["battery_charge"] - 0.42) < 1e-9
 
 
+def test_sample_from_telem_maps_lap_time_channels():
+    """Issue #38 prerequisite: capture the in-lap time axis. mElapsedTime and
+    mLapStartET are declared on TelemInfoV01 but were never read, so every lap
+    driven so far is permanently missing a time channel and delta-t has to be
+    integrated as ds/(v/3.6) off the 5 Hz scoring lap_distance.
+
+    time_into_lap is derived per-sample rather than at read time so it stays
+    correct across the lap seam, where mLapStartET jumps mid-array."""
+    t = roundtrip(make_telem(mElapsedTime=1234.5, mLapStartET=1200.0))
+    s = sample_from_telem(t, lap_dist=0.0)
+    assert s["elapsed_time"] == 1234.5
+    assert s["lap_start_et"] == 1200.0
+    assert abs(s["time_into_lap"] - 34.5) < 1e-9
+
+
+def test_lap_time_channels_survive_a_store_round_trip(tmp_path):
+    """The new channels are purely additive: store.save/load pass channels through
+    generically via npz, so no schema migration is needed -- prove it end to end
+    from sample_from_telem output rather than a hand-built dict."""
+    from simcoach.model_types import LapRecord
+    from simcoach.store import LapStore
+
+    samples = [
+        sample_from_telem(roundtrip(make_telem(mElapsedTime=100.0 + i * 0.02,
+                                               mLapStartET=100.0)), lap_dist=i * 1.0)
+        for i in range(5)
+    ]
+    channels = {k: [s[k] for s in samples] for k in samples[0]}
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    lap_id = store.save(LapRecord("lmu", "t", "c", 92.5, True, 0.0, channels))
+    back = store.load(lap_id).channels
+
+    assert list(back["time_into_lap"]) == pytest.approx([0.0, 0.02, 0.04, 0.06, 0.08])
+    assert list(back["elapsed_time"]) == pytest.approx([100.0 + i * 0.02 for i in range(5)])
+    assert list(back["lap_start_et"]) == pytest.approx([100.0] * 5)
+    assert list(back["speed"]) == pytest.approx([198.0] * 5)  # existing channels intact
+
+
 def test_sample_from_telem_speed_is_vector_magnitude():
     t = roundtrip(make_telem())
     t.mLocalVel.x, t.mLocalVel.y, t.mLocalVel.z = 3.0, 4.0, 0.0

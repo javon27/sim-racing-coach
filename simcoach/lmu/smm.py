@@ -219,6 +219,8 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
       lat_g = mLocalAccel.x / 9.80665 (x is lateral in local vehicle coords);
         long_g = mLocalAccel.z / 9.80665 (z is longitudinal; braking/accel).
       tire/brake temps: Kelvin -> Celsius (-273.15).
+      elapsed_time / lap_start_et: mElapsedTime / mLapStartET, seconds, as-is;
+        time_into_lap = their difference (seconds into the current lap).
       per-wheel [fl,fr,rl,rr]: wheel_rot (mRotation, rad/s -- lockup ~ 0 while
         moving), brake_temp, brake_press (mBrakePressure), grip (mGripFract,
         0..1), tire_load (mTireLoad, N), tire_press (mPressure, kPa), tire_wear
@@ -237,6 +239,18 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
         "lat_g": telem.mLocalAccel.x / 9.80665,
         "long_g": telem.mLocalAccel.z / 9.80665,
         "lap_distance": lap_dist,
+        # In-lap time axis (issue #38). lap_distance comes off the SCORING struct
+        # and only advances at ~5 Hz, so integrating delta-t as ds/(v/3.6) is
+        # coarse -- measured net-delta error median 0.206 s, max 1.212 s. These
+        # two fields are declared on TelemInfoV01, the same struct as mLocalVel,
+        # so they are EXPECTED to be per-poll fresh at ~50 Hz -- INFERRED FROM
+        # STRUCT MEMBERSHIP, NOT MEASURED (they appear in no capture yet). The
+        # first rig lap after this lands confirms or refutes it.
+        # time_into_lap is derived here, per sample, rather than at read time so
+        # it stays correct across the lap seam where mLapStartET jumps mid-array.
+        "elapsed_time": telem.mElapsedTime,
+        "lap_start_et": telem.mLapStartET,
+        "time_into_lap": telem.mElapsedTime - telem.mLapStartET,
         # World position for the track-map outline. x/z = horizontal plane;
         # y = elevation (banking, hills) for elevation-aware maps / 3D replay.
         # Appended raw even if non-finite -- the map builder filters.
