@@ -1,3 +1,4 @@
+import glob
 import itertools
 import json
 
@@ -244,6 +245,46 @@ def test_laguna_corner_windows_no_longer_overlap():
         # the apex itself must still be inside the (possibly clamped) window
         assert prev.start_dist <= prev.apex_dist <= prev.end_dist
         assert cur.start_dist <= cur.apex_dist <= cur.end_dist
+
+
+def _signed_circular_gap(prev_end: float, next_start: float, length: float) -> float:
+    """Gap from prev's end to next's start, going the short way around the lap,
+    kept in (-length/2, length/2] so a genuine overlap reads as a small negative
+    number instead of wrapping around into a huge, falsely-passing 'gap'."""
+    return ((next_start - prev_end + length / 2) % length) - length / 2
+
+
+def test_shipped_track_json_on_disk_has_no_overlapping_windows():
+    """#30: every existing test reaches simcoach/tracks/*.json through
+    CornerMap.load, which re-applies clamp_corner_windows on load and so masks
+    any regression baked into the file itself (test_laguna_corner_windows_no_
+    longer_overlap and test_all_shipped_track_files_still_load both pass on the
+    file whether or not the on-disk windows are actually clamped). This reads
+    the RAW JSON -- no CornerMap involved -- so it checks what's actually on
+    disk, for every shipped map, including the S/F seam pair (circularly)."""
+    for f in glob.glob("simcoach/tracks/*.json"):
+        with open(f) as fh:
+            data = json.load(fh)
+        length = data.get("length") or data.get("length_m")
+        if not length:
+            continue  # e.g. test_track.json: no length means no circular clamp
+        length = float(length)
+        corners = data["corners"]
+        by_apex = sorted(corners, key=lambda c: c["apex_dist"])
+        n = len(by_apex)
+        for k in range(n):
+            cur, nxt = by_apex[k], by_apex[(k + 1) % n]
+            gap = _signed_circular_gap(cur["end_dist"], nxt["start_dist"], length)
+            assert gap >= -1e-6, (
+                f"{f}: corner {cur['number']} end ({cur['end_dist']}) overlaps "
+                f"corner {nxt['number']} start ({nxt['start_dist']}) by {-gap:.1f} m"
+            )
+        for c in corners:
+            s, e, a = c["start_dist"], c["end_dist"], c["apex_dist"]
+            if s <= e:
+                assert s <= a <= e, f"{f}: corner {c['number']} apex {a} outside [{s}, {e}]"
+            else:  # window wraps the S/F seam
+                assert a >= s or a <= e, f"{f}: corner {c['number']} apex {a} outside wrapped [{s}, {e}]"
 
 
 def test_clamp_preserves_seam_wrap_corner():
