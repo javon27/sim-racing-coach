@@ -196,13 +196,29 @@ fn recenter_if_offscreen(window: &tauri::Window) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                // Visibility is OURS, not the plugin's. The plugin restores state from
+                // its on_window_ready hook -- i.e. at window-creation time, long before
+                // the webview has painted -- and restore_state() ends in
+                // `if flags.contains(VISIBLE) && should_show { show(); set_focus(); }`.
+                // With VISIBLE in the flags that reveal wins the race, the window is
+                // already up by the time on_page_load runs, and "visible": false buys us
+                // nothing but the geometry half of the fix. Dropping the one flag leaves
+                // the plugin restoring/persisting position+size+maximized exactly as
+                // before, minus the show() -- so on_page_load below is the sole reveal.
+                .with_state_flags(StateFlags::all() - StateFlags::VISIBLE)
+                .build(),
+        )
         // The main window is created hidden (tauri.conf.json "visible": false) so
         // restoring its saved geometry + the off-screen recovery below (commit
         // 40c18b1) happen before anything is shown -- otherwise it flashes blank
         // on the primary monitor before jumping to the saved (secondary) one.
         // This fires once the webview has actually painted (PageLoadEvent::Finished),
-        // not before, then reveals the window already placed correctly.
+        // not before, then reveals the window already placed correctly. The show() is
+        // unconditional and PageLoadEvent::Finished is wired to WebView2's
+        // NavigationCompleted without checking IsSuccess, so a failed/blank navigation
+        // still reveals the window -- it can never get stuck hidden.
         .on_page_load(|webview, payload| {
             if payload.event() != tauri::webview::PageLoadEvent::Finished {
                 return;
