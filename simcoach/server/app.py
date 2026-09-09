@@ -471,10 +471,12 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # BUT a browser does not attach Origin to a no-cors GET -- <img>,
         # <script>, <link>, <iframe>, and top-level navigation all send none --
         # so this guard does NOT stop a same-window `<img src="/setup">`-style
-        # read/write; _bad_origin sees no Origin and allows it through by design
-        # (a MISSING Origin must stay allowed so native/Tauri and non-browser
-        # clients work). That GET /setup writes (save_session_setup) is closed
-        # by not writing on a GET, tracked as #51 -- not by this guard.
+        # read; _bad_origin sees no Origin and allows it through by design (a
+        # MISSING Origin must stay allowed so native/Tauri and non-browser
+        # clients work). That used to matter because GET /setup wrote to the DB
+        # (save_session_setup); fixed by #51 -- persistence now lives behind
+        # POST /setup/capture, so a no-Origin GET here is read-only and has no
+        # side effect for this guard to miss.
         host = (request.headers.get("host") or "").split(":")[0].lower()
         if host not in ALLOWED_HOSTS or _bad_origin(request.headers.get("origin")):
             return JSONResponse({"detail": "forbidden host"}, status_code=403)
@@ -1172,26 +1174,38 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     def setup():
         # Phase 1: raw dict from LmuRest, unfiltered. Filtering to the
         # human-meaningful subset is deferred to the Setup-panel phase (Phase 4).
+        # Read-only: no store write here. A GET must stay safe to prefetch,
+        # cache, retry, or replay -- persistence is the explicit POST below
+        # (#51: this used to write on every GET).
         rest = _ensure_rest()
         if not rest:
             return {}
         try:
-            data = rest.get_setup()
+            return rest.get_setup()
         except Exception:
             return {}
-        # Continuous capture: every time the Setup panel pulls the live setup and
-        # we know which session it belongs to, persist the real-adjustable subset
-        # (same isFreeSetting filter as the panel) so "what did we run here last
-        # time?" survives a session ending. Best-effort — never break the fetch.
-        if data:
-            try:
-                st = status()
-                if st["track"] and st["car"] and st["session_id"]:
-                    free = {k: data[k] for k in adjustable_from_setup(data)}
-                    store.save_session_setup(st["session_id"], st["track"], st["car"], free)
-            except Exception:
-                logging.getLogger(__name__).warning("session setup capture failed", exc_info=True)
-        return data
+
+    @app.post("/setup/capture")
+    def setup_capture(body: dict = Body(...)):
+        # Continuous capture: the Setup panel calls this right after GET /setup,
+        # handing back the same data it just displayed, so we persist the
+        # real-adjustable subset (same isFreeSetting filter as the panel) and
+        # "what did we run here last time?" survives a session ending.
+        # Best-effort -- never break the caller. Guard unchanged from the old
+        # GET-time capture: skip when there's no session_id to key the row on
+        # (else we'd attribute one track's setup to another session).
+        data = body.get("data")
+        if not data:
+            return {"saved": False}
+        try:
+            st = status()
+            if st["track"] and st["car"] and st["session_id"]:
+                free = {k: data[k] for k in adjustable_from_setup(data)}
+                store.save_session_setup(st["session_id"], st["track"], st["car"], free)
+                return {"saved": True}
+        except Exception:
+            logging.getLogger(__name__).warning("session setup capture failed", exc_info=True)
+        return {"saved": False}
 
     @app.get("/chats")
     def chats():

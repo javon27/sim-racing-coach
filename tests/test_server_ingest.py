@@ -115,9 +115,12 @@ def test_no_origin_get_is_not_blocked_this_is_why_issue_51_exists(tmp_path, monk
     # A browser does NOT attach Origin to a no-cors GET (<img src=...>, <script>,
     # <link>, <iframe>, top-level navigation all send none), so _bad_origin sees
     # no Origin and this guard does NOT stop the request -- it reaches the
-    # handler. This is the residual gap the comment above _host_guard documents:
-    # GET /setup's write (save_session_setup) is closed by not writing on a GET,
-    # tracked as #51, not by this guard. Pins the real (non-403) behaviour so a
-    # future reader can't mistake the guard for covering this case.
+    # handler. This is the residual gap the comment above _host_guard documents.
+    # #51 used to give that gap a consequence: GET /setup wrote to the DB
+    # (save_session_setup), so a same-window no-Origin GET could trigger a
+    # write this guard couldn't see coming to stop. #51 fixed that by moving
+    # persistence to POST /setup/capture, so the gap this test pins is now
+    # read-only -- it still reaches the handler, there's just nothing left to
+    # do there but read.
     c, _ = _client(tmp_path, monkeypatch, mem_keyring)
     assert c.get("/setup").status_code == 200

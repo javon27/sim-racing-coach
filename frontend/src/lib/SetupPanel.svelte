@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getSetup } from "./api";
+  import { getSetup, captureSetup } from "./api";
 
   let setup: Record<string, unknown> = $state({});
   let phase: "loading" | "ok" | "empty" | "none" = $state("loading");
@@ -12,6 +12,9 @@
           phase = "empty";
         } else {
           phase = adjustable(res).length === 0 ? "none" : "ok";
+          // Persist what we just displayed (#51: GET /setup no longer writes).
+          // Fire-and-forget -- must never block or fail the panel.
+          captureSetup(res).catch(() => {});
         }
       })
       .catch(() => {
