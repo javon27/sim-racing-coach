@@ -18,12 +18,19 @@ def _setup_lines(setup: dict) -> list[str]:
     """Human-meaningful setup params, formatted for the prompt (filters ~170 -> the
     commonly-coached subset; flags tier-locked ones).
 
-    Appends each param's legal (range) from the REST payload's minValue/maxValue
-    when present -- real fields confirmed live against LMU's garage data (issue
-    #32) -- so the coach can see a param is already at its limit. The game does
-    NOT expose a step/increment field anywhere we've found; never fabricate one
-    here, and the system prompt tells the coach to hedge on step size instead of
-    quoting an exact amount.
+    Appends "(step N of lo-hi)" -- the param's ORDINAL position among the garage's
+    available options (issue #32). minValue/maxValue on LMU's garage payload are
+    option INDICES, not physical bounds: VM_REAR_WING comes back as
+    stringValue "6.5 deg", value 6, minValue 0, maxValue 9 -- wing position 6 of
+    0-9. Rendering those bounds next to the physical stringValue ("1200lbf/in
+    (range 0-4)") reads as a physical limit and is flatly wrong, so the suffix
+    MUST name the position and MUST be omitted entirely when `value` is absent --
+    bounds without their ordinal are the same unit mismatch. stringValue stays the
+    displayed physical value; it already carries real units/labels.
+
+    The payload exposes no step/increment SIZE anywhere, so the step count says
+    only how far a param can still move, never by how much -- the system prompts
+    tell the coach to give direction rather than an exact amount.
     """
     out = []
     for key, v in setup.items():
@@ -37,9 +44,9 @@ def _setup_lines(setup: dict) -> list[str]:
             continue
         label = key[3:].replace("_", " ").title() if key.startswith("VM_") else key
         locked = "" if v.get("isFreeSetting", True) else " [locked this tier]"
-        lo, hi = v.get("minValue"), v.get("maxValue")
-        rng = f" (range {lo}-{hi})" if lo is not None and hi is not None else ""
-        out.append(f"- {label}: {v['stringValue']}{rng}{locked}")
+        lo, hi, cur = v.get("minValue"), v.get("maxValue"), v.get("value")
+        step = "" if None in (lo, hi, cur) else f" (step {cur} of {lo}-{hi})"
+        out.append(f"- {label}: {v['stringValue']}{step}{locked}")
     return out
 
 
@@ -83,11 +90,12 @@ SYSTEM_PROMPT = (
     "and the specific fix — a setup change with a direction and rough amount, or a driving "
     "cue — not broken out into labeled sections. Keep setup vs driving advice clearly "
     "distinct in your wording.\n"
-    "- SETUP RANGES: each setup line shows its legal (range lo-hi) when the game exposes "
-    "one — NEVER suggest a value outside it, and say so if a param is already at its limit. "
-    "The game does not expose the adjustment's step size, so NEVER state an exact increment "
-    "(e.g. '-50 lbf/in'); give direction only ('soften the front spring a bit') or ask the "
-    "driver to check the smallest step available in the garage.\n"
+    "- SETUP STEPS: each adjustable setup line ends with (step N of lo-hi) — N is that "
+    "param's CURRENT position among the garage's available positions. It is an index, "
+    "NOT a physical value: never restate it as a spring rate, pressure or angle. Use it "
+    "only to tell whether a param is already at its limit and which way it can still "
+    "move. One step's physical size is not exposed, so NEVER state an exact increment "
+    "(e.g. '-50 lbf/in') — give direction ('soften the front spring a step or two').\n"
     "- Weigh context before over-reading a lap: tire temp/warm-up, fuel, wear. If the lap "
     "looks unrepresentative, say so.\n"
     "- Encouraging and constructive; acknowledge what's working, never berate. Honor the "
@@ -179,11 +187,12 @@ AGENTIC_SYSTEM_PROMPT = (
     "setup vs driving advice distinct.\n"
     "- Lead with the one thing that matters most. Weigh context before over-reading a lap (tire "
     "temp/warm-up, fuel, wear). Encouraging and constructive; note what's working; never berate.\n"
-    "- SETUP RANGES: get_setup shows each param's legal (range lo-hi) when the game exposes "
-    "one — NEVER suggest a value outside it, and say so if a param is already at its limit. "
-    "The game does not expose the adjustment's step size, so NEVER state an exact increment "
-    "(e.g. '-50 lbf/in'); give direction only ('soften the front spring a bit') or ask the "
-    "driver to check the smallest step available in the garage.\n"
+    "- SETUP STEPS: get_setup ends each adjustable line with (step N of lo-hi) — N is that "
+    "param's CURRENT position among the garage's available positions. It is an index, "
+    "NOT a physical value: never restate it as a spring rate, pressure or angle. Use it "
+    "only to tell whether a param is already at its limit and which way it can still "
+    "move. One step's physical size is not exposed, so NEVER state an exact increment "
+    "(e.g. '-50 lbf/in') — give direction ('soften the front spring a step or two').\n"
     "- Match length to the question: a quick question gets a sentence or two; a broad one ('how's "
     "my race going') can be a few short paragraphs or a bullet list — thorough but never padded. "
     "The driver will ask follow-ups."

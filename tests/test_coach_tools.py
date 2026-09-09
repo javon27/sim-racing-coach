@@ -302,16 +302,43 @@ def test_corner_geometry_clause_empty_for_unknown_corner():
     assert ctx._corner_geometry_clause("99") == ""
 
 
-def test_get_setup_surfaces_range(tmp_path, synthetic_lap):
-    # Issue #32: get_setup must expose each param's legal (range), confirmed real
-    # on the LMU REST payload, so the coach never suggests an out-of-range change.
+def test_get_setup_surfaces_step_position(tmp_path, synthetic_lap):
+    # Issue #32: minValue/maxValue are ORDINAL option indices, not physical bounds.
+    # Real captured shape: VM_BRAKE_BALANCE = stringValue "51.5:48.5", value 22,
+    # minValue 0, maxValue 57 -- bias *position* 22 of 0-57, NOT "max 57".
     ctx, _, _ = _ctx(tmp_path, synthetic_lap)
     ctx.setup = {
-        "VM_FRONTSPRING": {"stringValue": "1200", "isFreeSetting": True,
-                           "minValue": 800, "maxValue": 1200},
+        "VM_BRAKE_BALANCE": {"stringValue": "51.5:48.5", "value": 22, "isFreeSetting": True,
+                             "minValue": 0, "maxValue": 57},
     }
     out = ctx.get_setup()
-    assert "Frontspring: 1200 (range 800-1200)" in out
+    assert "Brake Balance: 51.5:48.5 (step 22 of 0-57)" in out
+    assert "(range" not in out
+
+
+def test_get_setup_omits_step_without_ordinal(tmp_path, synthetic_lap):
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    ctx.setup = {
+        "VM_BRAKE_BALANCE": {"stringValue": "51.5:48.5", "isFreeSetting": True,
+                             "minValue": 0, "maxValue": 57},
+    }
+    out = ctx.get_setup()
+    assert "Brake Balance: 51.5:48.5" in out
+    assert "0-57" not in out
+
+
+def test_get_last_setup_renders_step_position(tmp_path):
+    # The third _setup_lines caller must render identically -- and must not
+    # double-format a line that already carries its step suffix.
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    store.save_session_setup("s1--online", "spa", "gt3", {
+        "VM_REAR_WING": {"stringValue": "6.5 deg", "value": 6, "isFreeSetting": True,
+                         "minValue": 0, "maxValue": 9},
+    })
+    ctx = CoachContext(store, track="spa", car="gt3")
+    out = ctx.dispatch("get_last_setup", {})
+    assert "Rear Wing: 6.5 deg (step 6 of 0-9)" in out
+    assert out.count("step 6 of 0-9") == 1
 
 
 def test_dispatch_routes_and_handles_unknown(tmp_path, synthetic_lap):

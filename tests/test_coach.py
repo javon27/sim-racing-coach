@@ -69,15 +69,20 @@ def test_agentic_system_prompt_has_scope_guard():
     assert "nothing else" in AGENTIC_SYSTEM_PROMPT
 
 
-def test_system_prompts_warn_against_inventing_setup_increments():
-    """Issue #32: the game never exposes a step/increment field, so both the
-    legacy and agentic prompts must tell the coach to hedge on exact amounts
-    and respect each param's (range) rather than guessing a specific number."""
+def test_system_prompts_describe_setup_steps_as_positions_not_values():
+    """Issue #32: the setup suffix is an ordinal step position, not a physical
+    range. Both prompts must (a) say so explicitly, so the coach never restates
+    the index as a spring rate/pressure/angle, and (b) still forbid quoting an
+    exact increment, since no step-size field exists on the payload."""
     from simcoach.coach import AGENTIC_SYSTEM_PROMPT, SYSTEM_PROMPT
     for prompt in (SYSTEM_PROMPT, AGENTIC_SYSTEM_PROMPT):
-        assert "SETUP RANGES:" in prompt
-        assert "step size" in prompt
-        assert "range" in prompt.lower()
+        assert "SETUP STEPS:" in prompt
+        assert "(step N of lo-hi)" in prompt
+        assert "NOT a physical value" in prompt
+        assert "exact increment" in prompt
+        # the old framing asserted a legal *physical* range — it must be gone
+        assert "SETUP RANGES:" not in prompt
+        assert "legal (range lo-hi)" not in prompt
 
 
 def test_coach_shows_delta_with_reference(synthetic_lap):

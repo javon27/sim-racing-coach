@@ -103,9 +103,10 @@ TOOLS = [
         "name": "get_setup",
         "description": "The car's current adjustable setup values, so setup advice can name "
                        "specific changes. Includes which adjustments are legal this tier, and "
-                       "each param's legal (range) where the game exposes one -- NEVER suggest "
-                       "a value outside it. Step/increment size is NOT exposed; never state an "
-                       "exact increment, give direction only.",
+                       "each param's current position as (step N of lo-hi) -- an option INDEX, "
+                       "not a physical value: use it to see whether a param is already at its "
+                       "limit and which way it can move, never restate it as a rate/pressure/"
+                       "angle. Step size is NOT exposed; give direction, not an exact amount.",
         "input_schema": {"type": "object", "properties": {}},
     },
     {
