@@ -74,3 +74,38 @@ def test_post_ingest_without_content_type_is_422(tmp_path, monkeypatch, mem_keyr
     # 0.132.0 and 0.141.1.
     c, _ = _client(tmp_path, monkeypatch, mem_keyring)
     assert c.post("/ingest", content=b"{}").status_code == 422
+
+
+# --- Origin guard (CSRF defence in depth, independent of the fastapi version) ---
+# CORSMiddleware only decides whether the browser hands the RESPONSE back to
+# script; a CORS-simple request is still sent and still executed. So CORS can
+# never stop a side effect -- only the server refusing the request can.
+
+def test_hostile_origin_is_403_before_the_side_effect(tmp_path, monkeypatch, mem_keyring):
+    c, store = _client(tmp_path, monkeypatch, mem_keyring)
+
+    r = c.post("/ingest", json={}, headers={"Origin": "http://evil.example"})
+
+    assert r.status_code == 403
+    assert store.recent_race_sessions() == []  # the ingest never ran
+
+
+def test_missing_origin_still_allowed(tmp_path, monkeypatch, mem_keyring):
+    # Native/Tauri and non-browser clients send no Origin; only a browser does.
+    c, store = _client(tmp_path, monkeypatch, mem_keyring)
+    assert c.post("/ingest", json={}).status_code == 200
+    assert len(store.recent_race_sessions()) == 1
+
+
+def test_tauri_and_dev_origins_still_allowed(tmp_path, monkeypatch, mem_keyring):
+    c, _ = _client(tmp_path, monkeypatch, mem_keyring)
+    for origin in ("http://tauri.localhost", "http://localhost:5173", "http://127.0.0.1:8765"):
+        r = c.post("/ingest", json={}, headers={"Origin": origin})
+        assert r.status_code == 200, f"{origin} must stay allowed, got {r.status_code}"
+
+
+def test_hostile_origin_blocked_on_reads_too(tmp_path, monkeypatch, mem_keyring):
+    # Not filtered to mutating methods: GET /setup writes (save_session_setup),
+    # so a read-looking route is reachable via <img src=...> and must 403 too.
+    c, _ = _client(tmp_path, monkeypatch, mem_keyring)
+    assert c.get("/setup", headers={"Origin": "http://evil.example"}).status_code == 403

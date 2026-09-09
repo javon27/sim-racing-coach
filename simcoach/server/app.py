@@ -425,8 +425,18 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
 
     @app.middleware("http")
     async def _host_guard(request: Request, call_next):
+        # Also the CSRF guard for every HTTP route, and the only one that doesn't
+        # depend on a library default. CORSMiddleware decides whether the browser
+        # hands the RESPONSE back to script -- a CORS-simple request is sent and
+        # EXECUTED regardless, so CORS can never prevent a side effect. Refusing a
+        # disallowed Origin here can. Deliberately NOT filtered to mutating
+        # methods: a cross-origin request from a disallowed origin has no
+        # legitimate caller, and GET /setup writes (save_session_setup), so it is
+        # reachable via <img src=...>. A MISSING Origin stays allowed by design
+        # (see _bad_origin) -- only browsers set it, so native/Tauri and
+        # non-browser clients are unaffected.
         host = (request.headers.get("host") or "").split(":")[0].lower()
-        if host not in ALLOWED_HOSTS:
+        if host not in ALLOWED_HOSTS or _bad_origin(request.headers.get("origin")):
             return JSONResponse({"detail": "forbidden host"}, status_code=403)
         return await call_next(request)
 
