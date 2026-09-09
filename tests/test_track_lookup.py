@@ -255,32 +255,50 @@ def test_note_key_binds_matches_the_ui_grammar():
         assert note_key_binds(key, {"1", "2", "3", "11", "12", "13"}) == is_range, key
 
 
-def test_corner_number_bound_is_spelled_the_same_on_both_sides():
-    # The key side bounds corner numbers with _NOTE_NUM's regex and the label side with
-    # a len() check, for speed. Drift between the two is how you get a key the guard
-    # keeps for a label the coach cannot resolve, so pin that they mean the same thing.
-    from simcoach.track_lookup import _MAX_CORNER_DIGITS, _NOTE_NUM
-    assert _NOTE_NUM.fullmatch("9" * _MAX_CORNER_DIGITS)
-    assert not _NOTE_NUM.fullmatch("9" * (_MAX_CORNER_DIGITS + 1))
+def test_note_key_binds_wide_range_names_nothing():
+    # A span wider than _MAX_RANGE_SPAN is not a complex. This bounds how many corners
+    # ONE authored key can speak for: '1-999' bound every numeric corner on the track,
+    # survived every same-count map save, and was served to the driver as an
+    # `Authored note:` owned fact for each of them.
+    #
+    # PARTIAL. The cap is 100 and the largest shipped map has 30 corners, so '1-30'
+    # still blankets an entire real circuit and still binds. What the cap removes is
+    # the key that blankets any map regardless of size, plus an unbounded probe loop.
+    # Bounding the blast radius properly means a cap near the real complex width (the
+    # widest shipped range is 3), which would also start dropping a sector-wide note
+    # someone may have authored -- a call for the #64 work, not a side effect here.
+    assert note_key_binds("1-100", {"50"})          # span 100: still a complex
+    assert not note_key_binds("1-101", {"50"})      # wider: names nothing
+    assert not note_key_binds("1-999", {"7"})       # the blanket key
+    assert note_key_binds("1-999", {"1-999"})       # still its own label
 
 
 def test_note_key_binds_known_divergences_from_the_ui():
-    # The residual, measured by running TracksScreen's own logic under node against
-    # this grammar over a table of keys x labels. Both classes are Python being
-    # STRICTER, and both come from the same deliberate rule: a corner number in this
-    # grammar is 1-3 ASCII digits, on the key side AND the label side. That bound is
-    # what makes the 4300-digit crash unreachable without a try/except.
+    # The residual, measured by running TracksScreen's own logic under node against this
+    # grammar over 270 key x label pairs: 47 disagree, every one of them Python being
+    # STRICTER. Three classes, each a deliberate choice made above:
     #
-    # Pinned, not fixed: zero shipped keys or labels hit either class, and neither is
-    # reachable through the UI (TracksScreen has no free-form key entry, so a 4-digit
-    # endpoint needs a direct PUT /notes or a hand-edited map). Listed so that the
-    # consequence is on the record -- in both classes the UI collapses the note under a
-    # range row while this guard drops it on the next map save, which is the data-loss
-    # direction, not a cosmetic one. Narrowing the UI's `\d+` to `\d{1,3}` would close
-    # the first class; that is a frontend change, deliberately not made here.
-    assert not note_key_binds("1-1000", {"7"})     # UI: range (Number() is unbounded)
-    assert not note_key_binds("5-9", {"0007"})     # UI: Number('0007') == 7 -> binds
-    assert not note_key_binds("0-0", {""})         # UI: Number('') == 0 -> binds
+    # 1. A label `Number()` coerces to a covered integer but a string probe does not
+    #    match. The price of deleting the label parse -- which is what makes this
+    #    function total -- since the UI reads '07' as 7 and a probe only matches '7'.
+    # 2. A range endpoint of 4+ digits: not a range here, a range in the UI, because
+    #    the digit bound is what puts the 4300-digit int() crash out of reach.
+    # 3. A span over _MAX_RANGE_SPAN: not a range here, a range in the UI, which is
+    #    the blanket-key mitigation above.
+    #
+    # Pinned rather than fixed, because no shipped map has a key or label in any class
+    # and none is reachable through the UI (TracksScreen drives its rows off the map
+    # and has no free-form key entry, so these need a direct PUT /notes or a hand-edited
+    # file). On the record because the consequence is not cosmetic: in every class the
+    # UI collapses the note under a range row -- telling the user it is bound -- while
+    # this guard drops it on the next map save. Closing class 1 means the label parse
+    # comes back; closing 2 and 3 means narrowing the UI's `\d+`, a frontend change
+    # deliberately not made here.
+    for label in ("07", "007", "0007", " 7 ", "7.0", "+7", "0x7"):
+        assert not note_key_binds("5-9", {label})   # (1) UI: Number(label) == 7
+    assert not note_key_binds("0-0", {""})          # (1) UI: Number('') == 0
+    assert not note_key_binds("1-1000", {"7"})      # (2) UI: Number() is unbounded
+    assert not note_key_binds("1-101", {"50"})      # (3) UI: has no span cap
 
 
 def test_note_key_binds_ignores_labels_int_cannot_parse():
