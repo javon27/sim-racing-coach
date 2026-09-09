@@ -1,8 +1,19 @@
+from simcoach.model.base import TokenUsage
 from simcoach.model.claude import ClaudeModel
 
 
+class _Usage:
+    """Stands in for anthropic's `response.usage` (same field names)."""
+    def __init__(self, i, o, cr=0, cw=0):
+        self.input_tokens = i; self.output_tokens = o
+        self.cache_read_input_tokens = cr; self.cache_creation_input_tokens = cw
+
+
 class _Resp:
-    def __init__(self, content, stop_reason): self.content = content; self.stop_reason = stop_reason
+    def __init__(self, content, stop_reason, usage=None):
+        self.content = content; self.stop_reason = stop_reason
+        if usage is not None:
+            self.usage = usage          # absent entirely when None (legacy-fixture guard)
 
 
 class _Text:
@@ -41,10 +52,11 @@ class _FakeClient:
     both turns (unchanged); `.stream()` wraps the SAME turn as a streamed
     response — pass `stream_deltas`/`final_text` to also cover token-delta
     streaming with this one fixture."""
-    def __init__(self, stream_deltas=None, final_text="Carry more speed through Turn 1."):
+    def __init__(self, stream_deltas=None, final_text="Carry more speed through Turn 1.",
+                 usages=(None, None)):
         self._turns = [
-            _Resp([_ToolUse("t1", "get_corner", {"corner": "1"})], "tool_use"),
-            _Resp([_Text(final_text)], "end_turn"),
+            _Resp([_ToolUse("t1", "get_corner", {"corner": "1"})], "tool_use", usages[0]),
+            _Resp([_Text(final_text)], "end_turn", usages[1]),
         ]
         self.messages = self
         self._stream_deltas = stream_deltas
@@ -64,10 +76,11 @@ class _FakeClient:
         return _StreamCM(deltas, resp)
 
 
-def _model(stream_deltas=None, final_text="Carry more speed through Turn 1."):
+def _model(stream_deltas=None, final_text="Carry more speed through Turn 1.",
+           usages=(None, None), model="x"):
     m = ClaudeModel.__new__(ClaudeModel)          # bypass __init__ (no real anthropic client)
-    m.model = "x"; m.max_tokens = 100; m.thinking = False
-    m.client = _FakeClient(stream_deltas=stream_deltas, final_text=final_text)
+    m.model = model; m.max_tokens = 100; m.thinking = False
+    m.client = _FakeClient(stream_deltas=stream_deltas, final_text=final_text, usages=usages)
     return m
 
 
@@ -78,15 +91,56 @@ def test_run_stream_yields_tool_then_text():
                                tools=[{"name": "get_corner"}],
                                dispatch=lambda n, i: calls.append((n, i)) or "corner data"))
     assert calls == [("get_corner", {"corner": "1"})]
-    assert events[0] == {"type": "tool", "name": "get_corner", "input": {"corner": "1"}}
-    assert events[-1] == {"type": "text", "text": "Carry more speed through Turn 1."}
+    # Ignore the per-turn usage events (a text-less tool turn emits its usage first).
+    flow = [e for e in events if e["type"] in ("tool", "text")]
+    assert flow[0] == {"type": "tool", "name": "get_corner", "input": {"corner": "1"}}
+    assert flow[-1] == {"type": "text", "text": "Carry more speed through Turn 1."}
 
 
 def test_run_drains_run_stream():
     m = _model()
-    out = m.run("sys", [{"role": "user", "content": "q"}],
+    res = m.run("sys", [{"role": "user", "content": "q"}],
                 tools=[{"name": "get_corner"}], dispatch=lambda n, i: "corner data")
-    assert out == "Carry more speed through Turn 1."
+    assert res.text == "Carry more speed through Turn 1."
+
+
+def test_run_sums_usage_across_tool_loop_iterations():
+    """Two turns (tool_use then text) must bill as the SUM, not the last call."""
+    m = _model(usages=(_Usage(100, 10), _Usage(250, 40)))
+    res = m.run("sys", [{"role": "user", "content": "q"}],
+                tools=[{"name": "get_corner"}], dispatch=lambda n, i: "corner data")
+    assert res.text == "Carry more speed through Turn 1."
+    assert res.usage == TokenUsage(input=350, output=50)
+
+
+def test_run_sums_cache_buckets_too():
+    """cache_read/cache_write read 0 today (no prompt caching in the repo) but are
+    captured so the meter is right the day caching lands."""
+    m = _model(usages=(_Usage(1, 1, cr=7, cw=3), _Usage(1, 1, cr=5, cw=2)))
+    res = m.run("sys", [{"role": "user", "content": "q"}],
+                tools=[{"name": "get_corner"}], dispatch=lambda n, i: "corner data")
+    assert (res.usage.cache_read, res.usage.cache_write) == (12, 5)
+
+
+def test_run_stream_emits_one_usage_event_per_turn():
+    m = _model(usages=(_Usage(100, 10), _Usage(250, 40)), model="claude-sonnet-5")
+    events = list(m.run_stream("sys", [{"role": "user", "content": "q"}],
+                               tools=[{"name": "get_corner"}],
+                               dispatch=lambda n, i: "corner data"))
+    usage_events = [e for e in events if e["type"] == "usage"]
+    assert len(usage_events) == 2
+    assert usage_events[0]["usage"]["input"] == 100
+    assert usage_events[1]["usage"]["output"] == 40
+    assert usage_events[0]["model"] == "claude-sonnet-5"
+
+
+def test_missing_usage_contributes_zero_not_an_error():
+    """A response double without .usage must not raise (guards old fixtures)."""
+    m = _model()
+    res = m.run("sys", [{"role": "user", "content": "q"}],
+                tools=[{"name": "get_corner"}], dispatch=lambda n, i: "corner data")
+    assert res.text == "Carry more speed through Turn 1."
+    assert res.usage.total == 0
 
 
 class _FakeClientDispatchError:
@@ -115,10 +169,10 @@ def test_run_continues_after_dispatch_error_and_returns_final_text():
     def dispatch(name, inp):
         raise RuntimeError("boom")
 
-    out = m.run("sys", [{"role": "user", "content": "q"}],
+    res = m.run("sys", [{"role": "user", "content": "q"}],
                 tools=[{"name": "get_corner"}], dispatch=dispatch)
 
-    assert out == "Still got you covered."
+    assert res.text == "Still got you covered."
     # the tool_result on the NEXT create() call's messages carries is_error
     second_call_messages = client.calls[1]["messages"]
     tool_result_msg = second_call_messages[-1]
@@ -139,8 +193,8 @@ class _FakeClientIterationCap:
         self.calls.append(kw)
         if kw.get("tools"):
             return _Resp([_ToolUse(f"t{len(self.calls)}", "get_corner", {"corner": "1"})],
-                         "tool_use")
-        return _Resp([_Text("Iteration cap reached.")], "end_turn")
+                         "tool_use", _Usage(10, 1))
+        return _Resp([_Text("Iteration cap reached.")], "end_turn", _Usage(10, 1))
 
 
 def test_run_hits_iteration_cap_and_makes_final_tool_free_call():
@@ -151,12 +205,28 @@ def test_run_hits_iteration_cap_and_makes_final_tool_free_call():
     client = _FakeClientIterationCap()
     m.client = client
 
-    out = m.run("sys", [{"role": "user", "content": "q"}],
+    res = m.run("sys", [{"role": "user", "content": "q"}],
                 tools=[{"name": "get_corner"}], dispatch=lambda n, i: "corner data")
 
-    assert out == "Iteration cap reached."
+    assert res.text == "Iteration cap reached."
     assert len(client.calls) == MAX_TOOL_ITERATIONS + 1
     assert "tools" not in client.calls[-1]
+
+
+def test_iteration_cap_final_call_is_also_billed():
+    """The tool-free call made after hitting MAX_TOOL_ITERATIONS must be counted —
+    emitting usage from _stream_turn is what makes that structural."""
+    from simcoach.model.claude import MAX_TOOL_ITERATIONS
+
+    m = ClaudeModel.__new__(ClaudeModel)
+    m.model = "x"; m.max_tokens = 100; m.thinking = False
+    m.client = _FakeClientIterationCap()
+
+    res = m.run("sys", [{"role": "user", "content": "q"}],
+                tools=[{"name": "get_corner"}], dispatch=lambda n, i: "corner data")
+
+    assert res.usage.input == 10 * (MAX_TOOL_ITERATIONS + 1)
+    assert res.usage.output == 1 * (MAX_TOOL_ITERATIONS + 1)
 
 
 def test_run_stream_token_deltas():
@@ -176,6 +246,6 @@ def test_run_stream_token_deltas():
     assert sum(len(d) for d in text_events) == len(final_answer)
 
     m2 = _model(stream_deltas=deltas, final_text=final_answer)
-    out = m2.run("sys", [{"role": "user", "content": "q"}],
+    res = m2.run("sys", [{"role": "user", "content": "q"}],
                  tools=[{"name": "get_corner"}], dispatch=lambda n, i: "corner data")
-    assert out == final_answer
+    assert res.text == final_answer

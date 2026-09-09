@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from simcoach.coach import Coach
 from simcoach.driver import DriverProfile
+from simcoach.model.base import TokenUsage
 
 
 class CoachSession:
@@ -44,11 +45,15 @@ class CoachSession:
         # fact dumps, which would bloat context and mix lap contexts). The coach
         # appends the current lap's facts + question after this history.
         self.history: list[dict] = []
+        # Usage accumulated over this session's asks, for the REPL. NOTE: the
+        # authoritative per-chat accumulator is the store (coach_chat columns +
+        # LapStore.chat_usage) — the desktop sidecar never builds a CoachSession.
+        self.last_usage = TokenUsage()
 
     def ask(self, context, question: str) -> str:
         """Answer one question via the agentic tool loop. `context` (a CoachContext)
         holds the live lap/setup/units the tools read; history threads the chat."""
-        answer = self.coach.ask_agentic(
+        res = self.coach.ask_agentic(
             context,
             question,
             self.car,
@@ -57,6 +62,8 @@ class CoachSession:
             input_device=self.input_device,
             units=self.units,
         )
+        answer = res.text
+        self.last_usage = self.last_usage + res.usage
         self.history.append({"role": "user", "content": question})
         self.history.append({"role": "assistant", "content": answer})
         if self.store is not None:
