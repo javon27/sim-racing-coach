@@ -339,6 +339,46 @@ def test_reference_times_not_in_single_corner_view():
     assert "1:41.500" not in ctx.get_track_notes(corner="1")
 
 
+def _knowledge(slug):
+    from pathlib import Path
+    return (Path(__file__).resolve().parents[1] / "simcoach" / "knowledge"
+            / f"{slug}.md").read_text(encoding="utf-8")
+
+
+def test_get_track_notes_falls_back_to_knowledge_file_when_no_map():
+    # COTA has an authored note but NO corner-map JSON, so cmap is None. Before the
+    # fallback the coach could not reach a word of it.
+    ctx = CoachContext(store=None, cmap=None, track="Circuit of the Americas", car="GT3")
+    out = ctx.get_track_notes()
+    assert out == _knowledge("circuit_of_the_americas")   # verbatim, not reformatted
+    assert "Bobby Pin" in out
+
+
+def test_get_track_notes_falls_back_when_map_notes_are_empty():
+    # A map file exists but carries no `notes` — the authored .md still gets through.
+    ctx = _ctx_with_notes({})
+    ctx.track = "Fuji Speedway"
+    out = ctx.get_track_notes()
+    assert out == _knowledge("fuji_speedway")
+    assert "300R" in out
+
+
+def test_map_notes_win_over_knowledge_file():
+    # Guard (green before and after): the map file stays authoritative where it has
+    # notes — the fallback must never shadow it.
+    ctx = _ctx_with_notes({"overview": "rhythm track", "corners": {"1": "brake earlier"}})
+    ctx.track = "Silverstone Grand Prix Circuit"   # has a knowledge/*.md too
+    out = ctx.get_track_notes()
+    assert "rhythm track" in out and "brake earlier" in out
+    assert "Silverstone (Grand Prix layout) notes" not in out
+
+
+def test_get_track_notes_with_neither_map_nor_knowledge_file():
+    # Guard (green before and after): no map, no note -> the plain "none yet" answer.
+    ctx = CoachContext(store=None, cmap=None, track="Nowhere Circuit", car="GT3")
+    assert "no authored notes" in ctx.get_track_notes().lower()
+
+
 def test_record_driver_learning_writes_pending(tmp_path, synthetic_lap):
     ctx, store, _ = _ctx(tmp_path, synthetic_lap)
     out = ctx.record_driver_learning("consistently late on throttle")

@@ -21,6 +21,9 @@ _ANNOTATION_FIELDS = ("corners", "sections", "rotation", "notes")
 # trailing ' - <SERIES>' is removed.
 _SERIES_SUFFIX = re.compile(r"\s*[-–]\s*(elms|wec|lmu|imsa|gtwc)\s*$", re.IGNORECASE)
 
+# Authored prose track notes, `<slug>.md`, keyed on the same slug as the map files.
+KNOWLEDGE_DIR = Path(__file__).parent / "knowledge"
+
 
 def track_slug(track_name: str) -> str:
     """Deterministic filename stem for a live track name: drop the championship
@@ -29,6 +32,27 @@ def track_slug(track_name: str) -> str:
     name = _SERIES_SUFFIX.sub("", track_name or "")
     name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
     return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+
+
+def load_track_knowledge(track_name: str, knowledge_dir: str | Path | None = None) -> str:
+    """Authored prose track notes from `knowledge/<slug>.md`, verbatim, or '' if we
+    have none.
+
+    The FALLBACK source for tracks whose notes never made it into a corner-map JSON's
+    `notes` object — several shipped tracks have an authored note here and no map file
+    at all, so this is the only way the coach can reach them. The map file stays
+    authoritative wherever it carries notes; this is never merged into it.
+
+    Read as UTF-8 explicitly: a bare `read_text()` decodes as cp1252 on Windows and
+    mojibakes the content (issue #29). Slug-built paths only — no traversal."""
+    slug = track_slug(track_name)
+    if not slug:
+        return ""
+    base = Path(knowledge_dir) if knowledge_dir is not None else KNOWLEDGE_DIR
+    try:
+        return (base / f"{slug}.md").read_text(encoding="utf-8")
+    except OSError:
+        return ""
 
 
 def resolve_track_map(track_name: str, tracks_dir: str = "simcoach/tracks") -> Path | None:

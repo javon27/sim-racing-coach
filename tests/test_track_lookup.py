@@ -2,10 +2,13 @@
 slug of the (series-suffix-stripped, accent-normalized) full name — distinct layouts
 get distinct files, and an unknown layout resolves to None so the caller auto-builds."""
 import json
+from pathlib import Path
 
 import pytest
 
-from simcoach.track_lookup import resolve_track_map, track_slug
+from simcoach.track_lookup import load_track_knowledge, resolve_track_map, track_slug
+
+KNOWLEDGE = Path(__file__).resolve().parents[1] / "simcoach" / "knowledge"
 
 SLUG_CASES = [
     ("Silverstone Grand Prix Circuit - ELMS", "silverstone_grand_prix_circuit"),  # series suffix dropped
@@ -130,3 +133,36 @@ def test_load_map_data_merges_notes_overlay(tmp_path):
     assert merged["path"] == [[0, 0]]            # geometry from shipped
     assert merged["notes"]["overview"] == "edited"  # notes from overlay
     assert merged["notes"]["corners"]["1"] == "brake late"
+
+
+def test_load_track_knowledge_reads_shipped_orphan_note():
+    # Seven authored track notes ship ONLY as `knowledge/<slug>.md` — they have no
+    # corner-map JSON at all, so this loader is the only way the coach reaches them.
+    # Resolved from the live game name (series suffix and all) through track_slug.
+    text = load_track_knowledge("Circuit de Spa-Francorchamps - WEC")
+    assert "Spa-Francorchamps notes" in text
+    # verbatim — the coach states these as owned fact, so nothing may be reformatted
+    assert text == (KNOWLEDGE / "circuit_de_spa_francorchamps.md").read_text(encoding="utf-8")
+
+
+def test_load_track_knowledge_decodes_utf8_not_cp1252(tmp_path):
+    # Regression guard for issue #29: a bare Path.read_text() defaults to cp1252 on
+    # Windows and mojibakes valid UTF-8 authored content.
+    body = "# Sarthe\n\nMulsanne — the Porsche Curves, 250 km/h, ±3°C track temp.\n"
+    (tmp_path / "circuit_de_la_sarthe.md").write_text(body, encoding="utf-8")
+    assert load_track_knowledge("Circuit de la Sarthe", tmp_path) == body
+
+
+def test_load_track_knowledge_missing_returns_empty(tmp_path):
+    assert load_track_knowledge("No Such Circuit", tmp_path) == ""
+    assert load_track_knowledge("", tmp_path) == ""
+
+
+def test_every_shipped_knowledge_note_is_reachable():
+    # A note's filename must be a fixed point of track_slug or the live name never
+    # resolves to it and the authored content is silently unreachable.
+    notes = sorted(KNOWLEDGE.glob("*.md"))
+    assert len(notes) == 7
+    for p in notes:
+        assert track_slug(p.stem) == p.stem, p.name
+        assert load_track_knowledge(p.stem).startswith("#"), p.name
