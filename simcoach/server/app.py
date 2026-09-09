@@ -13,7 +13,6 @@ import sys
 import tempfile
 import threading
 import time
-import urllib.parse
 from dataclasses import asdict
 from pathlib import Path
 
@@ -64,21 +63,61 @@ def _usage_view(agg: dict) -> dict:
 _CLEAN_LAP_RATIO = 1.07  # keep laps within +7% of the track/car best (drop in/out/off laps)
 _MAP_BUFFER_MAX = 8      # cap mapping-mode buffer (need only 2 edges; keep last N)
 
-ALLOWED_HOSTS = {"127.0.0.1", "localhost"}  # port stripped before compare
+# Host-header allowlist (port stripped before compare) -- AND an input to
+# ALLOWED_ORIGINS below, which is a cross product of these hostnames with our two
+# local ports. Adding a hostname here to accept a new Host therefore also grants
+# it two ORIGINS, widening the CSRF guard without anyone editing it: adding
+# "tauri.localhost" (plausible -- it is already an allowed origin host) would
+# auto-admit http://tauri.localhost:5173 and :8765. Widen this set deliberately.
+ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
 REST_PROBE_TTL = 2.0  # s: liveness probe rate cap so /status polling can't hammer LMU's REST
+SIDECAR_PORT = 8765   # the port simcoach/server/__main__.py serves on (it imports this)
+VITE_DEV_PORT = 5173  # `npm run dev` / src-tauri/tauri.conf.json devUrl
 FRONTEND_ORIGINS = ["http://localhost:5173", "http://tauri.localhost"]
-ALLOWED_ORIGIN_HOSTS = ALLOWED_HOSTS | {"tauri.localhost"}
+
+# FULL origins (scheme + host + port), never bare hostnames. Comparing the
+# hostname alone let ANY app on ANY localhost port through the guard (#60) --
+# another local dev server, or an XSS in one, could drive every guarded route,
+# which is exactly what the guard exists to stop. Three sources, no invention:
+#   - FRONTEND_ORIGINS: the Vite dev origin (src-tauri/tauri.conf.json devUrl)
+#     and the Windows Tauri webview origin.
+#   - "tauri://localhost", the webview origin Tauri uses on macOS/Linux. NOT a
+#     new permission: the old hostname-only compare accepted it (hostname
+#     "localhost"), so dropping it here would lock the app's own webview out of
+#     its own sidecar on those platforms. #54 tracks the wider cross-platform
+#     origin question and stays untouched -- FRONTEND_ORIGINS (the CORS list) is
+#     deliberately NOT changed here.
+#   - our two local ports (sidecar + Vite dev) under BOTH names ALLOWED_HOSTS
+#     accepts as a Host. 127.0.0.1 and localhost are the same machine and the
+#     same server: accepting Host "localhost:8765" while refusing Origin
+#     "http://localhost:8765" would be incoherent, and the same argument applies
+#     to the dev port -- hence the cross product rather than four literals, so
+#     the host list and the port list cannot drift apart.
+# Deliberately dropped vs the old behaviour: "https://tauri.localhost" and every
+# other scheme on these hostnames. Nothing serves them; the old guard only let
+# them through because it never looked past the hostname.
+# NOT auto-widened: if Vite falls back to 5174 (5173 already taken) or you use
+# `vite preview` on 4173, that origin is refused with a 403 -- add the port here
+# deliberately. Allowing a range would hand the guard back to any local app.
+ALLOWED_ORIGINS = set(FRONTEND_ORIGINS) | {"tauri://localhost"} | {
+    f"http://{h}:{p}" for h in ALLOWED_HOSTS for p in (SIDECAR_PORT, VITE_DEV_PORT)
+}
 
 
 def _bad_origin(origin: str | None) -> bool:
-    """True if a browser Origin is present AND its host isn't allowed. A missing
-    Origin (native/Tauri client, or a non-browser client) is allowed — only a
-    browser sets Origin, and that's the cross-site-WS vector we're blocking.
-    Port-blind by design (any localhost port is fine for a local desktop app)."""
+    """True if a browser Origin is present AND isn't an exact ALLOWED_ORIGINS
+    match. A missing Origin (native/Tauri client, or a non-browser client) is
+    allowed — only a browser sets Origin, and that's the cross-site-WS/CSRF
+    vector we're blocking; no browser omits Origin on a mutating request.
+
+    Compares scheme+host+port, not just the host (#60). Exact string match after
+    lowercasing: scheme and host are case-insensitive, and a browser never sends
+    a path, a trailing slash, or an explicit default port on an Origin — so
+    anything that isn't the literal allowed origin is refused. That also refuses
+    "null", "file://" and bare "http://[::1]" for free, as before."""
     if not origin:
         return False
-    host = (urllib.parse.urlparse(origin).hostname or "").lower()
-    return host not in ALLOWED_ORIGIN_HOSTS
+    return origin.lower() not in ALLOWED_ORIGINS
 
 
 def _clean(v):

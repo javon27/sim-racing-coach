@@ -907,8 +907,11 @@ def test_coach_resolves_live_track_car_with_zero_stored_laps(tmp_path, monkeypat
     app = create_app(store, coach)  # default tracks_dir has test_track.json
     c = _tc(app)
     chat_id = None
+    # Origin carries the sidecar's port: #60 made the guard compare the FULL
+    # origin, and the port-less "http://127.0.0.1" this used to send only ever
+    # passed because the compare was hostname-only. Nothing serves on port 80.
     with c.websocket_connect("/coach", headers={"host": "127.0.0.1",
-                                                 "origin": "http://127.0.0.1"}) as ws:
+                                                 "origin": "http://127.0.0.1:8765"}) as ws:
         ws.send_json({"question": "what should I focus on here?"})
         while True:
             ev = ws.receive_json()
