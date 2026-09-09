@@ -65,7 +65,8 @@ _MAP_BUFFER_MAX = 8      # cap mapping-mode buffer (need only 2 edges; keep last
 
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}  # port stripped before compare
 REST_PROBE_TTL = 2.0  # s: liveness probe rate cap so /status polling can't hammer LMU's REST
-SIDECAR_PORT = 8765  # the port simcoach/server/__main__.py serves on (it imports this)
+SIDECAR_PORT = 8765   # the port simcoach/server/__main__.py serves on (it imports this)
+VITE_DEV_PORT = 5173  # `npm run dev` / src-tauri/tauri.conf.json devUrl
 FRONTEND_ORIGINS = ["http://localhost:5173", "http://tauri.localhost"]
 
 # FULL origins (scheme + host + port), never bare hostnames. Comparing the
@@ -80,14 +81,20 @@ FRONTEND_ORIGINS = ["http://localhost:5173", "http://tauri.localhost"]
 #     its own sidecar on those platforms. #54 tracks the wider cross-platform
 #     origin question and stays untouched -- FRONTEND_ORIGINS (the CORS list) is
 #     deliberately NOT changed here.
-#   - the sidecar's own origin, under both names ALLOWED_HOSTS accepts as Host --
-#     accepting Host "localhost:8765" but refusing Origin "http://localhost:8765"
-#     would be incoherent.
+#   - our two local ports (sidecar + Vite dev) under BOTH names ALLOWED_HOSTS
+#     accepts as a Host. 127.0.0.1 and localhost are the same machine and the
+#     same server: accepting Host "localhost:8765" while refusing Origin
+#     "http://localhost:8765" would be incoherent, and the same argument applies
+#     to the dev port -- hence the cross product rather than four literals, so
+#     the host list and the port list cannot drift apart.
 # Deliberately dropped vs the old behaviour: "https://tauri.localhost" and every
 # other scheme on these hostnames. Nothing serves them; the old guard only let
 # them through because it never looked past the hostname.
+# NOT auto-widened: if Vite falls back to 5174 (5173 already taken) or you use
+# `vite preview` on 4173, that origin is refused with a 403 -- add the port here
+# deliberately. Allowing a range would hand the guard back to any local app.
 ALLOWED_ORIGINS = set(FRONTEND_ORIGINS) | {"tauri://localhost"} | {
-    f"http://{h}:{SIDECAR_PORT}" for h in ALLOWED_HOSTS
+    f"http://{h}:{p}" for h in ALLOWED_HOSTS for p in (SIDECAR_PORT, VITE_DEV_PORT)
 }
 
 

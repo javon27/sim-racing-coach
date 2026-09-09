@@ -104,8 +104,12 @@ def test_tauri_and_dev_origins_still_allowed(tmp_path, monkeypatch, mem_keyring)
     c, _ = _client(tmp_path, monkeypatch, mem_keyring)
     # tauri://localhost is the macOS/Linux webview origin -- it passed the old
     # hostname-only compare too, so #60 must not lock those builds out (#54).
+    # Both local ports appear under BOTH host aliases: 127.0.0.1 and localhost
+    # are the same server, and ALLOWED_HOSTS accepts either as a Host, so the
+    # guard must accept either as an Origin. Listing 5173 for only one of them
+    # would refuse a dev who browses to http://127.0.0.1:5173.
     for origin in ("http://tauri.localhost", "tauri://localhost",
-                   "http://localhost:5173",
+                   "http://localhost:5173", "http://127.0.0.1:5173",
                    "http://127.0.0.1:8765", "http://localhost:8765"):
         r = c.post("/ingest", json={}, headers={"Origin": origin})
         assert r.status_code == 200, f"{origin} must stay allowed, got {r.status_code}"
