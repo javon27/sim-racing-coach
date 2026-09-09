@@ -29,8 +29,9 @@ class CornerMetrics:
     peak_steer: float = float("nan")     # max |steering| (0..1 of full lock)
     abs_pct: float = float("nan")        # fraction of corner with ABS engaged (braking too hard)
     tc_pct: float = float("nan")         # fraction of corner with TC engaged (too much throttle)
-    # Closest approach to the track edge (m) — not the track's half-width. Low = using
-    # all the track; negative = the car crossed the white line by that much.
+    # Closest approach of the car's CENTRE to the track edge (m) — not the track's
+    # half-width, and not the outer wheels. Low = using all the track; negative = the
+    # centre crossed the white line by that much.
     track_edge_min: float = float("nan")
     min_spd_delta: Optional[float] = None
     label: str = ""                          # displayed designation ("8A")
@@ -218,6 +219,12 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
     # fired for none of the 168-of-468 real corners a clamp flattened to exactly
     # 0.0. New capture, so nan for laps recorded before it. (Edge units PENDING
     # LIVE VALIDATION — see smm.)
+    # ponytail: centre-to-line, not wheel-to-line. mPathLateral is the car's CENTRE
+    # and we hold no per-car width, so a ~2m GT car's outer wheels sit ~0.8m further
+    # out than this number says -- and the reported median is only 0.24m, i.e. the
+    # whole interesting range hides inside one unmodeled half-car-width (the main
+    # reason so many corners read ~0). Worded as "centre" in format.py rather than
+    # guessing a width; if per-car width ever lands, subtract half of it here.
     edge = record.channels.get("track_edge")
     path_lat = record.channels.get("path_lateral")
     if edge is not None and path_lat is not None:

@@ -591,9 +591,10 @@ class LmuSource:
 
             sample = sample_from_telem(vt, dist)
             # Track-width usage lives on SCORING, not telemetry: path_lateral is the
-            # car's own lateral offset from the racing line's centre path; track_edge
-            # is that SAME centre path's offset to the track edge on the car's side
-            # (~= half the track width there) -- NOT the car's distance to the edge.
+            # car's own lateral offset from the racing line's centre path, taken at the
+            # car's CENTRE (not its outer wheels); track_edge is that SAME centre path's
+            # offset to the track edge on the car's side (~= half the track width there)
+            # -- NOT the car's distance to the edge.
             # Distance-to-edge = |track_edge| - |path_lateral|, computed downstream
             # in analysis.py where both channels are available together.
             # PENDING LIVE VALIDATION: mPathLateral/mTrackEdge units + sign.

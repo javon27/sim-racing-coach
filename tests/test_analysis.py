@@ -151,7 +151,9 @@ def test_track_edge_distance_uses_path_lateral(synthetic_lap):
 
 def test_track_edge_past_edge_wording(synthetic_lap):
     # A negative distance-to-edge must read as "past edge", not as a nonsense
-    # "-0.4m from edge".
+    # "-0.4m from edge". Both wordings name the car's CENTRE, because mPathLateral
+    # is the centre and we hold no per-car width -- a ~2m GT car at "centre 0.2m
+    # from edge" already has its outer wheels ~0.8m over the line.
     import numpy as np
 
     from simcoach.analysis import analyze_lap
@@ -169,12 +171,12 @@ def test_track_edge_past_edge_wording(synthetic_lap):
         lap = LapRecord(**{**synthetic_lap.__dict__, "channels": c})
         return format_corner_line(analyze_lap(lap, cmap).corners[0], "metric")
 
-    past = line_for(4.4)            # 0.4m beyond the white line
-    assert "0.4m past edge" in past
+    past = line_for(4.4)            # centre 0.4m beyond the white line
+    assert "centre 0.4m past edge" in past
     assert "-0.4" not in past and "from edge" not in past
 
-    inside = line_for(3.8)          # still 0.2m inside the line
-    assert "0.2m from edge" in inside
+    inside = line_for(3.8)          # centre still 0.2m inside the line
+    assert "centre 0.2m from edge" in inside
     assert "past edge" not in inside
 
 
