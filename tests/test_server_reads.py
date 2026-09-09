@@ -410,7 +410,14 @@ def test_setup_lazily_connects_via_factory(tmp_path, synthetic_lap):
     assert c.get("/status").json()["lmu_connected"] is True
 
 
-def test_setup_fetch_captures_session_setup(tmp_path, synthetic_lap):
+def test_setup_fetch_captures_session_setup(tmp_path, synthetic_lap, monkeypatch):
+    # Isolate from a live LMU session: unmocked, status() would read the real
+    # shared memory and see the synthetic lap as stale (track/car mismatch),
+    # skipping the capture -- green in CI, red on the rig.
+    from simcoach.lmu import smm
+    monkeypatch.setattr(smm, "read_live_status", lambda: None)
+    monkeypatch.setattr(smm, "read_session_track_car", lambda: None)
+
     class FakeRest:
         def get_setup(self):
             return {
@@ -430,10 +437,14 @@ def test_setup_fetch_captures_session_setup(tmp_path, synthetic_lap):
     assert last["setup"] == {"VM_WING_REAR": {"stringValue": "5", "isFreeSetting": True}}
 
 
-def test_setup_fetch_capture_renders_via_get_last_setup(tmp_path, synthetic_lap):
+def test_setup_fetch_capture_renders_via_get_last_setup(tmp_path, synthetic_lap, monkeypatch):
     # Anti-recurrence: the /setup capture path must store a shape get_last_setup can
     # actually render, not just a shape that round-trips through last_setup().
+    # Isolate from a live LMU session (see test_setup_fetch_captures_session_setup).
     from simcoach.coach_tools import CoachContext
+    from simcoach.lmu import smm
+    monkeypatch.setattr(smm, "read_live_status", lambda: None)
+    monkeypatch.setattr(smm, "read_session_track_car", lambda: None)
 
     class FakeRest:
         def get_setup(self):
