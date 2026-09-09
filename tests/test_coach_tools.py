@@ -440,3 +440,83 @@ def test_current_lap_resolved_from_store_when_not_pinned(tmp_path, synthetic_lap
     assert "Corner facts" in summary and "T1 " in summary
     assert ctx.get_corner("1").startswith("T1 ")
     assert "Current lap: yes" in ctx.get_session_status()
+
+
+# --- get_time_loss (issue #38 slice 1) ----------------------------------------
+
+def _time_loss_ctx(tmp_path, synthetic_lap):
+    """A store holding a clean reference lap plus a slower current lap that loses
+    time ONLY inside T1's 800-1200 m window. Returns (ctx, cur_lap_id)."""
+    import dataclasses
+
+    import numpy as np
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+
+    def clone(lap_time, slow_in_t1=False):
+        ch = {k: v.copy() for k, v in synthetic_lap.channels.items()}
+        if slow_in_t1:
+            d = ch["lap_distance"]
+            ch["speed"][(d >= 900) & (d <= 1100)] = 15.0   # half the corner speed
+        return dataclasses.replace(synthetic_lap, lap_time=lap_time, channels=ch,
+                                   session_id="s1--online", phase="race",
+                                   timestamp=lap_time)
+
+    store.save(clone(90.0))                              # the reference (faster)
+    cur = clone(95.0, slow_in_t1=True)
+    cur_id = store.save(cur)
+    ctx = CoachContext(store, record=cur, lap_id=cur_id, cmap=cmap,
+                       track=cur.track, car=cur.car, session_id="s1--online",
+                       on_track=True)
+    assert np.isfinite(cur.channels["speed"]).all()
+    return ctx, cur_id
+
+
+def test_get_time_loss_names_the_worst_corner(tmp_path, synthetic_lap):
+    ctx, _ = _time_loss_ctx(tmp_path, synthetic_lap)
+    out = ctx.dispatch("get_time_loss", {})
+    assert "Net" in out and "-" in out          # the loss is reported and signed
+    assert "T1 Left Hairpin" in out             # attributed to the owned corner name
+    assert out.index("T1 Left Hairpin") > out.index("Biggest losses")
+
+
+def test_get_time_loss_is_honest_without_a_reference(tmp_path, synthetic_lap):
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)    # only one lap stored
+    assert "reference" in ctx.get_time_loss().lower()
+
+
+def test_get_time_loss_refuses_to_compare_a_lap_to_itself(tmp_path, synthetic_lap):
+    ctx, _ = _time_loss_ctx(tmp_path, synthetic_lap)
+    # 'best' as the subject lap would otherwise be compared against itself.
+    assert "itself" in ctx.get_time_loss(which="best").lower()
+
+
+def test_get_time_loss_registered_in_tools_and_dispatch(tmp_path, synthetic_lap):
+    assert any(t["name"] == "get_time_loss" for t in TOOLS)
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    assert not ctx.dispatch("get_time_loss", {}).startswith("error:")
+
+
+def test_every_advertised_tool_is_dispatchable(tmp_path, synthetic_lap):
+    # A TOOLS entry with no dispatch wiring is a tool the model can call and always
+    # get "error: unknown tool" from.
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    for spec in TOOLS:
+        assert not ctx.dispatch(spec["name"], {}).startswith("error: unknown tool")
+
+
+def test_agentic_loop_can_call_get_time_loss(tmp_path, synthetic_lap):
+    ctx, _ = _time_loss_ctx(tmp_path, synthetic_lap)
+    model = FakeModel(reply="You're losing it at Turn 1.",
+                      tool_script=[("get_time_loss", {})])
+    answer = Coach(model).ask_agentic(ctx, "where am I losing time?", "test_car")
+    assert answer == "You're losing it at Turn 1."
+    assert model.dispatched[0][0] == "get_time_loss"
+    assert "Net" in model.dispatched[0][2]
+
+
+def test_agentic_prompt_points_at_get_time_loss(tmp_path, synthetic_lap):
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    model = FakeModel(reply="ok")
+    Coach(model).ask_agentic(ctx, "where am I losing time?", "test_car")
+    assert "get_time_loss" in model.last_system

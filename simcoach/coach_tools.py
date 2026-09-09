@@ -12,13 +12,14 @@ from __future__ import annotations
 import re
 import time
 
-from simcoach.analysis import analyze_lap
+from simcoach.analysis import analyze_lap, time_loss_buckets
 from simcoach.coach import _setup_lines
 from simcoach.format import (
     find_corner,
     format_corner_line,
     format_lap_facts,
     format_laptime,
+    format_time_loss,
     format_tire_report,
     format_wheel_report,
 )
@@ -55,6 +56,27 @@ TOOLS = [
             "properties": {"which": {"type": "string",
                                      "description": "'latest' (default), 'best', or an in-session "
                                                     "lap number like 'race lap 3'."}},
+        },
+    },
+    {
+        "name": "get_time_loss",
+        "description": "WHERE on track a lap loses time vs a reference lap, as a ranked "
+                       "list of corner-by-corner and straight-by-straight deltas that sum "
+                       "to the net lap delta. Call this FIRST for 'where am I losing time', "
+                       "'why am I slower', or 'what should I work on' — then get_corner on "
+                       "the worst bucket to explain why. Needs a second valid lap on this "
+                       "track/car to compare against.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "which": {"type": "string",
+                          "description": "Which lap to analyse: 'latest' (default) or an "
+                                         "in-session lap number like 'race lap 3'."},
+                "reference": {"type": "string",
+                              "description": "What to compare against: 'best' (default — "
+                                             "this session's best, else all-time best) or "
+                                             "an in-session lap number."},
+            },
         },
     },
     {
@@ -415,6 +437,47 @@ class CoachContext:
         analysis = self._analysis_for(record, lap_id)
         return format_lap_facts(analysis, self.units)
 
+    def _reference_lap(self, record, lap_id, reference="best"):
+        """(record, label) for a time-loss comparison, or (None, label).
+
+        'best' resolves the SAME way `_analysis_for` does — this session's best
+        first (same-phase fairness), all-time best as the fallback — so
+        get_time_loss and the per-corner 'min vs best' deltas never disagree about
+        what "best" means. Never returns the subject lap itself.
+        """
+        reference = (reference or "best").strip().lower()
+        if reference not in ("best", ""):
+            ref, _ = self._resolve_lap(reference)
+            return ref, f"your {reference}"
+        if self.session_id:
+            ref = self.store.best_lap(record.track, record.car, exclude_lap_id=lap_id,
+                                      session_id=self.session_id)
+            if ref is not None:
+                return ref, "your session best"
+        ref = self.store.best_lap(record.track, record.car, exclude_lap_id=lap_id)
+        return ref, "your all-time best"
+
+    def get_time_loss(self, which="latest", reference="best"):
+        record, lap_id = self._resolve_lap(which)
+        if record is None:
+            return "No lap available for that request (none captured yet, or unknown lap)."
+        if self.cmap is None:
+            return "No corner map for this track yet — can't break the lap into corners."
+        ref, ref_label = self._reference_lap(record, lap_id, reference)
+        if ref is None:
+            return ("No reference lap to compare against yet — you need a second valid "
+                    "lap on this track/car.")
+        # `which='best'` resolves no lap_id, so exclude_lap_id can't keep the best lap
+        # out of its own comparison. Say so rather than report a flat zero delta.
+        if ref.timestamp == record.timestamp and ref.lap_time == record.lap_time:
+            return ("That lap IS the reference — a lap can't be compared to itself. "
+                    "Ask about a specific lap (e.g. 'race lap 3') instead.")
+        buckets = time_loss_buckets(record, ref, self.cmap)
+        if buckets is None:
+            return ("That lap can't be compared to the reference (partial lap, or a "
+                    "different track length).")
+        return format_time_loss(buckets, ref_label)
+
     def list_track_corners(self):
         if self.cmap is None or not self.cmap.corners:
             return "No corner map for this track yet — no corner list available."
@@ -698,6 +761,8 @@ class CoachContext:
             "get_session_status": lambda: self.get_session_status(),
             "list_recent_laps": lambda: self.list_recent_laps(args.get("limit", 10)),
             "get_lap_summary": lambda: self.get_lap_summary(args.get("which", "latest")),
+            "get_time_loss": lambda: self.get_time_loss(args.get("which", "latest"),
+                                                        args.get("reference", "best")),
             "list_track_corners": lambda: self.list_track_corners(),
             "get_corner": lambda: self.get_corner(args.get("corner", ""), args.get("which", "latest")),
             "get_tire_report": lambda: self.get_tire_report(),
