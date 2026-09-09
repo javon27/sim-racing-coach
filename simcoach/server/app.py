@@ -420,13 +420,32 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         latest = app.state.latest
         return latest["record"].track if latest is not None else None
 
+    # add_middleware inserts at index 0, so this call must come BEFORE _host_guard
+    # below to make _host_guard the OUTERMOST middleware -- it sees OPTIONS
+    # preflights before CORSMiddleware does. Security doesn't depend on the
+    # ordering (either order refuses), but the insert-at-0 semantics are easy to
+    # get backwards in a later tidy-up.
     app.add_middleware(CORSMiddleware, allow_origins=FRONTEND_ORIGINS,
                         allow_methods=["*"], allow_headers=["*"])
 
     @app.middleware("http")
     async def _host_guard(request: Request, call_next):
+        # Also the CSRF guard for every HTTP route, and the only one that doesn't
+        # depend on a library default. CORSMiddleware decides whether the browser
+        # hands the RESPONSE back to script -- a CORS-simple request is sent and
+        # EXECUTED regardless, so CORS can never prevent a side effect. Refusing a
+        # disallowed Origin here can. Deliberately NOT filtered to mutating
+        # methods: any request that CARRIES a disallowed Origin (all mutating
+        # methods, plus a cors-mode GET) has no legitimate caller and is refused.
+        # BUT a browser does not attach Origin to a no-cors GET -- <img>,
+        # <script>, <link>, <iframe>, and top-level navigation all send none --
+        # so this guard does NOT stop a same-window `<img src="/setup">`-style
+        # read/write; _bad_origin sees no Origin and allows it through by design
+        # (a MISSING Origin must stay allowed so native/Tauri and non-browser
+        # clients work). That GET /setup writes (save_session_setup) is closed
+        # by not writing on a GET, tracked as #51 -- not by this guard.
         host = (request.headers.get("host") or "").split(":")[0].lower()
-        if host not in ALLOWED_HOSTS:
+        if host not in ALLOWED_HOSTS or _bad_origin(request.headers.get("origin")):
             return JSONResponse({"detail": "forbidden host"}, status_code=403)
         return await call_next(request)
 
@@ -926,9 +945,13 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             })
         return out
 
-    # Body(...) forces an application/json content-type, so these bodyless POSTs
-    # stop being CORS "simple requests" -- the browser must preflight, which the
-    # origin allowlist blocks (CSRF guard for the mapping-mode toggle).
+    # CSRF guard for the mutating POSTs: requiring Body(...) means the only
+    # content-type that reaches the handler is application/json, which is NOT a
+    # CORS "simple request" -- the browser must preflight, and the origin
+    # allowlist blocks that. NOTE this depends on FastAPI's strict_content_type
+    # default (0.132+), which is why pyproject pins fastapi>=0.132: on older
+    # FastAPI a body with an ABSENT content-type is still parsed as JSON, and an
+    # absent content-type IS CORS-simple, so the guard silently does nothing.
     @app.post("/mapcapture/start")
     def mapcapture_start(body: dict = Body(...)):
         app.state.map_buffer = []
@@ -1504,7 +1527,12 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         return {"api_key_set": True}
 
     @app.post("/settings/test-key")
-    def test_key():
+    def test_key(body: dict = Body(...)):
+        # Body(...) required as a CSRF guard (same mechanism as /mapcapture/*,
+        # see comment above them). Sharper here than elsewhere: this handler
+        # makes a real, BILLED Anthropic call, so a cross-origin page could loop
+        # it with mode:"no-cors" and burn the user's API credit without ever
+        # needing to read a response.
         try:
             cfg = config.load_config()
             model = make_model(model=cfg.get("model"))
@@ -1514,7 +1542,9 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             return {"ok": False, "error": str(e)}
 
     @app.post("/ingest")
-    def ingest():
+    def ingest(body: dict = Body(...)):
+        # Body(...) forces a JSON content-type -- CSRF guard, same mechanism as
+        # /mapcapture/* (see comment above them).
         return ingest_all(store)
 
     @app.delete("/data")

@@ -6,7 +6,14 @@ build-backend = "setuptools.build_meta"
 name = "simcoach"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["numpy>=1.26", "anthropic>=0.40", "keyring>=25", "fastapi>=0.115", "uvicorn>=0.30", "websockets>=13"]
+# fastapi>=0.132 is a SECURITY floor, not a feature floor: the CSRF guard on the
+# mutating POSTs (Body(...) -> browser must preflight -> origin allowlist blocks it)
+# relies on FastAPI's strict_content_type=True default, added in 0.132. On 0.115-0.131
+# FastAPI parses a body as JSON when Content-Type is ABSENT -- and an absent
+# Content-Type is a CORS-simple request, so no preflight fires and the guard is bypassed.
+# Verified on the same Body(...) route: 0.130.0 and 0.131.0 -> handler ran (200);
+# 0.132.0 and 0.141.1 -> 422. See tests/test_server_ingest.py.
+dependencies = ["numpy>=1.26", "anthropic>=0.40", "keyring>=25", "fastapi>=0.132", "uvicorn>=0.30", "websockets>=13"]
 
 # Explicit discovery: the repo is a flat layout with sibling non-package dirs
 # (site/, brand/, frontend/, packaging/), so setuptools auto-discovery bails with

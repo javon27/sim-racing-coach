@@ -452,7 +452,13 @@ export function setApiKey(key: string): Promise<{ api_key_set: boolean }> {
 }
 
 export function testApiKey(): Promise<{ ok: boolean; error: string | null }> {
-  return request<{ ok: boolean; error: string | null }>("/settings/test-key", { method: "POST" });
+  // Body required so the browser preflights (CSRF guard on a route that makes a
+  // real, billed API call).
+  return request<{ ok: boolean; error: string | null }>("/settings/test-key", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({}),
+  });
 }
 
 export function clearData(): Promise<{ cleared: boolean }> {
@@ -472,7 +478,12 @@ export interface IngestResult {
 }
 
 export function ingestHistory(): Promise<IngestResult> {
-  return request<IngestResult>("/ingest", { method: "POST" });
+  // Body required so the browser preflights (CSRF guard on the mutating route).
+  return request<IngestResult>("/ingest", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({}),
+  });
 }
 
 export interface TrackRow {

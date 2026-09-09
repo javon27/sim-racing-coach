@@ -92,7 +92,11 @@ describe("api client", () => {
 
     const result = await testApiKey();
 
-    expect(fetchMock).toHaveBeenCalledWith(`${BASE}/settings/test-key`, { method: "POST" });
+    expect(fetchMock).toHaveBeenCalledWith(`${BASE}/settings/test-key`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({}),
+    });
     expect(result).toEqual(payload);
   });
 
@@ -126,7 +130,11 @@ describe("api client", () => {
 
     const result = await ingestHistory();
 
-    expect(fetchMock).toHaveBeenCalledWith(`${BASE}/ingest`, { method: "POST" });
+    expect(fetchMock).toHaveBeenCalledWith(`${BASE}/ingest`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({}),
+    });
     expect(result).toEqual(payload);
   });
 
