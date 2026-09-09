@@ -1,11 +1,13 @@
 # tests/test_server_tracks.py
 import json
 import logging
+import shutil
 from pathlib import Path
 
 import numpy as np
 from fastapi.testclient import TestClient
 
+import simcoach
 from simcoach.coach import Coach
 from simcoach.model.fake import FakeModel
 from simcoach.server.app import create_app
@@ -250,6 +252,118 @@ def test_save_track_map_drops_orphaned_corner_notes_on_relabel(tmp_path):
     written = _written(tracks_dir)
     assert written["notes"]["corners"] == {"1": "brake late"}   # '2'/'3' orphaned
     assert written["notes"]["overview"] == "rhythm track"
+
+
+def _four_corners():
+    return [{"number": n, "label": str(n), "name": f"Turn {n}", "apex_dist": 20.0 * n}
+            for n in (1, 2, 3, 4)]
+
+
+def test_save_track_map_keeps_range_keyed_notes(tmp_path):
+    # A per-corner note key may name a RANGE ('2-4') -- that is how a complex gets
+    # annotated, and 16 of the 135 per-corner keys across the shipped maps look like
+    # this. '2-4' is never itself a corner label, so testing the raw key against the
+    # labels dropped every range-keyed note as "stale" on a plain no-op re-save,
+    # even though every corner it names still existed.
+    client, tracks_dir = _client_with_frozen_path(tmp_path)
+    four = _four_corners()
+    assert client.put("/tracks/algarve_international_circuit/map",
+                      json={"corners": four}).status_code == 200
+    _put_notes(client, {"1": "brake late", "2-4": "the fast left-right-left"})
+    assert client.put("/tracks/algarve_international_circuit/map",
+                      json={"corners": four}).status_code == 200
+    assert _written(tracks_dir)["notes"]["corners"] == {
+        "1": "brake late", "2-4": "the fast left-right-left"}
+
+
+def test_save_track_map_keeps_range_note_when_only_some_of_its_corners_survive(tmp_path):
+    # Partial survivor. '1-3' still names corners 1 and 3 after the middle one is
+    # relabelled '2A', and the coach still serves the note for those, so keeping it
+    # loses nothing. It is also no more exposed to renumbering than a plain '1' key,
+    # which the same rule already keeps -- so a range is judged the same way a single
+    # label is: keep it while it names a corner that exists.
+    client, tracks_dir = _client_with_frozen_path(tmp_path)
+    three = [{"number": n, "label": str(n), "name": f"Turn {n}", "apex_dist": 20.0 * n}
+             for n in (1, 2, 3)]
+    assert client.put("/tracks/algarve_international_circuit/map",
+                      json={"corners": three}).status_code == 200
+    _put_notes(client, {"1-3": "the downhill complex"})
+    r = client.put("/tracks/algarve_international_circuit/map", json={"corners": [
+        {"number": 1, "label": "1", "name": "Turn 1", "apex_dist": 20.0},
+        {"number": 2, "label": "2A", "name": "Turn 2A", "apex_dist": 40.0},
+        {"number": 3, "label": "3", "name": "Turn 3", "apex_dist": 60.0},
+    ]})
+    assert r.status_code == 200, r.text
+    assert _written(tracks_dir)["notes"]["corners"] == {"1-3": "the downhill complex"}
+
+
+def test_save_track_map_drops_range_note_when_no_corner_it_names_survives(tmp_path):
+    # GUARD (passes before the fix too -- the old code dropped every range key
+    # unconditionally, so this case cannot be made red). Pins the other side of the
+    # rule: a range naming nothing that still exists is unreachable, so it goes.
+    client, tracks_dir = _client_with_frozen_path(tmp_path)
+    three = [{"number": n, "label": str(n), "name": f"Turn {n}", "apex_dist": 20.0 * n}
+             for n in (1, 2, 3)]
+    assert client.put("/tracks/algarve_international_circuit/map",
+                      json={"corners": three}).status_code == 200
+    _put_notes(client, {"2-3": "the chicane"})
+    r = client.put("/tracks/algarve_international_circuit/map", json={"corners": [
+        {"number": 1, "label": "1A", "name": "Turn 1A", "apex_dist": 20.0},
+        {"number": 2, "label": "2A", "name": "Turn 2A", "apex_dist": 40.0},
+        {"number": 3, "label": "3A", "name": "Turn 3A", "apex_dist": 60.0},
+    ]})
+    assert r.status_code == 200, r.text
+    assert _written(tracks_dir)["notes"]["corners"] == {}
+
+
+def test_save_track_map_drops_range_keyed_notes_when_corner_count_changes(tmp_path, caplog):
+    # GUARD (passes before the fix too). #37's renumbering-safety arm must treat a
+    # range key no differently: a changed corner count drops per-corner notes
+    # wholesale, because every label downstream of a re-split complex shifts.
+    client, tracks_dir = _client_with_frozen_path(tmp_path)
+    four = _four_corners()
+    assert client.put("/tracks/algarve_international_circuit/map",
+                      json={"corners": four}).status_code == 200
+    _put_notes(client, {"2-4": "the fast left-right-left"})
+    with caplog.at_level(logging.WARNING, logger="simcoach.server.app"):
+        r = client.put("/tracks/algarve_international_circuit/map",
+                       json={"corners": four[:3]})
+    assert r.status_code == 200, r.text
+    written = _written(tracks_dir)
+    assert written["notes"]["corners"] == {}
+    assert "the fast left-right-left" in caplog.text   # recoverable from the log
+    assert "corner count changed" in caplog.text
+    assert written["notes"]["overview"] == "rhythm track"
+
+
+def test_self_save_of_shipped_imola_keeps_every_authored_note(tmp_path):
+    # The sharpest check available: hand the editor Imola's OWN shipped map straight
+    # back. Imola's notes are range-keyed ('2-4', '5-6', '11-13', '14-15', '17-18'),
+    # and this self-save silently deleted all five -- 1000 characters of authored
+    # prose -- on every map edit made through the app.
+    slug = "autodromo_enzo_e_dino_ferrari"
+    src = Path(simcoach.__file__).parent / "tracks" / f"{slug}.json"
+    tracks_dir = tmp_path / "tracks"
+    tracks_dir.mkdir()
+    shutil.copy(src, tracks_dir / f"{slug}.json")   # a temp copy; never the repo file
+    before = json.loads(src.read_text(encoding="utf-8"))
+    assert any("-" in k for k in before["notes"]["corners"]), "fixture lost its ranges"
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    client = TestClient(create_app(store, Coach(FakeModel("{}")), tracks_dir=str(tracks_dir)),
+                        base_url="http://127.0.0.1")
+    r = client.put(f"/tracks/{slug}/map", json={
+        "corners": before["corners"], "sectors": before.get("sectors") or [],
+        "sections": before.get("sections") or [], "name": before.get("name")})
+    assert r.status_code == 200, r.text
+    after = json.loads((tracks_dir / f"{slug}.json").read_text(encoding="utf-8"))
+    assert after["notes"] == before["notes"]        # every authored note, verbatim
+    # Otherwise a no-op. Not byte-identical only because a self-save re-bakes
+    # radius_m on 7 corners to different values than the shipped file carries --
+    # a separate, pre-existing geometry drift, unrelated to notes.
+    assert sorted(k for k in set(before) | set(after)
+                  if before.get(k) != after.get(k)) == ["corners"]
+    assert {f for b, a in zip(before["corners"], after["corners"])
+            for f in set(b) | set(a) if b.get(f) != a.get(f)} == {"radius_m"}
 
 
 def test_save_track_map_has_notes_false_once_only_orphans_remained(tmp_path):

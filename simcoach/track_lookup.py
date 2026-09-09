@@ -24,6 +24,36 @@ _SERIES_SUFFIX = re.compile(r"\s*[-–]\s*(elms|wec|lmu|imsa|gtwc)\s*$", re.IGNO
 # Authored prose track notes, `<slug>.md`, keyed on the same slug as the map files.
 KNOWLEDGE_DIR = Path(__file__).parent / "knowledge"
 
+# A per-corner note key is authored either as a single corner label ("7") or as a
+# hyphen RANGE spanning a complex ("2-4", "11-13") -- the only two shapes across
+# every shipped map. Ranges are numeric and inclusive.
+_NOTE_RANGE = re.compile(r"(\d+)-(\d+)")
+
+
+def note_key_binds(key: str, labels: set[str]) -> bool:
+    """Does a per-corner note key still name at least one corner that exists?
+
+    The one place that owns the note-key grammar, so the coach's READ path and the
+    map-save guard that decides which notes survive a rebuild cannot drift apart:
+    a note is kept exactly when the coach could still serve it.
+
+    A plain key names itself. A numeric range names every label it spans, matching
+    how `CoachContext._corner_note` resolves one -- endpoints only would drop a note
+    the coach still serves for the corners in between. Anything else (a comma list,
+    a GP-style '2A-2B') names only itself: the read path cannot resolve such a key,
+    so keeping it on the strength of its parts would preserve unreachable data.
+    """
+    key = str(key)
+    if key in labels:
+        return True
+    m = _NOTE_RANGE.fullmatch(key)
+    if not m:
+        return False
+    lo, hi = sorted((int(m.group(1)), int(m.group(2))))
+    # Scans the labels (capped at 100 by the save endpoint) rather than building the
+    # span, so an authored '1-999999999' costs nothing.
+    return any(lab.isdigit() and lo <= int(lab) <= hi for lab in labels)
+
 
 def track_slug(track_name: str) -> str:
     """Deterministic filename stem for a live track name: drop the championship

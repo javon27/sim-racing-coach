@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from simcoach.track_lookup import load_track_knowledge, resolve_track_map, track_slug
+from simcoach.track_lookup import (
+    load_track_knowledge,
+    note_key_binds,
+    resolve_track_map,
+    track_slug,
+)
 
 KNOWLEDGE = Path(__file__).resolve().parents[1] / "simcoach" / "knowledge"
 
@@ -166,3 +171,55 @@ def test_every_shipped_knowledge_note_is_reachable():
     for p in notes:
         assert track_slug(p.stem) == p.stem, p.name
         assert load_track_knowledge(p.stem).startswith("#"), p.name
+
+
+# --- per-corner note-key grammar -------------------------------------------------
+# Two shapes across all 12 shipped maps: a single label ('7', 119 keys) and an
+# inclusive numeric range ('2-4', '11-13', 16 keys). Nothing else occurs.
+
+def test_note_key_binds_single_label_is_plain_membership():
+    assert note_key_binds("7", {"6", "7", "8"})
+    assert not note_key_binds("7", {"6", "8"})
+
+
+def test_note_key_binds_range_covers_every_corner_it_spans():
+    # Endpoints AND the corners between them -- '11-13' names 12, and that is how
+    # the coach's read path resolves it, so the save guard must agree.
+    assert note_key_binds("11-13", {"12"})
+    assert note_key_binds("11-13", {"11"})
+    assert note_key_binds("11-13", {"13"})
+    assert not note_key_binds("11-13", {"10", "14"})
+
+
+def test_note_key_binds_range_survives_partially():
+    assert note_key_binds("2-4", {"1", "2", "3A", "4A"})       # 2 is still there
+    assert not note_key_binds("2-4", {"1", "2A", "3A", "4A"})  # names nothing left
+
+
+def test_note_key_binds_unparseable_key_names_only_itself():
+    # A GP-style '2A-2B' or a comma list is not a shape the coach's read path can
+    # resolve, so it binds only on an exact label match -- keeping it on the
+    # strength of its parts would preserve data nothing can ever serve.
+    assert not note_key_binds("2A-2B", {"2A", "2B"})
+    assert not note_key_binds("1,2", {"1", "2"})
+    assert note_key_binds("2A-2B", {"2A-2B"})
+
+
+def test_note_key_binds_absurd_range_is_cheap_and_correct():
+    # Authored keys are user input; the check scans the labels, never the span.
+    assert note_key_binds("1-999999999", {"7"})
+    assert not note_key_binds("1-999999999", {"7A"})
+
+
+def test_shipped_note_keys_all_bind_to_their_own_map():
+    # Every authored per-corner note in the shipped set names a corner that exists.
+    # A failure here means a shipped map's notes are already unreachable.
+    tracks = Path(__file__).resolve().parents[1] / "simcoach" / "tracks"
+    seen = 0
+    for p in sorted(tracks.glob("*.json")):
+        data = json.loads(p.read_text(encoding="utf-8"))
+        labels = {str(c.get("label") or c.get("number")) for c in (data.get("corners") or [])}
+        for key in ((data.get("notes") or {}).get("corners") or {}):
+            assert note_key_binds(str(key), labels), f"{p.name}: {key!r} names no corner"
+            seen += 1
+    assert seen > 100, "expected the shipped maps to carry authored per-corner notes"
