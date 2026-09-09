@@ -338,9 +338,21 @@ def corner_geometry(path, dist, corners, *, width=None, bank=None, elev=None):
     return out
 
 
-def geometry_clause(metrics: dict) -> str:
+def geometry_clause(metrics: dict, direction: str | None) -> str:
     """Render baked per-corner geometry as a digest clause, omitting absent
-    metrics. Elevation/banking below a threshold are dropped as noise."""
+    metrics. Elevation/banking below a threshold are dropped as noise.
+
+    `direction` is the corner's OWNED turn direction ("left"/"right", computed
+    from telemetry geometry -- never inferred). It is required because a
+    cross-slope is only meaningful against it: banking_deg's sign names the
+    direction the slope favours (rig-validated in 9756b65 on Laguna's Corkscrew,
+    negative = left, positive = right), so the same 3 degrees is BANKED for a
+    corner turning that way and OFF-CAMBER for one turning the other. Rendering
+    the bare magnitude (issue #35) told the driver the track was helping them
+    where it was falling away -- they then carry more speed into exactly the
+    wrong place. Pass None only when the direction genuinely isn't known; the
+    banking term is then omitted rather than guessed.
+    """
     parts = []
     r = metrics.get("radius_m")
     if r is not None:
@@ -352,6 +364,8 @@ def geometry_clause(metrics: dict) -> str:
     if w is not None:
         parts.append(f"width {w:.0f}m")
     bk = metrics.get("banking_deg")
-    if bk is not None and abs(bk) >= 1.0:
-        parts.append(f"{abs(bk):.0f}\N{DEGREE SIGN} banking")
+    if bk is not None and abs(bk) >= 1.0 and direction in ("left", "right"):
+        favours = "left" if bk < 0 else "right"
+        camber = "banked" if favours == direction else "off-camber"
+        parts.append(f"{abs(bk):.0f}\N{DEGREE SIGN} {camber}")
     return ", ".join(parts)

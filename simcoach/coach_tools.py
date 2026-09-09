@@ -448,7 +448,7 @@ class CoachContext:
         note = self._corner_note(label)
         if note:
             line += f"\nAuthored note: {note}"
-        geo = self._corner_geometry_clause(label)
+        geo = self._corner_geometry_clause(label, cm.direction)
         if geo:
             line += f"\nGeometry (baked from the track map): {geo}"
         return line
@@ -474,14 +474,18 @@ class CoachContext:
                 return text
         return None
 
-    def _corner_geometry_clause(self, label) -> str:
+    def _corner_geometry_clause(self, label, direction=None) -> str:
         """Baked geometry (radius/width/banking/elevation) for one corner label, as
-        an owned-data clause, or '' if the map carries none for this corner."""
+        an owned-data clause, or '' if the map carries none for this corner.
+
+        `direction` is the corner's computed turn direction; banking reads as
+        banked or off-camber only against it (issue #35).
+        """
         geometry = getattr(self.cmap, "geometry", None) or {}
         metrics = geometry.get(str(label))
         if not metrics:
             return ""
-        return geometry_clause(metrics)
+        return geometry_clause(metrics, direction)
 
     def get_track_notes(self, corner=None):
         notes = getattr(self.cmap, "notes", None) or {}

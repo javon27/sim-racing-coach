@@ -751,7 +751,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             lab = c.label or c.number
             line = (f"T{lab} {c.name}: {c.direction}, "
                     f"apex@{c.apex_dist:.0f}m, span {c.start_dist:.0f}-{c.end_dist:.0f}m")
-            clause = geometry_clause(file_corners.get(str(lab), {}))
+            clause = geometry_clause(file_corners.get(str(lab), {}), c.direction)
             if clause:
                 line += ", " + clause
             digest_lines.append(line)
