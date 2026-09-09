@@ -229,23 +229,25 @@ def test_map_prefers_frozen_path_over_reaverage(tmp_path):
     assert len(forced["dist"]) != len(default["dist"])           # avg=1 re-averaged
 
 
-def test_map_for_result_log_lap_with_no_telemetry(tmp_path):
-    # Issue #28: an older session imported from a result log (no telemetry --
-    # source='result', telemetry_path NULL) must still resolve the track's
-    # already-mapped (frozen) layout. The map only needs the lap's track name,
-    # not its own telemetry.
+def _result_log_lap(store, track="Curveland", session_id="race-1") -> int:
+    # A lap imported from an LMU result log: no telemetry at all (telemetry_path
+    # NULL), but it still has a track/car -- which is all map resolution needs.
     from simcoach.lmu.results import ResultLap, ResultSession
-    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     rs = ResultSession(
-        sim="lmu", track="Curveland", car="GT3", car_class="GT3", date_ts=1,
+        sim="lmu", track=track, car="GT3", car_class="GT3", date_ts=1,
         session_type="race", position=3, class_position=2, best_lap=90.0,
         finish_status="Finished",
         laps=[ResultLap(lap_no=1, lap_time=90.0, sectors=[], valid=True)],
         incidents=[], penalties=[],
     )
-    store.save_result_session(rs, session_id="race-1")
-    lap_id = store.session_laps("race-1")[0]["id"]
-    coach = Coach(FakeModel())
+    store.save_result_session(rs, session_id=session_id)
+    return store.session_laps(session_id)[0]["id"]
+
+
+def _result_log_app(tmp_path):
+    # App + a result-log lap on a track that already has a frozen layout on disk.
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    lap_id = _result_log_lap(store)
     tracks = tmp_path / "tracks"
     tracks.mkdir()
     (tracks / "curveland.json").write_text(json.dumps({
@@ -253,10 +255,66 @@ def test_map_for_result_log_lap_with_no_telemetry(tmp_path):
         "path": [[0, 0], [1, 0], [2, 0], [2, 1], [2, 2]],
         "path_dist": [0, 100, 200, 300, 400],
     }))
-    app = create_app(store, coach, tracks_dir=str(tracks))
+    return create_app(store, Coach(FakeModel()), tracks_dir=str(tracks)), lap_id, tracks
+
+
+def test_map_for_result_log_lap_with_no_telemetry(tmp_path):
+    # Issue #28: an older session imported from a result log (no telemetry --
+    # source='result', telemetry_path NULL) must still resolve the track's
+    # already-mapped (frozen) layout. The map only needs the lap's track name,
+    # not its own telemetry.
+    app, lap_id, _ = _result_log_app(tmp_path)
     r = _tc(app).get(f"/laps/{lap_id}/map")
     assert r.status_code == 200
     assert r.json()["dist"] == [0.0, 100.0, 200.0, 300.0, 400.0]
+
+
+def test_map_avg_for_result_log_lap_falls_back_to_frozen(tmp_path):
+    # Issue #28: the editor asks for avg=1 (re-average the track's own laps to pick
+    # up freshly driven ones). A result-log session has no laps to average, and an
+    # empty body reads to the UI as "no saved layout" for a track that HAS one --
+    # so fall back to the frozen layout instead of returning {}.
+    app, lap_id, _ = _result_log_app(tmp_path)
+    r = _tc(app).get(f"/laps/{lap_id}/map?avg=1")
+    assert r.status_code == 200
+    assert r.json()["dist"] == [0.0, 100.0, 200.0, 300.0, 400.0]
+
+
+def test_put_map_for_result_log_lap_with_no_telemetry(tmp_path):
+    # Issue #28: editing an imported session's layout is a legitimate flow -- the
+    # save only needs the lap's track/car, same as the read.
+    app, lap_id, tracks = _result_log_app(tmp_path)
+    r = _tc(app).put(f"/laps/{lap_id}/map", json={
+        "corners": [{"number": 1, "name": "The Bend", "apex_dist": 200.0}]})
+    assert r.status_code == 200, r.text
+    written = json.loads((tracks / "curveland.json").read_text())
+    assert [c["name"] for c in written["corners"]] == ["The Bend"]
+
+
+def test_rotation_for_result_log_lap_with_no_telemetry(tmp_path):
+    # Issue #28: same for rotating an imported session's map.
+    app, lap_id, tracks = _result_log_app(tmp_path)
+    r = _tc(app).post(f"/laps/{lap_id}/rotation", json={"degrees": 90})
+    assert r.status_code == 200, r.text
+    assert json.loads((tracks / "curveland.json").read_text())["rotation"] == 90.0
+
+
+def test_map_routes_404_for_a_lap_id_that_does_not_exist(tmp_path):
+    app, _, _ = _result_log_app(tmp_path)
+    c = _tc(app)
+    assert c.get("/laps/99999/map").status_code == 404
+    assert c.put("/laps/99999/map", json={"corners": []}).status_code == 404
+    assert c.post("/laps/99999/rotation", json={"degrees": 90}).status_code == 404
+
+
+def test_analysis_for_result_log_lap_says_no_telemetry(tmp_path):
+    # Issue #28: analysis genuinely needs telemetry, so 404 is right -- but "lap not
+    # found" sent the user hunting for a missing lap that is sitting right there.
+    app, lap_id, _ = _result_log_app(tmp_path)
+    r = _tc(app).get(f"/laps/{lap_id}/analysis")
+    assert r.status_code == 404
+    assert "telemetry" in r.json()["detail"]
+    assert _tc(app).get("/laps/99999/analysis").json()["detail"] == "lap not found"
 
 
 def test_map_cache_invalidated_after_put(tmp_path):
@@ -769,6 +827,30 @@ def test_mapcapture_rebuild_targets_edited_lap_not_live(tmp_path, monkeypatch):
     r = c.post("/mapcapture/rebuild", json={"lap_id": monza_lap})
     assert r.status_code == 200
     assert r.json().get("track_name") == "Monza"
+
+
+def test_mapcapture_rebuild_never_targets_another_track_for_a_telemetry_less_lap(tmp_path, monkeypatch):
+    # Issue #28: store.load() raised for a result-log lap inside a bare `except
+    # Exception: track = None`, which fell through to the live track and then to the
+    # NEWEST saved capture -- so rebuilding an imported Monza session silently wrote
+    # MapTrack's geometry over it. Resolving the lap must not be allowed to fall
+    # through to a DIFFERENT track; a lap with no capture of its own is a clean 422.
+    from simcoach.lmu import smm
+    app, store = _map_app(tmp_path)
+    app.state.latest = {"record": _edge("MapTrack", 1, 100.0), "lap_id": 0}
+    app.state.map_buffer = [_edge("MapTrack", 1, 100.0), _edge("MapTrack", -1, 100.0)]
+    c = _tc(app)
+    c.post("/mapcapture/build", json={})
+    c.post("/mapcapture/save", json={})        # the only saved capture: maptrack.npz
+    monkeypatch.setattr(smm, "read_session_track_car", lambda: None)
+    app.state.latest = None
+    app.state.last_ribbon = None
+    lap_id = _result_log_lap(store, track="Curveland")   # no telemetry, no capture
+    r = c.post("/mapcapture/rebuild", json={"lap_id": lap_id})
+    assert r.status_code == 422, r.text                  # NOT a 200 full of MapTrack
+    # A lap id that names no lap at all is explicit too, not a silent fall-through.
+    assert c.post("/mapcapture/rebuild", json={"lap_id": 99999}).status_code == 404
+    assert c.post("/mapcapture/rebuild", json={"lap_id": "nope"}).status_code == 422
 
 
 def test_mapcapture_rebuild_corrupt_capture_is_422(tmp_path):

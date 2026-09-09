@@ -332,13 +332,23 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # The track's canonical (path_world, dist): frozen file path first (unless
         # forcing a re-average), else averaged over the track+car's own pos laps,
         # else ([], []). The map is per-track owned data, NOT the selected lap.
-        if not force_avg:
+        def frozen():
             data = _track_file_data(track)
             p, pd = data.get("path"), data.get("path_dist")
             if isinstance(p, list) and isinstance(pd, list) and p and len(p) == len(pd):
                 return p, pd
+            return [], []
+        if not force_avg:
+            p, pd = frozen()
+            if p:
+                return p, pd
         laps = _clean_lap_channels(track, car)
-        return average_racing_line(laps) if laps else ([], [])
+        if laps:
+            return average_racing_line(laps)
+        # Nothing to re-average (a result-log session has no telemetry at all, #28):
+        # fall back to the frozen layout rather than returning {}, which the UI
+        # reports as "no saved layout" for a track that demonstrably has one.
+        return frozen()
 
     def _has_canonical(track: str, car: str) -> bool:
         if not track:
@@ -504,8 +514,13 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     def lap_analysis(lap_id: int):
         try:
             rec = store.load(lap_id)
-        except (KeyError, FileNotFoundError):
+        except KeyError:
             raise HTTPException(404, "lap not found")
+        except FileNotFoundError:
+            # The lap exists; it just has no channels to analyze (imported from a
+            # result log). Saying "lap not found" sent the user hunting for a lap
+            # that is sitting right there in the session list.
+            raise HTTPException(404, "lap has no telemetry to analyze")
         cmap = _map_for(rec.track)
         if cmap is None:
             raise HTTPException(404, "no corner map")
@@ -745,11 +760,12 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
 
     @app.put("/laps/{lap_id}/map")
     def save_lap_map(lap_id: int, body: dict = Body(...)):
-        try:
-            rec = store.load(lap_id)
-        except (KeyError, FileNotFoundError):
+        # Only the lap's track/car, not its telemetry (#28) -- editing an imported
+        # session's layout is a legitimate flow, same as reading it.
+        tc = store.lap_track_car(lap_id)
+        if tc is None:
             raise HTTPException(404, "lap not found")
-        return _persist_map(rec.track, rec.car, body)
+        return _persist_map(tc[0], tc[1], body)
 
     @app.put("/tracks/{slug}/map")
     def save_track_map(slug: str, body: dict = Body(...)):
@@ -891,12 +907,12 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
 
     @app.post("/laps/{lap_id}/rotation")
     def set_rotation(lap_id: int, body: dict = Body(...)):
-        # Body required -> preflight (CSRF), like the mapcapture routes.
-        try:
-            rec = store.load(lap_id)
-        except (KeyError, FileNotFoundError):
+        # Body required -> preflight (CSRF), like the mapcapture routes. Track/car
+        # only, not telemetry (#28) -- see save_lap_map.
+        tc = store.lap_track_car(lap_id)
+        if tc is None:
             raise HTTPException(404, "lap not found")
-        return _persist_rotation(rec.track, rec.car, body)
+        return _persist_rotation(tc[0], tc[1], body)
 
     @app.post("/tracks/{slug}/rotation")
     def set_track_rotation(slug: str, body: dict = Body(...)):
@@ -1070,14 +1086,21 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # ({"lap_id"} -> its track), the live/last track, else the NEWEST saved capture.
         # The edited lap MUST win over the live sim: editing a past Monza session has to
         # rebuild Monza even while Bahrain is the live track.
+        # A lap_id that can't be resolved is an ERROR, never a fall-through: it used
+        # to swallow every exception (including the result-log lap's missing
+        # telemetry, #28) and then rebuild the live/newest track instead -- writing
+        # one track's geometry over another's.
         slug = body.get("slug")
         lap_id = body.get("lap_id")
         track = slug
         if not track and lap_id is not None:
             try:
-                track = app.state.store.load(int(lap_id)).track
-            except Exception:
-                track = None
+                tc = app.state.store.lap_track_car(int(lap_id))
+            except (TypeError, ValueError):
+                raise HTTPException(422, "lap_id must be an integer")
+            if tc is None:
+                raise HTTPException(404, "lap not found")
+            track = tc[0]
         if not track:
             track = _live_track() or (app.state.last_ribbon or {}).get("track")
         path = _capture_path(track) if track else _newest_capture()
