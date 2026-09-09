@@ -12,9 +12,11 @@
           phase = "empty";
         } else {
           phase = adjustable(res).length === 0 ? "none" : "ok";
-          // Persist what we just displayed (#51: GET /setup no longer writes).
-          // Fire-and-forget -- must never block or fail the panel.
-          captureSetup(res).catch(() => {});
+          // Trigger persistence of what the sim currently reports (#51: GET
+          // /setup no longer writes; the server re-reads the setup itself
+          // rather than trusting this response body). Fire-and-forget --
+          // must never block or fail the panel.
+          captureSetup().catch(() => {});
         }
       })
       .catch(() => {

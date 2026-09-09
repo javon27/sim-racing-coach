@@ -1187,14 +1187,22 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
 
     @app.post("/setup/capture")
     def setup_capture(body: dict = Body(...)):
-        # Continuous capture: the Setup panel calls this right after GET /setup,
-        # handing back the same data it just displayed, so we persist the
-        # real-adjustable subset (same isFreeSetting filter as the panel) and
-        # "what did we run here last time?" survives a session ending.
-        # Best-effort -- never break the caller. Guard unchanged from the old
-        # GET-time capture: skip when there's no session_id to key the row on
-        # (else we'd attribute one track's setup to another session).
-        data = body.get("data")
+        # Continuous capture: persists what the sim CURRENTLY reports via
+        # LmuRest, same as the old GET-time capture did -- NOT whatever the
+        # caller sent. `body` is unused except to force a non-simple request
+        # (the CSRF preflight, same as every other POST here); trusting
+        # caller-supplied setup content was a prompt-injection sink, since it
+        # lands verbatim in get_last_setup()'s output and the coach reads that
+        # as fact. Same isFreeSetting filter as the panel, same session_id
+        # guard as before (skip when there's no session_id to key the row on),
+        # same best-effort -- never break the caller.
+        rest = _ensure_rest()
+        if not rest:
+            return {"saved": False}
+        try:
+            data = rest.get_setup()
+        except Exception:
+            return {"saved": False}
         if not data:
             return {"saved": False}
         try:

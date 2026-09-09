@@ -460,13 +460,17 @@ export function getSetup(): Promise<Record<string, unknown>> {
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
-// Explicit persistence for what GET /setup just returned (#51: GET is read-only,
-// a no-cors <img>/<script>/prefetch/retry/replay of it must not write to the DB).
-export function captureSetup(data: Record<string, unknown>): Promise<{ saved: boolean }> {
+// Explicit persistence of what the sim CURRENTLY reports (#51: GET is
+// read-only, a no-cors <img>/<script>/prefetch/retry/replay of it must not
+// write to the DB). Body is empty -- the server re-reads the setup itself
+// rather than trusting caller-supplied content (that was a prompt-injection
+// sink into the coach's prompt); `{}` only keeps the CSRF preflight (a
+// non-simple request needs a body).
+export function captureSetup(): Promise<{ saved: boolean }> {
   return request<{ saved: boolean }>("/setup/capture", {
     method: "POST",
     headers: JSON_HEADERS,
-    body: JSON.stringify({ data }),
+    body: JSON.stringify({}),
   });
 }
 
