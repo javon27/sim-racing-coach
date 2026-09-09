@@ -125,18 +125,18 @@ test("a range this screen cannot bind is flagged, not collapsed", async () => {
 });
 
 test("a label Number() would coerce does not collapse under a range", async () => {
-  // '0007' is 7 to Number(), but the Python guard bounds a corner number to 3 digits, so
-  // collapsing corner '0007' under '5-9' showed the note as bound here and had it
-  // dropped on the next map save. Same for ' 7 ', '7.0', '+7', '0x7', '1e1' and ''.
+  // '07' is 7 to Number() but only '7' to the Python guard's `str(n) in labels` probe,
+  // so collapsing corner '07' under '5-9' showed the note as bound here and had it
+  // dropped on the next map save. Canonical decimal labels only.
   const map = fourCornerMap();
-  (map.corners as unknown as { label: string }[])[2].label = "0007";
+  (map.corners as unknown as { label: string }[])[2].label = "07";
   vi.spyOn(api, "getTrackNotes").mockResolvedValue({
     overview: "", corners: { "5-9": "the complex" }, reference_times: {}, source: "",
   });
   vi.spyOn(api, "getTrackMap").mockResolvedValue(map);
   render(TracksScreen);
   await fireEvent.click(await screen.findByText("Algarve"));
-  expect(await screen.findByLabelText("corner note 0007")).toBeTruthy();   // its own row
+  expect(await screen.findByLabelText("corner note 07")).toBeTruthy();   // its own row
   expect(screen.getByText(/match no corner/i)).toBeTruthy();   // '5-9' flagged, not bound
 });
 
