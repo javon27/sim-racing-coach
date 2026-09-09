@@ -31,7 +31,9 @@ from ..coach_tools import CoachContext
 from ..corners import CornerMap, in_window
 from ..driver import DriverProfile
 from ..lmu.ingest import ingest_all
+from ..model.base import TokenUsage
 from ..model.factory import CoachUserError, make_model
+from ..pricing import estimate_chat_cost
 from ..ribbon import multi_signal_direction, reconstruct_surface, ribbon_to_screen
 from ..tiers import adjustable_from_setup, legal_adjustments
 from ..track_lookup import load_map_data, track_slug
@@ -40,6 +42,19 @@ from ..trackmap import average_racing_line, build_track_map, direction_from_path
 # Shipped corner-map dir, resolved off the package (not cwd) so it's correct
 # wherever the sidecar is launched from. simcoach/server/app.py -> simcoach/tracks.
 _DEFAULT_TRACKS_DIR = Path(__file__).resolve().parent.parent / "tracks"
+
+
+def _usage_view(agg: dict) -> dict:
+    """Shape a LapStore.chat_usage() aggregate for the wire: the four buckets +
+    total + message count, the estimated $, and whether that $ is the whole story.
+
+    The core owns the arithmetic (pricing lives in simcoach.pricing) — the UI only
+    formats what it's given. `by_model` stays server-side; the client has no use for
+    the breakdown, only for the one number and the completeness flag."""
+    usage = {k: agg.get(k, 0) for k in
+             ("input", "output", "cache_read", "cache_write", "total", "messages")}
+    cost, complete = estimate_chat_cost(agg.get("by_model") or {})
+    return {"usage": usage, "cost": cost, "cost_complete": complete}
 _CLEAN_LAP_RATIO = 1.07  # keep laps within +7% of the track/car best (drop in/out/off laps)
 _MAP_BUFFER_MAX = 8      # cap mapping-mode buffer (need only 2 edges; keep last N)
 
@@ -1106,6 +1121,12 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     def chat_messages(chat_id: str):
         return store.chat_messages(chat_id)
 
+    @app.get("/chats/{chat_id}/usage")
+    def chat_usage(chat_id: str):
+        """Billed tokens + estimated $ for a whole chat, so reopening a thread seeds
+        the meter without asking a question. Same shape the `done` frame carries."""
+        return _usage_view(store.chat_usage(chat_id))
+
     @app.websocket("/coach")
     async def coach_ws(ws: WebSocket):
         # HTTP Host-guard middleware does NOT run for websockets — check here.
@@ -1256,10 +1277,23 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                     history = []
 
             text = ""
+            # What this turn billed. One usage event arrives per model call, so a
+            # tool-using question contributes several — summing them here is what
+            # makes the ×N tool-loop re-send visible instead of invisible.
+            turn_usage = TokenUsage()
+            used_model: str | None = None
             try:
                 for ev in app.state.coach.ask_agentic_stream(
                         ctx, question, car=car, input_device=req.get("input_device"),
                         history=history, units=ctx.units, driver_profile=driver_profile):
+                    if ev["type"] == "usage":
+                        # Keep the per-turn breakdown server-side (noise on the wire);
+                        # the client gets one cumulative figure on `done`. The model id
+                        # comes from the event, i.e. what actually billed — NOT from
+                        # config, which may have changed since the model was resolved.
+                        turn_usage = turn_usage + TokenUsage(**ev["usage"])
+                        used_model = ev.get("model") or used_model
+                        continue
                     if ev["type"] == "text":
                         text += ev["text"]       # accumulate streamed deltas into the full answer
                     _emit(ev)
@@ -1277,8 +1311,16 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 try:
                     chat_id = req.get("chat_id") or app.state.store.create_chat()
                     app.state.store.save_chat(chat_id, ctx.session_id, ctx.track, ctx.car, ctx.lap_id,
-                                              question, text, ctx.tool_calls)
+                                              question, text, ctx.tool_calls,
+                                              usage=turn_usage.as_dict(), model=used_model)
                     terminal["chat_id"] = chat_id
+                    # Report the CHAT cumulative total, read back from the store after
+                    # the insert: the number the driver sees is then the persisted
+                    # truth rather than a drifting in-memory counter, and it survives
+                    # a sidecar restart. Still inside the swallowing try — a pricing
+                    # or aggregate failure costs the meter, never the answer.
+                    terminal.update(_usage_view(app.state.store.chat_usage(chat_id)))
+                    terminal["model"] = used_model
                 except Exception:
                     pass
             _emit(terminal)
