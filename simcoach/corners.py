@@ -30,6 +30,42 @@ class Corner:
     apexes: list[float] | None = None  # lap_distances; defaults to [apex_dist] (double-apex -> 2)
 
 
+def _clamp_corner_windows(corners: list[Corner], length: float | None) -> None:
+    """Trim each corner's start/end at the midpoint to its neighbors' apexes (by
+    apex_dist, circularly around the lap) so adjacent corner windows never
+    overlap. A window already inside its bounds is left untouched -- only the
+    side that bleeds past a neighbor's apex is trimmed, so an intentionally
+    narrow window (or an S/F-seam wrap) survives.
+
+    Root-cause fix for adjacent-corner telemetry contamination (e.g. Laguna's
+    T7 window bleeding into the Corkscrew) -- general for ANY track, not
+    special-cased. Mutates `corners` in place; no-op without >=2 corners or a
+    known lap length (can't do circular midpoint math without it)."""
+    n = len(corners)
+    if n < 2 or not length:
+        return
+    length = float(length)
+    order = sorted(range(n), key=lambda i: corners[i].apex_dist)
+    apexes = [corners[i].apex_dist for i in order]
+    eps = 1e-6
+    for k, i in enumerate(order):
+        c = corners[i]
+        a = c.apex_dist
+        prev_a, next_a = apexes[k - 1], apexes[(k + 1) % n]
+        mid_prev = (prev_a + ((a - prev_a) % length) / 2.0) % length
+        mid_next = (a + ((next_a - a) % length) / 2.0) % length
+
+        back = (a - c.start_dist) % length
+        allowed_back = (a - mid_prev) % length
+        if back > allowed_back + eps:
+            c.start_dist = round(mid_prev, 1)
+
+        fwd = (c.end_dist - a) % length
+        allowed_fwd = (mid_next - a) % length
+        if fwd > allowed_fwd + eps:
+            c.end_dist = round(mid_next, 1)
+
+
 def _load_sections(data: dict) -> list[dict]:
     """Named distance spans (straights, corner-group complexes, DRS zones):
     [{name, kind, start_dist, end_dist}]. Default []; validate start<end in range."""
@@ -88,6 +124,7 @@ class CornerMap:
                 c.label = str(c.number)
             if not c.apexes:                      # back-compat: single-apex default
                 c.apexes = [c.apex_dist]
+        _clamp_corner_windows(corners, data.get("length") or data.get("length_m"))
         return cls(corners, _load_sections(data), data.get("notes") or {})
 
     def corner_at(self, dist: float) -> Corner | None:

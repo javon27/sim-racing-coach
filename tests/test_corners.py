@@ -1,3 +1,4 @@
+import itertools
 import json
 
 import numpy as np
@@ -222,3 +223,49 @@ def test_corner_map_notes_default_empty():
     from simcoach.corners import CornerMap
     cm = CornerMap.from_data({"corners": []})
     assert cm.notes == {}
+
+
+def test_laguna_corner_windows_no_longer_overlap():
+    """Regression for #30: T7's window bled ~90m into the Corkscrew (T8), and T8
+    bled into T9, because windows were a fixed half-width around the apex with no
+    clamp against neighboring apexes. Loading the shipped map must now yield
+    strictly non-overlapping, apex-ordered windows for every adjacent pair --
+    asserted generally (no Laguna-specific numbers), so this also guards every
+    other shipped track map against the same class of bug."""
+    from simcoach.corners import CornerMap
+
+    cmap = CornerMap.load("simcoach/tracks/weathertech_raceway_laguna_seca.json")
+    by_apex = sorted(cmap.corners, key=lambda c: c.apex_dist)
+    for prev, cur in itertools.pairwise(by_apex):
+        assert prev.end_dist <= cur.start_dist, (
+            f"corner {prev.number} end ({prev.end_dist}) overlaps "
+            f"corner {cur.number} start ({cur.start_dist})"
+        )
+        # the apex itself must still be inside the (possibly clamped) window
+        assert prev.start_dist <= prev.apex_dist <= prev.end_dist
+        assert cur.start_dist <= cur.apex_dist <= cur.end_dist
+
+
+def test_clamp_preserves_seam_wrap_corner():
+    """A corner whose window wraps the S/F seam (start_dist > end_dist) must keep
+    wrapping after the overlap clamp -- the clamp only trims the side that bleeds
+    past a neighbor's apex, computed with wrap-aware (circular) distance."""
+    from simcoach.corners import CornerMap
+
+    data = {
+        "track": "seam_test", "length": 1000.0,
+        "corners": [
+            {"number": 1, "name": "B", "direction": "left",
+             "start_dist": 60, "apex_dist": 100, "end_dist": 140},
+            {"number": 2, "name": "C", "direction": "left",
+             "start_dist": 450, "apex_dist": 500, "end_dist": 550},
+            # wraps the seam: start (900) > end (50)
+            {"number": 3, "name": "A", "direction": "left",
+             "start_dist": 900, "apex_dist": 950, "end_dist": 50},
+        ],
+    }
+    cmap = CornerMap.from_data(data)
+    seam = next(c for c in cmap.corners if c.number == 3)
+    assert seam.start_dist > seam.end_dist  # still a wrap, not flattened
+    assert seam.start_dist == 900  # untouched: well clear of corner C's midpoint
+    assert seam.end_dist == 25.0   # trimmed to the midpoint with corner B (apex 100)
