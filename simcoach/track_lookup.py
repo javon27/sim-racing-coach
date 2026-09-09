@@ -33,10 +33,17 @@ KNOWLEDGE_DIR = Path(__file__).parent / "knowledge"
 # and which then raises on every later read and every map save. Three digits is the
 # width of a real corner number -- the largest shipped map has 30 corners.
 #
+# COUNTERPART of `MAX_CORNER_DIGITS` / `CORNER_NUM` / `RANGE_KEY` / `MAX_RANGE_SPAN` in
+# frontend/src/lib/TracksScreen.svelte, which reads this same grammar to decide which
+# notes collapse under a range row and which it tells the user match no corner. The two
+# must stay identical: a key this guard drops while that screen shows it bound is
+# authored prose deleted with no warning. Loosen one, loosen both.
+_MAX_CORNER_DIGITS = 3
+
 # A per-corner note key is authored either as a single corner label ("7") or as an
 # ASCENDING hyphen range spanning a complex ("2-4", "11-13") -- the only two shapes
 # across every shipped map (widest is 3 corners). Ranges are inclusive.
-_NOTE_RANGE = re.compile(r"([0-9]{1,3})-([0-9]{1,3})")
+_NOTE_RANGE = re.compile(rf"([0-9]{{1,{_MAX_CORNER_DIGITS}}})-([0-9]{{1,{_MAX_CORNER_DIGITS}}})")
 
 # Widest span still read as a corner complex. Bounds the probe loop below, and bounds
 # how many corners ONE authored key can speak for: a blanket '1-999' used to bind every

@@ -237,10 +237,15 @@ def test_note_key_binds_matches_the_ui_grammar():
     # not be one the UI calls an orphan, so pin the JS source that has to agree. A
     # cross-language run would need node plus a Svelte parse; reading the literal is
     # the cheap version and still fails if someone edits it.
+    from simcoach.track_lookup import _MAX_CORNER_DIGITS, _MAX_RANGE_SPAN
     svelte = (Path(__file__).resolve().parents[1]
               / "frontend" / "src" / "lib" / "TracksScreen.svelte").read_text(encoding="utf-8")
-    assert "/^(\\d+)-(\\d+)$/.exec(k)" in svelte, "TracksScreen.rangeOf changed: re-check agreement"
-    assert "Number.isInteger(n) ? ranges.find" in svelte, "TracksScreen label side changed"
+    for literal in (f"const MAX_CORNER_DIGITS = {_MAX_CORNER_DIGITS};",
+                    f"const MAX_RANGE_SPAN = {_MAX_RANGE_SPAN};",
+                    "String.raw`\\d{1,${MAX_CORNER_DIGITS}}`",      # the shared number
+                    "hi < lo || hi - lo >= MAX_RANGE_SPAN ? null",  # ascending + capped
+                    "CORNER_NUM.test(label) && String(n) === label"):  # canonical labels
+        assert literal in svelte, f"TracksScreen grammar changed, re-check agreement: {literal}"
     # Agreement on the keys that distinguish the two candidate grammars. Python is the
     # lenient one by default (`\d` is Unicode, and it could normalise direction), so
     # every row here is a case where it had to be held DOWN to the UI.
@@ -273,32 +278,24 @@ def test_note_key_binds_wide_range_names_nothing():
     assert note_key_binds("1-999", {"1-999"})       # still its own label
 
 
-def test_note_key_binds_known_divergences_from_the_ui():
-    # The residual, measured by running TracksScreen's own logic under node against this
-    # grammar over 270 key x label pairs: 47 disagree, every one of them Python being
-    # STRICTER. Three classes, each a deliberate choice made above:
+def test_note_key_binds_is_strict_where_the_ui_is_now_strict_too():
+    # These are the cases where the two readers used to disagree, all three classes of
+    # them: a label `Number()` coerced to a covered integer ('07' is 7, a string probe
+    # matches only '7'), a range endpoint of 4+ digits, and a span over _MAX_RANGE_SPAN.
+    # The UI bound all of them and this guard bound none, which is the DATA-LOSS
+    # direction -- the Tracks screen collapsed the note under a range row, telling the
+    # author it was bound, while the next map save dropped it with only a log line.
     #
-    # 1. A label `Number()` coerces to a covered integer but a string probe does not
-    #    match. The price of deleting the label parse -- which is what makes this
-    #    function total -- since the UI reads '07' as 7 and a probe only matches '7'.
-    # 2. A range endpoint of 4+ digits: not a range here, a range in the UI, because
-    #    the digit bound is what puts the 4300-digit int() crash out of reach.
-    # 3. A span over _MAX_RANGE_SPAN: not a range here, a range in the UI, which is
-    #    the blanket-key mitigation above.
-    #
-    # Pinned rather than fixed, because no shipped map has a key or label in any class
-    # and none is reachable through the UI (TracksScreen drives its rows off the map
-    # and has no free-form key entry, so these need a direct PUT /notes or a hand-edited
-    # file). On the record because the consequence is not cosmetic: in every class the
-    # UI collapses the note under a range row -- telling the user it is bound -- while
-    # this guard drops it on the next map save. Closing class 1 means the label parse
-    # comes back; closing 2 and 3 means narrowing the UI's `\d+`, a frontend change
-    # deliberately not made here.
-    for label in ("07", "007", "0007", " 7 ", "7.0", "+7", "0x7"):
-        assert not note_key_binds("5-9", {label})   # (1) UI: Number(label) == 7
-    assert not note_key_binds("0-0", {""})          # (1) UI: Number('') == 0
-    assert not note_key_binds("1-1000", {"7"})      # (2) UI: Number() is unbounded
-    assert not note_key_binds("1-101", {"50"})      # (3) UI: has no span cap
+    # Closed in both directions now: TracksScreen was narrowed to match (its grammar is
+    # pinned in the test above), and a node comparison over 360 key x label pairs shows
+    # zero disagreements. Kept as the Python half of that invariant -- the JS half is
+    # pinned by source literals, and this is what fails if the bound moves here.
+    for label in ("07", "007", "0007", " 7 ", "7.0", "+7", "0x7", "1e1"):
+        assert not note_key_binds("5-9", {label})   # non-canonical: only '7' is 7
+    assert not note_key_binds("0-0", {""})          # an empty label is not 0
+    assert not note_key_binds("1-1000", {"7"})      # 4-digit endpoint: not a range
+    assert not note_key_binds("1-101", {"50"})      # over the span cap: not a range
+    assert note_key_binds("5-9", {"7"})             # the canonical form still binds
 
 
 def test_note_key_binds_ignores_labels_int_cannot_parse():

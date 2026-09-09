@@ -104,6 +104,42 @@ test("a hyphen-range note collapses its covered corners into one row", async () 
   expect(screen.queryByText(/match no corner/i)).toBeNull();
 });
 
+test("a range this screen cannot bind is flagged, not collapsed", async () => {
+  // The grammar here must match `note_key_binds` in simcoach/track_lookup.py, which is
+  // the guard deciding which per-corner notes survive a map save. Anything this screen
+  // collapses under a range row but that guard drops is authored prose deleted with no
+  // warning, so the strictness is the point: a 4-digit endpoint ('1-1000'), a span over
+  // the cap ('1-101') and a descending key ('3-1') are all NOT ranges, and so show as
+  // orphans rather than silently swallowing corners 1-4.
+  vi.spyOn(api, "getTrackNotes").mockResolvedValue({
+    overview: "", corners: { "1-1000": "a", "1-101": "b", "3-1": "c" },
+    reference_times: {}, source: "",
+  });
+  vi.spyOn(api, "getTrackMap").mockResolvedValue(fourCornerMap());
+  render(TracksScreen);
+  await fireEvent.click(await screen.findByText("Algarve"));
+  for (const n of [1, 2, 3, 4]) {
+    expect(await screen.findByLabelText(`corner note ${n}`)).toBeTruthy();   // own row
+  }
+  expect(screen.getByText(/match no corner/i)).toBeTruthy();
+});
+
+test("a label Number() would coerce does not collapse under a range", async () => {
+  // '07' is 7 to Number() but only '7' to the Python guard's `str(n) in labels` probe,
+  // so collapsing corner '07' under '5-9' showed the note as bound here and had it
+  // dropped on the next map save. Canonical decimal labels only.
+  const map = fourCornerMap();
+  (map.corners as unknown as { label: string }[])[2].label = "07";
+  vi.spyOn(api, "getTrackNotes").mockResolvedValue({
+    overview: "", corners: { "5-9": "the complex" }, reference_times: {}, source: "",
+  });
+  vi.spyOn(api, "getTrackMap").mockResolvedValue(map);
+  render(TracksScreen);
+  await fireEvent.click(await screen.findByText("Algarve"));
+  expect(await screen.findByLabelText("corner note 07")).toBeTruthy();   // its own row
+  expect(screen.getByText(/match no corner/i)).toBeTruthy();   // '5-9' flagged, not bound
+});
+
 test("save sends the edited notes for the selected track", async () => {
   const saveSpy = vi.spyOn(api, "saveNotes").mockResolvedValue({ ok: true });
   render(TracksScreen);
