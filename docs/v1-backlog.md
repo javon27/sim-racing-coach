@@ -247,3 +247,43 @@ Open questions to settle in the spec:
   owned/verified, never live-LLM-guessed, to preserve the invariant.
 - Do notes live IN the track JSON or a sibling file? (Editing/versioning implications.)
 - Coverage: which tracks ship with notes at v1 vs. added over time.
+
+## Live-rig session, 2026-09-08 — session-continuity fixes + car knowledge
+Branch `feat/car-knowledge-and-session-fixes` (worktree `../sim-racing-coach-carwork`),
+NOT yet merged to main. Requires a **sidecar rebuild** to reach the running app.
+
+- [x] **Live view showed a session from days ago after driving a fresh lap.** ROOT
+  CAUSE: `store.save()` resolved the dated session instance (`base~<date>`) for the DB
+  row but never wrote it back onto the in-memory `LapRecord`, so `/status`, the lap
+  list, and the coach auto-anchor read the deterministic BASE id — which resolves to
+  the OLDEST weekend for that (track, car). FIX: write the resolved id back onto the
+  record (`record.session_id = sid`). Test: record reflects the resolved instance after
+  save. (commit `3154e33`, orig `cb2a2c5`.)
+- [x] **Coach question asked in the garage (before any lap) was orphaned** — saved with
+  `session_id=NULL`, so it never linked to the session and wasn't resumable, and the
+  view looked "blank" once it anchored elsewhere. FIX: stamp pre-lap chats with the live
+  session instance (new `smm.read_live_session_id` + `store.resolve_current_instance`),
+  and count coach chats as session activity in `_resolve_session_instance` so the laps
+  driven minutes later JOIN the same instance and the chat stays resumable via Sessions.
+  Test: a garage chat and the following laps share one instance. (same commit.)
+- [x] **Car knowledge for the agentic coach — SHIPPED** (commit `04c07a1`, implements
+  spec `docs/superpowers/specs/2026-09-08-car-knowledge-design.md`). New shipped car-
+  notes store `simcoach/cars/<slug>.json` + `car_notes.load_car_notes` loader (mirrors
+  `track_lookup.load_map_data`); shared `cars/_lmu_setup_concepts.json` distilled from
+  the 20KB setup guide; `get_car_notes` coach tool + prompt (provenance-tag hedging);
+  migrated the per-car `knowledge/*.md` into the store and retired the legacy
+  `knowledge_dir` car-note load (dropped from `Coach`, all call sites updated);
+  packaging ships `cars/`. Follow-up (still open, from memory): the map-editor by-slug
+  binding and hand-authoring notes for more cars/tracks over time.
+- [ ] **KNOWN pre-existing test failures (NOT from this work):**
+  `tests/test_server_reads.py::test_setup_fetch_captures_session_setup` and
+  `::test_setup_fetch_capture_renders_via_get_last_setup` fail on the committed tree
+  (verified they fail without any of this session's changes). The `/setup` route isn't
+  persisting the session setup as the tests expect — needs its own investigation.
+- NOTE (git topology to untangle when merging): an earlier, now-closed agent left the
+  per-corner-geometry spec (`35732ff`) and mapcapture (`91383ba`) UNMERGED on
+  `feat/per-corner-geometry` (the main checkout's current branch); `91383ba` also
+  accidentally swept in this feature's `server/app.py` car_notes wiring. My work was
+  cherry-picked clean onto `feat/car-knowledge-and-session-fixes` off `main` (with that
+  server wiring re-added). Do NOT delete `feat/per-corner-geometry` — it holds the only
+  copy of the mapcapture work.
