@@ -344,6 +344,16 @@ class LapStore:
                 os.remove(telemetry_path)
             raise
 
+    def lap_track_car(self, lap_id: int) -> tuple[str, str] | None:
+        """(track, car) for a lap id, or None if it doesn't exist. Unlike load(),
+        this never requires telemetry -- a result-log-imported lap (telemetry_path
+        NULL) still has a track/car, which is all per-track map resolution needs."""
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT track, car FROM laps WHERE id = ?", (lap_id,),
+            ).fetchone()
+        return (row[0], row[1]) if row is not None else None
+
     def load(self, lap_id: int) -> LapRecord:
         with self._lock:
             row = self.conn.execute(

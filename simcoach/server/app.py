@@ -332,13 +332,23 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # The track's canonical (path_world, dist): frozen file path first (unless
         # forcing a re-average), else averaged over the track+car's own pos laps,
         # else ([], []). The map is per-track owned data, NOT the selected lap.
-        if not force_avg:
+        def frozen():
             data = _track_file_data(track)
             p, pd = data.get("path"), data.get("path_dist")
             if isinstance(p, list) and isinstance(pd, list) and p and len(p) == len(pd):
                 return p, pd
+            return [], []
+        if not force_avg:
+            p, pd = frozen()
+            if p:
+                return p, pd
         laps = _clean_lap_channels(track, car)
-        return average_racing_line(laps) if laps else ([], [])
+        if laps:
+            return average_racing_line(laps)
+        # Nothing to re-average (a result-log session has no telemetry at all, #28):
+        # fall back to the frozen layout rather than returning {}, which the UI
+        # reports as "no saved layout" for a track that demonstrably has one.
+        return frozen()
 
     def _has_canonical(track: str, car: str) -> bool:
         if not track:
@@ -523,8 +533,13 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     def lap_analysis(lap_id: int):
         try:
             rec = store.load(lap_id)
-        except (KeyError, FileNotFoundError):
+        except KeyError:
             raise HTTPException(404, "lap not found")
+        except FileNotFoundError:
+            # The lap exists; it just has no channels to analyze (imported from a
+            # result log). Saying "lap not found" sent the user hunting for a lap
+            # that is sitting right there in the session list.
+            raise HTTPException(404, "lap has no telemetry to analyze")
         cmap = _map_for(rec.track)
         if cmap is None:
             raise HTTPException(404, "no corner map")
@@ -543,21 +558,24 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # The map is the track's CANONICAL layout, the same for every lap -- the
         # lap_id only selects the track (+car). avg=0: frozen file, else averaged
         # over the track's own pos laps (cached). avg=1: force a fresh re-average
-        # (editor, to pick up newly-driven laps before re-freezing).
-        try:
-            rec = store.load(lap_id)
-        except (KeyError, FileNotFoundError):
+        # (editor, to pick up newly-driven laps before re-freezing). Only the
+        # track/car strings are needed (not the lap's own telemetry), so an older
+        # session imported from a result log (no telemetry_path) still resolves
+        # an already-mapped track's frozen layout.
+        tc = store.lap_track_car(lap_id)
+        if tc is None:
             raise HTTPException(404, "lap not found")
-        m = _canonical_map(rec.track, rec.car, force=bool(avg))
+        track, car = tc
+        m = _canonical_map(track, car, force=bool(avg))
         if m:
             # The game's real S1/S2 boundaries (if any lap captured them) so the
             # editor can seed sector splits at the true positions, not thirds.
             # `shipped`: the geometry is a built-in the user may annotate but not rebuild.
             # `curating`: dev (source) build — layout tools + the track name are editable.
             # `track_name`: stored display-name override, else the live/canonical name.
-            m = {**m, "detected_sectors": store.sector_bounds(rec.track, rec.car) or [],
-                 "shipped": _is_shipped(rec.track), "curating": _curating(),
-                 "track_name": _track_file_data(rec.track).get("name") or rec.track}
+            m = {**m, "detected_sectors": store.sector_bounds(track, car) or [],
+                 "shipped": _is_shipped(track), "curating": _curating(),
+                 "track_name": _track_file_data(track).get("name") or track}
         return m
 
     @app.get("/track/map")
@@ -728,6 +746,31 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             out["name"] = name
         if keep_ribbon:
             out["ribbon"] = keep_ribbon  # keep the reconstructed surface across edits
+        old_notes = existing.get("notes") or {}
+        if old_notes:
+            # Carry the authored notes overlay across a rebuild instead of wiping it
+            # (#37) -- but per-corner notes are keyed by corner LABEL, and a rebuild
+            # can re-split a chicane or relabel '2' as '2A'/'2B'. A stale key then
+            # rebinds a note to a DIFFERENT corner, which get_corner states as owned
+            # fact ("Authored note: ...") -- worse than losing it. So keep a per-corner
+            # note only when the corner count is unchanged AND its label still exists;
+            # overview/reference_times/source are not corner-keyed, always keep those.
+            old_corners = {str(k): v for k, v in (old_notes.get("corners") or {}).items()}
+            same_count = len(existing.get("corners") or []) == len(corners)
+            labels = {c["label"] for c in corners}
+            kept = {k: v for k, v in old_corners.items() if k in labels} if same_count else {}
+            notes = {**old_notes, "corners": kept}
+            if any(notes.values()):   # all-empty -> don't write a hollow notes block
+                out["notes"] = notes
+            dropped = {k: v for k, v in old_corners.items() if k not in kept}
+            if dropped:
+                # Loud, and with the text, so the author can recover it from the log.
+                logging.getLogger(__name__).warning(
+                    "track %s: dropped %d authored per-corner note(s) on map save (%s); "
+                    "re-author them against the new layout. Dropped: %s",
+                    track_slug(track), len(dropped),
+                    "corner count changed" if not same_count else "labels no longer exist",
+                    json.dumps(dropped, ensure_ascii=False))
         _write_track_json(track, out)
         # Invalidate cmap + canonical caches so the next GET returns the new
         # canonical map (now frozen into the file).
@@ -736,11 +779,12 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
 
     @app.put("/laps/{lap_id}/map")
     def save_lap_map(lap_id: int, body: dict = Body(...)):
-        try:
-            rec = store.load(lap_id)
-        except (KeyError, FileNotFoundError):
+        # Only the lap's track/car, not its telemetry (#28) -- editing an imported
+        # session's layout is a legitimate flow, same as reading it.
+        tc = store.lap_track_car(lap_id)
+        if tc is None:
             raise HTTPException(404, "lap not found")
-        return _persist_map(rec.track, rec.car, body)
+        return _persist_map(tc[0], tc[1], body)
 
     @app.put("/tracks/{slug}/map")
     def save_track_map(slug: str, body: dict = Body(...)):
@@ -882,12 +926,12 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
 
     @app.post("/laps/{lap_id}/rotation")
     def set_rotation(lap_id: int, body: dict = Body(...)):
-        # Body required -> preflight (CSRF), like the mapcapture routes.
-        try:
-            rec = store.load(lap_id)
-        except (KeyError, FileNotFoundError):
+        # Body required -> preflight (CSRF), like the mapcapture routes. Track/car
+        # only, not telemetry (#28) -- see save_lap_map.
+        tc = store.lap_track_car(lap_id)
+        if tc is None:
             raise HTTPException(404, "lap not found")
-        return _persist_rotation(rec.track, rec.car, body)
+        return _persist_rotation(tc[0], tc[1], body)
 
     @app.post("/tracks/{slug}/rotation")
     def set_track_rotation(slug: str, body: dict = Body(...)):
@@ -1065,14 +1109,21 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # ({"lap_id"} -> its track), the live/last track, else the NEWEST saved capture.
         # The edited lap MUST win over the live sim: editing a past Monza session has to
         # rebuild Monza even while Bahrain is the live track.
+        # A lap_id that can't be resolved is an ERROR, never a fall-through: it used
+        # to swallow every exception (including the result-log lap's missing
+        # telemetry, #28) and then rebuild the live/newest track instead -- writing
+        # one track's geometry over another's.
         slug = body.get("slug")
         lap_id = body.get("lap_id")
         track = slug
         if not track and lap_id is not None:
             try:
-                track = app.state.store.load(int(lap_id)).track
-            except Exception:
-                track = None
+                tc = app.state.store.lap_track_car(int(lap_id))
+            except (TypeError, ValueError):
+                raise HTTPException(422, "lap_id must be an integer")
+            if tc is None:
+                raise HTTPException(404, "lap not found")
+            track = tc[0]
         if not track:
             track = _live_track() or (app.state.last_ribbon or {}).get("track")
         path = _capture_path(track) if track else _newest_capture()
