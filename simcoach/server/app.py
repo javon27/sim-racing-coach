@@ -42,6 +42,45 @@ from ..trackmap import average_racing_line, build_track_map, direction_from_path
 # wherever the sidecar is launched from. simcoach/server/app.py -> simcoach/tracks.
 _DEFAULT_TRACKS_DIR = Path(__file__).resolve().parent.parent / "tracks"
 
+# Bounds for `PUT /tracks/{slug}/notes`, the one endpoint on the notes path that had
+# none: every field there is free text that gets persisted verbatim into the track file
+# and carried across every later map save. The numbers are the ones this path already
+# uses rather than a new scheme -- 100 is the corner cap in `_persist_map`, 80 is its
+# corner-name cap. _MAX_NOTE_CHARS is ~300 words: 2.5x the 120-word overview budget and
+# 6x the 50-word per-corner budget the drafting prompt states, so it cannot clip prose
+# authored to spec. Over-limit input is REJECTED, never truncated -- silently shortening
+# authored notes is the class of bug this path just got fixed for.
+_MAX_NOTE_KEYS = 100
+_MAX_NOTE_KEY_CHARS = 80
+_MAX_NOTE_CHARS = 2000
+
+# DOCUMENT cap, on top of the per-field ones, because 200 fields that each pass their own
+# cap still landed a 5 MB body on disk -- 2.5x the single-field abuse the caps above were
+# added to stop, just spread across 100 corner keys + 100 reference times -- and every
+# later map save re-read and re-wrote it. The per-field caps stay: they name the offending
+# field, which one document cap cannot.
+#
+# BYTES of `json.dumps(notes)` -- the same serializer, with the same ensure_ascii=True,
+# that _write_track_json uses, so the quantity enforced here is the quantity that lands on
+# disk. Measuring the unescaped string instead would bound CODE POINTS, and an astral char
+# escapes to 12 bytes: an all-emoji payload measured 62,367 code points, passed, and wrote
+# 744,367 bytes. Escaped JSON is pure ASCII, so one char is one byte and the cap holds
+# whatever the encoding -- at the limit the notes block on disk is ~64.5 KB of ASCII prose
+# and ~64.2 KB of emoji (the extra over the cap is indent=2 whitespace).
+#
+# The number is the intended ceiling MEASURED, not rounded: the largest shipped map has 30
+# corners, so 30 notes at the full 2000-char per-note cap plus overview and source at
+# theirs serialises to exactly 64,357 bytes. (The raw content is 64,000 -- quoting, keys,
+# colons and commas are the other 357, which is why the constant is not a round number.
+# Stating 64,000 would have refused the very document the derivation is built from.)
+# For scale, the biggest `notes` block in simcoach/tracks/*.json today is 4,412 bytes
+# (longest single note 289, longest overview 706, most corner keys 24; shipped notes are
+# pure ASCII, so escaping does not move that number), making this ~14.6x the real worst
+# case. The per-FIELD caps still count code points, which is what the editor shows the
+# author -- on astral text the UI's UTF-16 count and those caps disagree, accepted, and
+# this cap is what bounds the consequence.
+_MAX_NOTES_DOC_BYTES = 64_357
+
 
 def _usage_view(agg: dict) -> dict:
     """Shape a LapStore.chat_usage() aggregate for the wire: the four buckets +
@@ -831,14 +870,19 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 out["notes"] = notes
             dropped = {k: v for k, v in old_corners.items() if k not in kept}
             if dropped:
-                # Loud, and with the text, so the author can recover it from the log.
+                # Loud, and with the text, so the author can recover it from the log --
+                # but BOUNDED. This dumped every dropped note in full: a probe that
+                # stored many notes made one warning() call write 4.6 MB, so a log sink
+                # became a place unbounded user input lands. 20 keys with 200 chars of
+                # each note is enough to re-author from, and the count stays exact.
+                sample = {k: v[:200] for k, v in sorted(dropped.items())[:20]}
                 logging.getLogger(__name__).warning(
                     "track %s: dropped %d authored per-corner note(s) on map save (%s); "
-                    "re-author them against the new layout. Dropped: %s",
+                    "re-author them against the new layout. Dropped (%d shown): %s",
                     track_slug(track), len(dropped),
                     "corner count changed" if not same_count
                     else "the corners they name no longer exist",
-                    json.dumps(dropped, ensure_ascii=False))
+                    len(sample), json.dumps(sample, ensure_ascii=False))
         _write_track_json(track, out)
         # Invalidate cmap + canonical caches so the next GET returns the new
         # canonical map (now frozen into the file).
@@ -916,10 +960,43 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         if track_slug(track) != slug:
             raise HTTPException(400, "slug/track mismatch")
         raw = body.get("notes") or {}
-        notes = {"overview": str(raw.get("overview", "")),
-                 "corners": {str(k): str(v) for k, v in (raw.get("corners") or {}).items()},
-                 "reference_times": {str(k): str(v) for k, v in (raw.get("reference_times") or {}).items()},
-                 "source": str(raw.get("source", ""))}
+
+        def _text(value: object, field: str) -> str:
+            s = str(value)
+            if len(s) > _MAX_NOTE_CHARS:
+                raise HTTPException(422, f"{field} exceeds {_MAX_NOTE_CHARS} characters")
+            return s
+
+        def _text_map(value: object, field: str) -> dict[str, str]:
+            # A non-dict REFUSES, never coerces to empty: this write REPLACES the notes
+            # already on disk, so accepting `corners: [["1", "brake late"]]` as {} would
+            # return 200 and wipe authored prose. (The same shape on the map-promotion
+            # path is correctly coerced -- there a malformed `corners` never held notes,
+            # so nothing is lost. The question is always what is on the other side.)
+            if value is not None and not isinstance(value, dict):
+                raise HTTPException(422, f"{field} must be an object")
+            items = list(value.items()) if isinstance(value, dict) else []
+            if len(items) > _MAX_NOTE_KEYS:
+                raise HTTPException(422, f"too many {field} (max {_MAX_NOTE_KEYS})")
+            out = {}
+            for k, v in items:
+                k = str(k)
+                if len(k) > _MAX_NOTE_KEY_CHARS:
+                    raise HTTPException(
+                        422, f"{field} key exceeds {_MAX_NOTE_KEY_CHARS} characters")
+                out[k] = _text(v, f"{field} note")
+            return out
+
+        notes = {"overview": _text(raw.get("overview", ""), "overview"),
+                 "corners": _text_map(raw.get("corners"), "corner notes"),
+                 "reference_times": _text_map(raw.get("reference_times"), "reference times"),
+                 "source": _text(raw.get("source", ""), "source")}
+        # Serialised exactly as _write_track_json will serialise it, so this measures the
+        # bytes that land on disk. Checked after the per-field caps so an over-limit field
+        # still gets its own named error.
+        if len(json.dumps(notes)) > _MAX_NOTES_DOC_BYTES:
+            raise HTTPException(
+                422, f"notes document exceeds {_MAX_NOTES_DOC_BYTES} bytes")
         data = dict(_track_file_data(track))       # merged shipped+overlay
         if not data:
             raise HTTPException(404, "no track file to annotate")

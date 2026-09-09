@@ -64,11 +64,41 @@
     const valid = new Set(rows.map((row) => row.key));
     return { rows, orphans: keys.filter((k) => !valid.has(k)) };
   });
+  // Both note maps are keyed on FREE TEXT: a corner label typed into the map editor,
+  // and the reference-time class typed into the Add row below. 'toString' / 'valueOf'
+  // resolve through Object.prototype, which broke these objects BOTH ways, so every read
+  // goes through `noteOf` (never `in` + a bare index) and every write through
+  // `setNote`/`setRefTime` (never `notes.corners[k] = v`):
+  //   READ:  `'toString' in notes.corners` was true for a key that did not exist, so the
+  //          seed below skipped it and the row read Object.prototype.toString -- a
+  //          function, which `?? ""` keeps and wordCount() throws "s.trim is not a
+  //          function" on, blanking the screen.
+  //   WRITE: Svelte's $state proxy SILENTLY DISCARDS `obj[k] = v` for such a key -- its
+  //          set trap only creates a source when the key is absent or an own writable
+  //          property, and a prototype-shadowed name is neither. The authored note went
+  //          nowhere at all. Replacing the object materializes a real own property.
+  //   DELETE: `delete notes.corners[k]` leaves the RAW TARGET's key in place -- Svelte's
+  //          deleteProperty never calls Reflect.deleteProperty, it only parks the key's
+  //          source at UNINITIALIZED. Object.keys, `in`, a read and JSON.stringify all
+  //          correctly report it gone; Object.hasOwn does NOT, because
+  //          getOwnPropertyDescriptor hands back the raw target's descriptor. noteOf then
+  //          returned undefined and the seed skipped re-seeding, so a deleted orphan note
+  //          whose corner later reappeared on the map threw the same TypeError.
+  // That last one is the point of this whole shape: NEITHER `in` (wrong after a
+  // prototype-key write) NOR Object.hasOwn (wrong after a delete) is correct on its own.
+  // One honest read primitive requires an honest target, which is what replacing the
+  // object -- on set AND on delete -- is for. Do not "simplify" any of these back.
+  // The class input is the WIDER hole of the two -- the corner label is narrowed to
+  // exactly {toString, valueOf} by PUT /map's 8-char cap, the class input has no cap.
+  const noteOf = (key: string): string =>
+    Object.hasOwn(notes.corners, key) ? notes.corners[key] : "";
+  const setNote = (key: string, v: string) => { notes.corners = { ...notes.corners, [key]: v }; };
+  const setRefTime = (cls: string, v: string) => { notes.reference_times = { ...notes.reference_times, [cls]: v }; };
   // Seed a blank note for every per-corner row so binding + word count are safe and
   // the row shows before it's written (range rows already exist as keys).
   $effect(() => {
     for (const row of cornerView.rows) {
-      if (!(row.key in notes.corners)) notes.corners[row.key] = "";
+      if (!Object.hasOwn(notes.corners, row.key)) setNote(row.key, "");
     }
   });
 
@@ -115,19 +145,23 @@
   }
 
   function removeCorner(label: string) {
-    delete notes.corners[label];
+    const rest = { ...notes.corners };        // copy, drop, replace -- see the note above:
+    delete rest[label];                       // `delete notes.corners[label]` leaves the
+    notes.corners = rest;                     // key on the target and Object.hasOwn lies.
   }
 
   function addRefTime() {
     const cls = newRefClass.trim();
     if (!cls || !newRefTime.trim()) return;
-    notes.reference_times[cls] = newRefTime.trim();
+    setRefTime(cls, newRefTime.trim());
     newRefClass = "";
     newRefTime = "";
   }
   function removeRefTime(cls: string) {
-    delete notes.reference_times[cls];
-  }
+    const rest = { ...notes.reference_times };   // same shape as removeCorner: no visible
+    delete rest[cls];                            // consequence here today, but the
+    notes.reference_times = rest;                // invariant holds of the file, not of two
+  }                                              // functions someone has to remember.
 
   async function generateDraft() {
     if (!selected) return;
@@ -201,8 +235,9 @@
         {#each cornerView.rows as row (row.key)}
           <div class="corner-row">
             <span class="clabel">T{row.label}</span>
-            <textarea rows="2" bind:value={notes.corners[row.key]} aria-label={`corner note ${row.key}`}></textarea>
-            <span class="wc">{wordCount(notes.corners[row.key] ?? "")}/50</span>
+            <textarea rows="2" aria-label={`corner note ${row.key}`}
+              bind:value={() => noteOf(row.key), (v) => setNote(row.key, v)}></textarea>
+            <span class="wc">{wordCount(noteOf(row.key))}/50</span>
           </div>
         {/each}
         {#if cornerView.orphans.length}
@@ -210,8 +245,9 @@
           {#each cornerView.orphans as key (key)}
             <div class="corner-row">
               <span class="clabel orphan">{key}</span>
-              <textarea rows="2" bind:value={notes.corners[key]} aria-label={`corner note ${key}`}></textarea>
-              <span class="wc">{wordCount(notes.corners[key] ?? "")}/50</span>
+              <textarea rows="2" aria-label={`corner note ${key}`}
+                bind:value={() => noteOf(key), (v) => setNote(key, v)}></textarea>
+              <span class="wc">{wordCount(noteOf(key))}/50</span>
               <button type="button" class="rm" aria-label={`remove corner note ${key}`} onclick={() => removeCorner(key)}>×</button>
             </div>
           {/each}
@@ -223,7 +259,8 @@
         {#each Object.keys(notes.reference_times) as cls (cls)}
           <div class="ref-row">
             <span class="clabel">{cls}</span>
-            <input type="text" bind:value={notes.reference_times[cls]} aria-label={`reference time ${cls}`} />
+            <input type="text" aria-label={`reference time ${cls}`}
+              bind:value={() => notes.reference_times[cls], (v) => setRefTime(cls, v)} />
             <button type="button" class="rm" aria-label={`remove reference time ${cls}`} onclick={() => removeRefTime(cls)}>×</button>
           </div>
         {/each}
