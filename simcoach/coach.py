@@ -19,6 +19,13 @@ _SETUP_TERMS = (
 # from what the driver is actually running (issue #33). Matched on the packed map
 # names so the availability flags (ANTILOCK_BRAKES / TRACTION_CONTROL, "Available")
 # -- which are not driver-adjustable on track -- are left alone.
+#
+# Brake balance (VM_BRAKE_BALANCE) is deliberately NOT caveated, though drivers
+# adjust it on track too: #33 evidences the discard for ABS/TC only, and whether
+# LMU treats BB the same way is unmeasured. Caveating a value that IS live would
+# make the coach hedge a fact. smm.py now captures mRearBrakeBias so the next rig
+# lap can settle it -- if the garage and telemetry values disagree on track, add
+# "brake_balance" here.
 _AID_MAP_TERMS = ("antilockbrakesystem", "tractioncontrol")
 _AID_CAVEAT = " [garage value — confirm what's dialed on-track]"
 

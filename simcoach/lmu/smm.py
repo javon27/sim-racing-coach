@@ -224,6 +224,8 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
       abs_map/tc_map/tc_slip_map/tc_cut_map/motor_map/migration/
         front_antisway/rear_antisway (+ each _max): cockpit map indices, uint8
         as-is -> float. Ordinals, not physical values. MEANING UNVERIFIED.
+      rear_brake_bias: mRearBrakeBias, raw, no conversion. SCALE UNVERIFIED
+        (fraction vs percent).
       per-wheel [fl,fr,rl,rr]: wheel_rot (mRotation, rad/s -- lockup ~ 0 while
         moving), brake_temp, brake_press (mBrakePressure), grip (mGripFract,
         0..1), tire_load (mTireLoad, N), tire_press (mPressure, kPa), tire_wear
@@ -249,8 +251,10 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
         # so they are EXPECTED to be per-poll fresh at ~50 Hz -- INFERRED FROM
         # STRUCT MEMBERSHIP, NOT MEASURED (they appear in no capture yet). The
         # first rig lap after this lands confirms or refutes it.
-        # time_into_lap is derived here, per sample, rather than at read time so
-        # it stays correct across the lap seam where mLapStartET jumps mid-array.
+        # time_into_lap is stored purely for ergonomics -- lap_start_et is itself
+        # per-sample, so elapsed_time - lap_start_et at read time is element-wise
+        # identical. It is NOT monotonic either way: samples carrying the next
+        # lap's mLapStartET drop back toward zero at the seam.
         "elapsed_time": telem.mElapsedTime,
         "lap_start_et": telem.mLapStartET,
         "time_into_lap": telem.mElapsedTime - telem.mLapStartET,
@@ -292,6 +296,13 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
         "front_antisway_max": float(telem.mFrontAntiSwayMax),
         "rear_antisway": float(telem.mRearAntiSway),
         "rear_antisway_max": float(telem.mRearAntiSwayMax),
+        # Brake bias, the other cockpit dial the garage payload can disagree with
+        # (VM_BRAKE_BALANCE, rendered front:rear e.g. "51.5:48.5"). Unlike the
+        # uint8 indices above this is a plain double in the offset-anchored region
+        # with unambiguous rF2 semantics, so it is the field most likely to settle
+        # the brake-balance half of #33. Stored raw, no conversion: the scale
+        # (fraction ~0.485 vs percent ~48.5) is INFERRED, NOT MEASURED.
+        "rear_brake_bias": telem.mRearBrakeBias,
         "fuel": telem.mFuel,
         "virtual_energy": telem.mVirtualEnergy,
         "soc": telem.mSoC,

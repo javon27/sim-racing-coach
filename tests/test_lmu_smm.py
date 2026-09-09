@@ -212,6 +212,15 @@ def test_sample_from_telem_maps_driver_aid_index_channels():
     assert s["abs_active"] == 1.0 and s["tc_active"] == 0.0
 
 
+def test_sample_from_telem_maps_rear_brake_bias():
+    """mRearBrakeBias is a plain double in the offset-anchored region with
+    unambiguous rF2 semantics, unlike the uint8 map indices above -- it is what
+    would settle the brake-balance half of #33. Stored raw: the scale (fraction
+    vs percent) is inferred, not measured, so no conversion is applied here."""
+    t = roundtrip(make_telem(mRearBrakeBias=0.485))
+    assert sample_from_telem(t, lap_dist=0.0)["rear_brake_bias"] == pytest.approx(0.485)
+
+
 def test_lap_time_channels_survive_a_store_round_trip(tmp_path):
     """The new channels are purely additive: store.save/load pass channels through
     generically via npz, so no schema migration is needed -- prove it end to end
@@ -221,7 +230,8 @@ def test_lap_time_channels_survive_a_store_round_trip(tmp_path):
 
     samples = [
         sample_from_telem(roundtrip(make_telem(mElapsedTime=100.0 + i * 0.02,
-                                               mLapStartET=100.0, mABS=3, mABSMax=10)),
+                                               mLapStartET=100.0, mABS=3, mABSMax=10,
+                                               mRearBrakeBias=0.485)),
                           lap_dist=i * 1.0)
         for i in range(5)
     ]
@@ -235,6 +245,7 @@ def test_lap_time_channels_survive_a_store_round_trip(tmp_path):
     assert list(back["lap_start_et"]) == pytest.approx([100.0] * 5)
     assert list(back["abs_map"]) == pytest.approx([3.0] * 5)
     assert list(back["abs_map_max"]) == pytest.approx([10.0] * 5)
+    assert list(back["rear_brake_bias"]) == pytest.approx([0.485] * 5)
     assert list(back["speed"]) == pytest.approx([198.0] * 5)  # existing channels intact
 
 
