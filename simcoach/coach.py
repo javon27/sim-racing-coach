@@ -13,10 +13,19 @@ _SETUP_TERMS = (
     "tc_", "migration", "balance", "steer", "duct", "radiator", "fuel", "engine_brak",
 )
 
+# Driver-aid MAPS (ABS + the TC family) -- the ones a driver rotates on a wheel
+# dial mid-lap. LMU's REST reports the GARAGE setup and on-track aid changes never
+# reach it (LMU discards them on entering the garage), so these values can differ
+# from what the driver is actually running (issue #33). Matched on the packed map
+# names so the availability flags (ANTILOCK_BRAKES / TRACTION_CONTROL, "Available")
+# -- which are not driver-adjustable on track -- are left alone.
+_AID_MAP_TERMS = ("antilockbrakesystem", "tractioncontrol")
+_AID_CAVEAT = " [garage value — confirm what's dialed on-track]"
+
 
 def _setup_lines(setup: dict) -> list[str]:
     """Human-meaningful setup params, formatted for the prompt (filters ~170 -> the
-    commonly-coached subset; flags tier-locked ones).
+    commonly-coached subset; flags tier-locked ones and garage-sourced driver aids).
 
     Appends "(step N of lo-hi)" -- the param's ORDINAL position among the garage's
     available options (issue #32). minValue/maxValue on LMU's garage payload are
@@ -46,7 +55,8 @@ def _setup_lines(setup: dict) -> list[str]:
         locked = "" if v.get("isFreeSetting", True) else " [locked this tier]"
         lo, hi, cur = v.get("minValue"), v.get("maxValue"), v.get("value")
         step = "" if None in (lo, hi, cur) else f" (step {cur} of {lo}-{hi})"
-        out.append(f"- {label}: {v['stringValue']}{step}{locked}")
+        aid = _AID_CAVEAT if any(t in k for t in _AID_MAP_TERMS) else ""
+        out.append(f"- {label}: {v['stringValue']}{step}{locked}{aid}")
     return out
 
 
@@ -96,6 +106,9 @@ SYSTEM_PROMPT = (
     "only to tell whether a param is already at its limit and which way it can still "
     "move. One step's physical size is not exposed, so NEVER state an exact increment "
     "(e.g. '-50 lbf/in') — give direction ('soften the front spring a step or two').\n"
+    "- DRIVER AIDS: a setup line ending [garage value — ...] is the GARAGE setting; LMU "
+    "never reports ABS/TC changes the driver made on track. Never assert one as what "
+    "they're currently running — name it as the garage value and ask them to confirm.\n"
     "- Weigh context before over-reading a lap: tire temp/warm-up, fuel, wear. If the lap "
     "looks unrepresentative, say so.\n"
     "- Encouraging and constructive; acknowledge what's working, never berate. Honor the "
@@ -193,6 +206,9 @@ AGENTIC_SYSTEM_PROMPT = (
     "only to tell whether a param is already at its limit and which way it can still "
     "move. One step's physical size is not exposed, so NEVER state an exact increment "
     "(e.g. '-50 lbf/in') — give direction ('soften the front spring a step or two').\n"
+    "- DRIVER AIDS: a setup line ending [garage value — ...] is the GARAGE setting; LMU "
+    "never reports ABS/TC changes the driver made on track. Never assert one as what "
+    "they're currently running — name it as the garage value and ask them to confirm.\n"
     "- Match length to the question: a quick question gets a sentence or two; a broad one ('how's "
     "my race going') can be a few short paragraphs or a bullet list — thorough but never padded. "
     "The driver will ask follow-ups."
