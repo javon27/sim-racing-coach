@@ -162,6 +162,50 @@ def test_resolve_lap_never_falls_back_to_raw_db_id(tmp_path, synthetic_lap):
     assert record is None and lap_id is None
 
 
+def _practice_session(tmp_path, synthetic_lap, n=35):
+    """A practice session of `n` laps, like the one in issue #34's chat."""
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    ids = [store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1",
+                                   "phase": "practice", "timestamp": float(i)}))
+           for i in range(n)]
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    ctx = CoachContext(
+        store, cmap=cmap,
+        record=LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1", "phase": "practice"}),
+        lap_id=ids[-1], session_id="s1",
+    )
+    return ctx, store, ids
+
+
+def test_unprefixed_lap_reference_resolves(tmp_path, synthetic_lap):
+    # Issue #34 (real root cause): the driver says "lap 35 on this list" using the
+    # UI's own unprefixed wording, so the model asks for "lap 35". Only
+    # "practice lap 35"/"practice 35"/"35" were registered, so the UI's own phrasing
+    # never resolved and the driver saw the tool's failure text.
+    ctx, _, ids = _practice_session(tmp_path, synthetic_lap)
+    assert ctx._resolve_lap("lap 35")[1] == ids[34]
+    assert ctx._resolve_lap("practice lap 35")[1] == ids[34]  # still works
+    assert ctx._resolve_lap("35")[1] == ids[34]
+
+
+def test_unknown_lap_reference_names_the_phase_and_range(tmp_path, synthetic_lap):
+    # The failure must be self-correcting: our own tool schema primed "race lap N",
+    # and the old message named neither the session's phase nor the valid range, so
+    # the model had nothing to retry against.
+    ctx, _, _ = _practice_session(tmp_path, synthetic_lap)
+    msg = ctx.get_lap_summary("race lap 35")
+    assert "practice" in msg and "1-35" in msg and "race lap 35" in msg
+    assert "practice" in ctx.get_corner("1", which="race lap 35")
+
+
+def test_unknown_lap_reference_still_fails(tmp_path, synthetic_lap):
+    # Making the UI's wording resolve must not make everything resolve.
+    ctx, _, _ = _practice_session(tmp_path, synthetic_lap, n=3)
+    for ref in ("race lap 2", "lap 99", "qualifying lap 1", "lap banana"):
+        assert ctx._resolve_lap(ref) == (None, None)
+
+
 def test_get_race_result_formats_and_falls_back(tmp_path, synthetic_lap):
     from simcoach.lmu.results import ResultLap, ResultSession
     ctx, store, _ = _ctx(tmp_path, synthetic_lap)
