@@ -712,11 +712,31 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             out["name"] = name
         if keep_ribbon:
             out["ribbon"] = keep_ribbon  # keep the reconstructed surface across edits
-        if existing.get("notes"):
-            # Authored notes (overview/per-corner/reference_times) are keyed by
-            # corner label, which survives a re-derive in the common case -- carry
-            # them across a rebuild/regenerate rather than silently wiping them.
-            out["notes"] = existing["notes"]
+        old_notes = existing.get("notes") or {}
+        if old_notes:
+            # Carry the authored notes overlay across a rebuild instead of wiping it
+            # (#37) -- but per-corner notes are keyed by corner LABEL, and a rebuild
+            # can re-split a chicane or relabel '2' as '2A'/'2B'. A stale key then
+            # rebinds a note to a DIFFERENT corner, which get_corner states as owned
+            # fact ("Authored note: ...") -- worse than losing it. So keep a per-corner
+            # note only when the corner count is unchanged AND its label still exists;
+            # overview/reference_times/source are not corner-keyed, always keep those.
+            old_corners = {str(k): v for k, v in (old_notes.get("corners") or {}).items()}
+            same_count = len(existing.get("corners") or []) == len(corners)
+            labels = {c["label"] for c in corners}
+            kept = {k: v for k, v in old_corners.items() if k in labels} if same_count else {}
+            notes = {**old_notes, "corners": kept}
+            if any(notes.values()):   # all-empty -> don't write a hollow notes block
+                out["notes"] = notes
+            dropped = {k: v for k, v in old_corners.items() if k not in kept}
+            if dropped:
+                # Loud, and with the text, so the author can recover it from the log.
+                logging.getLogger(__name__).warning(
+                    "track %s: dropped %d authored per-corner note(s) on map save (%s); "
+                    "re-author them against the new layout. Dropped: %s",
+                    track_slug(track), len(dropped),
+                    "corner count changed" if not same_count else "labels no longer exist",
+                    json.dumps(dropped, ensure_ascii=False))
         _write_track_json(track, out)
         # Invalidate cmap + canonical caches so the next GET returns the new
         # canonical map (now frozen into the file).

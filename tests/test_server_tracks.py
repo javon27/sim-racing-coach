@@ -1,5 +1,6 @@
 # tests/test_server_tracks.py
 import json
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -177,24 +178,94 @@ def test_save_track_map_by_slug_persists(tmp_path):
     assert all(c["direction"] in ("left", "right", "straight") for c in written["corners"])
 
 
-def test_save_track_map_by_slug_preserves_authored_notes(tmp_path):
-    # Issue #37: rebuilding/regenerating a track's layout (PUT .../map) must not
-    # silently wipe the authored notes overlay -- it's expensive to author and
-    # keyed by corner label, which survives a re-derive in the common case.
-    client, tracks_dir = _client_with_frozen_path(tmp_path)
-    client.put("/tracks/algarve_international_circuit/notes", json={
+def _written(tracks_dir):
+    return json.loads((tracks_dir / "algarve_international_circuit.json").read_text())
+
+
+def _put_notes(client, corners):
+    return client.put("/tracks/algarve_international_circuit/notes", json={
         "track": "Algarve International Circuit",
-        "notes": {"overview": "rhythm track", "corners": {"1": "brake late"},
+        "notes": {"overview": "rhythm track", "corners": corners,
                   "reference_times": {"GT3": "1:32.500"}, "source": "me"}})
+
+
+def test_save_track_map_by_slug_preserves_authored_notes(tmp_path):
+    # Issue #37: re-saving a track's layout (PUT .../map) must not silently wipe
+    # the authored notes overlay -- it's expensive to author. The no-op case: same
+    # corner count, same labels -> everything is carried across unchanged.
+    client, tracks_dir = _client_with_frozen_path(tmp_path)
+    _put_notes(client, {"1": "brake late"})
     r = client.put("/tracks/algarve_international_circuit/map", json={
         "corners": [
             {"number": 1, "label": "1", "name": "Turn 1", "apex_dist": 50.0},
         ]})
     assert r.status_code == 200, r.text
-    written = json.loads((tracks_dir / "algarve_international_circuit.json").read_text())
+    written = _written(tracks_dir)
     assert written["notes"]["overview"] == "rhythm track"
     assert written["notes"]["corners"] == {"1": "brake late"}
     assert written["notes"]["reference_times"] == {"GT3": "1:32.500"}
+
+
+def test_save_track_map_drops_corner_notes_when_corner_count_changes(tmp_path, caplog):
+    # Issue #37 (rework): a rebuild may re-derive a chicane as TWO corners and
+    # renumber everything after it, so a label-keyed note would silently rebind to
+    # a DIFFERENT corner -- and the coach states authored notes as owned fact.
+    # A changed corner count -> drop per-corner notes; keep the fields that are
+    # not corner-keyed (overview / reference_times / source).
+    client, tracks_dir = _client_with_frozen_path(tmp_path)
+    _put_notes(client, {"1": "the slow left hairpin - huge patience"})
+    with caplog.at_level(logging.WARNING, logger="simcoach.server.app"):
+        r = client.put("/tracks/algarve_international_circuit/map", json={
+            "corners": [
+                {"number": 1, "label": "1", "name": "Turn 1", "apex_dist": 18.0},
+                {"number": 2, "label": "2", "name": "Turn 2", "apex_dist": 24.0},
+            ]})
+    assert r.status_code == 200, r.text
+    # Not silent, and the dropped text is in the log so it can be recovered.
+    assert "huge patience" in caplog.text
+    written = _written(tracks_dir)
+    assert written["notes"]["corners"] == {}          # not rebound to a new T1/T2
+    assert written["notes"]["overview"] == "rhythm track"
+    assert written["notes"]["reference_times"] == {"GT3": "1:32.500"}
+    assert written["notes"]["source"] == "me"
+
+
+def test_save_track_map_drops_orphaned_corner_notes_on_relabel(tmp_path):
+    # Issue #37 (rework): same corner count, but GP-style relabelling ('2' -> '2A'
+    # /'2B') leaves note keys that no longer name any corner. Those are silently
+    # unreachable -- drop them, keep the labels that still exist.
+    client, tracks_dir = _client_with_frozen_path(tmp_path)
+    three = [{"number": 1, "label": "1", "name": "Turn 1", "apex_dist": 20.0},
+             {"number": 2, "label": "2", "name": "Turn 2", "apex_dist": 50.0},
+             {"number": 3, "label": "3", "name": "Turn 3", "apex_dist": 80.0}]
+    assert client.put("/tracks/algarve_international_circuit/map",
+                      json={"corners": three}).status_code == 200
+    _put_notes(client, {"1": "brake late", "2": "middle of the chicane", "3": "flat in 6th"})
+    r = client.put("/tracks/algarve_international_circuit/map", json={"corners": [
+        {"number": 1, "label": "1", "name": "Turn 1", "apex_dist": 20.0},
+        {"number": 2, "label": "2A", "name": "Turn 2A", "apex_dist": 50.0},
+        {"number": 3, "label": "2B", "name": "Turn 2B", "apex_dist": 80.0},
+    ]})
+    assert r.status_code == 200, r.text
+    written = _written(tracks_dir)
+    assert written["notes"]["corners"] == {"1": "brake late"}   # '2'/'3' orphaned
+    assert written["notes"]["overview"] == "rhythm track"
+
+
+def test_save_track_map_has_notes_false_once_only_orphans_remained(tmp_path):
+    # The Tracks screen must not keep claiming a track has notes when every
+    # authored per-corner note was dropped as unbindable.
+    client, tracks_dir = _client_with_frozen_path(tmp_path)
+    client.put("/tracks/algarve_international_circuit/notes", json={
+        "track": "Algarve International Circuit",
+        "notes": {"overview": "", "corners": {"1": "brake late"}}})
+    assert client.get("/tracks").json()[0]["has_notes"] is True
+    assert client.put("/tracks/algarve_international_circuit/map", json={"corners": [
+        {"number": 1, "label": "1", "name": "Turn 1", "apex_dist": 18.0},
+        {"number": 2, "label": "2", "name": "Turn 2", "apex_dist": 24.0},
+    ]}).status_code == 200
+    assert client.get("/tracks").json()[0]["has_notes"] is False
+    assert "notes" not in _written(tracks_dir)   # nothing authored left to keep
 
 
 def test_save_track_map_by_slug_rejects_empty_corners(tmp_path):
