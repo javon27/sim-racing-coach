@@ -282,6 +282,26 @@ def test_get_corner_output_includes_authored_note(tmp_path, synthetic_lap):
     assert "Authored note: brake earlier than it looks" in out
 
 
+def test_get_corner_output_includes_baked_geometry(tmp_path, synthetic_lap):
+    # Issue #35: radius/elevation/banking baked into the map must reach the
+    # coach through get_corner, not be left stranded at map-build time.
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    ctx.cmap.geometry = {"1": {"radius_m": 66.0, "elev_delta_m": -11.0, "banking_deg": 2.0}}
+    out = ctx.get_corner("1")
+    assert "Geometry (baked from the track map): radius ~66m, downhill 11m, 2\N{DEGREE SIGN} banking" in out
+
+
+def test_get_corner_output_omits_geometry_line_when_none_baked(tmp_path, synthetic_lap):
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    out = ctx.get_corner("1")
+    assert "Geometry" not in out
+
+
+def test_corner_geometry_clause_empty_for_unknown_corner():
+    ctx = _ctx_with_notes({})
+    assert ctx._corner_geometry_clause("99") == ""
+
+
 def test_dispatch_routes_and_handles_unknown(tmp_path, synthetic_lap):
     ctx, _, _ = _ctx(tmp_path, synthetic_lap)
     assert ctx.dispatch("get_corner", {"corner": "1"}).startswith("T1 ")

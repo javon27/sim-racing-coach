@@ -48,10 +48,14 @@ class CornerMap:
     """Loads and queries corner data from a track map JSON file."""
 
     def __init__(self, corners: list[Corner], sections: list[dict] | None = None,
-                 notes: dict | None = None):
+                 notes: dict | None = None, geometry: dict | None = None):
         self.corners = corners
         self.sections = sections or []
         self.notes = notes or {}
+        # Baked per-corner geometry (radius_m/width_m/banking_deg/elev_delta_m),
+        # keyed by corner label. Not corner-identity, so it's a parallel dict
+        # rather than Corner fields -- see from_data.
+        self.geometry = geometry or {}
 
     @classmethod
     def load(cls, path: str) -> "CornerMap":
@@ -88,7 +92,15 @@ class CornerMap:
                 c.label = str(c.number)
             if not c.apexes:                      # back-compat: single-apex default
                 c.apexes = [c.apex_dist]
-        return cls(corners, _load_sections(data), data.get("notes") or {})
+        # Baked geometry metrics (radius_m/width_m/banking_deg/elev_delta_m) aren't
+        # Corner fields -- carry them separately, keyed by the corner's final label,
+        # so the coach can reach this owned data (issue #35).
+        geometry = {}
+        for raw, c in zip(data["corners"], corners):
+            extra = {k: v for k, v in raw.items() if k not in _cf}
+            if extra:
+                geometry[c.label] = extra
+        return cls(corners, _load_sections(data), data.get("notes") or {}, geometry)
 
     def corner_at(self, dist: float) -> Corner | None:
         """Return the first corner whose window contains dist (inclusive; wrap-aware)."""
