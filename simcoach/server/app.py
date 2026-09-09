@@ -63,7 +63,13 @@ def _usage_view(agg: dict) -> dict:
 _CLEAN_LAP_RATIO = 1.07  # keep laps within +7% of the track/car best (drop in/out/off laps)
 _MAP_BUFFER_MAX = 8      # cap mapping-mode buffer (need only 2 edges; keep last N)
 
-ALLOWED_HOSTS = {"127.0.0.1", "localhost"}  # port stripped before compare
+# Host-header allowlist (port stripped before compare) -- AND an input to
+# ALLOWED_ORIGINS below, which is a cross product of these hostnames with our two
+# local ports. Adding a hostname here to accept a new Host therefore also grants
+# it two ORIGINS, widening the CSRF guard without anyone editing it: adding
+# "tauri.localhost" (plausible -- it is already an allowed origin host) would
+# auto-admit http://tauri.localhost:5173 and :8765. Widen this set deliberately.
+ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
 REST_PROBE_TTL = 2.0  # s: liveness probe rate cap so /status polling can't hammer LMU's REST
 SIDECAR_PORT = 8765   # the port simcoach/server/__main__.py serves on (it imports this)
 VITE_DEV_PORT = 5173  # `npm run dev` / src-tauri/tauri.conf.json devUrl
