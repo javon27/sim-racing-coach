@@ -4,10 +4,14 @@ Every test writes to tmp_path -- nothing here touches simcoach/tracks/.
 """
 import json
 import math
+import shutil
+from pathlib import Path
 
 import pytest
 
 from scripts.promote_map import PromoteError, promote
+
+SHIPPED_DIR = Path(__file__).resolve().parents[1] / "simcoach" / "tracks"
 
 _LEN = 1000.0
 
@@ -170,6 +174,46 @@ def test_force_keeps_the_shipped_maps_notes_that_still_bind(tmp_path):
                          .read_text("utf-8"))
     assert written["notes"]["overview"] == "curator wrote this"   # not corner-keyed
     assert written["notes"]["corners"] == {"1": "from the driver", "2": "late apex"}
+
+
+def test_range_keyed_note_survives_a_same_count_promote(tmp_path):
+    """A note key may name a COMPLEX ('2-3'), which is never itself a corner label.
+    Testing the raw key against the label set classifies every such key stale and
+    deletes it -- 16 of the 135 shipped note keys, on a promote whose corner count
+    never changed. Ask note_key_binds what the key names instead."""
+    data = _map(notes={"corners": {"2-3": "one flowing complex", "1": "brake late",
+                                   "7-9": "no such corners"}})
+    written = json.loads(promote(_src(tmp_path, data), _tracks(tmp_path)).read_text("utf-8"))
+    assert written["notes"]["corners"] == {"2-3": "one flowing complex", "1": "brake late"}
+
+
+@pytest.mark.parametrize("bad", ["abc", 5])
+def test_a_non_object_notes_corners_does_not_crash_the_promote(tmp_path, bad):
+    """`notes` here comes straight out of an arbitrary user JSON file, so a truthy
+    non-dict `corners` is input, not a bug: it used to reach .items() and surface as a
+    raw AttributeError traceback instead of the tool's `refused:`/`promoted` line."""
+    data = _map(notes={"overview": "keep me", "corners": bad})
+    written = json.loads(promote(_src(tmp_path, data), _tracks(tmp_path)).read_text("utf-8"))
+    assert written["notes"] == {"overview": "keep me", "corners": {}}
+
+
+def test_self_promoting_a_shipped_map_is_a_byte_identical_no_op(tmp_path):
+    """The operation a curator thinks is safest -- re-promoting a shipped map from its
+    own file with --force -- must change nothing at all. It is the whole shipped set's
+    regression test for this writer: format drift, a dropped field, or a note the
+    guard wrongly classifies stale all show up as a byte diff here.
+
+    Copies into tmp_path; simcoach/tracks/ is read-only to this test."""
+    maps = [p for p in sorted(SHIPPED_DIR.glob("*.json"))
+            if json.loads(p.read_text(encoding="utf-8")).get("length")]
+    assert len(maps) >= 11, "expected the shipped corner maps"   # test_track.json has no length
+    src_dir, tracks = tmp_path / "src", _tracks(tmp_path)
+    src_dir.mkdir()
+    for p in maps:
+        shutil.copyfile(p, src_dir / p.name)      # the user's own copy of the shipped map
+        shutil.copyfile(p, tracks / p.name)       # the shipped map --force replaces
+        out = promote(src_dir / p.name, tracks, slug=p.stem, force=True)
+        assert out.read_bytes() == p.read_bytes(), f"{p.name}: self-promote was not a no-op"
 
 
 def test_refuses_a_source_whose_stem_is_not_a_slug(tmp_path):

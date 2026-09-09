@@ -203,7 +203,10 @@ def guard_corner_notes(slug: str, old_notes: dict | None, old_corner_count: int,
     Returns the notes block to write, or None when it would be hollow. Shared by
     the editor's save path and the promote-to-shipped script so the two can't drift.
     """
-    old_corners = {str(k): v for k, v in ((old_notes or {}).get("corners") or {}).items()}
+    # `notes` reaches the promote path straight out of an arbitrary user JSON file, so
+    # a non-dict `corners` is input, not a bug: refuse it as empty rather than raising.
+    old = (old_notes or {}).get("corners")
+    old_corners = {str(k): v for k, v in old.items()} if isinstance(old, dict) else {}
     labels = set(new_labels)
     kept = ({k: v for k, v in old_corners.items() if note_key_binds(k, labels)}
             if old_corner_count == len(new_labels) else {})
