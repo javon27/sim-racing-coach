@@ -29,7 +29,7 @@ class CornerMetrics:
     peak_steer: float = float("nan")     # max |steering| (0..1 of full lock)
     abs_pct: float = float("nan")        # fraction of corner with ABS engaged (braking too hard)
     tc_pct: float = float("nan")         # fraction of corner with TC engaged (too much throttle)
-    track_edge_min: float = float("nan") # closest approach to the track edge (m); low = using all the track
+    track_edge_min: float = float("nan") # car's closest approach to the track edge (m), not the track's half-width; low = using all the track
     min_spd_delta: Optional[float] = None
     label: str = ""                          # displayed designation ("8A")
     apexes: Optional[list[float]] = None     # apex lap_distances (>1 = multi-apex)
@@ -206,10 +206,19 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
         return float(np.nanmean((ch[idx] > 0.5).astype(float))) if ch is not None else float("nan")
     abs_pct, tc_pct = _pct("abs_active"), _pct("tc_active")
 
-    # Track-width usage: closest the car got to the track edge (m). New capture, so
-    # nan for laps recorded before it. (Edge units PENDING LIVE VALIDATION — see smm.)
+    # Track-width usage: closest the car got to the track edge (m). mTrackEdge is
+    # the EDGE's offset from the centre path (~= half the track width there), not
+    # the car's distance to it -- that distance is |track_edge| - |path_lateral|
+    # (path_lateral is the car's own offset from that same centre path). Clamped
+    # at 0: a car running slightly beyond the white line would otherwise produce
+    # a nonsense negative "distance from edge". New capture, so nan for laps
+    # recorded before it. (Edge units PENDING LIVE VALIDATION — see smm.)
     edge = record.channels.get("track_edge")
-    track_edge_min = float(np.nanmin(np.abs(edge[idx]))) if edge is not None else float("nan")
+    path_lat = record.channels.get("path_lateral")
+    if edge is not None and path_lat is not None:
+        track_edge_min = float(np.nanmin(np.clip(np.abs(edge[idx]) - np.abs(path_lat[idx]), 0, None)))
+    else:
+        track_edge_min = float("nan")
 
     try:
         direction = compute_direction(record, corner.start_dist, corner.end_dist)
