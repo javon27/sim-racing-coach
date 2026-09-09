@@ -207,6 +207,15 @@ def guard_corner_notes(slug: str, old_notes: dict | None, old_corner_count: int,
     # a non-dict `corners` is input, not a bug: refuse it as empty rather than raising.
     old = (old_notes or {}).get("corners")
     old_corners = {str(k): v for k, v in old.items()} if isinstance(old, dict) else {}
+    if old and not old_corners:
+        # Truthy but not an object: nothing to carry, so say what was ignored. A
+        # promote reads this out of an arbitrary user JSON file, where `"corners":
+        # "2-3: brake late"` (a string, not an object) is a plausible typo -- silently
+        # accepting it would report success and quietly ship no notes at all.
+        logging.getLogger(__name__).warning(
+            "track %s: ignored a non-object `notes.corners` (%s, %d chars); per-corner "
+            "notes must be an object keyed by corner label. Ignored: %.200r",
+            slug, type(old).__name__, len(str(old)), old)
     labels = set(new_labels)
     kept = ({k: v for k, v in old_corners.items() if note_key_binds(k, labels)}
             if old_corner_count == len(new_labels) else {})

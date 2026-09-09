@@ -3,6 +3,7 @@
 Every test writes to tmp_path -- nothing here touches simcoach/tracks/.
 """
 import json
+import logging
 import math
 import shutil
 from pathlib import Path
@@ -187,14 +188,22 @@ def test_range_keyed_note_survives_a_same_count_promote(tmp_path):
     assert written["notes"]["corners"] == {"2-3": "one flowing complex", "1": "brake late"}
 
 
-@pytest.mark.parametrize("bad", ["abc", 5])
-def test_a_non_object_notes_corners_does_not_crash_the_promote(tmp_path, bad):
+@pytest.mark.parametrize("bad", ["2-3: brake late", 5])
+def test_a_non_object_notes_corners_is_ignored_with_a_warning(tmp_path, bad, caplog):
     """`notes` here comes straight out of an arbitrary user JSON file, so a truthy
     non-dict `corners` is input, not a bug: it used to reach .items() and surface as a
-    raw AttributeError traceback instead of the tool's `refused:`/`promoted` line."""
+    raw AttributeError traceback instead of the tool's `refused:`/`promoted` line.
+
+    It carries no authored per-corner prose to preserve, so the promote proceeds -- but
+    it is a plausible typo for the object form, and a silent success that ships no notes
+    at all is how someone loses them without knowing. Say what was ignored."""
     data = _map(notes={"overview": "keep me", "corners": bad})
-    written = json.loads(promote(_src(tmp_path, data), _tracks(tmp_path)).read_text("utf-8"))
-    assert written["notes"] == {"overview": "keep me", "corners": {}}
+    with caplog.at_level(logging.WARNING, logger="simcoach.track_lookup"):
+        out = promote(_src(tmp_path, data), _tracks(tmp_path))
+    assert json.loads(out.read_text("utf-8"))["notes"] == {"overview": "keep me", "corners": {}}
+    assert "non-object `notes.corners`" in caplog.text
+    assert repr(bad) in caplog.text             # what it saw, so the typo is findable
+    assert type(bad).__name__ in caplog.text
 
 
 def test_self_promoting_a_shipped_map_is_a_byte_identical_no_op(tmp_path):
