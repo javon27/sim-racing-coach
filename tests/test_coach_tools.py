@@ -112,6 +112,56 @@ def test_recent_laps_use_in_session_phase_numbering(tmp_path, synthetic_lap):
     assert ctx._resolve_lap("2")[1] == ids[3]  # bare number -> current (race) phase
 
 
+def test_lap_numbering_matches_ui_contiguous_phase_grouping(tmp_path, synthetic_lap):
+    # Issue #34: the UI (LapList.svelte) groups laps into a NEW block -- restarting
+    # "Lap 1" -- every time the phase value changes, even if that same phase
+    # recurs later (e.g. practice -> race -> practice again). The coach's numbering
+    # must follow the same grouping, not a cumulative per-phase count across the
+    # whole session (which would keep climbing past the interruption).
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    ids = []
+    for ph, t in [("practice", 1.0), ("practice", 2.0), ("race", 3.0), ("practice", 4.0)]:
+        ids.append(store.save(LapRecord(**{**synthetic_lap.__dict__,
+                                           "session_id": "s1", "phase": ph, "timestamp": t})))
+    ctx = CoachContext(
+        store,
+        record=LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1", "phase": "practice"}),
+        lap_id=ids[-1], session_id="s1",
+    )
+    listing = ctx.list_recent_laps().lower()
+    # The UI shows this lap as the FIRST lap of the second (new) practice block,
+    # not the third practice lap overall.
+    assert "practice lap 1" in listing
+    assert ctx._resolve_lap("practice lap 1")[1] == ids[-1]
+
+
+def test_resolve_lap_never_falls_back_to_raw_db_id(tmp_path, synthetic_lap):
+    # Issue #34: a bare number the driver gives must only ever resolve through the
+    # in-session lap numbering (what they actually see in the UI) -- never be
+    # silently reinterpreted as a raw database id, which can point at a
+    # completely unrelated lap (here, one from a different track/car entirely).
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    unrelated = LapRecord(**{**synthetic_lap.__dict__, "track": "other_track", "car": "other_car",
+                             "session_id": None, "phase": None})
+    for _ in range(5):
+        store.save(unrelated)  # bump the autoincrement so later ids are unrelated laps
+    ids = []
+    for t in (10.0, 11.0):
+        ids.append(store.save(LapRecord(**{**synthetic_lap.__dict__,
+                                           "session_id": "s1", "phase": "race", "timestamp": t})))
+    ctx = CoachContext(
+        store,
+        record=LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1", "phase": "race"}),
+        lap_id=ids[-1], session_id="s1",
+    )
+    # "5" isn't a valid in-session reference (only race laps 1-2 exist) and happens
+    # to collide with an unrelated lap's raw id (ids 1-5) -- must not resolve to it.
+    record, lap_id = ctx._resolve_lap("5")
+    assert record is None and lap_id is None
+
+
 def test_get_race_result_formats_and_falls_back(tmp_path, synthetic_lap):
     from simcoach.lmu.results import ResultLap, ResultSession
     ctx, store, _ = _ctx(tmp_path, synthetic_lap)
