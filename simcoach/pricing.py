@@ -4,19 +4,23 @@ This module is the ONE place a dollar-per-token figure appears. Nothing else —
 not the server, not the frontend — may hold a rate; they receive a computed
 number. `ponytail:` prices drift, so keep the table here and update it here.
 
-    ⚠  RE-CONFIRM THESE RATES BEFORE RELEASE.
-    The input/output figures come from the bundled `claude-api` skill's model
-    table, cached 2026-06-24, and the cache columns from its documented
-    multipliers (cache read ~0.1x input, cache write ~1.25x input for the
-    default 5-minute ephemeral TTL). Re-read that skill (or Anthropic's live
-    pricing page) at release time, fix any row that moved, and update the
-    confirmation date below. Showing a BYO-key driver a WRONG dollar figure is
-    worse than showing none.
+    Confirmed 2026-09-09 against the live pricing page:
+    https://platform.claude.com/docs/en/about-claude/pricing
+    Every rate below (input, output, cache read, cache write) matches that
+    page for all three models. Pricing can still change — re-check the live
+    page before a release and update this date if anything moved.
 
-    Last confirmed: 2026-09-08 against the bundled `claude-api` skill table
-    (itself cached 2026-06-24). NOT yet confirmed against live Anthropic
-    pricing — that is a release gate, and the numbers the driver sees are only
-    as current as this line.
+    Note for future readers: Claude Sonnet 5's $2/$10 was originally
+    announced as *introductory* pricing due to rise to $3/$15 on 2026-09-01.
+    The live docs now state that increase will NOT occur — $2/$10 is the
+    standard price. Do not "correct" it back to $3/$15 from a stale memory.
+
+    cache_write here is the 5-minute ephemeral TTL rate (1.25x input), which
+    is what every current caller means by "cache write" — there is no prompt
+    caching in this codebase yet (issue #42). The 1-hour TTL prices at 2x
+    input, not 1.25x. When #42 lands, if it uses `ttl: "1h"`, price it at
+    2x input rather than reusing this column, or the meter will under-report
+    those writes by 37.5%.
 
 Unknown model -> None, never 0.0: a fabricated $0 is a lie a BYO-key driver
 would act on. A genuinely free provider (the fake model, a future local model)
@@ -26,6 +30,8 @@ as "—" rather than "$0.00" so the meter never implies a paid thing was free.
 from __future__ import annotations
 
 # model_id: ($ per MILLION tokens) input, output, cache_read, cache_write
+# cache_write is the 5-minute-TTL rate (1.25x input). The 1-hour-TTL rate is
+# 2x input, not represented here — see the module docstring and issue #42.
 PRICES: dict[str, tuple[float, float, float, float]] = {
     "claude-opus-5":    (5.00, 25.00, 0.50, 6.25),
     "claude-sonnet-5":  (2.00, 10.00, 0.20, 2.50),
