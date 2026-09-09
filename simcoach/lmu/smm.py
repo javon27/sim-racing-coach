@@ -518,6 +518,20 @@ class LmuSource:
         # sleep-based cadence against this thread's own poll_hz sleep -- see
         # _poll_once, which is the single-step unit both laps() and tests use.
         self._now = now_fn
+        # A "session" is one (track, car, online|offline) combo with a stable,
+        # deterministic id -- all sim phases merge, and the id survives sidecar
+        # restarts. mSession still gives the per-lap phase label.
+        self._reset()
+
+    def _reset(self) -> None:
+        """(Re)initialise per-capture-run state. Called from __init__ AND from the
+        top of laps() -- callers (simcoach/app.py's run_repl) reuse ONE LmuSource
+        across LMU drop/reconnect cycles via `while True: for lap in source.laps()`,
+        and a generator's local variables would reset on each such call but instance
+        attributes would not. Without this, a reconnect mid-lap resumes with the
+        pre-drop buffer still attached: stale _prev_dist can read as a finish-line
+        wrap and stale _committed_time can let it commit as a real lap the car never
+        finished."""
         # Buffer the in-progress lap; only COMMIT it when the car genuinely crosses
         # the finish line (a downward lap-distance wrap) AND the sim posted a fresh
         # lap time for it. A teleport, pit exit, pause, or out-lap wraps the distance
@@ -530,9 +544,6 @@ class LmuSource:
         # forward changes become the sector boundaries at commit (see
         # sector_boundary_dists / sector_bounds_from).
         self._sector_seq: list[int] = []
-        # A "session" is one (track, car, online|offline) combo with a stable,
-        # deterministic id -- all sim phases merge, and the id survives sidecar
-        # restarts. mSession still gives the per-lap phase label.
 
     def _poll_once(self, telemetry_name: str, scoring_name: str):
         """One read-and-decide step: read the current telemetry/scoring snapshot,
@@ -604,6 +615,7 @@ class LmuSource:
         return record
 
     def laps(self) -> Iterator[LapRecord]:
+        self._reset()  # a reused instance must not resume a prior run's buffer
         try:
             telemetry_name, handle = open_first_available(
                 TELEMETRY_CANDIDATES, C.sizeof(rF2Telemetry)

@@ -327,6 +327,10 @@ def test_laps_commits_only_completed_freshly_timed_laps():
     assert abs(records[0].lap_time - 92.5) < 1e-6
     d = records[0].channels["lap_distance"]
     assert d.max() > 3000 and d.min() < 100   # spans the flying lap, not the out-lap/teleport
+    # Exact sample count -- catches a skipped buffer reset (e.g. the per-lap
+    # `self._channels = {}` in _poll_once no-opped): a leaked out-lap buffer would
+    # merge into this one and still happen to satisfy the range check above.
+    assert len(d) == 41
 
 
 def test_sector_boundary_dists_forward_transitions_only():
@@ -406,6 +410,94 @@ def test_laps_records_sector_bounds_end_to_end():
     b = records[0].sector_bounds
     assert b is not None, "expected two clean sector transitions to record bounds"
     assert 1300 < b[0] < 1700 and 2800 < b[1] < 3200
+    # Exact sample count -- catches a skipped buffer reset (e.g. the per-lap
+    # `self._channels = {}` in _poll_once no-opped) that a range-only check on
+    # sector bounds wouldn't notice.
+    assert len(records[0].channels["lap_distance"]) == 41
+
+
+def test_laps_resets_buffer_across_reused_instance_no_ghost_lap(monkeypatch):
+    """simcoach/app.py's run_repl reuses ONE LmuSource across LMU drop/reconnect
+    cycles: `while True: try: for lap in source.laps(): ...` -- on a RuntimeError
+    (dropped connection) it loops back and calls laps() again on the SAME instance.
+    A second laps() call must start with a clean buffer: otherwise a stale
+    _prev_dist can read the reconnect frame as a finish-line wrap of the pre-drop
+    buffer, and a stale _committed_time (still None, never having committed) lets
+    it through -- a "ghost lap" gets committed under whatever mLastLapTime the sim
+    happens to be reporting at reconnect, built from samples the car never drove in
+    that lap. Scripted read_consistent feed -- no threads, no mmaps, deterministic.
+    """
+    from simcoach.lmu import smm
+    from simcoach.lmu.rf2structs import rF2Scoring, rF2Telemetry
+
+    def frame(dist, last_lap, lap_no=1):
+        t = rF2Telemetry(); t.mVersionUpdateBegin = t.mVersionUpdateEnd = 1; t.mNumVehicles = 1
+        v = t.mVehicles[0]; v.mID = 1; v.mLapNumber = lap_no; v.mLocalVel.z = -50.0
+        v.mTrackName = b"Test Circuit"; v.mVehicleName = b"Car"
+        s = rF2Scoring(); s.mScoringInfo.mVersionUpdateBegin = s.mScoringInfo.mVersionUpdateEnd = 1
+        s.mScoringInfo.mNumVehicles = 1; s.mScoringInfo.mSession = 2
+        pv = s.mVehicles[0]; pv.mID = 1; pv.mIsPlayer = True; pv.mLapDist = dist; pv.mLastLapTime = last_lap
+        return t, s
+
+    # Pre-drop: partway through a lap (never reaches a wrap) before the connection dies.
+    pre_drop = [frame(500.0, -1.0), frame(1500.0, -1.0), frame(2900.0, -1.0)]
+    # Post-reconnect: ONE frame, near the S/F line, with a STALE-but-valid lap_time
+    # (95.0, left over in the sim's mLastLapTime from before the drop) -- the trap.
+    post_reconnect = [frame(50.0, 95.0)]
+
+    script = iter(pre_drop + [None] + post_reconnect + [None])
+    telem_q: list = []
+    scoring_q: list = []
+
+    def fake_read_consistent(name, ctype, retries=6):
+        # A new frame is pulled only once BOTH queues have drained (i.e. at the
+        # true start of the next _poll_once call, which reads telem then scoring)
+        # -- pulling on "telem_q empty" alone desyncs the pair, since telem_q is
+        # also empty immediately after the telem half of the SAME call is served.
+        if not telem_q and not scoring_q:
+            nxt = next(script)
+            if nxt is None:
+                raise RuntimeError("connection dropped")  # what a real reconnect sees
+            t, s = nxt
+            telem_q.append(t)
+            scoring_q.append(s)
+        return telem_q.pop(0) if ctype is rF2Telemetry else scoring_q.pop(0)
+
+    class _NullHandle:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(smm, "read_consistent", fake_read_consistent)
+    monkeypatch.setattr(
+        smm, "open_first_available",
+        lambda candidates, size: (candidates[0], _NullHandle()),
+    )
+    monkeypatch.setattr(smm.time, "sleep", lambda s: None)
+
+    src = smm.LmuSource(poll_hz=1000, now_fn=lambda: 0.0)
+
+    def drain_until_drop(gen):
+        # Keeps whatever committed before the RuntimeError -- list(gen) would
+        # discard that on the exception, which is exactly what we need to inspect.
+        records = []
+        try:
+            for lap in gen:
+                records.append(lap)
+        except RuntimeError:
+            pass  # what simcoach/app.py's run_repl catches before reconnecting
+        return records
+
+    # First connection: accumulates a partial-lap buffer, then drops. Nothing
+    # commits (no wrap ever occurs pre-drop).
+    records_before_drop = drain_until_drop(src.laps())
+    assert records_before_drop == []
+
+    # Reconnect: a NEW laps() call on the SAME instance.
+    records_after_reconnect = drain_until_drop(src.laps())
+
+    assert records_after_reconnect == [], (
+        f"ghost lap committed from a leaked pre-drop buffer: {records_after_reconnect!r}"
+    )
 
 
 def test_session_phase_maps_msession_index():
