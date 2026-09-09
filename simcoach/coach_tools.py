@@ -474,7 +474,7 @@ class CoachContext:
                 return text
         return None
 
-    def _corner_geometry_clause(self, label, direction=None) -> str:
+    def _corner_geometry_clause(self, label, direction) -> str:
         """Baked geometry (radius/width/banking/elevation) for one corner label, as
         an owned-data clause, or '' if the map carries none for this corner.
 

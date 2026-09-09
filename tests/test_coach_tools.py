@@ -305,7 +305,7 @@ def test_get_corner_output_omits_geometry_line_when_none_baked(tmp_path, synthet
 
 def test_corner_geometry_clause_empty_for_unknown_corner():
     ctx = _ctx_with_notes({})
-    assert ctx._corner_geometry_clause("99") == ""
+    assert ctx._corner_geometry_clause("99", None) == ""
 
 
 def test_get_setup_surfaces_step_position(tmp_path, synthetic_lap):
