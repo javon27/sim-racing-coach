@@ -184,6 +184,34 @@ def test_sample_from_telem_maps_lap_time_channels():
     assert abs(s["time_into_lap"] - 34.5) < 1e-9
 
 
+def test_sample_from_telem_maps_driver_aid_index_channels():
+    """Issues #33/#38: TelemInfoV01 declares each cockpit-adjustable map as a
+    current+ceiling uint8 pair, the same shape as the garage payload's
+    value/maxValue. The four aid ones are named after the garage keys they would
+    be cross-checked against (VM_ANTILOCKBRAKESYSTEMMAP, VM_TRACTIONCONTROLMAP,
+    ...POWERCUTMAP, ...SLIPANGLEMAP); the rest mirror the struct.
+
+    Capture only -- what these fields actually hold on track is unmeasured.
+    abs_map is distinct from the existing abs_active, which is engagement."""
+    t = roundtrip(make_telem(
+        mABS=3, mABSMax=10, mTC=4, mTCMax=12, mTCSlip=10, mTCSlipMax=12,
+        mTCCut=3, mTCCutMax=12, mMotorMap=2, mMotorMapMax=6,
+        mMigration=5, mMigrationMax=9, mFrontAntiSway=1, mFrontAntiSwayMax=7,
+        mRearAntiSway=6, mRearAntiSwayMax=7,
+    ))
+    s = sample_from_telem(t, lap_dist=0.0)
+    assert (s["abs_map"], s["abs_map_max"]) == (3.0, 10.0)
+    assert (s["tc_map"], s["tc_map_max"]) == (4.0, 12.0)
+    assert (s["tc_slip_map"], s["tc_slip_map_max"]) == (10.0, 12.0)
+    assert (s["tc_cut_map"], s["tc_cut_map_max"]) == (3.0, 12.0)
+    assert (s["motor_map"], s["motor_map_max"]) == (2.0, 6.0)
+    assert (s["migration"], s["migration_max"]) == (5.0, 9.0)
+    assert (s["front_antisway"], s["front_antisway_max"]) == (1.0, 7.0)
+    assert (s["rear_antisway"], s["rear_antisway_max"]) == (6.0, 7.0)
+    # the engagement booleans are untouched and still mean something else
+    assert s["abs_active"] == 1.0 and s["tc_active"] == 0.0
+
+
 def test_lap_time_channels_survive_a_store_round_trip(tmp_path):
     """The new channels are purely additive: store.save/load pass channels through
     generically via npz, so no schema migration is needed -- prove it end to end
@@ -193,7 +221,8 @@ def test_lap_time_channels_survive_a_store_round_trip(tmp_path):
 
     samples = [
         sample_from_telem(roundtrip(make_telem(mElapsedTime=100.0 + i * 0.02,
-                                               mLapStartET=100.0)), lap_dist=i * 1.0)
+                                               mLapStartET=100.0, mABS=3, mABSMax=10)),
+                          lap_dist=i * 1.0)
         for i in range(5)
     ]
     channels = {k: [s[k] for s in samples] for k in samples[0]}
@@ -204,6 +233,8 @@ def test_lap_time_channels_survive_a_store_round_trip(tmp_path):
     assert list(back["time_into_lap"]) == pytest.approx([0.0, 0.02, 0.04, 0.06, 0.08])
     assert list(back["elapsed_time"]) == pytest.approx([100.0 + i * 0.02 for i in range(5)])
     assert list(back["lap_start_et"]) == pytest.approx([100.0] * 5)
+    assert list(back["abs_map"]) == pytest.approx([3.0] * 5)
+    assert list(back["abs_map_max"]) == pytest.approx([10.0] * 5)
     assert list(back["speed"]) == pytest.approx([198.0] * 5)  # existing channels intact
 
 
