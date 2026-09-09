@@ -4,6 +4,7 @@ import sqlite3
 import pytest
 
 from scripts.backfill_sectors import _sector_bounds_for_slug, seed_sectors
+from simcoach.track_lookup import track_slug
 
 # ---- seed_sectors -----------------------------------------------------------
 
@@ -102,3 +103,54 @@ def test_sector_bounds_for_slug_skips_unparseable_json():
         (2, "Autodromo Nazionale Monza", None),
     ])
     assert _sector_bounds_for_slug(conn, "autodromo_nazionale_monza") is None
+
+
+# ---- cross-LAYOUT isolation (#41) --------------------------------------------
+# The across-cars match is deliberate (sector lines are fixed per track), but it
+# must NOT reach across LAYOUTS: seeding Monza GP's splits into the Curva Grande
+# map would corrupt a shipped file. It cannot, because a map's filename stem IS
+# `track_slug(<full live track name>)` and the layout is part of that name -- the
+# only things track_slug collapses are case, accents, punctuation and a trailing
+# series suffix (' - ELMS'/' - WEC'), none of which distinguish two layouts.
+# These pin that property so a future loosening of track_slug (fuzzy aliases,
+# dropping a trailing 'Circuit', ...) can't silently reintroduce the collision.
+
+_MONZA_GP = "Autodromo Nazionale Monza"            # -> autodromo_nazionale_monza
+_MONZA_CG = "Monza Curva Grande Circuit"           # -> monza_curva_grande_circuit
+
+
+def test_monza_layouts_do_not_share_a_slug():
+    # The mechanism the isolation rests on, asserted directly.
+    assert track_slug(_MONZA_GP) != track_slug(_MONZA_CG)
+    assert track_slug(_MONZA_GP) == "autodromo_nazionale_monza"
+    assert track_slug(_MONZA_CG) == "monza_curva_grande_circuit"
+
+
+def test_sector_bounds_never_cross_monza_layouts():
+    # Both layouts in one store, each with its own captured splits. Curva Grande
+    # is the LATER row, so a name-substring/fuzzy match would hand its bounds to
+    # the GP map (the "latest non-null across any car" scan is id DESC).
+    conn = _conn_with_laps([
+        (1, _MONZA_GP, json.dumps([2000.0, 4000.0])),
+        (2, _MONZA_CG, json.dumps([700.0, 1400.0])),
+    ])
+    assert _sector_bounds_for_slug(conn, "autodromo_nazionale_monza") == [2000.0, 4000.0]
+    assert _sector_bounds_for_slug(conn, "monza_curva_grande_circuit") == [700.0, 1400.0]
+
+
+def test_sector_bounds_for_a_layout_absent_from_the_store_is_none():
+    # Only Curva Grande has been driven. The GP map must get NOTHING -- seeding it
+    # with the other layout's splits is the Critical corruption #41 asks about.
+    conn = _conn_with_laps([(1, _MONZA_CG, json.dumps([700.0, 1400.0]))])
+    assert _sector_bounds_for_slug(conn, "autodromo_nazionale_monza") is None
+
+
+def test_series_suffix_variants_still_share_one_slug():
+    # The one merge track_slug performs on purpose: ' - ELMS'/' - WEC' is the same
+    # physical track (one map file), so sharing bounds there is correct, not a bug.
+    conn = _conn_with_laps([
+        (1, "Silverstone Grand Prix Circuit - ELMS", json.dumps([1200.0, 3400.0])),
+    ])
+    assert _sector_bounds_for_slug(conn, "silverstone_grand_prix_circuit") == [1200.0, 3400.0]
+    # ...but a genuinely different Silverstone layout is still isolated.
+    assert _sector_bounds_for_slug(conn, "silverstone_national_circuit") is None

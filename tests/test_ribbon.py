@@ -281,3 +281,77 @@ def test_smooth_curve_preserves_corners_and_cleans_straights():
 
     assert np.std(sx - x) < np.std(xn - x)               # straights denoised
     assert _menger(sx, sz).max() > _menger(bx, bz).max()  # corners kept sharper than boxcar
+
+
+# --- #58: ribbon handedness --------------------------------------------------
+# `_lateral` rotates the tangent +90 as (-tz, tx) and never consults
+# RIGHT_IS_POSITIVE, so "+lateral = the right edge" was a naming assumption with
+# no test behind it. These pin which physical side it actually lands on, anchored
+# to the repo's OWN owned-geometry direction convention (trackmap's
+# _LEFT_TURN_IS_CROSS_POSITIVE, via direction_from_path) rather than to a guess.
+
+def _ccw_circle(r=100.0, n=240):
+    """A closed circular track traversed counter-clockwise in (x, z) -- a
+    continuous LEFT-hander under the repo's direction convention. Returns
+    (x, z, dist, theta); the centre is the origin, so the INSIDE of the turn at
+    any station is exactly the -radial direction, by construction."""
+    th = np.linspace(0.0, 2 * np.pi, n, endpoint=False)
+    return r * np.cos(th), r * np.sin(th), th * r, th
+
+
+def test_lateral_points_left_of_travel_not_right():
+    """+lateral is the LEFT side of travel, contradicting the old docstring.
+
+    Construction, so left/right is not a matter of opinion: on a corner that
+    direction_from_path calls a LEFT-hander, the inside of the turn is the
+    driver's left. The circle's inside is the -radial direction, so dotting
+    `_lateral` with -radial settles it. The opposite rotation, (tz, -tx), flips
+    every one of these dots negative -- this is not a round-trip.
+    """
+    from simcoach.ribbon import _lateral
+    from simcoach.trackmap import direction_from_path
+
+    x, z, dist, th = _ccw_circle()
+    path = [[a, b] for a, b in zip(x, z)]
+    # Anchor: this traverse IS a left-hander under the repo's convention. If this
+    # assert ever fires, the direction convention moved and the rest is void.
+    for apex in (0.0, dist[len(dist) // 3], dist[2 * len(dist) // 3]):
+        assert direction_from_path(path, dist, apex) == "left"
+
+    lat_x, lat_z = _lateral(x, z)
+    inward_x, inward_z = -np.cos(th), -np.sin(th)      # toward the centre = inside = LEFT
+    dots = lat_x * inward_x + lat_z * inward_z
+    assert np.all(dots > 0.99)                          # +lateral == inside == LEFT
+    assert not np.any(dots < 0)                         # ...and never the right edge
+
+
+def test_reconstruct_surface_left_right_arrays_are_swapped():
+    """Records the CONSEQUENCE of the handedness above. Do NOT "fix" this by
+    swapping the keys (see #58): swapping without settling the banking sign would
+    invert the rig-validated convention from 9756b65, trading a latent bug for a
+    live one.
+
+    `li = lap_means.argmin()` is labelled left, but argmin is the most-NEGATIVE
+    lateral offset -- the side opposite +lateral -- and +lateral is left. So the
+    array keyed "left" holds the driver's RIGHT edge. Here the inner lap of a
+    counter-clockwise circle is physically the LEFT edge, and it comes back under
+    the "right" key.
+
+    Expected to flip when #58's relabel lands; that is the point -- it forces
+    whoever relabels to look at the banking convention in the same pass.
+    """
+    r_in, r_out = 95.0, 105.0
+    _, _, dist, th = _ccw_circle()
+    inner = {"pos_x": r_in * np.cos(th), "pos_z": r_in * np.sin(th), "lap_distance": dist}
+    outer = {"pos_x": r_out * np.cos(th), "pos_z": r_out * np.sin(th), "lap_distance": dist}
+
+    out = reconstruct_surface([inner, outer], bins=120)
+    mid = len(out["left"]) // 2
+
+    def rad(p):
+        return float(np.hypot(p[0], p[1]))
+
+    # The inner (physically LEFT) edge is the one keyed "right".
+    assert rad(out["right"][mid]) < rad(out["left"][mid])
+    assert abs(rad(out["right"][mid]) - r_in) < 2.0
+    assert abs(rad(out["left"][mid]) - r_out) < 2.0

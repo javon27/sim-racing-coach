@@ -29,10 +29,14 @@ _WIN_M = 55.0        # half-width of each corner's distance window
 
 
 def detect_corners(channels: dict) -> list[dict]:
-    """Return detected corners in track order: [{apex_dist, direction, min_speed}].
+    """Return detected corners in track order: [{apex_dist, direction, min_speed_kmh}].
 
     A corner is a local maximum of smoothed |steering|. Direction is the steering
-    sign at the apex (RIGHT_IS_POSITIVE=True); min_speed is the slowest speed near it.
+    sign at the apex (RIGHT_IS_POSITIVE=True); min_speed_kmh is the slowest speed
+    near it, in km/h -- straight off the captured ``speed`` channel, which
+    ``lmu/smm.py`` already stores as km/h (|mLocalVel| * 3.6). The unit is in the
+    key name on purpose: the old unitless ``min_speed`` meant km/h here and m/s in
+    ``raceline.solve_corners``, 3.6x apart with both values plausible (#55).
     """
     dist = np.asarray(channels["lap_distance"], dtype=float)
     spd = np.asarray(channels["speed"], dtype=float)
@@ -68,7 +72,7 @@ def detect_corners(channels: dict) -> list[dict]:
         corners.append({
             "apex_dist": round(float(a), 1),
             "direction": direction,
-            "min_speed": round(float(spd_win.min()), 1) if len(spd_win) else None,
+            "min_speed_kmh": round(float(spd_win.min()), 1) if len(spd_win) else None,
         })
     return corners
 

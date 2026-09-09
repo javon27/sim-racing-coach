@@ -96,9 +96,9 @@ def test_solve_corners_finds_the_two_arcs():
     v_ref = np.sqrt(car.mu * car.g * 50.0)  # centerline arc speed, m/s
     n = 160  # stadium: 40 bottom + 40 right-arc + 40 top + 40 left-arc
     for c in corners:
-        assert 0.5 * v_ref < c["min_speed"] < 1.7 * v_ref
+        assert 0.5 * v_ref * 3.6 < c["min_speed_kmh"] < 1.7 * v_ref * 3.6
         assert c["start_dist"] != c["end_dist"]
-        assert c["min_speed"] > 0.0
+        assert c["min_speed_kmh"] > 0.0
         # station indices are valid and self-consistent with the dist values
         for k in ("apex_idx", "start_idx", "end_idx"):
             assert isinstance(c[k], int) and 0 <= c[k] < n
@@ -107,6 +107,35 @@ def test_solve_corners_finds_the_two_arcs():
     apex_bands = sorted(c["apex_idx"] for c in corners)
     assert 40 <= apex_bands[0] < 80    # right arc: stations 40..79
     assert 120 <= apex_bands[1] < 160  # left arc: stations 120..159
+
+
+def test_solve_corners_min_speed_is_kmh_not_ms():
+    """#55: pin the UNIT of the corner speed, not the conversion.
+
+    The stadium's arc radius is 50 m BY CONSTRUCTION, so a point-mass at the
+    default mu reaches sqrt(mu*g*r) = 27.1 m/s = 97.6 km/h through it (the
+    min-curvature line's own radius shifts that a little, hence the band). The
+    band is chosen so ONLY km/h fits it:
+
+      * m/s (the pre-fix raceline convention)          ~25-27  -> below LO
+      * km/h (correct)                                 ~92     -> inside
+      * km/h converted twice (a 3.6 applied on top)    ~330    -> above HI
+
+    So this fails if the conversion is dropped, doubled, or inverted -- unlike a
+    round-trip assert, which passes under every one of those (#43-#47).
+    """
+    LO, HI = 60.0, 180.0
+    car = CarParams()
+    v_arc_ms = np.sqrt(car.mu * car.g * 50.0)          # 27.1 m/s, from the geometry
+    assert v_arc_ms < LO                               # the m/s answer can't reach LO
+    assert v_arc_ms * 3.6 * 3.6 > HI                   # a double conversion overshoots HI
+
+    left, right, _ = _stadium_edges()
+    for c in solve_corners(left, right):
+        assert LO < c["min_speed_kmh"] < HI
+    # and the unitless key is gone, so a stale reader fails loudly instead of
+    # silently reading a number 3.6x off.
+    assert all("min_speed" not in c for c in solve_corners(left, right))
 
 
 def test_banking_raises_corner_speed():
@@ -132,4 +161,4 @@ def test_telem_calibration_raises_corner_speed_cap():
     }
     hot = solve_corners(left, right, telem=telem)
 
-    assert min(c["min_speed"] for c in hot) > min(c["min_speed"] for c in base)
+    assert min(c["min_speed_kmh"] for c in hot) > min(c["min_speed_kmh"] for c in base)

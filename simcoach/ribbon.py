@@ -174,9 +174,13 @@ def _smooth_curve(x: np.ndarray, z: np.ndarray, base_w: int, pct: float = 88.0) 
 
 def _lateral(cx: np.ndarray, cz: np.ndarray):
     """Unit lateral (perpendicular to the centered-diff tangent, rot +90), closed
-    loop. Which side (+lateral) this lands on is an empirical (x, z)-handedness
-    fact, not derived from RIGHT_IS_POSITIVE -- see reconstruct_ribbon's bank
-    comment and 9756b65 for the rig-validated banking sign convention it feeds."""
+    loop. +lateral is the LEFT side of travel -- an empirical (x, z)-handedness
+    fact, not derived from RIGHT_IS_POSITIVE, now pinned by
+    tests/test_ribbon.py::test_lateral_points_left_of_travel_not_right (a
+    counter-clockwise circle is a left-hander under trackmap's direction
+    convention, and +lateral points at its inside). See reconstruct_ribbon's bank
+    comment and 9756b65 for the rig-validated banking sign this feeds, and #58 for
+    why reconstruct_surface's left/right LABELS are still not swapped."""
     tx, tz = np.roll(cx, -1) - np.roll(cx, 1), np.roll(cz, -1) - np.roll(cz, 1)
     tn = np.hypot(tx, tz); tn[tn == 0] = 1.0
     return -tz / tn, tx / tn
@@ -264,6 +268,13 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
 
     # Classify laps by mean lateral offset: most-negative = LEFT, most-positive =
     # RIGHT, the rest weave (elevation only). Edges from the bound laps directly.
+    # #58: those two names are INVERTED -- +lateral is left (see _lateral), so
+    # argmin is the driver's RIGHT edge and the returned "left"/"right" arrays are
+    # mirrored. Latent (width is symmetric, both edges are drawn), and NOT fixed
+    # here on purpose: swapping the keys without settling the banking sign would
+    # invert the rig-validated convention from 9756b65. Pinned by
+    # test_reconstruct_surface_left_right_arrays_are_swapped, which goes red the
+    # moment someone swaps them -- so the relabel and the bank sign move together.
     off_all = (X - cx[bi]) * lat_x[bi] + (Z - cz[bi]) * lat_z[bi]
     lap_means = np.array([off_all[a:b].mean() for a, b in slices])
     total_spread = float(np.ptp(off_all))
