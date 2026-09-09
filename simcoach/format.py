@@ -27,6 +27,13 @@ def unit_fns(units: str = "metric"):
     return spd, temp, ("mph" if imperial else "km/h"), ("°F" if imperial else "°C")
 
 
+# ponytail: mPathLateral/mTrackEdge units + sign are still PENDING LIVE
+# VALIDATION (see analysis.py) and the subtraction degrades exactly where the
+# car is off-track, so a precise figure past this magnitude implies confidence
+# the data can't support. Raise or remove once the channel is rig-validated.
+_TRACK_EDGE_RENDER_CAP_M = 2.0
+
+
 def format_corner_line(cm, units: str = "metric") -> str:
     """One driver-facing corner line: speeds, apex-relative brake/throttle, trail,
     peak g, and the delta vs best. Absolute lap-distance is never shown."""
@@ -71,8 +78,13 @@ def format_corner_line(cm, units: str = "metric") -> str:
         # rather than a nonsensical "-0.4m from edge". Says "centre" because the
         # measurement is the car's centre, not its outer wheels — at "centre 0.2m
         # from edge" a ~2m car already has a wheel over the line.
-        line += (f", centre {-edge_min:.1f}m past edge" if edge_min < 0
-                 else f", centre {edge_min:.1f}m from edge")
+        if edge_min < -_TRACK_EDGE_RENDER_CAP_M:
+            # Beyond the cap the magnitude isn't trustworthy (see comment above) —
+            # hedge with a phrase instead of a false-precision number.
+            line += ", centre well past edge"
+        else:
+            line += (f", centre {-edge_min:.1f}m past edge" if edge_min < 0
+                     else f", centre {abs(edge_min):.1f}m from edge")
     # Double-apex: name it and give the per-apex minima so the coach advises on both.
     aps = cm.apexes or []
     if len(aps) > 1 and cm.apex_min_speeds:
