@@ -55,8 +55,10 @@ class ClaudeModel:
         Also yields this turn's billed `usage` event last. EVERY billed API call in
         this class goes through here — the tool turns and the tool-free iteration-cap
         call alike — so summing the usage events is structurally complete rather than
-        something a later edit can forget on one code path."""
-        kw = dict(model=self.model, max_tokens=self.max_tokens, system=system,
+        something a later edit can forget on one code path. That is also why the
+        cache breakpoint goes here: one place, every billed call."""
+        kw = dict(model=self.model, max_tokens=self.max_tokens,
+                  system=_cached_system(system),
                   messages=convo, thinking=self._thinking_param())
         if tools is not None:
             kw["tools"] = tools
@@ -132,6 +134,27 @@ class ClaudeModel:
             elif ev["type"] == "usage":
                 usage = usage + TokenUsage(**ev["usage"])
         return RunResult(text=text, usage=usage)
+
+
+def _cached_system(system: str):
+    """Send the system prompt as one cacheable block (issue #42).
+
+    The agentic loop re-sends the same tools array + system prompt on every
+    iteration of a single question — up to MAX_TOOL_ITERATIONS + 1 billed calls,
+    a ~3.5k-token prefix each time. Caching is a PREFIX match and the render
+    order is `tools` → `system` → `messages`, so one breakpoint on the last (only)
+    system block caches tools and system together; nothing volatile precedes it.
+    Iteration 1 pays 1.25x to write, iterations 2..N pay 0.1x to read, so it is
+    ahead after a single read — which the loop guarantees inside the 5-minute TTL.
+
+    Anything that makes the prefix vary between iterations (a timestamp in the
+    prompt, a set-ordered tool list) silently drops the hit rate to zero with no
+    error — tests/test_prompt_caching.py asserts the prefix stays byte-stable.
+
+    Falsy system stays a bare string: an empty `text` block is a 400."""
+    if not system:
+        return system
+    return [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
 
 
 def _usage_of(resp) -> TokenUsage:
