@@ -24,10 +24,22 @@ _SERIES_SUFFIX = re.compile(r"\s*[-–]\s*(elms|wec|lmu|imsa|gtwc)\s*$", re.IGNO
 # Authored prose track notes, `<slug>.md`, keyed on the same slug as the map files.
 KNOWLEDGE_DIR = Path(__file__).parent / "knowledge"
 
-# A per-corner note key is authored either as a single corner label ("7") or as a
-# hyphen RANGE spanning a complex ("2-4", "11-13") -- the only two shapes across
-# every shipped map. Ranges are numeric and inclusive.
-_NOTE_RANGE = re.compile(r"(\d+)-(\d+)")
+# A per-corner note key is authored either as a single corner label ("7") or as a hyphen
+# RANGE spanning a complex ("2-4", "11-13") -- the only two shapes across every
+# shipped map (widest is 3 corners). Ranges are numeric and inclusive.
+#
+# ASCII digits, at most three, because both note endpoints accept arbitrary text and
+# the groups are fed to int(): a bare `\d` also matches Unicode decimal digits, and
+# an unbounded run matches keys past CPython's 4300-digit int()/str() limit. Either
+# one turns an authored key that `PUT /notes` happily persists into a ValueError on
+# every later read and every map save. A key outside the bound is not a range and so
+# names only itself.
+_NOTE_RANGE = re.compile(r"([0-9]{1,3})-([0-9]{1,3})")
+
+# Widest span we read as a corner complex. The map-save endpoint caps a track at 100
+# corners, so a range naming more than that cannot name a corner any saveable map
+# has -- and the bound is what keeps the cost of the save guard's per-key check flat.
+_MAX_RANGE_SPAN = 100
 
 
 def note_key_binds(key: str, labels: set[str]) -> bool:
@@ -40,8 +52,16 @@ def note_key_binds(key: str, labels: set[str]) -> bool:
     A plain key names itself. A numeric range names every label it spans, matching
     how `CoachContext._corner_note` resolves one -- endpoints only would drop a note
     the coach still serves for the corners in between. Anything else (a comma list,
-    a GP-style '2A-2B') names only itself: the read path cannot resolve such a key,
-    so keeping it on the strength of its parts would preserve unreachable data.
+    a GP-style '2A-2B', a range wider or longer than the grammar above) names only
+    itself: the read path cannot resolve such a key, so keeping it on the strength of
+    its parts would preserve unreachable data.
+
+    A descending range is normalised, so '13-11' spans 11-13 like '11-13' does.
+
+    TOTAL: returns a bool for every (key, labels) pair and never raises. Both callers
+    use it as a predicate inside a comprehension, and both get their keys and labels
+    from free-text user input -- a raise here is a 500 on a map save, or a dead coach
+    tool, so the contract is no-exceptions rather than exceptions-documented.
     """
     key = str(key)
     if key in labels:
@@ -50,9 +70,14 @@ def note_key_binds(key: str, labels: set[str]) -> bool:
     if not m:
         return False
     lo, hi = sorted((int(m.group(1)), int(m.group(2))))
-    # Scans the labels (capped at 100 by the save endpoint) rather than building the
-    # span, so an authored '1-999999999' costs nothing.
-    return any(lab.isdigit() and lo <= int(lab) <= hi for lab in labels)
+    if hi - lo >= _MAX_RANGE_SPAN:
+        return False
+    # Walks the span and probes the labels, rather than parsing every label: a label
+    # is free text from the editor's label box, where plenty of strings satisfy
+    # isdigit() but raise on int() ('²' U+00B2, '₂' U+2082, '⑥' U+2465). Comparing as
+    # strings needs no parse at all. A complex spans 2-3 corners, so this is also the
+    # cheaper direction -- a track may carry up to 100 labels.
+    return any(str(n) in labels for n in range(lo, hi + 1))
 
 
 def track_slug(track_name: str) -> str:

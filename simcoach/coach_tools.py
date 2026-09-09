@@ -493,6 +493,12 @@ class CoachContext:
         owns that grammar, shared with the map-save guard that decides which notes
         survive a rebuild -- the two must agree on what a key names, or the guard
         deletes notes this path could still serve.
+
+        Not a pure delegation: two rules live here rather than in the grammar.
+        An exact label is looked up FIRST, so a specific '12' note wins over a
+        '11-13' note covering it whatever order the dict happens to carry them in.
+        And the range scan takes the first covering key it meets, so two overlapping
+        ranges resolve by insertion order -- no shipped map has any.
         """
         notes = getattr(self.cmap, "notes", None) or {}
         by_corner = notes.get("corners") or {}

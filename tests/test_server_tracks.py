@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 
 import simcoach
 from simcoach.coach import Coach
+from simcoach.coach_tools import CoachContext
+from simcoach.corners import CornerMap
 from simcoach.model.fake import FakeModel
 from simcoach.server.app import create_app
 from simcoach.store import LapStore
@@ -334,6 +336,61 @@ def test_save_track_map_drops_range_keyed_notes_when_corner_count_changes(tmp_pa
     assert "the fast left-right-left" in caplog.text   # recoverable from the log
     assert "corner count changed" in caplog.text
     assert written["notes"]["overview"] == "rhythm track"
+
+
+def test_save_track_map_accepts_corner_labels_int_cannot_parse(tmp_path):
+    # A corner label is a FREE-TEXT box in the map editor (TrackMapEditor.svelte) and
+    # the endpoint only truncates it, so typing '²' U+00B2 is a pure-UI action. '²',
+    # '₂' U+2082 and '⑥' U+2465 all satisfy str.isdigit() and RAISE on int(), so the
+    # note guard's range check turned one into an HTTP 500 on save. Worse, whether you
+    # got the 500 or a 200 that persisted the label depended on `set` iteration order
+    # reaching an ASCII label first -- the label then poisoned every later read.
+    client, tracks_dir = _client_with_frozen_path(tmp_path)
+    odd = [{"number": n, "label": lab, "name": f"Turn {lab}", "apex_dist": 20.0 * n}
+           for n, lab in ((1, "1"), (2, "2"), (3, "²"), (4, "₂"), (5, "⑥"))]
+    assert client.put("/tracks/algarve_international_circuit/map",
+                      json={"corners": odd}).status_code == 200
+    # A NON-binding range scans every label, so it always reaches the odd ones: the
+    # deterministic 500. ('1-3' below instead short-circuits on ASCII '1' and saved a
+    # 200, which is the worse half of the same bug -- which you got depended on `set`
+    # iteration order.)
+    _put_notes(client, {"90-95": "nothing here"})
+    r = client.put("/tracks/algarve_international_circuit/map", json={"corners": odd})
+    assert r.status_code == 200, r.text
+    _put_notes(client, {"1-3": "the opening complex", "²": "the squared one"})
+    r = client.put("/tracks/algarve_international_circuit/map", json={"corners": odd})
+    assert r.status_code == 200, r.text
+    assert _written(tracks_dir)["notes"]["corners"] == {
+        "1-3": "the opening complex", "²": "the squared one"}
+    # And the coach can still read every one of those labels back off the saved map.
+    cmap = CornerMap.load(str(tracks_dir / "algarve_international_circuit.json"))
+    ctx = CoachContext(store=None, cmap=cmap, track="Algarve", car="GT3")
+    assert ctx._corner_note("²") == "the squared one"
+    assert ctx._corner_note("2") == "the opening complex"
+    assert ctx._corner_note("⑥") is None
+    assert "the squared one" in ctx.get_track_notes(corner="²")
+
+
+def test_save_track_map_survives_an_overlong_note_key_on_disk(tmp_path):
+    # CPython caps int()/str() conversion at 4300 digits, and `PUT /notes` validates
+    # nothing -- so a 4301-digit note key persists fine and then made every map save
+    # return 500 PERMANENTLY, with GET .../notes still 200 so the editor looked fine.
+    # The key is reached before any comparison, so it also killed the coach's read of
+    # corners that have nothing to do with it.
+    client, tracks_dir = _client_with_frozen_path(tmp_path)
+    four = _four_corners()
+    assert client.put("/tracks/algarve_international_circuit/map",
+                      json={"corners": four}).status_code == 200
+    poison = "1-" + "9" * 5000          # well past the 4300-digit int() threshold
+    assert _put_notes(client, {poison: "nonsense", "1": "brake late"}).status_code == 200
+    r = client.put("/tracks/algarve_international_circuit/map", json={"corners": four})
+    assert r.status_code == 200, r.text
+    # The poison key names nothing, so it is dropped; the real note is kept.
+    assert _written(tracks_dir)["notes"]["corners"] == {"1": "brake late"}
+    cmap = CornerMap.load(str(tracks_dir / "algarve_international_circuit.json"))
+    ctx = CoachContext(store=None, cmap=cmap, track="Algarve", car="GT3")
+    assert ctx._corner_note("1") == "brake late"    # ordinary labels still resolve
+    assert ctx._corner_note("99") is None
 
 
 def test_self_save_of_shipped_imola_keeps_every_authored_note(tmp_path):

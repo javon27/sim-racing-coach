@@ -432,6 +432,50 @@ def test_corner_note_resolves_ranged_key_on_real_track():
     assert ctx._corner_note("10") == ctx._corner_note("11")
 
 
+def test_corner_note_survives_labels_int_cannot_parse():
+    # The label reaching the read path comes from the map, and the editor's label box
+    # is free text -- '²' U+00B2, '₂' U+2082, '⑥' U+2465 all satisfy str.isdigit() and
+    # RAISE on int(). Parsing the label inside the range check made _corner_note (and
+    # so the LLM-callable get_track_notes) throw for any map carrying one.
+    ctx = _ctx_with_notes({"overview": "rhythm track",
+                           "corners": {"1-3": "the opening complex", "²": "the squared one"}})
+    assert ctx._corner_note("²") == "the squared one"        # its own exact key wins
+    assert "the squared one" in ctx.get_track_notes(corner="²")
+    for odd in ("₂", "⑥"):                                   # no exact key, no bind
+        assert ctx._corner_note(odd) is None
+        assert f"No authored note for corner {odd}." in ctx.get_track_notes(corner=odd)
+    assert ctx._corner_note("2") == "the opening complex"    # the range still resolves
+    assert "the squared one" in ctx.get_track_notes()        # listing all notes is fine
+
+
+def test_corner_note_survives_an_overlong_range_key():
+    # A note key of 5000 digits is persistable (`PUT /notes` validates nothing) and
+    # made the int() parse raise -- for EVERY label, including ones the map does not
+    # have, because the poison key is reached before any comparison. One such key on
+    # disk took out the whole read path, while GET .../notes still returned 200 so the
+    # editor showed nothing wrong.
+    poison = "1-" + "9" * 5000
+    ctx = _ctx_with_notes({"corners": {poison: "nonsense", "1": "brake late"}})
+    assert ctx._corner_note("1") == "brake late"     # ordinary labels keep working
+    assert ctx._corner_note("99") is None
+    assert ctx._corner_note("2") is None             # the poison key names nothing
+    assert "brake late" in ctx.get_track_notes(corner="1")
+
+
+def test_corner_note_exact_label_wins_in_either_dict_order():
+    # GUARD (passes before this commit too). Pins the precedence rule that lives in
+    # _corner_note rather than in the shared grammar, so a later "simplification" that
+    # folds the exact-label lookup into the range scan cannot silently lose it.
+    # An exact '12' note must beat a '11-13' range covering it whichever order the
+    # authored dict happens to carry them in -- the read path looks the label up
+    # before it scans for a covering range, so this cannot depend on insertion order.
+    for corners in ({"12": "the exact one", "11-13": "the complex"},
+                    {"11-13": "the complex", "12": "the exact one"}):
+        ctx = _ctx_with_notes({"corners": corners})
+        assert ctx._corner_note("12") == "the exact one", corners
+        assert ctx._corner_note("11") == "the complex", corners
+
+
 def test_get_corner_output_includes_authored_note(tmp_path, synthetic_lap):
     ctx, _, _ = _ctx(tmp_path, synthetic_lap)
     ctx.cmap.notes = {"corners": {"1": "brake earlier than it looks"}}

@@ -205,10 +205,86 @@ def test_note_key_binds_unparseable_key_names_only_itself():
     assert note_key_binds("2A-2B", {"2A-2B"})
 
 
-def test_note_key_binds_absurd_range_is_cheap_and_correct():
-    # Authored keys are user input; the check scans the labels, never the span.
-    assert note_key_binds("1-999999999", {"7"})
-    assert not note_key_binds("1-999999999", {"7A"})
+def test_note_key_binds_absurd_range_is_bounded_not_resolved():
+    # Authored keys are free text (`PUT /notes` validates nothing), and the groups are
+    # fed to int(). A run of digits past CPython's 4300-digit int() limit made the
+    # parse RAISE, which is a 500 on every later map save and a dead coach tool -- for
+    # a key already persisted to disk. So the grammar bounds the groups at three
+    # digits, the width of a real corner number, and anything longer is not a range:
+    # it names only itself, like '2A-2B'.
+    assert not note_key_binds("1-999999999", {"7"})
+    assert not note_key_binds("1-" + "9" * 5000, {"7"})
+    assert note_key_binds("1-999999999", {"1-999999999"})   # still its own label
+    assert note_key_binds("100-102", {"101"})                # three digits is in grammar
+
+
+def test_note_key_binds_wide_range_names_nothing():
+    # A span wider than the 100-corner cap the save endpoint enforces cannot name a
+    # corner any saveable map has. Rejecting it keeps the per-key cost flat, which is
+    # what stops an unbounded note dict from making a map save quadratic.
+    assert note_key_binds("1-100", {"100"})        # exactly 100 corners: still a range
+    assert not note_key_binds("1-101", {"100"})    # wider than any map: names nothing
+    assert not note_key_binds("0-999", {"500"})
+
+
+def test_note_key_binds_descending_range_is_normalised():
+    # GUARD (passes before this commit too -- the sorted() that does this arrived with
+    # note_key_binds itself). Pinning it because it is an UNDISCLOSED behaviour change
+    # from the code before that: the read path's old regex resolved '13-11' to nothing.
+    # '13-11' spans 11-13, same as '11-13'. A deliberate normalisation, not an
+    # accident of the parse: no shipped map authors one, and resolving it to nothing
+    # would have the save guard delete a note the read path could not serve either.
+    assert note_key_binds("13-11", {"12"})
+    assert note_key_binds("13-11", {"11"})
+    assert not note_key_binds("13-11", {"10", "14"})
+
+
+def test_note_key_binds_ignores_labels_int_cannot_parse():
+    # A corner label is free text from the editor's label box. '²' U+00B2 and friends
+    # satisfy str.isdigit() but RAISE on int(), so parsing the label side turned a
+    # typed superscript into an HTTP 500 on save -- or, when `any` short-circuited on
+    # an earlier label first, a 200 that persisted the label and then broke every read
+    # of it. The grammar never parses a label now; it compares as strings.
+    for odd in ("²", "₂", "⑥"):        # ² ₂ ⑥ -- isdigit(), not int()-able
+        assert odd.isdigit(), f"{odd!r} no longer exercises the isdigit()/int() gap"
+        assert not note_key_binds("1-3", {odd})       # no raise, no spurious bind
+        assert not note_key_binds("5-6", {"1", "2", odd})
+        assert note_key_binds(odd, {odd})             # an exact label still binds
+    # Arabic-Indic digits parse under int() but are not corner labels: ASCII only.
+    assert not note_key_binds("1-3", {"١"})      # '١' == 1 under int()
+    assert not note_key_binds("١-٣", {"2"})  # '١-٣' is not a range key
+
+
+def test_note_key_binds_is_total_over_hostile_input():
+    # The contract both callers rely on: a bool for every (key, labels) pair, never a
+    # raise. Each is used as a predicate inside a comprehension, so one exception is a
+    # 500 on a map save or a dead LLM-callable tool -- and the keys and labels both
+    # come from unvalidated user input. This is the test that stops the whole class.
+    labels = [set(), {"7"}, {"1", "2", "3"}, {"8A", "2A-2B"},
+              {"²", "₂", "⑥"}, {"١"}, {""}, {" 7 "}, {"07"},
+              {str(n) for n in range(1, 101)}]
+    keys = ["7", "", " 7 ", "7 - 9", "-7", "7-", "7--9", "13-11", "7_0", "0x7", "0",
+            "0-0", "1,2", "2A-2B", "١-٣", "１-３", "+1-3", "1-+3",
+            "1.0-3", "1-3-5", "999-1", "1-" + "9" * 5000, "9" * 4301, "\n1-3",
+            "1-3\n", "²-³", None, 7, 7.5, True, ("1-3",)]
+    for key in keys:
+        for labs in labels:
+            out = note_key_binds(key, labs)   # must not raise
+            assert out is True or out is False, f"{key!r}/{labs!r} -> {out!r}"
+
+
+def test_note_key_binds_distributes_over_labels():
+    # The equivalence the save guard's correctness argument rests on: asking about a
+    # whole label set is the same as asking about each label alone. The coach's read
+    # path only ever passes one label, the save guard passes the whole map -- if these
+    # could disagree the guard would delete notes the coach still serves.
+    keys = ["7", "11-13", "13-11", "1-100", "1-101", "2A-2B", "1-999999999", "0", ""]
+    label_sets = [set(), {"7"}, {"12"}, {"11", "12", "13"}, {"8A", "12"},
+                  {"²", "7"}, {"100", "101"}, {"0"}, {""}]
+    for key in keys:
+        for labs in label_sets:
+            assert note_key_binds(key, labs) == any(note_key_binds(key, {lab}) for lab in labs), \
+                f"{key!r} / {labs!r}"
 
 
 def test_shipped_note_keys_all_bind_to_their_own_map():
