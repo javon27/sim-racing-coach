@@ -23,6 +23,7 @@ from simcoach.format import (
     format_wheel_report,
 )
 from simcoach.fuel import fuel_per_lap_from_channel, laps_remaining
+from simcoach.track_lookup import load_track_knowledge
 
 # Tool specs advertised to the model (Anthropic tool-use format).
 TOOLS = [
@@ -524,7 +525,11 @@ class CoachContext:
         overview = (notes.get("overview") or "").strip()
         by_corner = notes.get("corners") or {}
         if not overview and not by_corner:
-            return f"No authored notes for {self.track or 'this track'} yet."
+            # No notes on the map file (or no map file at all) — fall back to the
+            # authored `knowledge/<slug>.md` prose note. Verbatim: the coach states
+            # these as owned fact, so reaching them must not reformat them.
+            return (load_track_knowledge(self.track)
+                    or f"No authored notes for {self.track or 'this track'} yet.")
         lines = []
         if overview:
             lines.append(overview)
