@@ -269,3 +269,62 @@ def test_clamp_preserves_seam_wrap_corner():
     assert seam.start_dist > seam.end_dist  # still a wrap, not flattened
     assert seam.start_dist == 900  # untouched: well clear of corner C's midpoint
     assert seam.end_dist == 25.0   # trimmed to the midpoint with corner B (apex 100)
+
+
+def test_clamp_never_cuts_an_apex_out_of_its_window():
+    """The overlap clamp must never trim a boundary past one of the corner's OWN
+    apexes. A double-apex corner's window has to hold both apexes, so each side is
+    guarded against the outermost apex on that side (earliest for start_dist, latest
+    for end_dist) -- not against apex_dist, which sits between them. Guarding on
+    apex_dist alone silently drops the head/tail apex out of the window from_data
+    had just validated."""
+    from simcoach.corners import CornerMap, in_window
+
+    data = {
+        "track": "double_apex", "length": 1000.0,
+        "corners": [
+            {"number": 1, "name": "A", "direction": "left",
+             "start_dist": 360, "apex_dist": 400, "end_dist": 440},
+            # double-apex: the window must keep BOTH 440 and 565, yet the midpoints
+            # to its neighbours' apexes (450 back, 560 forward) fall inside that span
+            {"number": 2, "name": "B", "direction": "left",
+             "start_dist": 420, "apex_dist": 500, "end_dist": 580,
+             "apexes": [440, 565]},
+            {"number": 3, "name": "C", "direction": "left",
+             "start_dist": 600, "apex_dist": 620, "end_dist": 660},
+        ],
+    }
+    cmap = CornerMap.from_data(data)
+    for c in cmap.corners:
+        for a in c.apexes:
+            assert in_window(a, c.start_dist, c.end_dist), (
+                f"corner {c.number}: apex {a} clamped out of window "
+                f"[{c.start_dist}, {c.end_dist}]"
+            )
+
+
+def test_clamp_rounding_never_pushes_an_apex_outside_its_window():
+    """The clamp rounds the midpoint to 0.1 m, so it must compare the ROUNDED
+    candidate -- testing the unrounded midpoint and then assigning the rounded one
+    can move a boundary past an apex by up to 0.05 m. Apexes carry sub-0.1 precision
+    as soon as a user annotation overlay edits them, so this is reachable."""
+    from simcoach.corners import CornerMap, in_window
+
+    data = {
+        "track": "precision", "length": 1000.0,
+        "corners": [
+            {"number": 1, "name": "A", "direction": "left",
+             "start_dist": 420, "apex_dist": 439.96, "end_dist": 460},
+            # the midpoint back to corner 1 is 439.97, which ROUNDS to 440.0 -- past
+            # this corner's own apex at 439.98
+            {"number": 2, "name": "B", "direction": "left",
+             "start_dist": 300, "apex_dist": 439.98, "end_dist": 500},
+            {"number": 3, "name": "C", "direction": "left",
+             "start_dist": 650, "apex_dist": 700, "end_dist": 750},
+        ],
+    }
+    cmap = CornerMap.from_data(data)
+    c2 = next(c for c in cmap.corners if c.number == 2)
+    assert in_window(c2.apex_dist, c2.start_dist, c2.end_dist), (
+        f"apex {c2.apex_dist} rounded out of window [{c2.start_dist}, {c2.end_dist}]"
+    )

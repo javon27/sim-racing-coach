@@ -51,19 +51,27 @@ def _clamp_corner_windows(corners: list[Corner], length: float | None) -> None:
     for k, i in enumerate(order):
         c = corners[i]
         a = c.apex_dist
+        # Guard each side against the corner's OWN outermost apex on that side, not
+        # apex_dist -- a double-apex window has to keep both, and apex_dist sits
+        # between them. Compare the ROUNDED candidate, since that is what gets
+        # assigned: testing the unrounded midpoint can shove a boundary 0.05 m past
+        # an apex. If a candidate would cut an apex out, the circular difference
+        # wraps to ~length and the test goes false, so the clamp declines to trim
+        # rather than lose an apex.
+        own = c.apexes or [a]
+        a_first = min(own, key=lambda x: (x - c.start_dist) % length)  # earliest in window
+        a_last = min(own, key=lambda x: (c.end_dist - x) % length)     # latest in window
         prev_a, next_a = apexes[k - 1], apexes[(k + 1) % n]
         mid_prev = (prev_a + ((a - prev_a) % length) / 2.0) % length
         mid_next = (a + ((next_a - a) % length) / 2.0) % length
 
-        back = (a - c.start_dist) % length
-        allowed_back = (a - mid_prev) % length
-        if back > allowed_back + eps:
-            c.start_dist = round(mid_prev, 1)
+        cand = round(mid_prev, 1)
+        if (a_first - c.start_dist) % length > (a_first - cand) % length + eps:
+            c.start_dist = cand
 
-        fwd = (c.end_dist - a) % length
-        allowed_fwd = (mid_next - a) % length
-        if fwd > allowed_fwd + eps:
-            c.end_dist = round(mid_next, 1)
+        cand = round(mid_next, 1)
+        if (c.end_dist - a_last) % length > (cand - a_last) % length + eps:
+            c.end_dist = cand
 
 
 def _load_sections(data: dict) -> list[dict]:
