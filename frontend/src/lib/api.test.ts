@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { getSessions, putSettings, setApiKey, testApiKey, clearData, ingestHistory } from "./api";
+import { getSessions, putSettings, setApiKey, testApiKey, clearData, ingestHistory, getChatUsage } from "./api";
 
 const BASE = "http://127.0.0.1:8765";
 const JSON_HEADERS = { "Content-Type": "application/json" };
@@ -28,6 +28,21 @@ describe("api client", () => {
     const result = await getSessions({ track: "Le Mans", offset: 30, limit: 30 });
 
     expect(fetchMock).toHaveBeenCalledWith(`${BASE}/sessions?track=Le+Mans&offset=30&limit=30`, undefined);
+    expect(result).toEqual(payload);
+  });
+
+  it("getChatUsage fetches {base}/chats/:id/usage and returns tokens + cost", async () => {
+    const payload = {
+      usage: { input: 3500, output: 400, cache_read: 0, cache_write: 0, total: 3900, messages: 2 },
+      cost: 0.011,
+      cost_complete: true,
+    };
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => payload });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await getChatUsage("chat-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(`${BASE}/chats/chat-1/usage`, undefined);
     expect(result).toEqual(payload);
   });
 

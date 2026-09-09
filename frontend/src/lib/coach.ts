@@ -1,6 +1,8 @@
 // WS client for the SimCoach coach endpoint (simcoach/server/app.py, @app.websocket("/coach")).
 // UI-agnostic core rule: this file only streams + shapes coach events, no analysis logic.
 
+import type { ChatUsage } from "./api";
+
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8765";
 const WS_BASE = API_BASE.replace(/^http/, "ws"); // http -> ws, https -> wss
 
@@ -26,6 +28,11 @@ export class CoachStream {
   answer = "";
   chatId: string | null = null;
   error: string | null = null;
+  // The CHAT cumulative usage + estimated $ the server reports on `done`. Null
+  // until a done frame carries them (an older sidecar sends none).
+  usage: ChatUsage | null = null;
+  cost: number | null = null;
+  costComplete = true;
 
   #ws: WebSocket | null = null;
   #listeners = new Set<(value: this) => void>();
@@ -44,6 +51,9 @@ export class CoachStream {
     this.answer = "";
     this.chatId = null;
     this.error = null;
+    this.usage = null;
+    this.cost = null;
+    this.costComplete = true;
     this.#settled = false;
     this.#notify();
 
@@ -69,6 +79,9 @@ export class CoachStream {
           case "done":
             this.phase = "done";
             this.chatId = data.chat_id ?? null;
+            this.usage = data.usage ?? null;
+            this.cost = data.cost ?? null;
+            this.costComplete = data.cost_complete ?? true;
             this.#settled = true;
             this.#close();
             break;

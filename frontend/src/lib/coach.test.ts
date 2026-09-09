@@ -159,6 +159,67 @@ describe("CoachStream", () => {
     expect(FakeWebSocket.instances.length).toBe(2);
   });
 
+  it("captures usage and cost from the done frame", () => {
+    const stream = new CoachStream();
+    stream.ask("how's my braking?");
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.();
+
+    emit(ws, {
+      type: "done",
+      chat_id: "chat-1",
+      usage: { input: 3500, output: 400, cache_read: 0, cache_write: 0, total: 3900, messages: 2 },
+      cost: 0.011,
+      cost_complete: true,
+    });
+
+    expect(stream.usage?.total).toBe(3900);
+    expect(stream.cost).toBe(0.011);
+    expect(stream.costComplete).toBe(true);
+  });
+
+  it("treats a done frame with no usage as no meter data, not a crash", () => {
+    const stream = new CoachStream();
+    stream.ask("q");
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.();
+
+    emit(ws, { type: "done", chat_id: "chat-1" });
+
+    expect(stream.phase).toBe("done");
+    expect(stream.usage).toBeNull();
+    expect(stream.cost).toBeNull();
+  });
+
+  it("clears usage when a new ask starts", () => {
+    const stream = new CoachStream();
+    stream.ask("q1");
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.();
+    emit(ws, { type: "done", chat_id: "c1", usage: { total: 10 }, cost: 1, cost_complete: true });
+    expect(stream.usage).not.toBeNull();
+
+    stream.ask("q2");
+
+    expect(stream.usage).toBeNull();
+    expect(stream.cost).toBeNull();
+    expect(stream.costComplete).toBe(true);
+  });
+
+  it("ignores an unknown event type without breaking the stream", () => {
+    const stream = new CoachStream();
+    stream.ask("q");
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.();
+
+    // the server filters these out, but an older/newer sidecar may send them
+    emit(ws, { type: "usage", usage: { input: 1 }, model: "claude-sonnet-5" });
+    emit(ws, { type: "text", text: "still fine" });
+
+    expect(stream.phase).toBe("streaming");
+    expect(stream.answer).toBe("still fine");
+  });
+
   it("notifies subscribers on state changes (store contract)", () => {
     const stream = new CoachStream();
     const seen: string[] = [];

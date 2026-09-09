@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { CoachStream, type CoachPhase, type ToolActivity } from "./coach";
-  import { getChatMessages } from "./api";
+  import { getChatMessages, getChatUsage, type ChatUsage } from "./api";
 
   let {
     sessionId,
@@ -22,6 +22,9 @@
       answer: string;
       chatId: string | null;
       error: string | null;
+      usage?: ChatUsage | null;
+      cost?: number | null;
+      costComplete?: boolean;
       ask(question: string, opts: { sessionId?: string; lapId?: number; chatId?: string }): void;
       subscribe(run: (value: unknown) => void): () => void;
     };
@@ -89,6 +92,33 @@
   let error: string | null = $state(null);
   let scrollEl: HTMLDivElement | undefined = $state();
 
+  // Usage/cost meter. Every number here is computed by the core and handed over —
+  // this component formats, it never prices.
+  let usedTokens = $state(0);
+  let cost: number | null = $state(null);
+  let costComplete = $state(true);
+
+  function formatTokens(n: number): string {
+    return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+  }
+
+  // A dash for "no dollar figure to show": either the model could not be priced
+  // (cost === null) or it is genuinely free (cost === 0, e.g. a local model).
+  // "$0.00" would read as "this paid thing cost nothing", so it is never printed —
+  // a real-but-tiny cost shows as "<$0.01" instead.
+  function formatCost(c: number | null, complete: boolean): string {
+    if (c === null || c === 0) return "—";
+    const prefix = complete ? "" : "≥ ";
+    if (c < 0.01) return `${prefix}<$0.01`;
+    return `${prefix}$${c < 1 ? c.toFixed(3) : c.toFixed(2)}`;
+  }
+
+  function clearMeter() {
+    usedTokens = 0;
+    cost = null;
+    costComplete = true;
+  }
+
   // Keep the newest message/streaming text in view, unless the user has
   // scrolled up to read history (within 80px of bottom = "at the bottom").
   $effect(() => {
@@ -114,11 +144,23 @@
     } catch {
       messages = [];
     }
+    // Seed the meter so reopening a thread shows what it has already cost.
+    // Best-effort, same shape as above: a sidecar hiccup hides the meter, it
+    // never costs the driver the thread.
+    try {
+      const u = await getChatUsage(id);
+      usedTokens = u.usage.total;
+      cost = u.cost;
+      costComplete = u.cost_complete;
+    } catch {
+      clearMeter();
+    }
   }
 
   function newChat() {
     currentChatId = undefined;
     messages = [];
+    clearMeter();
   }
 
   // "New session": clear the chat locally and ask the app to clear the selected
@@ -143,7 +185,7 @@
 
   onMount(() => {
     const unsubscribe = stream.subscribe((s) => {
-      const snap = s as { phase: CoachPhase; toolActivity: ToolActivity | null; answer: string; chatId: string | null; error: string | null };
+      const snap = s as { phase: CoachPhase; toolActivity: ToolActivity | null; answer: string; chatId: string | null; error: string | null; usage?: ChatUsage | null; cost?: number | null; costComplete?: boolean };
       phase = snap.phase;
       toolActivity = snap.toolActivity;
       answer = snap.answer;
@@ -153,6 +195,12 @@
         waiting = false;
         // Adopt the server's chat id so follow-ups append to this thread.
         if (snap.chatId) currentChatId = snap.chatId;
+        // ...and its cumulative usage snapshot (the persisted chat total).
+        if (snap.usage) {
+          usedTokens = snap.usage.total;
+          cost = snap.cost ?? null;
+          costComplete = snap.costComplete ?? true;
+        }
       } else if (snap.phase === "error") {
         messages = [...messages, { role: "coach", text: snap.error ?? "Something went wrong." }];
         waiting = false;
@@ -190,6 +238,13 @@
 
 <section class="chat">
   <div class="chat-bar">
+    {#if usedTokens > 0}
+      <span
+        class="meter"
+        data-testid="usage-meter"
+        title="Tokens billed in this chat, and the estimated API cost of them."
+      >{formatTokens(usedTokens)} tokens · {formatCost(cost, costComplete)}</span>
+    {/if}
     <button type="button" class="new-chat" onclick={newSession}>+ New session</button>
   </div>
   <div class="chat-scroll" bind:this={scrollEl}>
@@ -257,6 +312,17 @@
     gap: 8px;
     padding: 8px 12px;
     border-bottom: 1px solid var(--line);
+  }
+  .meter {
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--faint);
+    white-space: nowrap;
+  }
+  /* With a meter present the meter takes the auto margin; alone, the button does. */
+  .meter + .new-chat {
+    margin-left: 0;
   }
   .new-chat {
     margin-left: auto;

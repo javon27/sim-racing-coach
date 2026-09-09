@@ -102,6 +102,26 @@ export interface ChatMessage {
   tool_calls: unknown;
 }
 
+// Billed tokens for a whole chat. Computed by the core (simcoach/store.py +
+// simcoach/pricing.py) -- the UI only formats these numbers, never prices anything.
+export interface ChatUsage {
+  input: number;
+  output: number;
+  cache_read: number;
+  cache_write: number;
+  total: number;
+  messages: number;
+}
+
+export interface ChatUsageResponse {
+  usage: ChatUsage;
+  // null = the model could not be priced; 0 = a genuinely free model (render both
+  // as a dash, never "$0.00" -- see ChatPanel.formatCost).
+  cost: number | null;
+  // false = at least one model in the chat was unpriceable, so `cost` is a floor.
+  cost_complete: boolean;
+}
+
 export interface DriverProfile {
   braking_style: string | null;
   balance_preference: string | null;
@@ -423,6 +443,10 @@ export function getSessionChats(sid: string): Promise<ChatRow[]> {
 
 export function getChatMessages(chatId: string): Promise<ChatMessage[]> {
   return request<ChatMessage[]>(`/chats/${chatId}`);
+}
+
+export function getChatUsage(chatId: string): Promise<ChatUsageResponse> {
+  return request<ChatUsageResponse>(`/chats/${chatId}/usage`);
 }
 
 export function getSettings(): Promise<SettingsResponse> {
