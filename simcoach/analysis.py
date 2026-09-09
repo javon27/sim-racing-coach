@@ -30,6 +30,9 @@ class CornerMetrics:
     abs_pct: float = float("nan")        # fraction of corner with ABS engaged (braking too hard)
     tc_pct: float = float("nan")         # fraction of corner with TC engaged (too much throttle)
     track_edge_min: float = float("nan") # closest approach to the track edge (m); low = using all the track
+    coast_time: float = float("nan")      # seconds in the corner with NEITHER pedal
+    coast_dist: float = float("nan")      # meters in the corner with neither pedal
+    brake_to_throttle_dist: float = float("nan")  # last brake-off -> first throttle (m)
     min_spd_delta: Optional[float] = None
     label: str = ""                          # displayed designation ("8A")
     apexes: Optional[list[float]] = None     # apex lap_distances (>1 = multi-apex)
@@ -47,6 +50,7 @@ class LapAnalysis:
     tire_means: Optional[dict[str, float]] = None      # {'fl','fr','rl','rr'}: °C mean over lap
     tire_warmup: Optional[tuple[float, float]] = None  # (early °C, late °C), all-wheel mean
     wheels: Optional[dict] = None  # lap-level brake/pressure/wear from extended capture
+    coast_total: "tuple[float, float] | None" = None   # (seconds, meters) with neither pedal
 
 
 _TIRE_KEYS = ("tire_temp_fl", "tire_temp_fr", "tire_temp_rl", "tire_temp_rr")
@@ -65,22 +69,102 @@ _MIN_SPEED_KMH = 1.0
 _MIN_OVERLAP_FRAC = 0.5
 
 
-def _monotonic_axis(record: LapRecord) -> tuple[np.ndarray, np.ndarray]:
-    """(dist, speed) with non-finite and non-increasing `lap_distance` samples
-    dropped. Strictly increasing distance is a precondition of every two-lap
-    comparison: a pit re-entry, an S/F wrap or sensor jitter otherwise integrates
-    a negative ds or interpolates backwards."""
+# Coasting = neither pedal. Pedal inputs are 0..1 fractions.
+# ponytail: tuning knobs. A driver who rests a foot on the throttle would need the
+# throttle floor raised; a rig check on a known coasting corner settles them.
+_COAST_THROTTLE = 0.05
+_COAST_BRAKE = 0.05
+# Below this, reporting coasting is noise on a clean corner.
+_COAST_REPORT_S = 0.05
+# How far past a corner window to look for the throttle pickup that ends the dead
+# zone — throttle often comes up after the window closes. Mirrors the 250 m
+# approach look-back `brake_point` already uses.
+# ponytail: fixed look-ahead; two corners <250 m apart could see the next one's
+# throttle pickup, which under-reports nothing but caps the gap at that distance.
+_THROTTLE_LOOKAHEAD_M = 250.0
+
+
+# An interval wider than this is not two adjacent ~50 Hz samples: it's a dropped
+# frame or the jump across a seam-wrapped corner window's two distance runs.
+# Counting it would invent coasting distance, so it is dropped (under-reporting,
+# the safe direction for a coaching claim).
+# ponytail: fixed cap; a per-lap median-spacing multiple would adapt to sparse laps.
+_MAX_SAMPLE_GAP_M = 50.0
+
+
+def _coast_totals(dist, speed, throttle, brake) -> tuple[float, float]:
+    """(seconds, meters) with NEITHER pedal applied, over the samples given,
+    integrating ds / (v/3.6) exactly as `lap_time_axis` does. An interval counts
+    only when both of its endpoints are coasting."""
+    n = min(len(dist), len(speed), len(throttle), len(brake))
+    if n < 2:
+        return 0.0, 0.0
+    d = np.asarray(dist[:n], dtype=float)
+    v = np.asarray(speed[:n], dtype=float)
+    v = np.where(np.isfinite(v), v, _MIN_SPEED_KMH)
+    coast = (np.asarray(throttle[:n], dtype=float) < _COAST_THROTTLE) & (
+        np.asarray(brake[:n], dtype=float) < _COAST_BRAKE)
+    ds = np.diff(d)
+    ds = np.where(coast[:-1] & coast[1:] & (ds > 0) & (ds <= _MAX_SAMPLE_GAP_M), ds, 0.0)
+    inv = 1.0 / (np.maximum(v, _MIN_SPEED_KMH) * _SPEED_KMH_TO_MS)
+    return float(np.sum(ds * (inv[:-1] + inv[1:]) / 2.0)), float(np.sum(ds))
+
+
+def _brake_to_throttle(dist, brake, throttle, idx) -> float:
+    """Distance from the last braking sample inside a corner window to the first
+    throttle pickup after it. Searches up to `_THROTTLE_LOOKAHEAD_M` past the
+    window, because throttle often comes up after the window closes. nan when the
+    corner has no braking phase, or no pickup within the look-ahead."""
+    on_brake = np.where(np.asarray(brake)[idx] >= _COAST_BRAKE)[0]
+    if on_brake.size == 0:
+        return float("nan")
+    d_off = float(np.asarray(dist)[idx][on_brake[-1]])
+    ahead = np.where((dist > d_off) & (dist <= d_off + _THROTTLE_LOOKAHEAD_M)
+                     & (np.asarray(throttle) >= _COAST_THROTTLE))[0]
+    if ahead.size == 0:
+        return float("nan")
+    return float(np.min(np.asarray(dist)[ahead])) - d_off
+
+
+def lap_coast_total(record: LapRecord):
+    """(seconds, meters) of whole-lap coasting, or None when the lap was captured
+    without pedal channels."""
+    ch = record.channels
+    if "throttle" not in ch or "brake" not in ch:
+        return None
+    idx = _monotonic_idx(record)
+    if idx.size < 2:
+        return None
+    return _coast_totals(np.asarray(ch["lap_distance"], dtype=float)[idx],
+                         np.asarray(ch["speed"], dtype=float)[idx],
+                         np.asarray(ch["throttle"], dtype=float)[idx],
+                         np.asarray(ch["brake"], dtype=float)[idx])
+
+
+def _monotonic_idx(record: LapRecord) -> np.ndarray:
+    """Indices of the samples with finite distance/speed and strictly increasing
+    `lap_distance`. Strictly increasing distance is a precondition of every two-lap
+    comparison: a pit re-entry, an S/F wrap or sensor jitter otherwise integrates a
+    negative ds or interpolates backwards. Returned as indices so other channels
+    can be sliced onto the same filtered grid."""
     d = np.asarray(record.channels["lap_distance"], dtype=float)
     v = np.asarray(record.channels["speed"], dtype=float)
     n = min(d.size, v.size)
     d, v = d[:n], v[:n]
-    ok = np.isfinite(d) & np.isfinite(v)
-    d, v = d[ok], v[ok]
-    if d.size < 2:
-        return d, v
-    # Keep only samples beyond the running maximum seen so far.
-    keep = np.concatenate(([True], d[1:] > np.maximum.accumulate(d)[:-1]))
-    return d[keep], v[keep]
+    i = np.where(np.isfinite(d) & np.isfinite(v))[0]
+    if i.size < 2:
+        return i
+    # Keep only samples beyond the running maximum distance seen so far.
+    dd = d[i]
+    keep = np.concatenate(([True], dd[1:] > np.maximum.accumulate(dd)[:-1]))
+    return i[keep]
+
+
+def _monotonic_axis(record: LapRecord) -> tuple[np.ndarray, np.ndarray]:
+    """(dist, speed) on the filtered grid — see `_monotonic_idx`."""
+    idx = _monotonic_idx(record)
+    return (np.asarray(record.channels["lap_distance"], dtype=float)[idx],
+            np.asarray(record.channels["speed"], dtype=float)[idx])
 
 
 def lap_time_axis(record: LapRecord) -> tuple[np.ndarray, np.ndarray]:
@@ -363,6 +447,12 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
     edge = record.channels.get("track_edge")
     track_edge_min = float(np.nanmin(np.abs(edge[idx]))) if edge is not None else float("nan")
 
+    # Dead time: distance/seconds in the corner with neither pedal, plus the gap
+    # between brake release and throttle pickup. Same ds/(v/3.6) integration as
+    # lap_time_axis, restricted to the coasting mask.
+    coast_time, coast_dist = _coast_totals(win_dist, win_speed, win_throttle, win_brake)
+    brake_to_throttle_dist = _brake_to_throttle(dist, brake, throttle, idx)
+
     try:
         direction = compute_direction(record, corner.start_dist, corner.end_dist)
     except ValueError:
@@ -406,6 +496,9 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
         abs_pct=abs_pct,
         tc_pct=tc_pct,
         track_edge_min=track_edge_min,
+        coast_time=coast_time,
+        coast_dist=coast_dist,
+        brake_to_throttle_dist=brake_to_throttle_dist,
         label=label, apexes=aps, apex_min_speeds=apex_min_speeds,
     )
 
@@ -439,6 +532,7 @@ def analyze_lap(
     return LapAnalysis(
         lap_time=record.lap_time, corners=corners, has_reference=has_reference,
         tire_means=tire_means, tire_warmup=tire_warmup, wheels=_wheel_summary(record),
+        coast_total=lap_coast_total(record),
     )
 
 

@@ -354,6 +354,57 @@ def test_time_loss_buckets_none_without_usable_reference():
     assert time_loss_buckets(short, long_ref, _test_cmap()) is None
 
 
+# --- coasting / dead time -----------------------------------------------------
+
+def _coasting_lap():
+    """A lap at a constant 36 km/h (10 m/s) that brakes 800-900 m, coasts with
+    NEITHER pedal 900-1000 m, then picks the throttle back up — inside T1's
+    800-1200 m window. 100 m of coasting at 10 m/s is exactly 10 s."""
+    lap = _flat_lap(36.0, n=1500, length=3000.0)
+    d = lap.channels["lap_distance"]
+    lap.channels["brake"][(d >= 800) & (d < 900)] = 0.8
+    lap.channels["throttle"][(d >= 800) & (d < 1000)] = 0.0
+    lap.channels["steering"][(d >= 800) & (d <= 1200)] = -0.5
+    return lap
+
+
+def test_corner_coasting_measures_the_dead_zone():
+    from simcoach.analysis import analyze_lap
+    c1 = analyze_lap(_coasting_lap(), _test_cmap()).corners[0]
+    assert abs(c1.coast_dist - 100.0) < 4.0           # ~100 m with neither pedal
+    assert abs(c1.coast_time - 10.0) < 0.5            # at 10 m/s, ~10 s of dead time
+    assert abs(c1.brake_to_throttle_dist - 100.0) < 5.0
+
+
+def test_corner_without_coasting_reports_zero(synthetic_lap):
+    from simcoach.analysis import analyze_lap
+    from simcoach.format import format_corner_line
+    c1 = analyze_lap(synthetic_lap, _test_cmap()).corners[0]
+    assert c1.coast_time == 0.0 and c1.coast_dist == 0.0
+    assert "coasting" not in format_corner_line(c1)    # a clean corner carries no line
+
+
+def test_lap_coast_total_and_lap_facts_line():
+    from simcoach.analysis import analyze_lap
+    from simcoach.format import format_lap_facts
+    a = analyze_lap(_coasting_lap(), _test_cmap())
+    secs, meters = a.coast_total
+    assert abs(secs - 10.0) < 0.5 and abs(meters - 100.0) < 4.0
+    assert "Coasting this lap" in format_lap_facts(a)
+
+
+def test_lap_coast_total_is_none_without_pedal_channels():
+    import numpy as np
+
+    from simcoach.analysis import lap_coast_total
+    from simcoach.model_types import LapRecord
+    n = 10
+    bare = LapRecord("lmu", "t", "c", 0.0, True, 0.0,
+                     {"lap_distance": np.linspace(0.0, 100.0, n),
+                      "speed": np.full(n, 72.0)})
+    assert lap_coast_total(bare) is None
+
+
 def test_time_loss_buckets_handle_a_corner_wrapping_the_start_finish_seam():
     # A window with start_dist > end_dist spans the S/F seam; its two distance runs
     # must fold into ONE bucket and the tiling must still sum to the net delta.

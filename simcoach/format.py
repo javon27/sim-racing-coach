@@ -27,6 +27,15 @@ def unit_fns(units: str = "metric"):
     return spd, temp, ("mph" if imperial else "km/h"), ("°F" if imperial else "°C")
 
 
+# Dead-time reporting floors. Below these it's sampling noise, not a coachable
+# finding: at 50 Hz and 200 km/h one sample interval is already ~1.1 m, so a 1 m
+# floor would print the sample spacing.
+# ponytail: tuning knobs — a rig read on a corner the driver knows they coast
+# through settles them.
+_COAST_REPORT_S = 0.05
+_GAP_REPORT_M = 5.0
+
+
 def format_corner_line(cm, units: str = "metric") -> str:
     """One driver-facing corner line: speeds, apex-relative brake/throttle, trail,
     peak g, and the delta vs best. Absolute lap-distance is never shown."""
@@ -67,6 +76,13 @@ def format_corner_line(cm, units: str = "metric") -> str:
         line += ", " + " ".join(aids)
     if not math.isnan(getattr(cm, "track_edge_min", float("nan"))):
         line += f", {cm.track_edge_min:.1f}m from edge"
+    # Dead time. Silent on a clean corner — zero coasting shouldn't carry a line.
+    coast_t = getattr(cm, "coast_time", float("nan"))
+    if not math.isnan(coast_t) and coast_t > _COAST_REPORT_S:
+        line += f", coasting {coast_t:.1f}s ({cm.coast_dist:.0f} m)"
+    gap = getattr(cm, "brake_to_throttle_dist", float("nan"))
+    if not math.isnan(gap) and gap > _GAP_REPORT_M:
+        line += f", {gap:.0f} m brake\N{RIGHTWARDS ARROW}throttle gap"
     # Double-apex: name it and give the per-apex minima so the coach advises on both.
     aps = cm.apexes or []
     if len(aps) > 1 and cm.apex_min_speeds:
@@ -158,6 +174,10 @@ def format_lap_facts(analysis, units: str = "metric") -> str:
     if analysis.has_reference:
         lines.append("Deltas below are vs the driver's best lap on this track/car.")
     lines += [format_corner_line(cm, units) for cm in analysis.corners]
+    coast = getattr(analysis, "coast_total", None)
+    if coast and coast[0] > _COAST_REPORT_S:
+        lines.append(f"Coasting this lap: {coast[0]:.1f} s ({coast[1]:.0f} m) with "
+                     "neither pedal.")
     tire = format_tire_report(analysis, units)
     if tire:
         lines.append(tire)

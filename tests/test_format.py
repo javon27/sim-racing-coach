@@ -66,3 +66,26 @@ def test_format_time_loss_says_so_when_nothing_stands_out():
 def test_format_time_loss_is_honest_with_no_buckets():
     from simcoach.format import format_time_loss
     assert "reference" in format_time_loss(None, "your best lap").lower()
+
+
+def test_format_corner_line_reports_coasting_and_the_brake_to_throttle_gap():
+    from simcoach.analysis import CornerMetrics
+    from simcoach.format import format_corner_line
+    cm = CornerMetrics(corner_no=1, name="Village", direction="left", apex_dist=1000.0,
+                       entry_spd=120.0, apex_spd=60.0, min_spd=58.0, exit_spd=90.0,
+                       brake_point=900.0, throttle_point=1050.0, trailbrake_overlap=0.3,
+                       coast_time=0.42, coast_dist=18.0, brake_to_throttle_dist=18.0)
+    line = format_corner_line(cm)
+    assert "coasting 0.4s (18 m)" in line
+    assert "18 m brake\N{RIGHTWARDS ARROW}throttle gap" in line
+
+
+def test_format_corner_line_silent_when_coasting_was_not_measured():
+    from simcoach.analysis import CornerMetrics
+    from simcoach.format import format_corner_line
+    # nan = the channel wasn't there (older capture / degenerate window), not zero.
+    cm = CornerMetrics(corner_no=1, name="Village", direction="left", apex_dist=1000.0,
+                       entry_spd=120.0, apex_spd=60.0, min_spd=58.0, exit_spd=90.0,
+                       brake_point=900.0, throttle_point=1050.0, trailbrake_overlap=0.3)
+    line = format_corner_line(cm)
+    assert "coasting" not in line and "gap" not in line
