@@ -18,7 +18,7 @@ def _app(tmp_path, synthetic_lap, cmap=None):
     cid = store.create_chat()
     store.save_chat(cid, synthetic_lap.session_id, synthetic_lap.track,
                     synthetic_lap.car, lap_id, "q", "a")
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     return create_app(store, coach, cmap=cmap), lap_id, cid
 
 
@@ -54,7 +54,7 @@ def test_session_race_endpoint(tmp_path, synthetic_lap):
         incidents=["Off track T7"], penalties=[],
     )
     store.save_result_session(rs, session_id="race-1")
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     c = _tc(create_app(store, coach))
     body = c.get("/sessions/race-1/race").json()
     assert body == {"position": 3, "class_position": 2, "finish_status": "Finished",
@@ -153,7 +153,7 @@ def test_map_with_pos_and_cmap(tmp_path):
     cmap = CornerMap.load("simcoach/tracks/test_track.json")
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     lap_id = store.save(_pos_lap())
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     body = _tc(create_app(store, coach, cmap=cmap)).get(f"/laps/{lap_id}/map").json()
     assert body["width"] == 1000
     assert body["path"]
@@ -165,7 +165,7 @@ def test_map_has_dist_and_corner_windows(tmp_path):
     cmap = CornerMap.load("simcoach/tracks/test_track.json")
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     lap_id = store.save(_pos_lap())
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     body = _tc(create_app(store, coach, cmap=cmap)).get(f"/laps/{lap_id}/map").json()
     assert len(body["dist"]) == len(body["path"])
     assert "apex_dist" in body["corners"][0]
@@ -187,7 +187,7 @@ def test_map_avg_averages_clean_laps(tmp_path):
     a = store.save(_curve_lap("Curveland", "GT3", 90.0, dx=0.0))
     store.save(_curve_lap("Curveland", "GT3", 90.5, dx=10.0))
     store.save(_curve_lap("Curveland", "GT3", 200.0, dx=999.0))  # off lap -> excluded
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     app = create_app(store, coach, tracks_dir=str(tmp_path / "tracks"))
     body = _tc(app).get(f"/laps/{a}/map?avg=1").json()
     assert body["path"]  # averaged outline built
@@ -201,7 +201,7 @@ def test_map_is_canonical_for_lap_without_position(tmp_path):
     store.save(_curve_lap("Curveland", "GT3", 90.0))          # pos lap (builds the map)
     no_pos = store.save(LapRecord("lmu", "Curveland", "GT3", 90.2, True, 0.0,
                                   {"lap_distance": np.arange(5.0)}))  # selected, no pos
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     app = create_app(store, coach, tracks_dir=str(tmp_path / "tracks"))
     body = _tc(app).get(f"/laps/{no_pos}/map").json()
     assert body.get("path")  # canonical outline present despite the lap having no pos
@@ -212,7 +212,7 @@ def test_map_prefers_frozen_path_over_reaverage(tmp_path):
     # uses it verbatim rather than re-averaging the driven laps.
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     lap_id = store.save(_curve_lap("Curveland", "GT3", 90.0))
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     tracks = tmp_path / "tracks"
     tracks.mkdir()
     # Frozen outline with a distinctive 5-point path_dist; re-averaging would
@@ -242,7 +242,7 @@ def _curve_app(tmp_path):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     lap_id = store.save(_curve_lap("Curveland", "GT3", 90.0, dx=0.0))
     store.save(_curve_lap("Curveland", "GT3", 90.4, dx=8.0))
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     tracks = tmp_path / "tracks"
     app = create_app(store, coach, tracks_dir=str(tracks))
     return app, lap_id, tracks
@@ -350,7 +350,7 @@ def test_put_map_slug_cannot_escape_tracks_dir(tmp_path):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     lap_id = store.save(_curve_lap("../../../evil", "GT3", 90.0))
     store.save(_curve_lap("../../../evil", "GT3", 90.3, dx=5.0))
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     tracks = tmp_path / "tracks"
     app = create_app(store, coach, tracks_dir=str(tracks))
     r = _tc(app).put(f"/laps/{lap_id}/map", json={"corners": [{"number": 1, "apex_dist": 200.0}]})
@@ -365,7 +365,7 @@ def test_put_map_no_clean_laps_is_422(tmp_path):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     lap_id = store.save(LapRecord("lmu", "Bare", "GT3", 90.0, True, 0.0,
                                   {"lap_distance": np.arange(5.0)}))
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     app = create_app(store, coach, tracks_dir=str(tmp_path / "tracks"))
     r = _tc(app).put(f"/laps/{lap_id}/map", json={"corners": [{"number": 1, "apex_dist": 2.0}]})
     assert r.status_code == 422
@@ -388,7 +388,7 @@ def test_setup_survives_rest_failure(tmp_path, synthetic_lap):
             raise RuntimeError("LMU closed")
 
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     app = create_app(store, coach, rest=BrokenRest())
     r = _tc(app).get("/setup")
     assert r.status_code == 200
@@ -401,7 +401,7 @@ def test_setup_lazily_connects_via_factory(tmp_path, synthetic_lap):
             return {"wing": 5}
 
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     app = create_app(store, coach, rest=None, rest_factory=FakeRest)
     c = _tc(app)
     # No boot rest, but the factory connects on first /setup call.
@@ -420,7 +420,7 @@ def test_setup_fetch_captures_session_setup(tmp_path, synthetic_lap):
 
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     synthetic_lap.session_id = "s1"
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     app = create_app(store, coach, rest=FakeRest())
     app.state.latest = {"record": synthetic_lap, "lap_id": 1}  # gives /status a live session/track/car
     _tc(app).get("/setup")
@@ -441,7 +441,7 @@ def test_setup_fetch_capture_renders_via_get_last_setup(tmp_path, synthetic_lap)
 
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     synthetic_lap.session_id = "s1"
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     app = create_app(store, coach, rest=FakeRest())
     app.state.latest = {"record": synthetic_lap, "lap_id": 1}
     _tc(app).get("/setup")
@@ -458,7 +458,7 @@ def test_setup_fetch_without_known_session_does_not_capture(tmp_path):
             return {"VM_WING_REAR": {"stringValue": "5", "isFreeSetting": True}}
 
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     app = create_app(store, coach, rest=FakeRest())
     _tc(app).get("/setup")  # no live/latest session -> nothing to key the row on
     assert store.conn.execute("SELECT COUNT(*) FROM session_setups").fetchone()[0] == 0
@@ -471,7 +471,7 @@ def test_analysis_resolves_map_per_track(tmp_path, synthetic_lap):
     resolver = lambda track: cmap if track == track_a else None
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     lap_id = store.save(synthetic_lap)
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     app = create_app(store, coach, map_resolver=resolver)
     c = _tc(app)
     assert c.get(f"/laps/{lap_id}/analysis").status_code == 200
@@ -489,7 +489,7 @@ def test_status_has_map_reflects_canonical(tmp_path, monkeypatch):
     monkeypatch.setattr(smm, "read_live_status", lambda: None)
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     pos = store.save(_curve_lap("Curveland", "GT3", 90.0))
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     app = create_app(store, coach, tracks_dir=str(tmp_path / "tracks"))
     app.state.latest = {"record": store.load(pos), "lap_id": pos}
     assert _tc(app).get("/status").json()["has_map"] is True
@@ -502,7 +502,7 @@ def test_status_has_map_reflects_canonical(tmp_path, monkeypatch):
 
 def _map_app(tmp_path):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     app = create_app(store, coach, tracks_dir=str(tmp_path / "tracks"))
     return app, store
 
@@ -689,7 +689,7 @@ def test_coach_resolves_live_track_car_with_zero_stored_laps(tmp_path, monkeypat
     from simcoach.lmu import smm
     monkeypatch.setattr(smm, "read_session_track_car", lambda: ("test_track", "test_car"))
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))  # empty store
-    coach = Coach(FakeModel(reply="Focus on braking."), "simcoach/knowledge")
+    coach = Coach(FakeModel(reply="Focus on braking."))
     app = create_app(store, coach)  # default tracks_dir has test_track.json
     c = _tc(app)
     chat_id = None
@@ -788,7 +788,7 @@ def test_rotation_persists_and_reflected(tmp_path):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     lid = store.save(_curve_lap("Rot", "GT3", 90.0))
     store.save(_curve_lap("Rot", "GT3", 90.3, dx=8.0))
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     tracks = tmp_path / "tracks"
     c = _tc(create_app(store, coach, tracks_dir=str(tracks)))
     assert c.get(f"/laps/{lid}/map").json()["rotation"] == 0.0
@@ -805,7 +805,7 @@ def test_rotation_preserves_resolved_corners_when_no_file(tmp_path):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     lid = store.save(_curve_lap("test_track", "GT3", 90.0))
     store.save(_curve_lap("test_track", "GT3", 90.3, dx=8.0))
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     tracks = tmp_path / "tracks"
     resolver = lambda t: cmap if t == "test_track" else None
     c = _tc(create_app(store, coach, tracks_dir=str(tracks), map_resolver=resolver))
@@ -821,7 +821,7 @@ def test_rotation_preserves_resolved_corners_when_no_file(tmp_path):
 def test_rotation_csrf_and_validation(tmp_path):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     lid = store.save(_curve_lap("Rot", "GT3", 90.0))
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     c = _tc(create_app(store, coach, tracks_dir=str(tmp_path / "tracks")))
     assert c.post(f"/laps/{lid}/rotation").status_code == 422             # no body (CSRF)
     assert c.post(f"/laps/{lid}/rotation", json={"degrees": "x"}).status_code == 422
@@ -854,7 +854,7 @@ def test_installed_build_writes_maps_to_appdata_not_bundle(tmp_path, monkeypatch
     bundled = (tmp_path / "tracks").resolve()
     bundled.mkdir()
     monkeypatch.setattr(app_module.sys, "frozen", True, raising=False)
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     c = _tc(create_app(store, coach, tracks_dir=str(bundled)))
     assert c.post(f"/laps/{lid}/rotation", json={"degrees": 45}).status_code == 200
 
@@ -872,7 +872,7 @@ def test_dev_build_writes_maps_to_bundle(tmp_path, monkeypatch):
     lid = store.save(_curve_lap("Imola", "GT3", 90.0))
     bundled = (tmp_path / "tracks").resolve()
     monkeypatch.setattr(app_module.sys, "frozen", False, raising=False)
-    coach = Coach(FakeModel(), "simcoach/knowledge")
+    coach = Coach(FakeModel())
     c = _tc(create_app(store, coach, tracks_dir=str(bundled)))
     assert c.post(f"/laps/{lid}/rotation", json={"degrees": 45}).status_code == 200
     assert (bundled / f"{track_slug('Imola')}.json").exists()

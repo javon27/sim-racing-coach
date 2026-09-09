@@ -1,6 +1,3 @@
-import re
-from pathlib import Path
-
 from simcoach.analysis import LapAnalysis
 from simcoach.driver import DriverProfile
 from simcoach.format import format_lap_facts, unit_fns
@@ -130,6 +127,12 @@ AGENTIC_SYSTEM_PROMPT = (
     "When reference lap times are given, you MAY compare the driver's time to the "
     "benchmark for their class as an absolute yardstick — but these are community times, "
     "not the driver's data; frame them as a reference, not a verdict.\n\n"
+    "For the car's handling character, a setup direction, or a driver-aid (ABS/TC/"
+    "brake-bias) question, call get_car_notes and ground your advice in the authored "
+    "car notes and the shared LMU setup concepts it returns — prefer these over general "
+    "motorsport memory, and NEVER invent the car's character. Respect the provenance "
+    "tags: [LMU] is game-specific, [general-sim] is cross-sim baseline, and "
+    "[needs-refinement] items are tentative — hedge on those.\n\n"
     "HISTORY: for anything spanning past sessions — 'what's my all-time/personal best here', "
     "'am I improving over time', 'how did my last few sessions go', 'what setup did we run "
     "here last time' — call get_personal_best, get_progress, list_past_sessions, or "
@@ -170,9 +173,8 @@ AGENTIC_SYSTEM_PROMPT = (
 class Coach:
     """Assembles prompts from analysis + corner facts + knowledge notes and calls the Model."""
 
-    def __init__(self, model: Model, knowledge_dir: str):
+    def __init__(self, model: Model):
         self.model = model
-        self.knowledge_dir = knowledge_dir
 
     def build_prompt(
         self,
@@ -205,14 +207,6 @@ class Coach:
             if lines:
                 sections.append("\nCurrent car setup (adjust THESE for setup fixes):")
                 sections.extend(lines)
-
-        # Load the car note by a filesystem-safe slug of the car name (slugifying also
-        # neutralizes any path separators, so a crafted car name can't escape the dir).
-        slug = re.sub(r"[^a-z0-9]+", "_", car.lower()).strip("_")
-        if slug:
-            notes_file = Path(self.knowledge_dir) / f"{slug}.md"
-            if notes_file.exists():
-                sections.append(f"\nKnowledge notes for {car}:\n{notes_file.read_text()}")
 
         sections.append(f"\nQuestion: {question}")
 

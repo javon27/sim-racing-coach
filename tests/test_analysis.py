@@ -45,7 +45,7 @@ def test_tire_summary_and_prompt(synthetic_lap):
     assert all(80.0 <= v <= 85.0 for v in a.tire_means.values())
     assert a.tire_warmup is not None
 
-    _, user = Coach(FakeModel(), "kb").build_prompt(a, "car", "how were my tires?")
+    _, user = Coach(FakeModel()).build_prompt(a, "car", "how were my tires?")
     assert "Tire temps" in user and "FL" in user and "warm-up" in user.lower()
 
 
@@ -63,7 +63,7 @@ def test_wheel_report_and_min_grip(synthetic_lap):
     rep = format_wheel_report(a, "metric")
     assert "Brake temps" in rep and "wear" in rep.lower()
     # surfaced in the prompt corner line
-    _, user = Coach(FakeModel(), "kb").build_prompt(a, "car", "grip?")
+    _, user = Coach(FakeModel()).build_prompt(a, "car", "grip?")
     assert "min grip" in user
 
 

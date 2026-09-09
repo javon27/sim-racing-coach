@@ -43,7 +43,7 @@ def _client(tmp_path, monkeypatch, mem_keyring):
     monkeypatch.setenv("SIMCOACH_LMU_DIR", str(lmu_dir))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    app = create_app(store, Coach(FakeModel(), "simcoach/knowledge"))
+    app = create_app(store, Coach(FakeModel()))
     return TestClient(app, base_url="http://127.0.0.1"), store
 
 

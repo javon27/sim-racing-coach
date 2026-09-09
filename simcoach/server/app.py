@@ -1202,6 +1202,17 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             # the session stamp.
             if eff_session_id is None and app.state.latest is not None:
                 eff_session_id = app.state.latest["record"].session_id
+            # No lap captured yet (e.g. a question asked in the garage): stamp the
+            # chat with the CURRENT live session so it isn't orphaned — the laps that
+            # follow join the same instance and the chat stays resumable via Sessions.
+            if eff_session_id is None:
+                try:
+                    from ..lmu.smm import read_live_session_id
+                    base = read_live_session_id()
+                    if base:
+                        eff_session_id = store.resolve_current_instance(base)
+                except Exception:
+                    pass
             cfg = config.load_config()
             ctx = CoachContext(app.state.store, record=None, lap_id=None, cmap=cmap,
                                units=cfg.get("units", "metric"),

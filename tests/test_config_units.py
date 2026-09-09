@@ -29,14 +29,14 @@ def test_config_reads_file_and_survives_garbage(tmp_path):
 
 
 def test_metric_prompt_uses_kmh(synthetic_lap):
-    c = Coach(FakeModel(), "simcoach/knowledge")
+    c = Coach(FakeModel())
     _, user = c.build_prompt(_analysis(synthetic_lap), "test_car", "q", units="metric")
     assert "km/h" in user and "mph" not in user
     assert "°C" in user
 
 
 def test_imperial_prompt_converts_speed_and_temp(synthetic_lap):
-    c = Coach(FakeModel(), "simcoach/knowledge")
+    c = Coach(FakeModel())
     a = _analysis(synthetic_lap)
     _, user = c.build_prompt(a, "test_car", "q", units="imperial")
     assert "mph" in user and "km/h" not in user
@@ -49,7 +49,7 @@ def test_imperial_prompt_converts_speed_and_temp(synthetic_lap):
 
 
 def test_corner_line_has_richer_inputs(synthetic_lap):
-    c = Coach(FakeModel(), "simcoach/knowledge")
+    c = Coach(FakeModel())
     _, user = c.build_prompt(_analysis(synthetic_lap), "test_car", "q")
     t1 = [l for l in user.splitlines() if l.startswith("T1 ")][0]
     assert "peak" in t1 and "g" in t1        # peak lateral g surfaced

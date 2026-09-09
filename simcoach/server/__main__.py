@@ -22,7 +22,7 @@ def build_app():
     configure_logging()
     cfg = load_config()
     store = LapStore(str(db_path()), str(telemetry_dir()))
-    coach = Coach(LazyModel(model=cfg["model"]), str(m.PKG_DIR / "knowledge"))
+    coach = Coach(LazyModel(model=cfg["model"]))
 
     user_tracks_dir = str(Path(store.data_dir) / "tracks")
 

@@ -13,7 +13,7 @@ def _ctx(tmp_path):
 def test_session_threads_history(tmp_path):
     ctx = _ctx(tmp_path)
     m = FakeModel(reply="brake later")
-    sess = CoachSession(Coach(m, "simcoach/knowledge"), car="test_car")
+    sess = CoachSession(Coach(m), car="test_car")
 
     sess.ask(ctx, "where am I losing time?")
     assert len(sess.history) == 2  # user question + assistant answer
@@ -29,7 +29,7 @@ def test_session_threads_history(tmp_path):
 def test_session_first_call_has_no_prior_history(tmp_path):
     ctx = _ctx(tmp_path)
     m = FakeModel(reply="ok")
-    sess = CoachSession(Coach(m, "simcoach/knowledge"), car="test_car")
+    sess = CoachSession(Coach(m), car="test_car")
     sess.ask(ctx, "first question")
     # only the current turn's user question is present (no prior history)
     assert len(m.last_messages) == 1
@@ -38,7 +38,7 @@ def test_session_first_call_has_no_prior_history(tmp_path):
 
 def test_session_reset(synthetic_lap):
     m = FakeModel()
-    sess = CoachSession(Coach(m, "simcoach/knowledge"), car="c")
+    sess = CoachSession(Coach(m), car="c")
     sess.history.append({"role": "user", "content": "x"})
     sess.reset()
     assert sess.history == []

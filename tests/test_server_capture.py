@@ -18,7 +18,7 @@ class _OneShotSource:
 
 def test_capture_loop_saves_lap_and_updates_latest(tmp_path, synthetic_lap):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    app = create_app(store, Coach(FakeModel(), "simcoach/knowledge"))
+    app = create_app(store, Coach(FakeModel()))
     lap = dataclasses.replace(synthetic_lap, session_id="test-session")
 
     _capture_loop(_OneShotSource(lap), store, app.state)

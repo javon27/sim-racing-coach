@@ -14,7 +14,7 @@ from simcoach.store import LapStore
 
 def _app(tmp_path):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    app = create_app(store, Coach(FakeModel(), "simcoach/knowledge"), tracks_dir=str(tmp_path / "tracks"))
+    app = create_app(store, Coach(FakeModel()), tracks_dir=str(tmp_path / "tracks"))
     return app, store
 
 

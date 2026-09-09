@@ -7,7 +7,7 @@ from simcoach.model.fake import FakeModel
 
 def _tc(tmp_path):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    app = create_app(store, Coach(FakeModel(), "simcoach/knowledge"))  # cmap/rest None
+    app = create_app(store, Coach(FakeModel()))  # cmap/rest None
     return TestClient(app, base_url="http://127.0.0.1")
 
 
@@ -32,7 +32,7 @@ def test_status_on_track_live_with_latest_context(tmp_path, synthetic_lap, monke
     monkeypatch.setattr(smm, "read_live_status",
                         lambda: {"track": synthetic_lap.track, "car": synthetic_lap.car, "state": "track"})
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    app = create_app(store, Coach(FakeModel(), "simcoach/knowledge"))
+    app = create_app(store, Coach(FakeModel()))
     app.state.latest = {"record": synthetic_lap, "lap_id": 1}
 
     b = TestClient(app, base_url="http://127.0.0.1").get("/status").json()

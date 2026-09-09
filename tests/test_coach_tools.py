@@ -293,7 +293,7 @@ def test_agentic_loop_dispatches_tool_calls(tmp_path, synthetic_lap):
     # Script the fake model to call get_corner, then answer.
     model = FakeModel(reply="Turn 1 looks good.",
                       tool_script=[("get_corner", {"corner": "1"})])
-    coach = Coach(model, "simcoach/knowledge")
+    coach = Coach(model)
     answer = coach.ask_agentic(ctx, "how's turn 1?", "test_car")
     assert answer == "Turn 1 looks good."
     # the tool actually ran and produced the corner line
@@ -306,7 +306,7 @@ def test_agentic_loop_dispatches_tool_calls(tmp_path, synthetic_lap):
 def test_agentic_system_prompt_has_units_and_tools_guidance(tmp_path, synthetic_lap):
     ctx, _, _ = _ctx(tmp_path, synthetic_lap)
     model = FakeModel(reply="ok")
-    Coach(model, "simcoach/knowledge").ask_agentic(ctx, "q", "test_car", units="imperial")
+    Coach(model).ask_agentic(ctx, "q", "test_car", units="imperial")
     assert "mph" in model.last_system and "°F" in model.last_system
     assert "tool" in model.last_system.lower()
 
