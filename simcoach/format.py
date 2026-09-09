@@ -77,6 +77,38 @@ def format_corner_line(cm, units: str = "metric") -> str:
     return line
 
 
+# How many loss buckets the coach is handed. More than this and the ranking stops
+# being a ranking. ponytail: a flat cap; a "everything above 0.1s" rule would adapt.
+_TOP_BUCKETS = 5
+# Below this a bucket is ds/v integration noise, not a coachable loss.
+# ponytail: tuning knob — raise it if real laps show chatter in the listing.
+_BUCKET_NOISE_S = 0.02
+
+
+def format_time_loss(buckets, reference_label: str = "your best lap") -> str:
+    """Net delta plus the biggest loss buckets, ranked. `buckets` carry delta
+    POSITIVE = time lost; output signs a loss NEGATIVE, the way a driver reads a
+    delta ("you're -0.31s at T4"). The biggest gain is named too, so the coach can
+    reinforce what worked."""
+    if not buckets:
+        return ("No comparable reference lap to measure time loss against yet — "
+                "you need a second valid lap on this track/car.")
+    net = sum(b["delta"] for b in buckets)
+    out = f"Net {-net:+.2f}s vs {reference_label}."
+    losses = sorted((b for b in buckets if b["delta"] > _BUCKET_NOISE_S),
+                    key=lambda b: -b["delta"])[:_TOP_BUCKETS]
+    if losses:
+        out += " Biggest losses: " + ", ".join(
+            f"{b['label']} {-b['delta']:+.2f}s" for b in losses) + "."
+    gains = [b for b in buckets if b["delta"] < -_BUCKET_NOISE_S]
+    if gains:
+        g = min(gains, key=lambda b: b["delta"])
+        out += f" Biggest gain: {g['label']} {-g['delta']:+.2f}s."
+    if not losses and not gains:
+        out += " No single section stands out — this lap tracks the reference closely."
+    return out
+
+
 def format_wheel_report(analysis, units: str = "metric") -> str | None:
     """Lap-level brake temps, hot pressures, and tire wear per wheel — or None if
     the lap predates the extended capture."""

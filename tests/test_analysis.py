@@ -296,3 +296,73 @@ def test_align_time_axes_injected_loss_shows_as_delta():
 def test_align_time_axes_rejects_insufficient_overlap():
     from simcoach.analysis import align_time_axes
     assert align_time_axes(_flat_lap(72.0, length=300.0), _flat_lap(72.0, length=3000.0)) is None
+
+
+# --- whole-lap time-loss buckets ---------------------------------------------
+
+def _test_cmap():
+    from simcoach.corners import CornerMap
+    return CornerMap.load("simcoach/tracks/test_track.json")
+
+
+def _slow_in_t1():
+    """(cur, ref) on test_track geometry: identical 144 km/h laps except cur drops
+    to 72 km/h between 900-1100 m — inside T1's 800-1200 m window only."""
+    ref = _flat_lap(144.0, n=1500, length=3000.0)
+    cur = _flat_lap(144.0, n=1500, length=3000.0)
+    d = cur.channels["lap_distance"]
+    cur.channels["speed"][(d >= 900) & (d <= 1100)] = 72.0
+    return cur, ref
+
+
+def test_time_loss_buckets_attribute_the_loss_to_the_right_corner():
+    from simcoach.analysis import time_loss_buckets
+    cur, ref = _slow_in_t1()
+    b = time_loss_buckets(cur, ref, _test_cmap())
+    t1 = next(x for x in b if x["kind"] == "corner" and x["label"].startswith("T1"))
+    assert t1["delta"] > 0.5                                        # the loss landed in T1
+    assert all(abs(x["delta"]) < 0.05 for x in b if x is not t1)    # and nowhere else
+
+
+def test_time_loss_buckets_sum_to_the_net_delta():
+    from simcoach.analysis import align_time_axes, time_loss_buckets
+    cur, ref = _slow_in_t1()
+    b = time_loss_buckets(cur, ref, _test_cmap())
+    _, delta = align_time_axes(cur, ref)
+    assert abs(sum(x["delta"] for x in b) - float(delta[-1])) < 0.02
+
+
+def test_time_loss_buckets_cover_corners_and_straights():
+    from simcoach.analysis import time_loss_buckets
+    cur, ref = _slow_in_t1()
+    cmap = _test_cmap()
+    import itertools
+    b = time_loss_buckets(cur, ref, cmap)
+    assert {x["kind"] for x in b} == {"corner", "straight"}
+    assert len([x for x in b if x["kind"] == "corner"]) == len(cmap.corners)
+    # contiguous tiling in track order, so the deltas can't double-count or gap
+    for prev, nxt in itertools.pairwise(b):
+        assert abs(prev["end_dist"] - nxt["start_dist"]) < 1e-6
+    # straights are named from the corners they sit between, never invented
+    names = [x["label"] for x in b if x["kind"] == "straight"]
+    assert any("T1" in n and "T2" in n for n in names)
+
+
+def test_time_loss_buckets_none_without_usable_reference():
+    from simcoach.analysis import time_loss_buckets
+    short, long_ref = _flat_lap(72.0, length=300.0), _flat_lap(72.0, length=3000.0)
+    assert time_loss_buckets(short, long_ref, _test_cmap()) is None
+
+
+def test_time_loss_buckets_handle_a_corner_wrapping_the_start_finish_seam():
+    # A window with start_dist > end_dist spans the S/F seam; its two distance runs
+    # must fold into ONE bucket and the tiling must still sum to the net delta.
+    from simcoach.analysis import align_time_axes, time_loss_buckets
+    from simcoach.corners import Corner, CornerMap
+    cur, ref = _slow_in_t1()
+    cmap = CornerMap([Corner(1, "Seam", "left", 2800.0, 2900.0, 200.0),
+                      Corner(2, "Left Hairpin", "left", 800.0, 1000.0, 1200.0)])
+    b = time_loss_buckets(cur, ref, cmap)
+    assert len([x for x in b if x["kind"] == "corner"]) == 2
+    _, delta = align_time_axes(cur, ref)
+    assert abs(sum(x["delta"] for x in b) - float(delta[-1])) < 0.02

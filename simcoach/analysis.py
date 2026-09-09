@@ -124,6 +124,87 @@ def align_time_axes(record: LapRecord, reference: LapRecord):
     return grid, delta - delta[0]
 
 
+def time_loss_buckets(record: LapRecord, reference: LapRecord, cmap: CornerMap):
+    """Where the lap's time went vs `reference`, bucketed over the WHOLE lap.
+
+    One bucket per corner window (owned data — boundaries and identity come from
+    the corner map) plus one per inter-corner gap, in track order, each
+    `{"label", "kind": "corner"|"straight", "delta", "start_dist", "end_dist"}`.
+    `delta` is seconds, POSITIVE = time lost vs the reference. The buckets tile
+    the compared distance range contiguously, so they sum to the net delta — a
+    ranked list that doesn't reconcile with the net it's printed beside is worse
+    than no tool.
+
+    Gap buckets are labelled from the corners they sit between; no corner name,
+    number or direction is invented. None when the laps aren't comparable.
+    """
+    aligned = align_time_axes(record, reference)
+    if aligned is None:
+        return None
+    grid, delta = aligned
+    lo0, hi0 = float(grid[0]), float(grid[-1])
+
+    def t_at(d: float) -> float:
+        return float(np.interp(d, grid, delta))
+
+    # Corner windows clipped onto the compared range. A window that wraps the S/F
+    # seam (start_dist > end_dist) contributes two distance runs; they are summed
+    # back into one bucket below so the corner is reported once.
+    runs: list[tuple[float, float, int]] = []
+    for c in cmap.corners:
+        pairs = ([(c.start_dist, c.end_dist)] if c.start_dist <= c.end_dist
+                 else [(lo0, c.end_dist), (c.start_dist, hi0)])
+        for a, b in pairs:
+            a, b = max(float(a), lo0), min(float(b), hi0)
+            if b > a:
+                runs.append((a, b, c.number))
+    runs.sort()
+
+    # Overlapping windows (a malformed map) would double-count: clip to the tiling.
+    tiled: list[tuple[float, float, int]] = []
+    for a, b, no in runs:
+        if tiled and a < tiled[-1][1]:
+            a = tiled[-1][1]
+        if b > a:
+            tiled.append((a, b, no))
+
+    tag = {c.number: f"T{c.label or c.number}" for c in cmap.corners}
+    name = {c.number: f"T{c.label or c.number} {c.name}".strip() for c in cmap.corners}
+    wrapped = {c.number: c for c in cmap.corners if c.start_dist > c.end_dist}
+
+    def gap_label(i: int) -> str:
+        before = f"{tag[tiled[i - 1][2]]} exit" if i > 0 else "lap start"
+        after = f"{tag[tiled[i][2]]} entry" if i < len(tiled) else "lap end"
+        return f"{before} \N{RIGHTWARDS ARROW} {after}"
+
+    out: list[dict] = []
+    by_corner: dict[int, dict] = {}
+    cursor = lo0
+    for i, (a, b, no) in enumerate(tiled):
+        if a > cursor + 1e-9:
+            out.append({"label": gap_label(i), "kind": "straight",
+                        "delta": t_at(a) - t_at(cursor),
+                        "start_dist": cursor, "end_dist": a})
+        d = t_at(b) - t_at(a)
+        if no in by_corner:
+            # The far side of a seam-wrapped window: fold the delta into the one
+            # bucket and report the map's own (wrapped) window, not the clipped run.
+            by_corner[no]["delta"] += d
+            by_corner[no]["start_dist"] = float(wrapped[no].start_dist)
+            by_corner[no]["end_dist"] = float(wrapped[no].end_dist)
+        else:
+            bucket = {"label": name[no], "kind": "corner", "delta": d,
+                      "start_dist": a, "end_dist": b}
+            by_corner[no] = bucket
+            out.append(bucket)
+        cursor = b
+    if hi0 > cursor + 1e-9:
+        out.append({"label": gap_label(len(tiled)), "kind": "straight",
+                    "delta": t_at(hi0) - t_at(cursor),
+                    "start_dist": cursor, "end_dist": hi0})
+    return out
+
+
 def _wheel_summary(record: LapRecord):
     """Lap-level brake temp / pressure / wear per wheel from the extended capture.
     Returns None for laps captured before those channels existed."""

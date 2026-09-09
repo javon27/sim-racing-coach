@@ -25,3 +25,44 @@ def test_format_laptime_invalid():
     for bad in (None, -1.0, float("nan"), float("inf"), "x"):
         assert format_laptime(bad) == "—"
     assert math.isfinite(1.0)  # sanity
+
+
+# --- time-loss formatting (issue #38 slice 1) ---------------------------------
+
+def _buckets():
+    # delta > 0 = time LOST vs the reference (align_time_axes' sign).
+    return [
+        {"label": "lap start → T1 entry", "kind": "straight", "delta": 0.01,
+         "start_dist": 0.0, "end_dist": 800.0},
+        {"label": "T1 Left Hairpin", "kind": "corner", "delta": 0.31,
+         "start_dist": 800.0, "end_dist": 1200.0},
+        {"label": "T1 exit → T2 entry", "kind": "straight", "delta": 0.18,
+         "start_dist": 1200.0, "end_dist": 2000.0},
+        {"label": "T2 Right Sweeper", "kind": "corner", "delta": -0.12,
+         "start_dist": 2000.0, "end_dist": 2400.0},
+    ]
+
+
+def test_format_time_loss_ranks_losses_biggest_first_and_signs_them_negative():
+    from simcoach.format import format_time_loss
+    out = format_time_loss(_buckets(), "your session best")
+    assert "Net -0.38s vs your session best." in out        # 0.01+0.31+0.18-0.12
+    assert "-0.31s" in out and "-0.18s" in out
+    assert out.index("T1 Left Hairpin") < out.index("T1 exit → T2 entry")
+    # the 0.01s straight is integration noise, not a coachable loss
+    assert "lap start" not in out
+    # a real gain is named so the coach can reinforce it
+    assert "Biggest gain" in out and "T2 Right Sweeper +0.12s" in out
+
+
+def test_format_time_loss_says_so_when_nothing_stands_out():
+    from simcoach.format import format_time_loss
+    flat = [{"label": "T1", "kind": "corner", "delta": 0.001,
+             "start_dist": 0.0, "end_dist": 10.0}]
+    out = format_time_loss(flat, "your best lap")
+    assert "Net" in out and "stands out" in out
+
+
+def test_format_time_loss_is_honest_with_no_buckets():
+    from simcoach.format import format_time_loss
+    assert "reference" in format_time_loss(None, "your best lap").lower()
