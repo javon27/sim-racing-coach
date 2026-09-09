@@ -392,6 +392,46 @@ def test_get_chat_usage_is_zeroed_for_an_unknown_chat(tmp_path):
     assert r["cost"] == 0.0 and r["cost_complete"] is True
 
 
+def test_get_chat_usage_flags_incomplete_for_an_all_legacy_chat(tmp_path):
+    """Every pre-v12 row billed real money but stores NULL usage. A chat that is
+    ALL such rows must never render as 'total=0, complete=True' -- that reads as
+    a free chat when it plainly was not."""
+    client, store = _client(tmp_path)
+    cid = store.create_chat()
+    for i in range(3):
+        store.save_chat(cid, "s", "Monza", "GT3", None, f"q{i}", f"a{i}")
+    r = client.get(f"/chats/{cid}/usage").json()
+    assert r["usage"]["total"] == 0
+    assert r["cost_complete"] is False
+
+
+def test_get_chat_usage_flags_incomplete_for_a_mixed_legacy_and_new_chat(tmp_path):
+    """The real-world case (chat-20260908T204046-6de917 in the live DB has 30
+    legacy rows): 29 legacy rows + one new, priced turn must still show the total
+    as incomplete, not '18.9k tokens * $0.045' with no caveat."""
+    client, store = _client(tmp_path)
+    cid = store.create_chat()
+    for i in range(29):
+        store.save_chat(cid, "s", "Monza", "GT3", None, f"q{i}", f"a{i}")
+    store.save_chat(cid, "s", "Monza", "GT3", None, "q30", "a30",
+                     usage={"input": 15000, "output": 3900}, model="claude-sonnet-5")
+    r = client.get(f"/chats/{cid}/usage").json()
+    assert r["usage"]["total"] == 18900
+    assert r["usage"]["messages"] == 30
+    assert r["cost_complete"] is False
+
+
+def test_get_chat_usage_is_complete_for_an_all_new_chat(tmp_path):
+    """Guard against overcorrecting: a chat with no legacy rows at all must still
+    report complete=True."""
+    client, store = _client(tmp_path)
+    cid = store.create_chat()
+    store.save_chat(cid, "s", "Monza", "GT3", None, "q", "a",
+                     usage={"input": 100, "output": 20}, model="claude-sonnet-5")
+    r = client.get(f"/chats/{cid}/usage").json()
+    assert r["cost_complete"] is True
+
+
 def test_coach_ws_usage_missing_degrades_the_meter_not_the_answer(tmp_path):
     """A model that emits no usage event (e.g. _DeltaModel) must still answer and
     persist; the meter just reads zero."""

@@ -50,10 +50,16 @@ def _usage_view(agg: dict) -> dict:
 
     The core owns the arithmetic (pricing lives in simcoach.pricing) — the UI only
     formats what it's given. `by_model` stays server-side; the client has no use for
-    the breakdown, only for the one number and the completeness flag."""
+    the breakdown, only for the one number and the completeness flag.
+
+    A chat with any pre-v12/NULL-usage row (`null_usage_rows`) is never "complete" —
+    those rows billed real money that COALESCEs to 0, so a chat that is ALL such rows
+    must not read as a genuinely-zero-cost, fully-priced chat."""
     usage = {k: agg.get(k, 0) for k in
              ("input", "output", "cache_read", "cache_write", "total", "messages")}
     cost, complete = estimate_chat_cost(agg.get("by_model") or {})
+    if agg.get("null_usage_rows"):
+        complete = False
     return {"usage": usage, "cost": cost, "cost_complete": complete}
 _CLEAN_LAP_RATIO = 1.07  # keep laps within +7% of the track/car best (drop in/out/off laps)
 _MAP_BUFFER_MAX = 8      # cap mapping-mode buffer (need only 2 edges; keep last N)

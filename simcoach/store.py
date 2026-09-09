@@ -576,9 +576,14 @@ class LapStore:
         `by_model` exists because Settings can change the model mid-chat, so the chat's
         cost is only priceable per model — pricing the total against one id would be
         wrong. Rows written before v12 (and any turn whose usage went missing) carry
-        NULL and count as 0; an unknown chat is all zeroes, never an error. Unknown /
-        NULL model rows key under "" so the caller can see them and flag the total
-        as incomplete rather than silently dropping them."""
+        NULL and count as 0 in the sums; an unknown chat is all zeroes, never an error.
+        Unknown / NULL model rows key under "" so the caller can see them.
+
+        A NULL-usage row summed as 0 is indistinguishable from a turn that genuinely
+        billed zero tokens once COALESCEd — so `null_usage_rows` reports that count
+        separately (keyed on `input_tokens IS NULL`) rather than folding it into the
+        buckets. The caller (server `_usage_view`) uses it to flag the chat's cost as
+        incomplete even when every bucket happens to sum to zero."""
         sums = ", ".join(f"SUM(COALESCE({col}, 0))" for col, _ in _USAGE_COLUMNS)
         with self._lock:
             rows = self.conn.execute(
@@ -586,6 +591,10 @@ class LapStore:
                 "WHERE chat_id = ? GROUP BY model",
                 (chat_id,),
             ).fetchall()
+            null_usage_rows = self.conn.execute(
+                "SELECT COUNT(*) FROM coach_chat WHERE chat_id = ? AND input_tokens IS NULL",
+                (chat_id,),
+            ).fetchone()[0]
         out = {key: 0 for _, key in _USAGE_COLUMNS}
         out["messages"] = 0
         by_model: dict[str, dict] = {}
@@ -598,6 +607,7 @@ class LapStore:
             by_model[model or ""] = per
         out["total"] = sum(out[key] for _, key in _USAGE_COLUMNS)
         out["by_model"] = by_model
+        out["null_usage_rows"] = null_usage_rows
         return out
 
     def list_chats(self) -> list[dict]:

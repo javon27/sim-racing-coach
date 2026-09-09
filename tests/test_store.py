@@ -498,6 +498,25 @@ def test_chat_usage_splits_by_model_and_tolerates_legacy_null_rows(tmp_path):
     assert u["by_model"][""] == {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
 
 
+def test_chat_usage_counts_null_usage_rows_separately_from_zero(tmp_path):
+    """A pre-v12 row's NULL usage sums to 0 via COALESCE -- indistinguishable from a
+    turn that genuinely billed zero tokens. `null_usage_rows` must expose the NULL
+    count on its own so the caller can flag the chat as cost-incomplete even when
+    every bucket total happens to be zero."""
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    cid = s.create_chat()
+    s.save_chat(cid, "sess", "Monza", "GT3", None, "q1", "a1")  # legacy, NULL usage
+    s.save_chat(cid, "sess", "Monza", "GT3", None, "q2", "a2")  # legacy, NULL usage
+    assert s.chat_usage(cid)["null_usage_rows"] == 2
+
+    s.save_chat(cid, "sess", "Monza", "GT3", None, "q3", "a3",
+                usage={"input": 10, "output": 1}, model="claude-sonnet-5")
+    u = s.chat_usage(cid)
+    assert u["null_usage_rows"] == 2            # only the legacy rows, not the new one
+    assert u["messages"] == 3
+
+
 def test_chat_usage_is_zero_for_an_unknown_chat(tmp_path):
     from simcoach.store import LapStore
     s = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
