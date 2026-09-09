@@ -429,12 +429,17 @@ export function buildRibbon(): Promise<RibbonPreview> {
 }
 
 // Re-reconstruct from the track's SAVED raw capture (no active capture / re-drive).
-// Pass the edited lap so the SELECTED session's track is rebuilt, not the live sim's.
-export function rebuildFromCapture(lapId?: number | null): Promise<RibbonPreview> {
+// Bind the target explicitly: the edited lap (Sessions) or the track slug (Tracks
+// screen, which has no driven lap). With NEITHER, the sidecar falls back to the
+// live sim or the newest saved capture — i.e. it would rebuild a different track's
+// geometry over the one on screen (#26). Slug wins server-side, same priority.
+export function rebuildFromCapture(lapId?: number | null,
+                                   slug?: string | null): Promise<RibbonPreview> {
+  const target = slug ? { slug } : lapId != null ? { lap_id: lapId } : {};
   return request<RibbonPreview>("/mapcapture/rebuild", {
     method: "POST",
     headers: JSON_HEADERS,
-    body: JSON.stringify(lapId != null ? { lap_id: lapId } : {}),
+    body: JSON.stringify(target),
   });
 }
 
