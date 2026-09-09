@@ -212,8 +212,8 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
     samples (that's what the weave is for).
 
     # ponytail: nearest-bin assignment + O(bins*N) loops -- naive, fine for a few
-    # passes. bank sign is a fixed perpendicular convention -- rig-verify on a
-    # real banked track.
+    # passes. bank sign rig-validated on Laguna's Corkscrew (T8 left -> negative,
+    # T9 right -> positive): negative = left, positive = right.
     """
     xs, zs, ys, ds, slices = [], [], [], [], []
     start = 0
