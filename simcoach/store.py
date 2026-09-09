@@ -38,15 +38,18 @@ def _session_base(sid: str) -> str:
     """The (track, car, mode) base of a session id, dropping any ~<instance> suffix."""
     return sid.split(_SESSION_SEP, 1)[0]
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
 # (NULL for pre-lap general questions); tool_calls is a JSON list of the on-demand
 # tools the agentic coach invoked that turn (added v4). chat_id (added v5) groups
 # messages into a chat that can span multiple race sessions (session_id stays the
-# race-session scope). Defined separately so both fresh installs and the
-# migration create the identical table.
+# race-session scope). The four *_tokens columns and `model` (added v12) record what
+# each turn actually cost to bill; `model` is per ROW because Settings can change the
+# model mid-chat, so a chat total is only priceable row by row. All five are nullable
+# -- pre-v12 rows stay NULL and sum as 0 via COALESCE. Defined separately so both
+# fresh installs and the migration create the identical table.
 _COACH_CHAT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS coach_chat (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,9 +61,20 @@ CREATE TABLE IF NOT EXISTS coach_chat (
     lap_id INTEGER,
     question TEXT,
     answer TEXT,
-    tool_calls TEXT
+    tool_calls TEXT,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cache_read_tokens INTEGER,
+    cache_write_tokens INTEGER,
+    model TEXT
 );
 """
+
+# (coach_chat column, TokenUsage/wire key) for the v12 usage buckets, in the order
+# chat_usage() reports them. One list so the migration, the INSERT and the SUM
+# can never drift apart.
+_USAGE_COLUMNS = (("input_tokens", "input"), ("output_tokens", "output"),
+                  ("cache_read_tokens", "cache_read"), ("cache_write_tokens", "cache_write"))
 
 # Longitudinal driver profile: reviewed "memories" (driver_learnings), the
 # concise always-on summary the coach prompt carries (driver_summary, a single
@@ -253,6 +267,21 @@ class LapStore:
                 # v10 -> v11: driver profile memories + maintained summary + per-session
                 # setup snapshots. Idempotent creates.
                 self.conn.executescript(_PROFILE_SCHEMA)
+            if current_version < 12:
+                # v11 -> v12: per-turn billed token usage + the model that billed it,
+                # so the chat's cost is priceable row by row (the model can change
+                # mid-chat via Settings). Guard the ADD COLUMNs like the v4/v5 steps:
+                # a <3 db just created coach_chat with these columns already, and a
+                # half-applied migration must be able to finish. `if cols` also guards
+                # the table existing at all -- some tests simulate a bare pre-v12 db
+                # holding only the tables their own migration step cares about.
+                cols = [r[1] for r in self.conn.execute("PRAGMA table_info(coach_chat)")]
+                if cols:
+                    for col, _ in _USAGE_COLUMNS:
+                        if col not in cols:
+                            _add_column(self.conn, "coach_chat", f"{col} INTEGER")
+                    if "model" not in cols:
+                        _add_column(self.conn, "coach_chat", "model TEXT")
         if current_version != SCHEMA_VERSION:
             self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self.conn.commit()
@@ -518,18 +547,58 @@ class LapStore:
 
     def save_chat(self, chat_id: str, session_id: str, track: str | None, car: str | None,
                   lap_id: int | None, question: str, answer: str,
-                  tool_calls: list | None = None, ts: float | None = None) -> None:
-        """Append one coach Q&A exchange (with the tools it invoked) to the log."""
+                  tool_calls: list | None = None, ts: float | None = None,
+                  usage: dict | None = None, model: str | None = None) -> None:
+        """Append one coach Q&A exchange (with the tools it invoked) to the log.
+
+        `usage` is a TokenUsage.as_dict() of what this turn actually billed, summed
+        over every tool-loop call; `model` is the model that billed it. Both optional
+        — a turn with no usage stores NULLs and sums as zero."""
         if chat_id is None:
             raise ValueError("chat_id is required")
         tc_json = json.dumps(tool_calls) if tool_calls else None
+        u = usage or {}
         with self._lock, self.conn:
             self.conn.execute(
                 "INSERT INTO coach_chat (ts, chat_id, session_id, track, car, lap_id, "
-                "question, answer, tool_calls) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "question, answer, tool_calls, input_tokens, output_tokens, "
+                "cache_read_tokens, cache_write_tokens, model) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (ts if ts is not None else time.time(), chat_id, session_id, track, car,
-                 lap_id, question, answer, tc_json),
+                 lap_id, question, answer, tc_json,
+                 *(u.get(key) for _, key in _USAGE_COLUMNS), model),
             )
+
+    def chat_usage(self, chat_id: str) -> dict:
+        """Billed tokens for a whole chat: the four buckets + `total` + the message
+        count, plus a `by_model` breakdown.
+
+        `by_model` exists because Settings can change the model mid-chat, so the chat's
+        cost is only priceable per model — pricing the total against one id would be
+        wrong. Rows written before v12 (and any turn whose usage went missing) carry
+        NULL and count as 0; an unknown chat is all zeroes, never an error. Unknown /
+        NULL model rows key under "" so the caller can see them and flag the total
+        as incomplete rather than silently dropping them."""
+        sums = ", ".join(f"SUM(COALESCE({col}, 0))" for col, _ in _USAGE_COLUMNS)
+        with self._lock:
+            rows = self.conn.execute(
+                f"SELECT model, {sums}, COUNT(*) FROM coach_chat "
+                "WHERE chat_id = ? GROUP BY model",
+                (chat_id,),
+            ).fetchall()
+        out = {key: 0 for _, key in _USAGE_COLUMNS}
+        out["messages"] = 0
+        by_model: dict[str, dict] = {}
+        for row in rows:
+            model, counts, n = row[0], row[1:-1], row[-1]
+            per = {key: counts[i] for i, (_, key) in enumerate(_USAGE_COLUMNS)}
+            for key, val in per.items():
+                out[key] += val
+            out["messages"] += n
+            by_model[model or ""] = per
+        out["total"] = sum(out[key] for _, key in _USAGE_COLUMNS)
+        out["by_model"] = by_model
+        return out
 
     def list_chats(self) -> list[dict]:
         """One entry per chat_id, newest last-activity first."""
