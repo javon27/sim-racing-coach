@@ -52,6 +52,77 @@ class LapAnalysis:
 _TIRE_KEYS = ("tire_temp_fl", "tire_temp_fr", "tire_temp_rl", "tire_temp_rr")
 _WHEELS = ("fl", "fr", "rl", "rr")
 
+# --- distance-keyed time axis -------------------------------------------------
+# The `speed` channel is km/h (smm.py: |mLocalVel| * 3.6), so every ds/v
+# integration divides by speed/3.6. This is the ONE place that conversion lives:
+# get it wrong and every delta-t silently scales by 3.6.
+_SPEED_KMH_TO_MS = 1.0 / 3.6
+# A stopped (or pit-lane crawling) sample must not divide by ~0 and produce an
+# infinite time loss. Clamp floor, in km/h.
+_MIN_SPEED_KMH = 1.0
+# Two laps are only comparable when they overlap over most of the longer lap's
+# distance span; below this an out-lap / partial lap would read as a huge delta.
+_MIN_OVERLAP_FRAC = 0.5
+
+
+def _monotonic_axis(record: LapRecord) -> tuple[np.ndarray, np.ndarray]:
+    """(dist, speed) with non-finite and non-increasing `lap_distance` samples
+    dropped. Strictly increasing distance is a precondition of every two-lap
+    comparison: a pit re-entry, an S/F wrap or sensor jitter otherwise integrates
+    a negative ds or interpolates backwards."""
+    d = np.asarray(record.channels["lap_distance"], dtype=float)
+    v = np.asarray(record.channels["speed"], dtype=float)
+    n = min(d.size, v.size)
+    d, v = d[:n], v[:n]
+    ok = np.isfinite(d) & np.isfinite(v)
+    d, v = d[ok], v[ok]
+    if d.size < 2:
+        return d, v
+    # Keep only samples beyond the running maximum seen so far.
+    keep = np.concatenate(([True], d[1:] > np.maximum.accumulate(d)[:-1]))
+    return d[keep], v[keep]
+
+
+def lap_time_axis(record: LapRecord) -> tuple[np.ndarray, np.ndarray]:
+    """Cumulative elapsed seconds along `lap_distance`, integrating ds / (v/3.6).
+
+    Returns (dist, t) with `t[0] == 0.0`. There is no captured `time` channel —
+    this is the lap's time axis, and the alignment key stays lap distance.
+
+    ponytail: trapezoidal integration of the ~50 Hz ds/v samples, so it is exact
+    only to sampling resolution. Sampling `mElapsedTime` / `mLapStartET` would
+    give an exact axis (plan Open Question 5 / Task 10) — out of this slice.
+    """
+    d, v = _monotonic_axis(record)
+    if d.size < 2:
+        return d, np.zeros_like(d)
+    inv = 1.0 / (np.maximum(v, _MIN_SPEED_KMH) * _SPEED_KMH_TO_MS)   # s per meter
+    dt = np.diff(d) * (inv[:-1] + inv[1:]) / 2.0
+    return d, np.concatenate(([0.0], np.cumsum(dt)))
+
+
+def align_time_axes(record: LapRecord, reference: LapRecord):
+    """(dist_grid, delta_t) where delta_t = t_cur(d) - t_ref(d), positive = time
+    LOST vs the reference, zeroed at the start of the overlap.
+
+    Sampled on the current lap's (filtered) distance grid over the distance range
+    both laps cover. Returns None when that overlap is under `_MIN_OVERLAP_FRAC`
+    of the longer lap — either lap being a partial makes the comparison dishonest.
+    """
+    dc, tc = lap_time_axis(record)
+    dr, tr = lap_time_axis(reference)
+    if dc.size < 2 or dr.size < 2:
+        return None
+    lo, hi = max(dc[0], dr[0]), min(dc[-1], dr[-1])
+    span = max(dc[-1] - dc[0], dr[-1] - dr[0])
+    if hi <= lo or span <= 0 or (hi - lo) / span < _MIN_OVERLAP_FRAC:
+        return None
+    grid = dc[(dc >= lo) & (dc <= hi)]
+    if grid.size < 2:
+        return None
+    delta = np.interp(grid, dc, tc) - np.interp(grid, dr, tr)
+    return grid, delta - delta[0]
+
 
 def _wheel_summary(record: LapRecord):
     """Lap-level brake temp / pressure / wear per wheel from the extended capture.

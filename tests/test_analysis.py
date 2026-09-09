@@ -228,3 +228,71 @@ def test_analyze_lap_rejects_reference_from_different_track(synthetic_lap):
 
     with pytest.raises(ValueError, match="other_track"):
         analyze_lap(synthetic_lap, cmap, reference=other_track_lap)
+
+
+# --- distance-keyed time axis + two-lap alignment (issue #38 slice 1) ---------
+
+def _flat_lap(speed_kmh, n=500, length=1000.0, **extra):
+    """A constant-speed lap on a clean distance axis."""
+    import numpy as np
+
+    from simcoach.model_types import LapRecord
+    dist = np.linspace(0.0, length, n)
+    ch = {"lap_distance": dist, "speed": np.full(n, float(speed_kmh)),
+          "throttle": np.ones(n), "brake": np.zeros(n), "steering": np.zeros(n)}
+    ch.update(extra)
+    return LapRecord("lmu", "test_track", "test_car", 0.0, True, 0.0, ch)
+
+
+def test_lap_time_axis_constant_speed_is_distance_over_speed():
+    from simcoach.analysis import lap_time_axis
+    d, t = lap_time_axis(_flat_lap(72.0, length=1000.0))   # 72 km/h = 20 m/s
+    assert len(d) == len(t)
+    assert t[0] == 0.0
+    assert abs(t[-1] - 50.0) < 0.05        # 1000 m / 20 m/s = 50 s  (km/h NOT m/s)
+
+
+def test_speed_channel_is_km_per_hour():
+    # The `speed` channel is km/h (smm.py: |mLocalVel| * 3.6). This constant is the
+    # ONE place that conversion lives; a wrong value scales every delta-t by 3.6.
+    from simcoach.analysis import _SPEED_KMH_TO_MS
+    assert _SPEED_KMH_TO_MS == 1.0 / 3.6
+
+
+def test_lap_time_axis_ignores_non_increasing_distance():
+    import numpy as np
+
+    from simcoach.analysis import lap_time_axis
+    lap = _flat_lap(72.0, n=100, length=1000.0)
+    lap.channels["lap_distance"][50] = 10.0          # a backwards jitter sample
+    d, t = lap_time_axis(lap)
+    assert np.all(np.diff(d) > 0)                     # filtered out
+    assert abs(t[-1] - 50.0) < 0.5
+
+
+def test_lap_time_axis_survives_a_stopped_sample():
+    import math
+
+    from simcoach.analysis import lap_time_axis
+    lap = _flat_lap(72.0)
+    lap.channels["speed"][10] = 0.0
+    _, t = lap_time_axis(lap)
+    assert math.isfinite(t[-1])                        # no div-by-zero / inf
+
+
+def test_align_time_axes_injected_loss_shows_as_delta():
+    from simcoach.analysis import align_time_axes
+    ref = _flat_lap(72.0, length=1000.0)
+    cur = _flat_lap(72.0, length=1000.0)
+    # slow to 36 km/h (10 m/s) between 400-600 m: 200 m costs 20 s instead of 10 s
+    m = (cur.channels["lap_distance"] >= 400) & (cur.channels["lap_distance"] <= 600)
+    cur.channels["speed"][m] = 36.0
+    d, delta = align_time_axes(cur, ref)
+    assert abs(delta[-1] - 10.0) < 0.3                # +10 s lost, net
+    assert abs(delta[d < 400][-1]) < 0.1              # nothing lost before the slow bit
+    assert abs(delta[d > 600][0] - 10.0) < 0.3        # all of it inside the window
+
+
+def test_align_time_axes_rejects_insufficient_overlap():
+    from simcoach.analysis import align_time_axes
+    assert align_time_axes(_flat_lap(72.0, length=300.0), _flat_lap(72.0, length=3000.0)) is None
