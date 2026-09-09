@@ -94,6 +94,17 @@ def note_key_binds(key: str, labels: set[str]) -> bool:
     # why a descending key needs no code: range(13, 12) is empty, so '13-11' binds
     # nothing, matching both `main` and the UI. Both callers pass a set, so each probe
     # is O(1); a list here would make this quadratic.
+    #
+    # DO NOT turn this back into a label parse. The obvious-looking alternative,
+    #     any(len(lab) <= 3 and lab.isascii() and lab.isdigit() and lo <= int(lab) <= hi ...)
+    # was written, shipped and reverted (019dc26 / b181604). It is safe only as written:
+    # short-circuit `and` is the sole reason int() never sees '²', so moving or weakening
+    # the isascii() clause puts the crash straight back. The probe cannot raise at all,
+    # which is the property worth keeping -- three separate crash paths on this branch
+    # came from a guarded label parse, reached from a free-text UI field and from an
+    # LLM-callable tool. The parse's only gain was binding a '07' label under '5-9'; no
+    # shipped map has a zero-padded label, and when the two differ the note surfaces as
+    # a UI-flagged orphan instead of silently rebinding.
     return any(str(n) in labels for n in range(lo, hi + 1))
 
 

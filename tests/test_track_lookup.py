@@ -298,12 +298,14 @@ def test_note_key_binds_is_strict_where_the_ui_is_now_strict_too():
     assert note_key_binds("5-9", {"7"})             # the canonical form still binds
 
 
-def test_note_key_binds_ignores_labels_int_cannot_parse():
-    # A corner label is free text from the editor's label box. '²' U+00B2 and friends
-    # satisfy str.isdigit() but RAISE on int(), so parsing the label side turned a
-    # typed superscript into an HTTP 500 on save -- or, when `any` short-circuited on
-    # an earlier label first, a 200 that persisted the label and then broke every read
-    # of it. The grammar never parses a label now; it compares as strings.
+def test_note_key_binds_never_parses_a_label():
+    # STRUCTURAL, not guarded -- the point of the design, so don't "simplify" the probe
+    # back into a label parse (tried in 019dc26, reverted in b181604). A corner label is
+    # free text from the editor's label box. '²' U+00B2 and friends satisfy str.isdigit()
+    # but RAISE on int(), so parsing the label side turned a typed superscript into an
+    # HTTP 500 on save -- or, when `any` short-circuited on an earlier label first, a 200
+    # that persisted the label and then broke every read of it. A guarded parse passes
+    # this test too, which is exactly why the comment above the code says not to.
     for odd in ("²", "₂", "⑥"):        # ² ₂ ⑥ -- isdigit(), not int()-able
         assert odd.isdigit(), f"{odd!r} no longer exercises the isdigit()/int() gap"
         assert not note_key_binds("1-3", {odd})       # no raise, no spurious bind
