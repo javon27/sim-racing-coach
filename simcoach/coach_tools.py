@@ -36,7 +36,7 @@ TOOLS = [
     {
         "name": "list_recent_laps",
         "description": "List recent laps for the current track/car (newest first) with "
-                       "the lap's in-session number (per phase, e.g. 'race lap 3' — the "
+                       "the lap's in-session number (per phase, e.g. 'lap 3' — the "
                        "same numbering the driver sees), time, and validity. Refer to laps "
                        "by that number; never invent or cite a database id.",
         "input_schema": {
@@ -54,7 +54,7 @@ TOOLS = [
             "type": "object",
             "properties": {"which": {"type": "string",
                                      "description": "'latest' (default), 'best', or an in-session "
-                                                    "lap number like 'race lap 3'."}},
+                                                    "lap number like 'lap 3'."}},
         },
     },
     {
@@ -72,14 +72,14 @@ TOOLS = [
                        "(e.g. 'Village'). Use this for a question about a specific corner "
                        "instead of pulling the whole lap. Pass `which` to target a specific "
                        "lap — do this whenever the conversation is about a particular lap "
-                       "(e.g. 'race lap 2'); it defaults to the latest lap otherwise.",
+                       "(e.g. 'lap 2'); it defaults to the latest lap otherwise.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "corner": {"type": "string", "description": "Corner number or name."},
                 "which": {"type": "string",
                           "description": "Which lap: 'latest' (default), 'best', or an "
-                                         "in-session lap number like 'race lap 2'."},
+                                         "in-session lap number like 'lap 2'."},
             },
             "required": ["corner"],
         },
@@ -281,11 +281,15 @@ class CoachContext:
         self._current_lap_cache = found
         return found
     def _lap_numbering(self) -> tuple[dict, dict]:
-        """Per-phase, in-session lap numbering matching the UI (laps numbered 1..N
-        within each phase, in ts order). Returns (label_by_id, id_by_ref):
-        label_by_id[lap_id] -> e.g. 'race lap 3'; id_by_ref maps textual refs the
-        model might use ('race 3', 'race lap 3', or a bare number in the current
-        phase) back to the DB lap_id. Cached per turn."""
+        """In-session lap numbering matching the UI (LapList.svelte): laps are
+        grouped into CONSECUTIVE same-phase runs in ts order, numbered 1..N within
+        each run -- a run restarts at 1 if the phase value changes and later comes
+        back (e.g. practice -> race -> practice), same as the UI's groups. Returns
+        (label_by_id, id_by_ref): label_by_id[lap_id] -> e.g. 'race lap 3';
+        id_by_ref maps textual refs the model might use ('race 3', 'race lap 3',
+        and -- for the current phase's run -- the UI's unprefixed 'lap 3' or a bare
+        '3') back to the DB lap_id.
+        Cached per turn."""
         if self._lap_numbering_cache is not None:
             return self._lap_numbering_cache
         label_by_id: dict[int, str] = {}
@@ -293,19 +297,25 @@ class CoachContext:
         if self.session_id:
             cur_rec, _ = self._current_lap()
             cur_phase = cur_rec.phase if cur_rec is not None else None
-            counts: dict = {}
+            prev_phase: object = object()  # sentinel -- never equals a real phase value
+            n = 0
             for lap in self.store.session_laps(self.session_id):
                 ph = lap.get("phase")
-                counts[ph] = counts.get(ph, 0) + 1
-                n = counts[ph]
+                n = n + 1 if ph == prev_phase else 1
+                prev_phase = ph
                 label_by_id[lap["id"]] = f"{ph} lap {n}" if ph else f"lap {n}"
                 if ph:
                     id_by_ref[f"{ph} {n}".lower()] = lap["id"]
                     id_by_ref[f"{ph} lap {n}".lower()] = lap["id"]
                     if ph == cur_phase:
-                        id_by_ref[str(n)] = lap["id"]  # bare number -> current phase
+                        # Bare number AND the UI's own unprefixed wording ("lap 35"),
+                        # which is what the driver reads off the lap list and the model
+                        # then echoes -- it must resolve, not look like a third scheme.
+                        id_by_ref[str(n)] = lap["id"]
+                        id_by_ref[f"lap {n}"] = lap["id"]
                 else:
                     id_by_ref[str(n)] = lap["id"]
+                    id_by_ref[f"lap {n}"] = lap["id"]
         self._lap_numbering_cache = (label_by_id, id_by_ref)
         return self._lap_numbering_cache
 
@@ -333,8 +343,11 @@ class CoachContext:
 
     def _resolve_lap(self, which):
         """which -> (record, lap_id). 'latest'/None -> current; 'best' -> best lap;
-        an in-session lap reference ('race lap 3', 'race 3', or a bare number in the
-        current phase) -> that lap; a bare number falls back to a raw DB id."""
+        an in-session lap reference ('race lap 3', 'race 3', 'lap 3' or a bare number
+        in the current phase) -> that lap. A raw DB id is accepted ONLY where the
+        listing itself had to fall back to raw ids (no in-session numbering) and only
+        for this track/car -- never as a guess at a number the in-session numbering
+        simply doesn't cover, which could pull an unrelated lap (issue #34)."""
         which = (which or "latest").strip().lower()
         if which in ("latest", "current", ""):
             return self._current_lap()
@@ -344,20 +357,38 @@ class CoachContext:
             best = self.store.best_lap(self.track, self.car)
             # best_lap returns the record; find its id via recent list match on time
             return best, None
-        # In-session per-phase reference (matches how laps are named to the driver).
+        # In-session reference (matches how laps are named to the driver) first.
         _, id_by_ref = self._lap_numbering()
-        if which in id_by_ref:
-            lid = id_by_ref[which]
-            try:
-                return self.store.load(lid), lid
-            except Exception:
-                return None, None
-        if which.isdigit():
-            try:
-                return self.store.load(int(which)), int(which)
-            except Exception:
-                return None, None
-        return None, None
+        lid = id_by_ref.get(which)
+        # With no in-session numbering (e.g. the REPL asking before this run's first
+        # lap lands), `list_recent_laps` labels laps by their raw DB id -- so that is
+        # the only reference the model can give back, and refusing it makes the tool
+        # surface contradict itself. Accept it there, but only for a lap that really
+        # belongs to this track/car, so it can never pull an unrelated lap (issue #34).
+        if lid is None and not id_by_ref:
+            raw = which.removeprefix("lap ")
+            if raw.isdigit() and int(raw) in set(self.store.list_lap_ids(self.track, self.car)):
+                lid = int(raw)
+        if lid is None:
+            return None, None
+        try:
+            return self.store.load(lid), lid
+        except Exception:
+            return None, None
+
+    def _no_lap_msg(self, which) -> str:
+        """Failure text for an unresolvable lap reference. Names this session's phase
+        and lap range so the model can correct itself instead of handing the driver a
+        dead end -- the schema's old 'race lap N' example primed exactly that wrong
+        guess in a practice session (issue #34)."""
+        cur_rec, _ = self._current_lap()
+        phase = cur_rec.phase if cur_rec is not None else None
+        # The bare-number keys are precisely the current phase's run of laps.
+        _, id_by_ref = self._lap_numbering()
+        n = max((int(k) for k in id_by_ref if k.isdigit()), default=0)
+        if phase and n:
+            return f"No lap matching {which!r}. This session is {phase}, laps 1-{n}."
+        return "No lap available for that request (none captured yet, or unknown lap)."
 
     # --- tools -----------------------------------------------------------
     def get_session_status(self):
@@ -409,7 +440,7 @@ class CoachContext:
     def get_lap_summary(self, which="latest"):
         record, lap_id = self._resolve_lap(which)
         if record is None:
-            return "No lap available for that request (none captured yet, or unknown id)."
+            return self._no_lap_msg(which)
         if self.cmap is None:
             return "No corner map for this track yet — can't break the lap into corners."
         analysis = self._analysis_for(record, lap_id)
@@ -429,7 +460,7 @@ class CoachContext:
     def get_corner(self, corner, which="latest"):
         record, lap_id = self._resolve_lap(which)
         if record is None:
-            return "No lap available for that request (none captured yet, or unknown lap)."
+            return self._no_lap_msg(which)
         if self.cmap is None:
             return "No corner map for this track yet — can't break the lap into corners."
         analysis = self._analysis_for(record, lap_id)
