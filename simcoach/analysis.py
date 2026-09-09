@@ -225,6 +225,9 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
     # whole interesting range hides inside one unmodeled half-car-width (the main
     # reason so many corners read ~0). Worded as "centre" in format.py rather than
     # guessing a width; if per-car width ever lands, subtract half of it here.
+    # (Not a contradiction of the clamp note above: that 168-of-468 count was
+    # exact-0.0 saturation from clamping real excursions; this near-zero-but-not-0
+    # spread is the separate, still-present effect of the unmodeled half-car-width.)
     edge = record.channels.get("track_edge")
     path_lat = record.channels.get("path_lateral")
     if edge is not None and path_lat is not None:
