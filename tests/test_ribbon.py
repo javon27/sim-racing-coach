@@ -29,8 +29,10 @@ def test_reconstruct_surface_straight_envelope():
     assert len(r["left"]) == len(r["right"]) == len(r["center"]) == 50
 
 
-def test_reconstruct_surface_bank_from_higher_outer_edge():
-    # Outer edge (positive lateral offset) is higher -> non-zero bank from the fit.
+def test_reconstruct_surface_bank_from_cross_slope():
+    # A cross-slope across the width -> non-zero bank from the fit. Magnitude only:
+    # these are straight passes, so there is no inside/outside to call it banked or
+    # off-camber, and the +offset side is the driver's LEFT (#58), not an "outer" edge.
     laps = [_pass(-4.0, 0.0), _pass(0.0, 0.5), _pass(4.0, 1.0)]  # y rises with +offset
     r = reconstruct_surface(laps, bins=50)
     mid = len(r["bank"]) // 2
@@ -110,17 +112,24 @@ def test_reconstruct_surface_smooths_weave_straight():
 
 
 def test_reconstruct_surface_edges_from_bound_laps():
-    # left-hug + right-hug + a weave that SPIKES past the left bound mid-lap. Edges
-    # must come from the BOUND laps (left stays ~-5), not the all-sample envelope
-    # (which would grab the -8 spike).
+    # Two edge-hugging passes at z = +-5 plus a weave that SPIKES past the z=-5
+    # bound mid-lap. Edges must come from the BOUND laps (the -5 edge stays ~-5),
+    # not the all-sample envelope (which would grab the -8 spike).
+    # On a pass along +x, +lateral is +z (#58), so z=-5 is the driver's RIGHT edge
+    # and that is the key the spike would leak into.
     x = np.linspace(0.0, 400.0, 400)
-    left = {"pos_x": x, "pos_z": np.full(400, -5.0), "lap_distance": x.copy()}
-    right = {"pos_x": x, "pos_z": np.full(400, 5.0), "lap_distance": x.copy()}
+    neg = {"pos_x": x, "pos_z": np.full(400, -5.0), "lap_distance": x.copy()}
+    pos = {"pos_x": x, "pos_z": np.full(400, 5.0), "lap_distance": x.copy()}
     wz = np.zeros(400); wz[(x >= 200) & (x <= 210)] = -8.0  # ran wide once
     weave = {"pos_x": x, "pos_z": wz, "lap_distance": x.copy()}
-    r = reconstruct_surface([left, weave, right], bins=100)
+    r = reconstruct_surface([neg, weave, pos], bins=100)
+    rz = np.array([p[1] for p in r["right"]])[10:-10]
     lz = np.array([p[1] for p in r["left"]])[10:-10]
-    assert lz.min() > -6.0                       # bound lap, not the -8 weave spike
+    # Bound two-sided, so each array has to be the edge it is NAMED for: a
+    # one-sided "rz.min() > -6" would also hold for the +5 pass, i.e. it would
+    # still pass with the keys swapped. These go red if they are.
+    assert -6.0 < rz.min() and rz.max() < -4.0   # ~-5 throughout: bound lap, no -8 spike
+    assert 4.0 < lz.min() and lz.max() < 6.0     # ~+5 throughout
     assert abs(r["width"][50] - 10.0) < 1.0      # edges = the two bounds (~10 apart)
     cz = np.array([p[1] for p in r["center"]])[10:-10]
     assert np.abs(cz).max() < 0.6                # center = midpoint of the bounds
@@ -168,8 +177,9 @@ def test_reconstruct_ribbon_bank_from_elevation():
     left = {**_edge(5.0, 100.0), "pos_y": np.full(3, 2.0)}
     right = {**_edge(-5.0, 100.0), "pos_y": np.zeros(3)}
     ribbon = reconstruct_ribbon(left, right, bins=5)
-    # Convention: positive = RIGHT higher. Here LEFT is higher -> negative.
-    expected = np.arctan2(-2.0, 10.0)
+    # Convention (#58, matching reconstruct_surface): positive = the LEFT edge is
+    # higher = banked for a right-hander. Here LEFT is higher -> positive.
+    expected = np.arctan2(2.0, 10.0)
     assert all(abs(b - expected) < 1e-3 for b in ribbon["bank"])  # bank stored at 4 dp
 
 
@@ -325,33 +335,72 @@ def test_lateral_points_left_of_travel_not_right():
     assert not np.any(dots < 0)                         # ...and never the right edge
 
 
-def test_reconstruct_surface_left_right_arrays_are_swapped():
-    """Records the CONSEQUENCE of the handedness above. Do NOT "fix" this by
-    swapping the keys (see #58): swapping without settling the banking sign would
-    invert the rig-validated convention from 9756b65, trading a latent bug for a
-    live one.
+def test_left_key_is_the_inside_of_a_cambered_left_hander():
+    """The "left" array holds the driver's LEFT edge -- anchored to the
+    RIG-VALIDATED banking sign, not to a guess, so the keys and that sign can
+    never drift apart again.
 
-    `li = lap_means.argmin()` is labelled left, but argmin is the most-NEGATIVE
-    lateral offset -- the side opposite +lateral -- and +lateral is left. So the
-    array keyed "left" holds the driver's RIGHT edge. Here the inner lap of a
-    counter-clockwise circle is physically the LEFT edge, and it comes back under
-    the "right" key.
+    Geometry: a circular track traversed counter-clockwise in (x, z) with the
+    surface CAMBERED -- elevation rises with radius, so the physically OUTER edge
+    is higher. Two facts then pin the labels with no round-trip:
 
-    Expected to flip when #58's relabel lands; that is the point -- it forces
-    whoever relabels to look at the banking convention in the same pass.
+      1. bank comes out NEGATIVE here. Per 9756b65 (rig-validated on Laguna's
+         Corkscrew: T8 left -> -3.9, T9 right -> +4.1) negative means banked FOR
+         A LEFT-HANDER. "Banked" means the outer edge is higher, which is exactly
+         how this surface is built -- so this traverse is a left-hander.
+      2. The inside of a left-hander is the driver's LEFT, and the inside here is
+         the smaller radius, by construction.
+
+    => out["left"] must be the INNER edge. This is a two-sided tripwire: under
+    the labelling that shipped before #58 the inner edge comes back keyed "right"
+    and the radius asserts go red, while flipping _lateral's rotation to
+    (tz, -tx) instead makes bank positive and the first assert go red. Neither
+    convention can be changed alone.
     """
     r_in, r_out = 95.0, 105.0
     _, _, dist, th = _ccw_circle()
-    inner = {"pos_x": r_in * np.cos(th), "pos_z": r_in * np.sin(th), "lap_distance": dist}
-    outer = {"pos_x": r_out * np.cos(th), "pos_z": r_out * np.sin(th), "lap_distance": dist}
+    slope = 0.10  # elevation per metre of radius -> outer edge ~1 m higher
 
-    out = reconstruct_surface([inner, outer], bins=120)
+    def lap(r):
+        return {"pos_x": r * np.cos(th), "pos_z": r * np.sin(th),
+                "pos_y": np.full(len(th), slope * r), "lap_distance": dist}
+
+    out = reconstruct_surface([lap(r_in), lap(r_out)], bins=120)
     mid = len(out["left"]) // 2
 
     def rad(p):
         return float(np.hypot(p[0], p[1]))
 
-    # The inner (physically LEFT) edge is the one keyed "right".
-    assert rad(out["right"][mid]) < rad(out["left"][mid])
-    assert abs(rad(out["right"][mid]) - r_in) < 2.0
-    assert abs(rad(out["left"][mid]) - r_out) < 2.0
+    # 1. Outer-higher camber on this traverse reads as a banked LEFT-hander.
+    assert out["bank"][mid] < -0.05
+    # 2. ...so the inside (smaller radius) is the driver's left.
+    assert rad(out["left"][mid]) < rad(out["right"][mid])
+    assert abs(rad(out["left"][mid]) - r_in) < 2.0
+    assert abs(rad(out["right"][mid]) - r_out) < 2.0
+
+
+def test_left_key_is_the_inside_in_the_envelope_fallback():
+    """Same relabel, the OTHER branch. Two passes that each spend half the lap on
+    each side have equal mean offset, so they can't be classified into bound laps
+    and the edges come from the lateral ENVELOPE instead. +lateral is the driver's
+    left, so the most-POSITIVE offset per bin is the LEFT edge -- the inside of
+    this counter-clockwise (left-hand) circle, i.e. the smaller radius. Sampled
+    well away from the two radius steps, which are the only ambiguous stations."""
+    r_in, r_out = 95.0, 105.0
+    th = np.linspace(0.0, 2 * np.pi, 600, endpoint=False)
+    dist = th * 100.0
+    first_half = th < np.pi
+
+    def lap(inner_first):
+        r = np.where(first_half == inner_first, r_in, r_out)
+        return {"pos_x": r * np.cos(th), "pos_z": r * np.sin(th), "lap_distance": dist}
+
+    out = reconstruct_surface([lap(True), lap(False)], bins=120)
+
+    def rad(p):
+        return float(np.hypot(p[0], p[1]))
+
+    for i in (30, 90):  # quarter and three-quarter distance; steps sit at 0 and 60
+        assert rad(out["left"][i]) < rad(out["right"][i])
+        assert abs(rad(out["left"][i]) - r_in) < 2.0
+        assert abs(rad(out["right"][i]) - r_out) < 2.0
