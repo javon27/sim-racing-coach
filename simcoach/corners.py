@@ -96,8 +96,12 @@ class CornerMap:
     """Loads and queries corner data from a track map JSON file."""
 
     def __init__(self, corners: list[Corner], sections: list[dict] | None = None,
-                 notes: dict | None = None, geometry: dict | None = None):
+                 notes: dict | None = None, geometry: dict | None = None,
+                 length: float | None = None):
         self.corners = corners
+        # Lap length (m) when the map declares one. Kept because anything reasoning
+        # ACROSS the S/F seam (see analysis._metrics_for_corner) needs the modulus.
+        self.length = float(length) if length else None
         self.sections = sections or []
         self.notes = notes or {}
         # Baked per-corner geometry (radius_m/width_m/banking_deg/elev_delta_m),
@@ -148,8 +152,9 @@ class CornerMap:
             extra = {k: v for k, v in raw.items() if k not in _cf}
             if extra:
                 geometry[c.label] = extra
-        clamp_corner_windows(corners, data.get("length") or data.get("length_m"))
-        return cls(corners, _load_sections(data), data.get("notes") or {}, geometry)
+        length = data.get("length") or data.get("length_m")
+        clamp_corner_windows(corners, length)
+        return cls(corners, _load_sections(data), data.get("notes") or {}, geometry, length)
 
     def corner_at(self, dist: float) -> Corner | None:
         """Return the first corner whose window contains dist (inclusive; wrap-aware)."""
