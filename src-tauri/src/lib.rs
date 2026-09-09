@@ -169,27 +169,25 @@ fn is_on_screen(x: i32, y: i32, w: u32, h: u32, monitors: &[(i32, i32, u32, u32)
 /// monitor if the restored rect lands outside every monitor (layout changed
 /// since last launch). No-op if any Result fails — a missing window/monitor is
 /// not worth crashing startup over.
-fn recenter_if_offscreen(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        if let (Ok(pos), Ok(size), Ok(monitors)) = (
-            window.outer_position(),
-            window.outer_size(),
-            window.available_monitors(),
-        ) {
-            let rects: Vec<(i32, i32, u32, u32)> = monitors
-                .iter()
-                .map(|m| {
-                    (
-                        m.position().x,
-                        m.position().y,
-                        m.size().width,
-                        m.size().height,
-                    )
-                })
-                .collect();
-            if !is_on_screen(pos.x, pos.y, size.width, size.height, &rects) {
-                let _ = window.center();
-            }
+fn recenter_if_offscreen(window: &tauri::Window) {
+    if let (Ok(pos), Ok(size), Ok(monitors)) = (
+        window.outer_position(),
+        window.outer_size(),
+        window.available_monitors(),
+    ) {
+        let rects: Vec<(i32, i32, u32, u32)> = monitors
+            .iter()
+            .map(|m| {
+                (
+                    m.position().x,
+                    m.position().y,
+                    m.size().width,
+                    m.size().height,
+                )
+            })
+            .collect();
+        if !is_on_screen(pos.x, pos.y, size.width, size.height, &rects) {
+            let _ = window.center();
         }
     }
 }
@@ -199,6 +197,25 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        // The main window is created hidden (tauri.conf.json "visible": false) so
+        // restoring its saved geometry + the off-screen recovery below (commit
+        // 40c18b1) happen before anything is shown -- otherwise it flashes blank
+        // on the primary monitor before jumping to the saved (secondary) one.
+        // This fires once the webview has actually painted (PageLoadEvent::Finished),
+        // not before, then reveals the window already placed correctly.
+        .on_page_load(|webview, payload| {
+            if payload.event() != tauri::webview::PageLoadEvent::Finished {
+                return;
+            }
+            let window = webview.window();
+            if window.label() != "main" {
+                return;
+            }
+            let _ = window.restore_state(StateFlags::all());
+            recenter_if_offscreen(&window);
+            let _ = window.show();
+            let _ = window.set_focus();
+        })
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -236,12 +253,8 @@ pub fn run() {
             };
             app.manage(Sidecar(Mutex::new(child)));
 
-            // Restore explicitly so the off-screen guard runs strictly AFTER
-            // the plugin applies the saved geometry, regardless of hook order.
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.restore_state(StateFlags::all());
-            }
-            recenter_if_offscreen(app.handle());
+            // Geometry restore + off-screen recovery + reveal now happen in
+            // on_page_load (above), once the webview has actually painted.
 
             Ok(())
         })
