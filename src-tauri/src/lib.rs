@@ -2,6 +2,7 @@ use std::fs::File;
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::Manager;
@@ -165,6 +166,14 @@ fn is_on_screen(x: i32, y: i32, w: u32, h: u32, monitors: &[(i32, i32, u32, u32)
     })
 }
 
+/// First caller wins: flips `flag` and returns true only for the call that found
+/// it unset. Used to make the one-shot startup reveal one-shot -- on_page_load
+/// fires on EVERY navigation, and re-running the reveal on a reload is actively
+/// harmful (see the call site).
+fn claim_once(flag: &AtomicBool) -> bool {
+    !flag.swap(true, Ordering::Relaxed)
+}
+
 /// After the window-state plugin restores geometry, recenter on the primary
 /// monitor if the restored rect lands outside every monitor (layout changed
 /// since last launch). No-op if any Result fails — a missing window/monitor is
@@ -220,11 +229,26 @@ pub fn run() {
         // NavigationCompleted without checking IsSuccess, so a failed/blank navigation
         // still reveals the window -- it can never get stuck hidden.
         .on_page_load(|webview, payload| {
+            // Startup reveal only: PageLoadEvent::Finished fires on EVERY navigation
+            // (dev HMR, a user refresh), and re-running restore_state() later in the
+            // session un-maximizes the window -- nothing refreshes the plugin's cached
+            // `maximized` flag while the app runs (its Resized handler deliberately
+            // skips saving size while maximized, and `maximized` is only written by
+            // update_state at CloseRequested), so a reload would restore the stale
+            // pre-maximize rect over a maximized window, and steal focus besides.
+            // One global flag is enough: only "main" gets past the label check, and
+            // this app has exactly one window (the track-map editor is an in-page
+            // Svelte view, not a second Tauri window).
+            static REVEALED: AtomicBool = AtomicBool::new(false);
+
             if payload.event() != tauri::webview::PageLoadEvent::Finished {
                 return;
             }
             let window = webview.window();
             if window.label() != "main" {
+                return;
+            }
+            if !claim_once(&REVEALED) {
                 return;
             }
             let _ = window.restore_state(StateFlags::all());
@@ -295,7 +319,25 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::is_on_screen;
+    use super::{claim_once, is_on_screen};
+    use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn claim_once_only_lets_the_first_caller_through() {
+        // Stands in for repeated PageLoadEvent::Finished on reloads: the startup
+        // reveal must run on the first one and never again.
+        let flag = AtomicBool::new(false);
+        assert!(claim_once(&flag));
+        assert!(!claim_once(&flag));
+        assert!(!claim_once(&flag));
+    }
+
+    #[test]
+    fn claim_once_flags_are_independent() {
+        let (a, b) = (AtomicBool::new(false), AtomicBool::new(false));
+        assert!(claim_once(&a));
+        assert!(claim_once(&b), "one window's reveal must not consume another's");
+    }
 
     #[test]
     fn fully_inside_one_monitor() {
