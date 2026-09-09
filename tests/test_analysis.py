@@ -83,7 +83,11 @@ def test_extended_corner_inputs(synthetic_lap):
     ch["long_g"] = np.where(brake > 0, -1.4, 0.3)     # 1.4g decel under braking
     ch["abs_active"] = (brake > 0).astype(float)      # ABS on under braking
     ch["tc_active"] = np.zeros_like(brake)
-    ch["track_edge"] = np.where(left, 0.3, 5.0)       # ran to ~0.3m of the edge in T1
+    # mTrackEdge is the track half-width at that point (0.3m in T1), not the car's
+    # distance to it -- that distance is |track_edge| - |path_lateral|. The car sits
+    # 0.1m off the centre path here, so it's 0.2m from the edge, not 0.3m.
+    ch["track_edge"] = np.where(left, 0.3, 5.0)       # track half-width: ~0.3m in T1
+    ch["path_lateral"] = np.where(left, 0.1, 0.0)     # car's offset from centre path
     lap = LapRecord(**{**synthetic_lap.__dict__, "channels": ch})
 
     c1 = analyze_lap(lap, cmap).corners[0]
@@ -91,11 +95,89 @@ def test_extended_corner_inputs(synthetic_lap):
     assert np.isnan(c1.peak_accel_g)          # no throttle-on phase inside the corner
     assert abs(c1.peak_steer - 0.5) < 1e-6
     assert c1.abs_pct > 0.9
-    assert abs(c1.track_edge_min - 0.3) < 1e-6
+    assert abs(c1.track_edge_min - 0.2) < 1e-6
 
     line = format_corner_line(c1, "metric")
     assert "brake 1.4g" in line and "ABS" in line and "from edge" in line
     assert "accel" not in line               # nan accel is omitted
+
+
+def test_track_edge_distance_uses_path_lateral(synthetic_lap):
+    # Issue #45: mTrackEdge is the track EDGE's offset from the centre path
+    # (~half the track width there), not the car's distance to it. True
+    # distance-to-edge = |track_edge| - |path_lateral|. Holding track_edge
+    # constant and varying path_lateral must change the reported distance --
+    # the old implementation (nanmin(|track_edge|) alone) ignored path_lateral
+    # entirely and fails this test.
+    import math
+
+    import numpy as np
+
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap
+    from simcoach.model_types import LapRecord
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    ch = dict(synthetic_lap.channels)
+    dist = ch["lap_distance"]
+    in_corner = (dist > 800) & (dist < 1200)   # corner 1's window
+    half_width = 4.0   # constant track half-width (mTrackEdge) through the corner
+
+    def edge_min_for(path_lateral_in_corner):
+        c = dict(ch)
+        c["track_edge"] = np.where(in_corner, half_width, 10.0)
+        c["path_lateral"] = np.where(in_corner, path_lateral_in_corner, 0.0)
+        lap = LapRecord(**{**synthetic_lap.__dict__, "channels": c})
+        return analyze_lap(lap, cmap).corners[0].track_edge_min
+
+    # Car mid-track (path_lateral ~= 0): distance-to-edge ~= the full half-width.
+    mid_track = edge_min_for(0.0)
+    assert abs(mid_track - half_width) < 1e-6
+
+    # Car running right at the edge (path_lateral == half_width): distance ~= 0.
+    assert abs(edge_min_for(half_width) - 0.0) < 1e-6
+
+    # Same track_edge, different path_lateral -> different reported distance.
+    near_edge = edge_min_for(half_width - 0.5)
+    assert not math.isclose(near_edge, mid_track)
+    assert abs(near_edge - 0.5) < 1e-6
+
+    # A car beyond the white line (|path_lateral| > |track_edge|) reports how far
+    # PAST it went, as a negative number. Clamping that to 0.0 flattened 168 of
+    # 468 real corners (36%) -- true minima with a median of -0.38m, worst -9.75m,
+    # at a median 153 km/h -- and no other signal reports them: the lap-level
+    # `valid` flag (mLapInvalidated) fired for none of the 168.
+    assert abs(edge_min_for(half_width + 1.0) - -1.0) < 1e-6
+
+
+def test_track_edge_past_edge_wording(synthetic_lap):
+    # A negative distance-to-edge must read as "past edge", not as a nonsense
+    # "-0.4m from edge". Both wordings name the car's CENTRE, because mPathLateral
+    # is the centre and we hold no per-car width -- a ~2m GT car at "centre 0.2m
+    # from edge" already has its outer wheels ~0.8m over the line.
+    import numpy as np
+
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap
+    from simcoach.format import format_corner_line
+    from simcoach.model_types import LapRecord
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    ch = dict(synthetic_lap.channels)
+    in_corner = (ch["lap_distance"] > 800) & (ch["lap_distance"] < 1200)
+
+    def line_for(path_lateral_in_corner):
+        c = dict(ch)
+        c["track_edge"] = np.where(in_corner, 4.0, 10.0)
+        c["path_lateral"] = np.where(in_corner, path_lateral_in_corner, 0.0)
+        lap = LapRecord(**{**synthetic_lap.__dict__, "channels": c})
+        return format_corner_line(analyze_lap(lap, cmap).corners[0], "metric")
+
+    past = line_for(4.4)            # centre 0.4m beyond the white line
+    assert "centre 0.4m past edge" in past
+    assert "-0.4" not in past and "from edge" not in past
+
+    inside = line_for(3.8)          # centre still 0.2m inside the line
+    assert "centre 0.2m from edge" in inside
+    assert "past edge" not in inside
 
 
 def test_extended_inputs_absent_without_channels(synthetic_lap):
