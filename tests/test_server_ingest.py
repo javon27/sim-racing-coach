@@ -65,11 +65,12 @@ def test_post_ingest_bodyless_is_422(tmp_path, monkeypatch, mem_keyring):
 
 
 def test_post_ingest_without_content_type_is_422(tmp_path, monkeypatch, mem_keyring):
-    # The CSRF guard rests on FastAPI's strict_content_type=True default (0.131+):
+    # The CSRF guard rests on FastAPI's strict_content_type=True default (0.132+):
     # a body with NO Content-Type must NOT be parsed as JSON. An absent
     # Content-Type is CORS-simple, so if FastAPI still parsed it the attacker gets
     # the handler with no preflight and the Body(...) guard is worthless.
     # Pins the BEHAVIOUR, so it fails if fastapi is downgraded below the
-    # pyproject floor: verified 200 ("ran") on 0.130.0, 422 on 0.141.1.
+    # pyproject floor: verified 200 ("ran") on 0.130.0 and 0.131.0, 422 on
+    # 0.132.0 and 0.141.1.
     c, _ = _client(tmp_path, monkeypatch, mem_keyring)
     assert c.post("/ingest", content=b"{}").status_code == 422

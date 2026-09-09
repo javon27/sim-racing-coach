@@ -930,7 +930,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     # content-type that reaches the handler is application/json, which is NOT a
     # CORS "simple request" -- the browser must preflight, and the origin
     # allowlist blocks that. NOTE this depends on FastAPI's strict_content_type
-    # default (0.131+), which is why pyproject pins fastapi>=0.131: on older
+    # default (0.132+), which is why pyproject pins fastapi>=0.132: on older
     # FastAPI a body with an ABSENT content-type is still parsed as JSON, and an
     # absent content-type IS CORS-simple, so the guard silently does nothing.
     @app.post("/mapcapture/start")
