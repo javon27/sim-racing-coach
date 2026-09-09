@@ -24,22 +24,21 @@ _SERIES_SUFFIX = re.compile(r"\s*[-–]\s*(elms|wec|lmu|imsa|gtwc)\s*$", re.IGNO
 # Authored prose track notes, `<slug>.md`, keyed on the same slug as the map files.
 KNOWLEDGE_DIR = Path(__file__).parent / "knowledge"
 
-# A per-corner note key is authored either as a single corner label ("7") or as a hyphen
-# RANGE spanning a complex ("2-4", "11-13") -- the only two shapes across every
-# shipped map (widest is 3 corners). Ranges are numeric and inclusive.
+# A corner number, in note keys AND in corner labels: one to three ASCII digits.
 #
-# ASCII digits, at most three, because both note endpoints accept arbitrary text and
-# the groups are fed to int(): a bare `\d` also matches Unicode decimal digits, and
-# an unbounded run matches keys past CPython's 4300-digit int()/str() limit. Either
-# one turns an authored key that `PUT /notes` happily persists into a ValueError on
-# every later read and every map save. A key outside the bound is not a range and so
-# names only itself.
-_NOTE_RANGE = re.compile(r"([0-9]{1,3})-([0-9]{1,3})")
+# `[0-9]`, never `\d`, and bounded, because both sides of the comparison are free text
+# that gets fed to int(). `\d` also matches Unicode decimal digits, so '١-٣' parsed as
+# a range here while the UI's `Number()` reads it as NaN; and an unbounded run matches
+# a key past CPython's 4300-digit int()/str() limit, which `PUT /notes` persists happily
+# and which then raises on every later read and every map save. Three digits is the
+# width of a real corner number -- no circuit has more than ~38.
+_MAX_CORNER_DIGITS = 3
+_NOTE_NUM = re.compile(rf"[0-9]{{1,{_MAX_CORNER_DIGITS}}}")
 
-# Widest span we read as a corner complex. The map-save endpoint caps a track at 100
-# corners, so a range naming more than that cannot name a corner any saveable map
-# has -- and the bound is what keeps the cost of the save guard's per-key check flat.
-_MAX_RANGE_SPAN = 100
+# A per-corner note key is authored either as a single corner label ("7") or as an
+# ASCENDING hyphen range spanning a complex ("2-4", "11-13") -- the only two shapes
+# across every shipped map (widest is 3 corners). Ranges are inclusive.
+_NOTE_RANGE = re.compile(rf"({_NOTE_NUM.pattern})-({_NOTE_NUM.pattern})")
 
 
 def note_key_binds(key: str, labels: set[str]) -> bool:
@@ -51,12 +50,17 @@ def note_key_binds(key: str, labels: set[str]) -> bool:
 
     A plain key names itself. A numeric range names every label it spans, matching
     how `CoachContext._corner_note` resolves one -- endpoints only would drop a note
-    the coach still serves for the corners in between. Anything else (a comma list,
-    a GP-style '2A-2B', a range wider or longer than the grammar above) names only
+    the coach still serves for the corners in between. Anything else (a comma list, a
+    GP-style '2A-2B', a DESCENDING '13-11', a group outside `_NOTE_NUM`) names only
     itself: the read path cannot resolve such a key, so keeping it on the strength of
     its parts would preserve unreachable data.
 
-    A descending range is normalised, so '13-11' spans 11-13 like '11-13' does.
+    There is a THIRD reader of this grammar, in the UI: `TracksScreen.svelte`'s
+    `rangeOf`/`cornerView`, which decides which notes collapse under a range row and
+    which are flagged to the user as matching no corner. It is deliberately the
+    strictest of the three (ASCII digits, ascending only), and this grammar is held
+    down to it -- a note the guard keeps and the coach states as owned fact must not
+    be the same note the Tracks screen calls an orphan. Loosen one, loosen both.
 
     TOTAL: returns a bool for every (key, labels) pair and never raises. Both callers
     use it as a predicate inside a comprehension, and both get their keys and labels
@@ -69,15 +73,14 @@ def note_key_binds(key: str, labels: set[str]) -> bool:
     m = _NOTE_RANGE.fullmatch(key)
     if not m:
         return False
-    lo, hi = sorted((int(m.group(1)), int(m.group(2))))
-    if hi - lo >= _MAX_RANGE_SPAN:
-        return False
-    # Walks the span and probes the labels, rather than parsing every label: a label
-    # is free text from the editor's label box, where plenty of strings satisfy
-    # isdigit() but raise on int() ('²' U+00B2, '₂' U+2082, '⑥' U+2465). Comparing as
-    # strings needs no parse at all. A complex spans 2-3 corners, so this is also the
-    # cheaper direction -- a track may carry up to 100 labels.
-    return any(str(n) in labels for n in range(lo, hi + 1))
+    lo, hi = int(m.group(1)), int(m.group(2))     # not sorted: '13-11' is not a range
+    # The label side needs the same bound as the key side, and for the same reason:
+    # a label is free text from the editor's label box, where '²' U+00B2, '₂' U+2082
+    # and '⑥' U+2465 all satisfy str.isdigit() and RAISE on int(). `labels` comes from
+    # the MAP, so no key-side regex reaches it. Spelled out rather than reusing
+    # _NOTE_NUM because this runs once per label per key and fullmatch() costs ~2x.
+    return any(len(lab) <= _MAX_CORNER_DIGITS and lab.isascii() and lab.isdigit()
+               and lo <= int(lab) <= hi for lab in labels)
 
 
 def track_slug(track_name: str) -> str:

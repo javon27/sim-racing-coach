@@ -500,6 +500,9 @@ class CoachContext:
         And the range scan takes the first covering key it meets, so two overlapping
         ranges resolve by insertion order -- no shipped map has any.
         """
+        # 'corner' reaches here straight from the model's tool call, so it is arbitrary
+        # text; `note_key_binds` is total and the lookups are by string, so no shape of
+        # it can raise out of an LLM-callable tool.
         notes = getattr(self.cmap, "notes", None) or {}
         by_corner = notes.get("corners") or {}
         label = str(label)

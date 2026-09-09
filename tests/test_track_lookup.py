@@ -218,25 +218,69 @@ def test_note_key_binds_absurd_range_is_bounded_not_resolved():
     assert note_key_binds("100-102", {"101"})                # three digits is in grammar
 
 
-def test_note_key_binds_wide_range_names_nothing():
-    # A span wider than the 100-corner cap the save endpoint enforces cannot name a
-    # corner any saveable map has. Rejecting it keeps the per-key cost flat, which is
-    # what stops an unbounded note dict from making a map save quadratic.
-    assert note_key_binds("1-100", {"100"})        # exactly 100 corners: still a range
-    assert not note_key_binds("1-101", {"100"})    # wider than any map: names nothing
-    assert not note_key_binds("0-999", {"500"})
+def test_note_key_binds_descending_range_is_not_a_range():
+    # A range is ASCENDING. fbdcb6d briefly sorted() the endpoints, which silently
+    # widened the read path (main resolved '13-11' to nothing) and disagreed with the
+    # UI, where `rangeOf` never normalises -- so the guard would keep a note that the
+    # Tracks screen shows the user as matching no corner. Zero shipped keys are
+    # inverted, so strict costs nothing and all three readers agree.
+    assert not note_key_binds("13-11", {"12"})
+    assert not note_key_binds("13-11", {"11"})
+    assert not note_key_binds("13-11", {"13"})
+    assert note_key_binds("13-11", {"13-11"})   # still its own label
 
 
-def test_note_key_binds_descending_range_is_normalised():
-    # GUARD (passes before this commit too -- the sorted() that does this arrived with
-    # note_key_binds itself). Pinning it because it is an UNDISCLOSED behaviour change
-    # from the code before that: the read path's old regex resolved '13-11' to nothing.
-    # '13-11' spans 11-13, same as '11-13'. A deliberate normalisation, not an
-    # accident of the parse: no shipped map authors one, and resolving it to nothing
-    # would have the save guard delete a note the read path could not serve either.
-    assert note_key_binds("13-11", {"12"})
-    assert note_key_binds("13-11", {"11"})
-    assert not note_key_binds("13-11", {"10", "14"})
+def test_note_key_binds_matches_the_ui_grammar():
+    # This grammar has a THIRD reader: TracksScreen.svelte's `rangeOf` decides which
+    # notes collapse under a range row and which are flagged to the user as orphans.
+    # A key the Python guard keeps -- and the coach then states as owned fact -- must
+    # not be one the UI calls an orphan, so pin the JS source that has to agree. A
+    # cross-language run would need node plus a Svelte parse; reading the literal is
+    # the cheap version and still fails if someone edits it.
+    svelte = (Path(__file__).resolve().parents[1]
+              / "frontend" / "src" / "lib" / "TracksScreen.svelte").read_text(encoding="utf-8")
+    assert "/^(\\d+)-(\\d+)$/.exec(k)" in svelte, "TracksScreen.rangeOf changed: re-check agreement"
+    assert "Number.isInteger(n) ? ranges.find" in svelte, "TracksScreen label side changed"
+    # Agreement on the keys that distinguish the two candidate grammars. Python is the
+    # lenient one by default (`\d` is Unicode, and it could normalise direction), so
+    # every row here is a case where it had to be held DOWN to the UI.
+    ui_is_range = {"11-13": True, "2-4": True, "1-2": True,   # plain ascending: both
+                   "13-11": False,        # UI never normalises -> neither do we
+                   "١-٣": False,         # Number('١') is NaN; `\d` would have matched
+                   "１-３": False,    # fullwidth: same trap
+                   "²-³": False,        # isdigit(), not int()-able, not Number()-able
+                   "2A-2B": False, "1,2": False, "7": False, "": False}
+    for key, is_range in ui_is_range.items():
+        # A range binds a label it spans; a non-range can only bind its own exact self.
+        assert note_key_binds(key, {"1", "2", "3", "11", "12", "13"}) == is_range, key
+
+
+def test_corner_number_bound_is_spelled_the_same_on_both_sides():
+    # The key side bounds corner numbers with _NOTE_NUM's regex and the label side with
+    # a len() check, for speed. Drift between the two is how you get a key the guard
+    # keeps for a label the coach cannot resolve, so pin that they mean the same thing.
+    from simcoach.track_lookup import _MAX_CORNER_DIGITS, _NOTE_NUM
+    assert _NOTE_NUM.fullmatch("9" * _MAX_CORNER_DIGITS)
+    assert not _NOTE_NUM.fullmatch("9" * (_MAX_CORNER_DIGITS + 1))
+
+
+def test_note_key_binds_known_divergences_from_the_ui():
+    # The residual, measured by running TracksScreen's own logic under node against
+    # this grammar over a table of keys x labels. Both classes are Python being
+    # STRICTER, and both come from the same deliberate rule: a corner number in this
+    # grammar is 1-3 ASCII digits, on the key side AND the label side. That bound is
+    # what makes the 4300-digit crash unreachable without a try/except.
+    #
+    # Pinned, not fixed: zero shipped keys or labels hit either class, and neither is
+    # reachable through the UI (TracksScreen has no free-form key entry, so a 4-digit
+    # endpoint needs a direct PUT /notes or a hand-edited map). Listed so that the
+    # consequence is on the record -- in both classes the UI collapses the note under a
+    # range row while this guard drops it on the next map save, which is the data-loss
+    # direction, not a cosmetic one. Narrowing the UI's `\d+` to `\d{1,3}` would close
+    # the first class; that is a frontend change, deliberately not made here.
+    assert not note_key_binds("1-1000", {"7"})     # UI: range (Number() is unbounded)
+    assert not note_key_binds("5-9", {"0007"})     # UI: Number('0007') == 7 -> binds
+    assert not note_key_binds("0-0", {""})         # UI: Number('') == 0 -> binds
 
 
 def test_note_key_binds_ignores_labels_int_cannot_parse():
