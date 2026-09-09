@@ -344,10 +344,10 @@ class CoachContext:
     def _resolve_lap(self, which):
         """which -> (record, lap_id). 'latest'/None -> current; 'best' -> best lap;
         an in-session lap reference ('race lap 3', 'race 3', 'lap 3' or a bare number
-        in the current phase) -> that lap. A number that doesn't match the in-session
-        numbering resolves to nothing -- it is NEVER reinterpreted as a raw DB id
-        (that could silently pull an unrelated lap the driver never referenced;
-        see issue #34)."""
+        in the current phase) -> that lap. A raw DB id is accepted ONLY where the
+        listing itself had to fall back to raw ids (no in-session numbering) and only
+        for this track/car -- never as a guess at a number the in-session numbering
+        simply doesn't cover, which could pull an unrelated lap (issue #34)."""
         which = (which or "latest").strip().lower()
         if which in ("latest", "current", ""):
             return self._current_lap()
@@ -360,6 +360,15 @@ class CoachContext:
         # In-session reference (matches how laps are named to the driver) first.
         _, id_by_ref = self._lap_numbering()
         lid = id_by_ref.get(which)
+        # With no in-session numbering (e.g. the REPL asking before this run's first
+        # lap lands), `list_recent_laps` labels laps by their raw DB id -- so that is
+        # the only reference the model can give back, and refusing it makes the tool
+        # surface contradict itself. Accept it there, but only for a lap that really
+        # belongs to this track/car, so it can never pull an unrelated lap (issue #34).
+        if lid is None and not id_by_ref:
+            raw = which.removeprefix("lap ")
+            if raw.isdigit() and int(raw) in set(self.store.list_lap_ids(self.track, self.car)):
+                lid = int(raw)
         if lid is None:
             return None, None
         try:

@@ -206,6 +206,29 @@ def test_unknown_lap_reference_still_fails(tmp_path, synthetic_lap):
         assert ctx._resolve_lap(ref) == (None, None)
 
 
+def test_raw_id_resolves_only_when_laps_are_labelled_by_id(tmp_path, synthetic_lap):
+    # With no session numbering (the REPL asks questions before this run's first lap)
+    # list_recent_laps labels laps by their raw DB id, so that is the only reference
+    # the model can give back. It must resolve -- but only after validating the id
+    # belongs to THIS track/car, never an unrelated lap (issue #34).
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    other = [store.save(LapRecord(**{**synthetic_lap.__dict__, "track": "other_track",
+                                     "car": "other_car", "session_id": None, "phase": None}))
+             for _ in range(3)]
+    mine = store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": None,
+                                   "phase": "practice"}))
+    ctx = CoachContext(store, cmap=CornerMap.load("simcoach/tracks/test_track.json"),
+                       track=synthetic_lap.track, car=synthetic_lap.car)
+    listing = ctx.list_recent_laps()
+    assert f"lap {mine}" in listing          # labelled by raw id, so it must resolve
+    assert ctx._resolve_lap(str(mine))[1] == mine
+    assert ctx._resolve_lap(f"lap {mine}")[1] == mine
+    # An id from a different track/car stays unresolvable.
+    assert ctx._resolve_lap(str(other[0])) == (None, None)
+    assert ctx._resolve_lap(f"lap {other[-1]}") == (None, None)
+
+
 def test_get_race_result_formats_and_falls_back(tmp_path, synthetic_lap):
     from simcoach.lmu.results import ResultLap, ResultSession
     ctx, store, _ = _ctx(tmp_path, synthetic_lap)
