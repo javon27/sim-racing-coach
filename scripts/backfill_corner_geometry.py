@@ -21,8 +21,9 @@ from pathlib import Path
 import numpy as np
 
 from simcoach.analysis import corner_geometry
-from simcoach.server.app import _load_cloud
+from simcoach.ribbon import reconstruct_surface
 from simcoach.server.__main__ import db_path, telemetry_dir
+from simcoach.server.app import _load_cloud
 from simcoach.store import LapStore
 from simcoach.track_lookup import track_slug
 
@@ -69,6 +70,28 @@ def _capture_samples(slug, cap_dir):
             if "lap_distance" in lap and "pos_y" in lap]
 
 
+def _ribbon_from_cloud(slug, cap_dir, path_dist):
+    """Width/banking on the frozen path, reconstructed from the saved point cloud.
+
+    For an already-curated map (frozen path, no stored ribbon) the cloud from a
+    boundary-weave capture is the only width/banking source -- reconstruct the
+    ribbon and resample its width/bank (on the reconstruction's own lap-distance
+    grid) onto the frozen path_dist. Returns (width, bank) lists aligned to
+    path_dist, or (None, None) when there's no usable cloud."""
+    cap = cap_dir / f"{slug}.npz"
+    if not cap.exists():
+        return None, None
+    world = reconstruct_surface(_load_cloud(cap))
+    rd, rw, rb = world.get("dist"), world.get("width"), world.get("bank")
+    if not (rd and rw and rb):
+        return None, None
+    rd = np.asarray(rd, float)
+    pd = np.asarray(path_dist, float)
+    width = list(np.interp(pd, rd, np.asarray(rw, float)))
+    bank = list(np.interp(pd, rd, np.asarray(rb, float)))
+    return width, bank
+
+
 def _store_samples(slug, store, conn, limit=12):
     out = []
     for lap_id, track in conn.execute("SELECT id, track FROM laps"):
@@ -102,6 +125,12 @@ def backfill(slugs=None):
         rib = d.get("ribbon") or {}
         width = rib.get("width") if len(rib.get("width") or []) == len(path) else None
         bank = rib.get("bank") if len(rib.get("bank") or []) == len(path) else None
+        # No stored ribbon (curated map saved via "Save capture only") -> reconstruct
+        # width/banking from the raw boundary-weave cloud and resample onto the path.
+        if width is None or bank is None:
+            cw, cb = _ribbon_from_cloud(slug, cap_dir, dist)
+            width = width if width is not None else cw
+            bank = bank if bank is not None else cb
         samples = _capture_samples(slug, cap_dir) or _store_samples(slug, store, conn)
         elev = _elev_on_path(samples, dist) if samples else None
         geo = corner_geometry(path, dist, corners, width=width, bank=bank, elev=elev)
