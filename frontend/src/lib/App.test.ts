@@ -44,9 +44,10 @@ vi.mock("./api", async () => {
 describe("App shell", () => {
   afterEach(cleanup);
 
-  // CornerSetupTabs now keeps both tab panels mounted (issue #36 fix), so
-  // SetupPanel's getSetup() fires on Coach-screen mount even though these
-  // tests never touch the Setup tab.
+  // CornerSetupTabs (issue #36 fix) keeps the Setup panel mounted once
+  // opened, but mounts it lazily on first visit — these tests never touch
+  // the Setup tab, so getSetup() isn't actually called; mock stays as a
+  // defensive default in case a future test opens it.
   beforeEach(() => {
     vi.mocked(getSetup).mockResolvedValue({});
   });

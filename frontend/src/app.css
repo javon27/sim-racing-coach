@@ -562,6 +562,16 @@ body {
   color: var(--text);
   border-color: var(--line);
 }
+/* Corners/Setup panels stay mounted (issue #36) inside a `hidden`-toggled
+   wrapper; only give the visible one flex sizing so `.panel`'s flex/scroll
+   rules below work, and don't touch the hidden one so `hidden`'s
+   `display: none` keeps it out of layout, the a11y tree, and tab order. */
+.tab-pane:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
 .panel {
   flex: 1;
   overflow-y: auto;
