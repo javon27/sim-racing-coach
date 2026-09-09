@@ -30,6 +30,54 @@ class Corner:
     apexes: list[float] | None = None  # lap_distances; defaults to [apex_dist] (double-apex -> 2)
 
 
+def clamp_corner_windows(corners: list[Corner], length: float | None) -> None:
+    """Trim each corner's start/end at the midpoint to its neighbors' apexes (by
+    apex_dist, circularly around the lap) so adjacent corner windows never
+    overlap. A window already inside its bounds is left untouched -- only the
+    side that bleeds past a neighbor's apex is trimmed, so an intentionally
+    narrow window (or an S/F-seam wrap) survives.
+
+    Root-cause fix for adjacent-corner telemetry contamination (e.g. Laguna's
+    T7 window bleeding into the Corkscrew) -- general for ANY track, not
+    special-cased. Mutates `corners` in place; no-op without >=2 corners or a
+    known lap length (can't do circular midpoint math without it).
+
+    Shared by both layers: mapbuild applies it before writing a new map, so the
+    file on disk is already clamped, and from_data applies it on load as a guard
+    for maps written before that (or by hand)."""
+    n = len(corners)
+    if n < 2 or not length:
+        return
+    length = float(length)
+    order = sorted(range(n), key=lambda i: corners[i].apex_dist)
+    apexes = [corners[i].apex_dist for i in order]
+    eps = 1e-6
+    for k, i in enumerate(order):
+        c = corners[i]
+        a = c.apex_dist
+        # Guard each side against the corner's OWN outermost apex on that side, not
+        # apex_dist -- a double-apex window has to keep both, and apex_dist sits
+        # between them. Compare the ROUNDED candidate, since that is what gets
+        # assigned: testing the unrounded midpoint can shove a boundary 0.05 m past
+        # an apex. If a candidate would cut an apex out, the circular difference
+        # wraps to ~length and the test goes false, so the clamp declines to trim
+        # rather than lose an apex.
+        own = c.apexes or [a]
+        a_first = min(own, key=lambda x: (x - c.start_dist) % length)  # earliest in window
+        a_last = min(own, key=lambda x: (c.end_dist - x) % length)     # latest in window
+        prev_a, next_a = apexes[k - 1], apexes[(k + 1) % n]
+        mid_prev = (prev_a + ((a - prev_a) % length) / 2.0) % length
+        mid_next = (a + ((next_a - a) % length) / 2.0) % length
+
+        cand = round(mid_prev, 1)
+        if (a_first - c.start_dist) % length > (a_first - cand) % length + eps:
+            c.start_dist = cand
+
+        cand = round(mid_next, 1)
+        if (c.end_dist - a_last) % length > (cand - a_last) % length + eps:
+            c.end_dist = cand
+
+
 def _load_sections(data: dict) -> list[dict]:
     """Named distance spans (straights, corner-group complexes, DRS zones):
     [{name, kind, start_dist, end_dist}]. Default []; validate start<end in range."""
@@ -88,6 +136,7 @@ class CornerMap:
                 c.label = str(c.number)
             if not c.apexes:                      # back-compat: single-apex default
                 c.apexes = [c.apex_dist]
+        clamp_corner_windows(corners, data.get("length") or data.get("length_m"))
         return cls(corners, _load_sections(data), data.get("notes") or {})
 
     def corner_at(self, dist: float) -> Corner | None:

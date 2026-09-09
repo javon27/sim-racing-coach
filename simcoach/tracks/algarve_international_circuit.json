@@ -54,7 +54,7 @@
       "label": "4",
       "name": "Turn 4",
       "direction": "left",
-      "start_dist": 798.4,
+      "start_dist": 798.5,
       "apex_dist": 872.7,
       "end_dist": 956.3,
       "apexes": [
@@ -104,7 +104,7 @@
       "direction": "right",
       "start_dist": 1838.3,
       "apex_dist": 1921.8,
-      "end_dist": 2005.4,
+      "end_dist": 1996.1,
       "apexes": [
         1921.8
       ],
@@ -166,7 +166,7 @@
       "label": "11",
       "name": "Turn 11",
       "direction": "right",
-      "start_dist": 2692.4,
+      "start_dist": 2710.9,
       "apex_dist": 2748.1,
       "end_dist": 2831.7,
       "apexes": [

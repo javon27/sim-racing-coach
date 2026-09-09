@@ -8,7 +8,7 @@
       "direction": "right",
       "start_dist": 648.2,
       "apex_dist": 732.1,
-      "end_dist": 793.1,
+      "end_dist": 781.7,
       "apexes": [
         732.1
       ],
@@ -24,7 +24,7 @@
       "direction": "left",
       "start_dist": 793.1,
       "apex_dist": 831.3,
-      "end_dist": 899.9,
+      "end_dist": 888.5,
       "apexes": [
         831.3
       ],
@@ -38,9 +38,9 @@
       "label": "3",
       "name": "Turn 3",
       "direction": "right",
-      "start_dist": 861.8,
+      "start_dist": 888.5,
       "apex_dist": 945.7,
-      "end_dist": 1021.9,
+      "end_dist": 983.9,
       "apexes": [
         945.7
       ],
@@ -54,7 +54,7 @@
       "label": "4",
       "name": "Turn 4",
       "direction": "right",
-      "start_dist": 976.2,
+      "start_dist": 983.9,
       "apex_dist": 1022.0,
       "end_dist": 1029.6,
       "apexes": [
@@ -70,7 +70,7 @@
       "label": "5",
       "name": "Turn 5",
       "direction": "left",
-      "start_dist": 1060.1,
+      "start_dist": 1083.0,
       "apex_dist": 1144.0,
       "end_dist": 1212.6,
       "apexes": [
@@ -136,7 +136,7 @@
       "direction": "right",
       "start_dist": 3256.5,
       "apex_dist": 3340.4,
-      "end_dist": 3424.3,
+      "end_dist": 3378.6,
       "apexes": [
         3340.4
       ],
@@ -150,7 +150,7 @@
       "label": "10",
       "name": "Turn 10",
       "direction": "right",
-      "start_dist": 3332.8,
+      "start_dist": 3378.6,
       "apex_dist": 3416.7,
       "end_dist": 3485.3,
       "apexes": [
