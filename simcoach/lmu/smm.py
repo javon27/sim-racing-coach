@@ -511,8 +511,97 @@ class LmuSource:
     RuntimeError immediately rather than yielding garbage.
     """
 
-    def __init__(self, poll_hz: float = 50.0):
+    def __init__(self, poll_hz: float = 50.0, now_fn=time.time):
         self.poll_hz = poll_hz
+        # Injectable so tests can drive the "is this lap freshly timed" commit
+        # decision at controlled instants instead of racing a real writer thread's
+        # sleep-based cadence against this thread's own poll_hz sleep -- see
+        # _poll_once, which is the single-step unit both laps() and tests use.
+        self._now = now_fn
+        # Buffer the in-progress lap; only COMMIT it when the car genuinely crosses
+        # the finish line (a downward lap-distance wrap) AND the sim posted a fresh
+        # lap time for it. A teleport, pit exit, pause, or out-lap wraps the distance
+        # too but posts no new time -- those buffers are discarded, so half-driven /
+        # frozen / abandoned laps never reach the store or the coach.
+        self._channels: dict[str, list[float]] = {}
+        self._prev_dist: float | None = None
+        self._committed_time: float | None = None
+        # Per-lap mCurrentSector sample, parallel to channels["lap_distance"];
+        # forward changes become the sector boundaries at commit (see
+        # sector_boundary_dists / sector_bounds_from).
+        self._sector_seq: list[int] = []
+        # A "session" is one (track, car, online|offline) combo with a stable,
+        # deterministic id -- all sim phases merge, and the id survives sidecar
+        # restarts. mSession still gives the per-lap phase label.
+
+    def _poll_once(self, telemetry_name: str, scoring_name: str):
+        """One read-and-decide step: read the current telemetry/scoring snapshot,
+        update the in-progress lap buffer, and return a committed LapRecord if this
+        read crossed the finish line with a fresh time (else None).
+
+        Pulled out of laps() as its own unit so tests can call it directly, once per
+        write(), with no thread/sleep involved -- the flakiness this replaced came
+        from two real OS threads racing sleep-based cadences under system load, not
+        from anything about the decision logic itself.
+        """
+        telem = read_consistent(telemetry_name, rF2Telemetry)
+        scoring = read_consistent(scoring_name, rF2Scoring)
+
+        player = _find_player(scoring)
+        vt = _find_telem_by_id(telem, player.mID) if player is not None else None
+        if player is None or vt is None:
+            return None
+
+        record = None
+        dist = player.mLapDist
+        # Finish line / lap boundary: lap distance jumped backward a long way.
+        if self._prev_dist is not None and dist < self._prev_dist - _LAP_WRAP_M:
+            lap_time = player.mLastLapTime
+            # Commit ONLY a completed, freshly-timed lap. A teleport/exit/out-lap
+            # also wraps here but carries a stale or sentinel (<=0) lap time.
+            if self._channels and lap_time > 0 and lap_time != self._committed_time:
+                track = vt.mTrackName.decode(errors="replace")
+                car = vt.mVehicleName.decode(errors="replace")
+                phase = session_phase(scoring.mScoringInfo.mSession)
+                session_id = session_id_for(track, car, _is_online(scoring))
+                sectors = compute_sectors(
+                    player.mLastSector1, player.mLastSector2, lap_time
+                )
+                position = player_position(player.mPlace)
+                lap_dists = self._channels.get("lap_distance") or []
+                lap_len = max(lap_dists or [0.0])
+                sector_bounds = sector_bounds_from(
+                    sector_boundary_dists(lap_dists, self._sector_seq), lap_len
+                )
+                record = build_lap_record(
+                    sim="lmu", track=track, car=car, lap_time=lap_time,
+                    invalidated=vt.mLapInvalidated, timestamp=self._now(),
+                    channels=self._channels, phase=phase, session_id=session_id,
+                    sectors=sectors, position=position, sector_bounds=sector_bounds,
+                )
+                if record is not None:
+                    self._committed_time = lap_time
+            self._channels = {}  # start the next lap fresh (committed or discarded)
+            self._sector_seq = []
+
+        sample = sample_from_telem(vt, dist)
+        # Track-width usage lives on SCORING, not telemetry: path_lateral is the
+        # car's own lateral offset from the racing line's centre path, taken at the
+        # car's CENTRE (not its outer wheels); track_edge is that SAME centre path's
+        # offset to the track edge on the car's side (~= half the track width there)
+        # -- NOT the car's distance to the edge.
+        # Distance-to-edge = |track_edge| - |path_lateral|, computed downstream
+        # in analysis.py where both channels are available together.
+        # PENDING LIVE VALIDATION: mPathLateral/mTrackEdge units + sign.
+        sample["path_lateral"] = player.mPathLateral
+        sample["track_edge"] = player.mTrackEdge
+        for k, v in sample.items():
+            self._channels.setdefault(k, []).append(v)
+        self._prev_dist = dist
+        # mCurrentSector lives on the TELEM struct (vt), not scoring.
+        self._sector_seq.append(int(vt.mCurrentSector))  # parallel to lap_distance
+
+        return record
 
     def laps(self) -> Iterator[LapRecord]:
         try:
@@ -531,79 +620,8 @@ class LmuSource:
             ) from exc
 
         period = 1.0 / self.poll_hz
-        # Buffer the in-progress lap; only COMMIT it when the car genuinely crosses
-        # the finish line (a downward lap-distance wrap) AND the sim posted a fresh
-        # lap time for it. A teleport, pit exit, pause, or out-lap wraps the distance
-        # too but posts no new time — those buffers are discarded, so half-driven /
-        # frozen / abandoned laps never reach the store or the coach.
-        channels: dict[str, list[float]] = {}
-        prev_dist: float | None = None
-        committed_time: float | None = None
-        # Per-lap mCurrentSector sample, parallel to channels["lap_distance"];
-        # forward changes become the sector boundaries at commit (see
-        # sector_boundary_dists / sector_bounds_from).
-        sector_seq: list[int] = []
-        # A "session" is one (track, car, online|offline) combo with a stable,
-        # deterministic id -- all sim phases merge, and the id survives sidecar
-        # restarts. mSession still gives the per-lap phase label.
-
         while True:
-            telem = read_consistent(telemetry_name, rF2Telemetry)
-            scoring = read_consistent(scoring_name, rF2Scoring)
-
-            player = _find_player(scoring)
-            vt = _find_telem_by_id(telem, player.mID) if player is not None else None
-            if player is None or vt is None:
-                time.sleep(period)
-                continue
-
-            dist = player.mLapDist
-            # Finish line / lap boundary: lap distance jumped backward a long way.
-            if prev_dist is not None and dist < prev_dist - _LAP_WRAP_M:
-                lap_time = player.mLastLapTime
-                # Commit ONLY a completed, freshly-timed lap. A teleport/exit/out-lap
-                # also wraps here but carries a stale or sentinel (<=0) lap time.
-                if channels and lap_time > 0 and lap_time != committed_time:
-                    track = vt.mTrackName.decode(errors="replace")
-                    car = vt.mVehicleName.decode(errors="replace")
-                    phase = session_phase(scoring.mScoringInfo.mSession)
-                    session_id = session_id_for(track, car, _is_online(scoring))
-                    sectors = compute_sectors(
-                        player.mLastSector1, player.mLastSector2, lap_time
-                    )
-                    position = player_position(player.mPlace)
-                    lap_dists = channels.get("lap_distance") or []
-                    lap_len = max(lap_dists or [0.0])
-                    sector_bounds = sector_bounds_from(
-                        sector_boundary_dists(lap_dists, sector_seq), lap_len
-                    )
-                    record = build_lap_record(
-                        sim="lmu", track=track, car=car, lap_time=lap_time,
-                        invalidated=vt.mLapInvalidated, timestamp=time.time(),
-                        channels=channels, phase=phase, session_id=session_id,
-                        sectors=sectors, position=position, sector_bounds=sector_bounds,
-                    )
-                    if record is not None:
-                        committed_time = lap_time
-                        yield record
-                channels = {}  # start the next lap fresh (committed or discarded)
-                sector_seq = []
-
-            sample = sample_from_telem(vt, dist)
-            # Track-width usage lives on SCORING, not telemetry: path_lateral is the
-            # car's own lateral offset from the racing line's centre path, taken at the
-            # car's CENTRE (not its outer wheels); track_edge is that SAME centre path's
-            # offset to the track edge on the car's side (~= half the track width there)
-            # -- NOT the car's distance to the edge.
-            # Distance-to-edge = |track_edge| - |path_lateral|, computed downstream
-            # in analysis.py where both channels are available together.
-            # PENDING LIVE VALIDATION: mPathLateral/mTrackEdge units + sign.
-            sample["path_lateral"] = player.mPathLateral
-            sample["track_edge"] = player.mTrackEdge
-            for k, v in sample.items():
-                channels.setdefault(k, []).append(v)
-            prev_dist = dist
-            # mCurrentSector lives on the TELEM struct (vt), not scoring.
-            sector_seq.append(int(vt.mCurrentSector))  # parallel to lap_distance
-
+            record = self._poll_once(telemetry_name, scoring_name)
+            if record is not None:
+                yield record
             time.sleep(period)

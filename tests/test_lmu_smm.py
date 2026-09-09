@@ -6,6 +6,7 @@ that sample_from_telem() maps fields correctly -- NOT that the offsets match
 a real LMU process. Live offset/sign validation is a separate [LUNCH] task.
 """
 import ctypes as C
+import uuid
 
 import pytest
 
@@ -255,22 +256,33 @@ def test_build_lap_record_stamps_phase_and_session():
     assert record.phase == "race" and record.session_id == "s1"
 
 
-def test_laps_commits_only_completed_freshly_timed_laps(monkeypatch):
-    """Integration: LmuSource.laps() against a scripted fake buffer. Only a lap the
-    car actually finished (distance wraps at S/F AND a fresh lap time posts) commits;
-    an out-lap, a teleport, and an abandoned/frozen exit are all discarded."""
+def test_laps_commits_only_completed_freshly_timed_laps():
+    """Unit: LmuSource._poll_once() against a scripted fake buffer, driven
+    synchronously -- write a sample, then poll once, no threads and no sleep-based
+    races. Only a lap the car actually finished (distance wraps at S/F AND a fresh
+    lap time posts) commits; an out-lap, a teleport, and an abandoned/frozen exit are
+    all discarded.
+
+    This used to drive a writer thread against LmuSource.laps() with 0.03s
+    wall-clock sleeps and assert on whatever the reader thread happened to capture --
+    flaky under load (issue #52) because it raced two real OS threads' scheduling
+    instead of testing the commit decision itself. _poll_once() (smm.py) is the
+    single-step unit extracted so this can drive the decision deterministically.
+    """
     import mmap
-    import threading
-    import time as _t
     from simcoach.lmu import smm
     from simcoach.lmu.rf2structs import rF2Scoring, rF2Telemetry
 
     # Test-only MMF names so this NEVER opens/writes LMU's real live buffers (which
-    # share the production candidate names) — that would corrupt a running game and
+    # share the production candidate names) -- that would corrupt a running game and
     # pollute the store.
-    tn, sn = "$simcoach_test_telem$", "$simcoach_test_scoring$"
-    monkeypatch.setattr(smm, "TELEMETRY_CANDIDATES", [tn])
-    monkeypatch.setattr(smm, "SCORING_CANDIDATES", [sn])
+    # Windows named mmaps are session-global, not process-scoped: a fixed tagname
+    # collides across concurrent pytest PROCESSES (not just threads), which is the
+    # actual root cause of issue #52's "flaky under load" -- three suites running
+    # concurrently each open the SAME named shared memory and stomp on each other's
+    # writes. A per-run unique suffix makes this test process-isolated.
+    tag = uuid.uuid4().hex
+    tn, sn = f"$simcoach_test_telem_{tag}$", f"$simcoach_test_scoring_{tag}$"
     tmap = mmap.mmap(-1, C.sizeof(rF2Telemetry), tagname=tn, access=mmap.ACCESS_WRITE)
     smap = mmap.mmap(-1, C.sizeof(rF2Scoring), tagname=sn, access=mmap.ACCESS_WRITE)
 
@@ -283,45 +295,32 @@ def test_laps_commits_only_completed_freshly_timed_laps(monkeypatch):
         pv = s.mVehicles[0]; pv.mID = 1; pv.mIsPlayer = True; pv.mLapDist = dist; pv.mLastLapTime = last_lap
         tmap.seek(0); tmap.write(bytes(t)); smap.seek(0); smap.write(bytes(s))
 
-    write(5.0, -1.0)
-    stop = [False]
-
-    def writer():
-        def ramp(d0, d1, last, lap, secs=1.2):
-            n = int(secs / 0.03)
-            for i in range(n):
-                if stop[0]:
-                    return
-                write(d0 + (d1 - d0) * i / n, last, lap); _t.sleep(0.03)
-        ramp(5, 4000, -1.0, 0)                    # OUT-LAP (no valid time yet)
-        write(3.0, -1.0, 1); _t.sleep(0.05)       # cross S/F, out-lap still -1 -> DROP
-        ramp(3, 4000, -1.0, 1)                    # the flying lap
-        write(2.0, 92.5, 2); _t.sleep(0.4)        # cross S/F, fresh time 92.5 -> COMMIT
-        ramp(2, 1500, 92.5, 2)                    # into next lap...
-        write(3.0, 92.5, 3); _t.sleep(0.2)        # TELEPORT-style wrap, stale time -> DROP
-        ramp(3, 800, 92.5, 3)                     # drove a bit then...
-        for _ in range(20):                       # ABANDONED: frozen, never wraps again
-            if stop[0]:
-                break
-            write(800.0, 92.5, 3); _t.sleep(0.05)
-        stop[0] = True
-
+    # Fixed, injected clock: the commit path stamps timestamp=now_fn() rather than
+    # racing a real wall clock -- see LmuSource.__init__(now_fn=...).
+    src = smm.LmuSource(poll_hz=60, now_fn=lambda: 1_700_000_000.0)
     records = []
 
-    def cap():
-        try:
-            for lap in smm.LmuSource(poll_hz=60).laps():
-                records.append(lap)
-                if stop[0]:
-                    break
-        except Exception:
-            pass  # mmaps closed on teardown while mid-read — expected, harmless
+    def step():
+        record = src._poll_once(tn, sn)
+        if record is not None:
+            records.append(record)
 
-    threading.Thread(target=writer, daemon=True).start()
-    ct = threading.Thread(target=cap, daemon=True); ct.start()
-    while not stop[0]:
-        _t.sleep(0.05)
-    _t.sleep(0.3)
+    def ramp(d0, d1, last, lap, n=40):
+        for i in range(n):
+            write(d0 + (d1 - d0) * i / n, last, lap)
+            step()
+
+    write(5.0, -1.0); step()
+    ramp(5, 4000, -1.0, 0)                    # OUT-LAP (no valid time yet)
+    write(3.0, -1.0, 1); step()               # cross S/F, out-lap still -1 -> DROP
+    ramp(3, 4000, -1.0, 1)                    # the flying lap
+    write(2.0, 92.5, 2); step()               # cross S/F, fresh time 92.5 -> COMMIT
+    ramp(2, 1500, 92.5, 2)                    # into next lap...
+    write(3.0, 92.5, 3); step()               # TELEPORT-style wrap, stale time -> DROP
+    ramp(3, 800, 92.5, 3)                     # drove a bit then...
+    for _ in range(20):                       # ABANDONED: frozen, never wraps again
+        write(800.0, 92.5, 3); step()
+
     tmap.close(); smap.close()
 
     assert len(records) == 1, f"expected 1 committed lap, got {len(records)}"
@@ -355,19 +354,21 @@ def test_sector_boundary_dists_messy_sequence_rejected_by_guard():
     assert sector_bounds_from(sector_boundary_dists([0.0, 1000.0], [1, 2]), 3000.0) is None
 
 
-def test_laps_records_sector_bounds_end_to_end(monkeypatch):
-    """Integration guard: the loop reads mCurrentSector from the TELEM struct and
-    a flying lap stepping 1->2->3 records two boundaries. Mirrors the committed-lap
-    test's cadence (proven reliable)."""
+def test_laps_records_sector_bounds_end_to_end():
+    """Unit guard: _poll_once() reads mCurrentSector from the TELEM struct and
+    a flying lap stepping 1->2->3 records two boundaries. Driven synchronously
+    (write, then poll once) -- no threads, no sleep-based races. Mirrors the
+    committed-lap test's cadence (proven deterministic) and shares its mechanism:
+    see LmuSource._poll_once (smm.py)."""
     import mmap
-    import threading
-    import time as _t
     from simcoach.lmu import smm
     from simcoach.lmu.rf2structs import rF2Scoring, rF2Telemetry
 
-    tn, sn = "$simcoach_test_telem_sb$", "$simcoach_test_scoring_sb$"
-    monkeypatch.setattr(smm, "TELEMETRY_CANDIDATES", [tn])
-    monkeypatch.setattr(smm, "SCORING_CANDIDATES", [sn])
+    # See test_laps_commits_only_completed_freshly_timed_laps: a fixed tagname
+    # collides across concurrent pytest processes on Windows (session-global named
+    # mmaps), which was the real cause of issue #52's "flaky under load".
+    tag = uuid.uuid4().hex
+    tn, sn = f"$simcoach_test_telem_sb_{tag}$", f"$simcoach_test_scoring_sb_{tag}$"
     tmap = mmap.mmap(-1, C.sizeof(rF2Telemetry), tagname=tn, access=mmap.ACCESS_WRITE)
     smap = mmap.mmap(-1, C.sizeof(rF2Scoring), tagname=sn, access=mmap.ACCESS_WRITE)
 
@@ -380,38 +381,25 @@ def test_laps_records_sector_bounds_end_to_end(monkeypatch):
         pv = s.mVehicles[0]; pv.mID = 1; pv.mIsPlayer = True; pv.mLapDist = dist; pv.mLastLapTime = last_lap
         tmap.seek(0); tmap.write(bytes(t)); smap.seek(0); smap.write(bytes(s))
 
-    write(5.0, -1.0, 1)
-    stop = [False]
-
-    def writer():
-        def ramp(d0, d1, last, lap, secs=1.2):
-            n = int(secs / 0.03)
-            for i in range(n):
-                if stop[0]:
-                    return
-                d = d0 + (d1 - d0) * i / n
-                sector = 1 if d < 1500 else (2 if d < 3000 else 3)
-                write(d, last, sector, lap); _t.sleep(0.03)
-        ramp(3, 4500, -1.0, 1)                    # the flying lap, sectors step 1->2->3
-        write(2.0, 92.5, 1, lap_no=2); _t.sleep(0.4)  # cross S/F, fresh time -> COMMIT
-        stop[0] = True
-
+    src = smm.LmuSource(poll_hz=60, now_fn=lambda: 1_700_000_000.0)
     records = []
 
-    def cap():
-        try:
-            for lap in smm.LmuSource(poll_hz=60).laps():
-                records.append(lap)
-                if stop[0]:
-                    break
-        except Exception:
-            pass
+    def step():
+        record = src._poll_once(tn, sn)
+        if record is not None:
+            records.append(record)
 
-    threading.Thread(target=writer, daemon=True).start()
-    ct = threading.Thread(target=cap, daemon=True); ct.start()
-    while not stop[0]:
-        _t.sleep(0.05)
-    _t.sleep(0.3)
+    def ramp(d0, d1, last, lap, n=40):
+        for i in range(n):
+            d = d0 + (d1 - d0) * i / n
+            sector = 1 if d < 1500 else (2 if d < 3000 else 3)
+            write(d, last, sector, lap)
+            step()
+
+    write(5.0, -1.0, 1); step()
+    ramp(3, 4500, -1.0, 1)                        # the flying lap, sectors step 1->2->3
+    write(2.0, 92.5, 1, lap_no=2); step()         # cross S/F, fresh time -> COMMIT
+
     tmap.close(); smap.close()
 
     assert len(records) == 1
@@ -543,6 +531,55 @@ def test_version_ok_false_when_torn():
     wrapper.mVersionUpdateBegin = 3
     wrapper.mVersionUpdateEnd = 4
     assert version_ok(wrapper) is False
+
+
+def test_read_consistent_retries_past_a_torn_read(monkeypatch):
+    """The regression issue #52 is really about: read_consistent must not hand back
+    a frame whose mVersionUpdateBegin != mVersionUpdateEnd (caught mid-write) -- it
+    has to retry read_struct until version_ok() passes. Exercised directly via a
+    monkeypatched read_struct, so it's deterministic (no real shared memory, no
+    threads, no sleeps). The old writer-thread/reader-thread integration tests set
+    begin=end=1 on every write, which never tripped this guard and let torn,
+    interleaved reads through -- undetected -- as the actual cause of their flake."""
+    from simcoach.lmu import smm
+
+    torn = make_wrapper()
+    torn.mVersionUpdateBegin, torn.mVersionUpdateEnd = 2, 1  # mid-write
+    settled = make_wrapper()
+    settled.mVersionUpdateBegin = settled.mVersionUpdateEnd = 5
+
+    reads = [torn, torn, settled]
+    calls = []
+
+    def fake_read_struct(name, ctype):
+        calls.append(name)
+        return reads.pop(0)
+
+    monkeypatch.setattr(smm, "read_struct", fake_read_struct)
+    result = smm.read_consistent("dummy", rF2Telemetry, retries=6)
+
+    assert result is settled
+    assert len(calls) == 3  # 1 initial read + 2 retries before it settled
+
+
+def test_read_consistent_gives_up_after_retries_exhausted(monkeypatch):
+    """Best-effort per the docstring: if it never settles within `retries`, return
+    the last read rather than hanging or (worse) fabricating a consistent one."""
+    from simcoach.lmu import smm
+
+    calls = []
+
+    def always_torn(name, ctype):
+        calls.append(name)
+        w = make_wrapper()
+        w.mVersionUpdateBegin, w.mVersionUpdateEnd = 2, 1
+        return w
+
+    monkeypatch.setattr(smm, "read_struct", always_torn)
+    result = smm.read_consistent("dummy", rF2Telemetry, retries=3)
+
+    assert version_ok(result) is False  # gave up, didn't fabricate consistency
+    assert len(calls) == 4  # 1 initial read + 3 retries, all torn
 
 
 # -- compatibility_check ---------------------------------------------------
