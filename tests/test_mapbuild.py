@@ -26,7 +26,25 @@ def test_detect_finds_both_corners_with_direction():
     a, b = corners
     assert 260 < a["apex_dist"] < 340 and a["direction"] == "left"
     assert 660 < b["apex_dist"] < 740 and b["direction"] == "right"
-    assert a["min_speed"] < 120  # speed dip detected at the apex
+    assert a["min_speed_kmh"] < 120  # speed dip detected at the apex
+
+
+def test_detect_corners_min_speed_is_kmh_not_ms():
+    """#55: the captured `speed` channel is ALREADY km/h (lmu/smm.py stores
+    |mLocalVel| * 3.6), so detect_corners must pass it through unconverted.
+
+    _synthetic_lap dips to 90 and 70 km/h. Band picked so only km/h fits:
+    a m/s reading of the same lap would be 25.0/19.4 (below LO), and a spurious
+    *3.6 would be 324/252 (above HI).
+    """
+    LO, HI = 50.0, 150.0
+    lap = _synthetic_lap()
+    trough = float(np.min(lap["speed"]))               # 70.0 km/h, by construction
+    assert trough / 3.6 < LO and trough * 3.6 > HI     # both wrong readings miss the band
+
+    for c in detect_corners(lap):
+        assert LO < c["min_speed_kmh"] < HI
+        assert "min_speed" not in c                    # unitless key retired
 
 
 def _close_corners_lap():
