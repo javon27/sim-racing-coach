@@ -1,0 +1,222 @@
+"""Promote a user-built track map into the committed shipped set (#10).
+
+A map the user builds or edits in the app is written to app-data
+(``<data_dir>/tracks/<slug>.json``) and read back as an ANNOTATION OVERLAY on top
+of the shipped geometry. There was no path from there into ``simcoach/tracks/``,
+so a map a driver built and verified could never become a curated default. This
+is that path: validate a user map the way the editor's save guard does, then
+write it into the repo's tracks dir in the shipped byte format, ready to commit.
+
+Curator tool, like backfill_corner_geometry.py -- it writes into the repo, so it
+only makes sense on a machine with the checkout. Run it, eyeball ``git diff``,
+commit.
+
+    python scripts/promote_map.py <slug>              # from app-data
+    python scripts/promote_map.py <slug> --from FILE  # from an exported file
+    python scripts/promote_map.py <slug> --force      # replace a shipped map
+
+An existing shipped map is NEVER replaced without --force: shipped geometry is
+authoritative and the user's copy is the overlay, so a silent promotion would
+invert that. --force is the curator saying "the map I drove is the better one"
+(the Imola/Spa driver-verified rebuild flow). It replaces the shipped map's
+authored notes with the source's -- git diff shows it, git checkout reverses it.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import sys
+from pathlib import Path
+
+from simcoach.corners import Corner, clamp_corner_windows, in_window
+from simcoach.track_lookup import guard_corner_notes, track_slug
+from simcoach.trackmap import direction_from_path
+
+TRACKS_DIR = Path("simcoach/tracks")
+_MAX_CORNERS = 100  # no real circuit exceeds ~30; same cap as the editor's save guard
+
+
+class PromoteError(Exception):
+    """A map that must not be promoted, with the reason."""
+
+
+def _serialize(data: dict) -> bytes:
+    """The shipped on-disk format: 2-space JSON, real UTF-8 (two shipped maps carry
+    accented names), CRLF, no trailing newline. Written explicitly rather than left
+    to the platform's text-mode newline translation, so the bytes are the same
+    wherever this runs."""
+    return json.dumps(data, indent=2, ensure_ascii=False,
+                      allow_nan=False).replace("\n", "\r\n").encode("utf-8")
+
+
+def _validated_corners(data: dict, length: float) -> list[dict]:
+    """The editor's save guard (server.app._persist_map), applied to a file.
+
+    Corner DIRECTION is re-derived from the map's own path geometry, never taken
+    from the file -- the same rule the editor's PUT enforces, and the reason a map
+    with no path can't be promoted: an unverifiable direction is not owned data.
+    """
+    raw = data.get("corners")
+    if not isinstance(raw, list) or not raw:
+        raise PromoteError("corners must be a non-empty list")
+    if len(raw) > _MAX_CORNERS:
+        raise PromoteError(f"too many corners ({len(raw)})")
+    path, dist = data.get("path"), data.get("path_dist")
+    if not (isinstance(path, list) and isinstance(dist, list) and path and len(path) == len(dist)):
+        raise PromoteError(
+            "no path/path_dist geometry: corner direction can't be re-derived, and a "
+            "map whose directions can't be verified is not owned data. Promote the "
+            "full map the app built, not an annotation-only overlay.")
+
+    out, seen = [], set()
+    for c in raw:
+        if not isinstance(c, dict):
+            raise PromoteError("each corner must be an object")
+        try:
+            number = int(c["number"])
+            apex = float(c["apex_dist"])
+            start = float(c["start_dist"])
+            end = float(c["end_dist"])
+        except (KeyError, TypeError, ValueError):
+            raise PromoteError(
+                "corner requires an integer number and numeric apex/start/end_dist") from None
+        if number in seen:
+            raise PromoteError(f"duplicate corner number {number}")
+        seen.add(number)
+        if not all(math.isfinite(v) for v in (apex, start, end)):
+            raise PromoteError(f"corner {number}: non-finite window")
+        if not all(0.0 <= v <= length for v in (apex, start, end)):
+            raise PromoteError(f"corner {number}: window outside [0, {length}]")
+        # start > end is a valid S/F-seam WRAP; only start == end is degenerate.
+        if start == end:
+            raise PromoteError(f"corner {number}: start_dist == end_dist is degenerate")
+        if not in_window(apex, start, end):
+            raise PromoteError(f"corner {number}: apex_dist must be inside the window")
+        apexes = sorted(round(float(a), 1) for a in (c.get("apexes") or [])
+                        if isinstance(a, (int, float)) and math.isfinite(a)
+                        and in_window(float(a), start, end)) or [round(apex, 1)]
+        out.append({**c,
+                    "number": number,
+                    "label": str(c.get("label") or number)[:8],
+                    "name": str(c.get("name") or f"Turn {number}")[:80],
+                    "direction": direction_from_path(path, dist, apex),
+                    "start_dist": round(start, 1), "apex_dist": round(apex, 1),
+                    "end_dist": round(end, 1), "apexes": apexes})
+    out.sort(key=lambda c: c["apex_dist"])
+    return out
+
+
+def _overlaps(corners: list[dict], length: float) -> list[str]:
+    """Adjacent corner windows that overlap, circularly (so the S/F-seam pair is
+    checked too). Same signed short-way-around gap that
+    tests/test_corners.py::test_shipped_track_json_on_disk_has_no_overlapping_windows
+    asserts over every shipped file -- a promotion that broke it would land a red
+    suite on the curator, so refuse here instead, naming the corners."""
+    by_apex = sorted(corners, key=lambda c: c["apex_dist"])
+    bad = []
+    for k, cur in enumerate(by_apex):
+        nxt = by_apex[(k + 1) % len(by_apex)]
+        gap = ((nxt["start_dist"] - cur["end_dist"] + length / 2) % length) - length / 2
+        if gap < -1e-6:
+            bad.append(f"corner {cur['number']} end ({cur['end_dist']}) overlaps "
+                       f"corner {nxt['number']} start ({nxt['start_dist']}) by {-gap:.1f} m")
+    return bad
+
+
+def promote(src: Path | str, tracks_dir: Path | str = TRACKS_DIR, *,
+            slug: str | None = None, force: bool = False) -> Path:
+    """Validate the user map at `src` and write it into `tracks_dir` as a shipped
+    map. `slug` names the shipped file (default: the source's filename stem, which
+    is what the app names its own map files). Returns the written path; raises
+    PromoteError with the reason otherwise."""
+    src, tracks_dir = Path(src), Path(tracks_dir)
+    slug = slug or src.stem
+    if not slug or track_slug(slug) != slug:
+        raise PromoteError(f"{slug!r} is not a valid track slug")
+    try:
+        data = json.loads(src.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise PromoteError(f"{src}: unreadable map ({e})") from None
+    if not isinstance(data, dict):
+        raise PromoteError(f"{src}: map must be a JSON object")
+
+    length = data.get("length") or data.get("length_m")
+    if not isinstance(length, (int, float)) or not math.isfinite(length) or length <= 0:
+        raise PromoteError("map has no usable `length`")
+    length = float(length)
+
+    target = tracks_dir / f"{slug}.json"
+    if target.exists() and not force:
+        raise PromoteError(
+            f"{target} already ships. Shipped geometry is authoritative and the user's "
+            f"copy is only an annotation overlay on it -- pass --force to replace it "
+            f"deliberately (git diff/checkout is the undo).")
+    if target.exists():
+        # Byte-fidelity proof: this writer must reproduce the shipped file it is
+        # about to replace, byte for byte, or the whole shipped set's format is
+        # about to drift. Abort rather than reformat 10k lines under a map edit.
+        old = target.read_bytes()
+        if _serialize(json.loads(old.decode("utf-8"))) != old:
+            raise PromoteError(
+                f"{target}: shipped format has drifted from this writer's output; "
+                f"promoting would reformat the file. Fix _serialize first.")
+
+    corners = _validated_corners(data, length)
+    # Bake the window clamp into the file, as mapbuild does before writing a new map:
+    # CornerMap.load re-clamps on read, so an unclamped file would look fine through
+    # the app and only show up in the on-disk regression test.
+    clamped = [Corner(c["number"], c["name"], c["direction"], c["start_dist"],
+                      c["apex_dist"], c["end_dist"], c["label"], c["apexes"])
+               for c in corners]
+    clamp_corner_windows(clamped, length)
+    for c, o in zip(corners, clamped):
+        c["start_dist"], c["end_dist"] = o.start_dist, o.end_dist
+    bad = _overlaps(corners, length)
+    if bad:
+        raise PromoteError("corner windows still overlap after clamping: " + "; ".join(bad))
+
+    out = {**data, "track": slug, "corners": corners}
+    # Notes travel with the map they were authored against, guarded by the same rule
+    # the editor's save uses so a stale label can't rebind a note to another corner.
+    notes = guard_corner_notes(slug, data.get("notes"), len(data.get("corners") or []),
+                               [c["label"] for c in corners])
+    if notes:
+        out["notes"] = notes
+    else:
+        out.pop("notes", None)
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = _serialize(out)
+    target.write_bytes(payload)
+    if json.loads(target.read_bytes().decode("utf-8")) != out:
+        raise PromoteError(f"{target}: written file did not read back as written")
+    return target
+
+
+def _default_src(slug: str) -> Path:
+    # Imported here, not at module scope: it pulls in the FastAPI sidecar just to read
+    # the app-data layout, which promote() itself never needs.
+    from simcoach.server.__main__ import telemetry_dir
+    return Path(telemetry_dir()) / "tracks" / f"{slug}.json"
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("slug", help="track slug, e.g. weathertech_raceway_laguna_seca")
+    ap.add_argument("--from", dest="src", help="source map file (default: app-data)")
+    ap.add_argument("--tracks-dir", default=str(TRACKS_DIR))
+    ap.add_argument("--force", action="store_true", help="replace an existing shipped map")
+    a = ap.parse_args(argv)
+    src = Path(a.src) if a.src else _default_src(a.slug)
+    try:
+        target = promote(src, a.tracks_dir, slug=a.slug, force=a.force)
+    except PromoteError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 1
+    print(f"promoted {src} -> {target}; review `git diff` and commit")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
