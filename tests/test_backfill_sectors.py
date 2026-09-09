@@ -192,6 +192,12 @@ def test_series_suffix_variants_still_share_one_slug():
     assert _sector_bounds_for_slug(conn, "silverstone_national_circuit") is None
 
 
+# A 400-digit integer *literal*, as JSON text -- the real decode path. JSON's
+# `1e400` decodes to float inf (already rejected), but this decodes to a Python int
+# that `float()`/`math.isfinite()` cannot convert: OverflowError, not inf.
+_HUGE_INT_JSON = "9" * 400
+
+
 # ---- hostile DB rows: arity + type ------------------------------------------
 # `laps.sector_bounds` has one writer (smm.sector_bounds_from, which enforces two
 # finite values), so these need a hand-edited SQLite file. It's still a trust
@@ -208,6 +214,7 @@ def test_series_suffix_variants_still_share_one_slug():
     ('[null, 3800.0]', "null is not a number"),
     ('["1000", "2000"]', "numeric strings are not numbers"),
     ('[[1000], [2000]]', "nested lists are not numbers"),
+    (f'[1000, {_HUGE_INT_JSON}]', "a 400-digit int has no float -- OverflowError, not inf"),
 ])
 def test_hostile_sector_bounds_rows_never_reach_a_map(raw, why):
     d = {"length": 5777.59, "sectors": []}
@@ -236,6 +243,7 @@ def test_seed_sectors_requires_exactly_two_bounds(bad_arity):
     float("nan"),
     True,              # bool -- float(True) == 1.0
     0, 0.0, -1.0, None,
+    json.loads(_HUGE_INT_JSON),  # int too big for a float: OverflowError, not inf
 ])
 def test_seed_sectors_requires_a_finite_positive_numeric_length(bad_length):
     d = {"length": bad_length, "sectors": []}
@@ -287,12 +295,18 @@ def test_backfill_write_is_atomic_and_leaves_no_tmp(tmp_path, monkeypatch):
     assert list(tracks.glob("*.tmp")) == []  # no debris left behind
 
 
-def test_backfill_survives_a_bad_length_and_still_seeds_the_rest(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("bad_length", [
+    "abc",                       # float() -> ValueError
+    json.loads(_HUGE_INT_JSON),  # float()/math.isfinite() -> OverflowError
+])
+def test_backfill_survives_a_bad_length_and_still_seeds_the_rest(
+        bad_length, tmp_path, monkeypatch, capsys):
     # The behaviour that matters: one broken map must not strand the maps after it.
-    # Previously `float("abc")` aborted the run mid-way, and the partial state was
-    # sticky -- a re-run hit the same map and died in the same place.
+    # Previously these aborted the run mid-way, and the partial state was sticky --
+    # a re-run hit the same map and died in the same place, so every map after it
+    # stayed unseeded forever.
     tracks = _fake_tracks(tmp_path / "tracks", {
-        "autodromo_nazionale_monza": {"length": "abc", "sectors": []},       # sorts first
+        "autodromo_nazionale_monza": {"length": bad_length, "sectors": []},  # sorts first
         "monza_curva_grande_circuit": {"length": 5739.08, "sectors": []},    # must still be reached
     })
     _wire(monkeypatch, tracks, _fake_db(tmp_path, [
@@ -305,7 +319,7 @@ def test_backfill_survives_a_bad_length_and_still_seeds_the_rest(tmp_path, monke
     gp = json.loads((tracks / "autodromo_nazionale_monza.json").read_text(encoding="utf-8"))
     cg = json.loads((tracks / "monza_curva_grande_circuit.json").read_text(encoding="utf-8"))
     assert gp["sectors"] == []                  # skipped, not written
-    assert gp["length"] == "abc"                # and not "repaired"
+    assert gp["length"] == bad_length            # and not "repaired"
     assert cg["sectors"] == [1951.4, 3757.4]    # the rest still got seeded
     assert "is not a finite positive number" in capsys.readouterr().out
 

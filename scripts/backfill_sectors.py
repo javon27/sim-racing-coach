@@ -45,10 +45,19 @@ def _num(v) -> float | None:
     """`v` as a finite float, or None. Rejects bools (`float(True) == 1.0` would
     otherwise sail through as a 1 m sector split), strings -- including numeric
     ones -- and NaN/inf. Every number read out of the DB or a map file goes
-    through here; nothing else may call float() on untrusted input."""
-    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+    through here; nothing else may call float() on untrusted input.
+
+    Total: returns None for any input, never raises. `math.isfinite` and `float`
+    both raise OverflowError on an int too big to be a float, which JSON reaches
+    with a 400-digit integer literal (`1e400` decodes to inf and is already
+    rejected, but `10**400` decodes to an int). Unhandled, that aborted the whole
+    run from inside the one function meant to make bad input a per-map skip."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
         return None
-    return float(v)
+    try:
+        return float(v) if math.isfinite(v) else None
+    except OverflowError:
+        return None
 
 
 def _sector_bounds_for_slug(conn: sqlite3.Connection, slug: str) -> list[float] | None:
