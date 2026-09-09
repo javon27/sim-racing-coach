@@ -36,6 +36,16 @@ def test_put_settings_persists_and_rejects_secret(tmp_path, monkeypatch, mem_key
     assert "sk-should-not-persist" not in paths.config_path().read_text()
 
 
+def test_put_show_cost_round_trips_through_the_whitelist(tmp_path, monkeypatch, mem_keyring):
+    """The cost estimate is a Settings toggle; it rides the existing DEFAULTS
+    whitelist with no special-casing in put_settings."""
+    c, _ = _client(tmp_path, monkeypatch, mem_keyring)
+    assert c.get("/settings").json()["show_cost"] is True      # default on
+    assert c.put("/settings", json={"show_cost": False}).json()["show_cost"] is False
+    assert c.get("/settings").json()["show_cost"] is False
+    assert c.put("/settings", json={"show_cost": True}).json()["show_cost"] is True
+
+
 def test_delete_requires_confirmation(tmp_path, monkeypatch, mem_keyring, synthetic_lap):
     c, store = _client(tmp_path, monkeypatch, mem_keyring)
     store.save(synthetic_lap)

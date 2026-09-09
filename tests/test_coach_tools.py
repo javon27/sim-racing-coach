@@ -411,8 +411,9 @@ def test_agentic_loop_dispatches_tool_calls(tmp_path, synthetic_lap):
     model = FakeModel(reply="Turn 1 looks good.",
                       tool_script=[("get_corner", {"corner": "1"})])
     coach = Coach(model)
-    answer = coach.ask_agentic(ctx, "how's turn 1?", "test_car")
-    assert answer == "Turn 1 looks good."
+    res = coach.ask_agentic(ctx, "how's turn 1?", "test_car")
+    assert res.text == "Turn 1 looks good."
+    assert res.usage.total > 0          # usage rides back out with the answer
     # the tool actually ran and produced the corner line
     assert model.dispatched[0][0] == "get_corner"
     assert model.dispatched[0][2].startswith("T1 ")

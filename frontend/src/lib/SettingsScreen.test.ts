@@ -50,6 +50,7 @@ function baseSettings(overrides: Partial<SettingsResponse> = {}): SettingsRespon
     input_device: "wheel",
     model: "sonnet",
     corner_naming: "names",
+    show_cost: true,
     log_level: "INFO",
     driver: { braking_style: null, balance_preference: null, risk_tolerance: null },
     api_key_set: false,
@@ -141,6 +142,27 @@ describe("SettingsScreen", () => {
     expect(putSettings).toHaveBeenCalledWith(
       expect.objectContaining({ log_level: "DEBUG" })
     );
+  });
+
+  it("renders the cost-estimate toggle, on by default", async () => {
+    vi.mocked(getSettings).mockResolvedValue(baseSettings());
+
+    render(SettingsScreen);
+
+    const toggle = await screen.findByLabelText<HTMLInputElement>(/cost estimate/i);
+    expect(toggle.checked).toBe(true);
+  });
+
+  it("turning the cost estimate off calls putSettings with show_cost false", async () => {
+    vi.mocked(getSettings).mockResolvedValue(baseSettings({ show_cost: true }));
+    vi.mocked(putSettings).mockResolvedValue(baseSettings({ show_cost: false }));
+
+    render(SettingsScreen);
+
+    const toggle = await screen.findByLabelText(/cost estimate/i);
+    await fireEvent.click(toggle);
+
+    expect(putSettings).toHaveBeenCalledWith(expect.objectContaining({ show_cost: false }));
   });
 
   it("entering a key and clicking Save calls setApiKey", async () => {

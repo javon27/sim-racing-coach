@@ -2,6 +2,8 @@ from typing import Callable, Iterator
 
 import anthropic
 
+from .base import RunResult, TokenUsage
+
 # Safety stop for the tool-use loop: a coach question should need only a few
 # tool calls; this bounds a runaway model without capping normal use.
 MAX_TOOL_ITERATIONS = 8
@@ -48,7 +50,12 @@ class ClaudeModel:
         returns the final message so the caller can inspect `stop_reason`/`content`
         — its text is never re-yielded (that would double the answer once `run`
         accumulates deltas). `tools=None` omits the `tools` kwarg entirely (the
-        iteration-cap call)."""
+        iteration-cap call).
+
+        Also yields this turn's billed `usage` event last. EVERY billed API call in
+        this class goes through here — the tool turns and the tool-free iteration-cap
+        call alike — so summing the usage events is structurally complete rather than
+        something a later edit can forget on one code path."""
         kw = dict(model=self.model, max_tokens=self.max_tokens, system=system,
                   messages=convo, thinking=self._thinking_param())
         if tools is not None:
@@ -58,12 +65,17 @@ class ClaudeModel:
             text = _first_text(resp)
             if text:
                 yield {"type": "text", "text": text}
+            yield self._usage_event(resp)
             return resp
         with self.client.messages.stream(**kw) as stream:
             for delta in stream.text_stream:
                 yield {"type": "text", "text": delta}
             final = stream.get_final_message()
+        yield self._usage_event(final)
         return final
+
+    def _usage_event(self, resp) -> dict:
+        return {"type": "usage", "usage": _usage_of(resp).as_dict(), "model": self.model}
 
     def run_stream(
         self,
@@ -108,14 +120,34 @@ class ClaudeModel:
         messages: list[dict],
         tools: list[dict],
         dispatch: Callable[[str, dict], str],
-    ) -> str:
+    ) -> RunResult:
         """Agentic tool-use loop; drains `run_stream`, accumulating text deltas
-        into the final answer."""
+        into the final answer and the per-turn usage events into the turn's total
+        cost (every loop iteration, including the tool-free iteration-cap call)."""
         text = ""
+        usage = TokenUsage()
         for ev in self.run_stream(system, messages, tools, dispatch):
             if ev["type"] == "text":
                 text += ev["text"]
-        return text
+            elif ev["type"] == "usage":
+                usage = usage + TokenUsage(**ev["usage"])
+        return RunResult(text=text, usage=usage)
+
+
+def _usage_of(resp) -> TokenUsage:
+    """Read anthropic's `response.usage` into our provider-neutral shape. Defensive
+    by design: a response double (or a future SDK) without the field contributes
+    zero rather than killing the answer the driver is waiting on. This is the ONLY
+    place in the codebase that touches the SDK's usage field names."""
+    u = getattr(resp, "usage", None)
+    if u is None:
+        return TokenUsage()
+    return TokenUsage(
+        input=getattr(u, "input_tokens", 0) or 0,
+        output=getattr(u, "output_tokens", 0) or 0,
+        cache_read=getattr(u, "cache_read_input_tokens", 0) or 0,
+        cache_write=getattr(u, "cache_creation_input_tokens", 0) or 0,
+    )
 
 
 def _first_text(resp) -> str:

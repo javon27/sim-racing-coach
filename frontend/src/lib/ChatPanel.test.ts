@@ -1,13 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/svelte";
-import { getChatMessages } from "./api";
+import { getChatMessages, getChatUsage, getSettings, type ChatUsage, type SettingsResponse } from "./api";
 import type { CoachPhase, ToolActivity } from "./coach";
 import ChatPanel from "./ChatPanel.svelte";
 
 vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
-  return { ...actual, getChatMessages: vi.fn() };
+  return { ...actual, getChatMessages: vi.fn(), getChatUsage: vi.fn(), getSettings: vi.fn() };
 });
+
+function usage(overrides: Partial<ChatUsage> = {}): ChatUsage {
+  return { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, messages: 0, ...overrides };
+}
 
 // Drives the panel the same way CoachStream would, without a real WebSocket.
 class FakeStream {
@@ -16,6 +20,10 @@ class FakeStream {
   answer = "";
   chatId: string | null = null;
   error: string | null = null;
+  usage: ChatUsage | null = null;
+  cost: number | null = null;
+  costComplete = true;
+  longChat = false;
   ask = vi.fn();
   #listeners = new Set<(value: this) => void>();
 
@@ -33,6 +41,10 @@ class FakeStream {
 describe("ChatPanel", () => {
   beforeEach(() => {
     vi.mocked(getChatMessages).mockReset();
+    vi.mocked(getChatUsage).mockReset();
+    vi.mocked(getChatUsage).mockResolvedValue({ usage: usage(), cost: 0, cost_complete: true });
+    vi.mocked(getSettings).mockReset();
+    vi.mocked(getSettings).mockResolvedValue({ show_cost: true } as SettingsResponse);
   });
 
   afterEach(cleanup);
@@ -162,5 +174,203 @@ describe("ChatPanel", () => {
     await fireEvent.input(textarea, { target: { value: "brand new" } });
     await fireEvent.click(screen.getByRole("button", { name: /send/i }));
     expect(stream.ask).toHaveBeenCalledWith("brand new", { sessionId: undefined, lapId: undefined, chatId: undefined });
+  });
+
+  // --- the usage/cost meter (issue #39) ---
+
+  async function answerWith(stream: FakeStream, meter: {
+    usage: ChatUsage; cost: number | null; costComplete?: boolean; longChat?: boolean;
+  }, props: Record<string, unknown> = {}) {
+    render(ChatPanel, { props: { stream, ...props } });
+    const textarea = await screen.findByPlaceholderText(/ask your engineer/i);
+    await fireEvent.input(textarea, { target: { value: "where am I losing time?" } });
+    await fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await answerAgain(stream, meter);
+  }
+
+  async function answerAgain(stream: FakeStream, meter: {
+    usage: ChatUsage; cost: number | null; costComplete?: boolean; longChat?: boolean;
+  }) {
+    stream.phase = "done";
+    stream.answer = "Brake later into T3.";
+    stream.chatId = "chat-1";
+    stream.usage = meter.usage;
+    stream.cost = meter.cost;
+    stream.costComplete = meter.costComplete ?? true;
+    stream.longChat = meter.longChat ?? false;
+    stream.notify();
+  }
+
+  it("shows the token + cost meter after an answer", async () => {
+    const stream = new FakeStream();
+    await answerWith(stream, { usage: usage({ total: 1200, messages: 1 }), cost: 0.011 });
+
+    const meter = await screen.findByTestId("usage-meter");
+    expect(meter.textContent).toMatch(/1\.2k tokens/);
+    expect(meter.textContent).toMatch(/\$0\.011/);
+  });
+
+  it("hides the meter on an empty new chat", async () => {
+    const stream = new FakeStream();
+    render(ChatPanel, { props: { stream } });
+    expect(await screen.findByText(/new chat — ask a question/i)).toBeTruthy();
+    expect(screen.queryByTestId("usage-meter")).toBeNull();
+  });
+
+  it("shows a dash instead of a cost when the model is unpriced", async () => {
+    const stream = new FakeStream();
+    await answerWith(stream, { usage: usage({ total: 1200 }), cost: null });
+
+    const meter = await screen.findByTestId("usage-meter");
+    expect(meter.textContent).toMatch(/1\.2k tokens/);
+    expect(meter.textContent).toContain("—");
+    expect(meter.textContent).not.toContain("$");
+  });
+
+  it("renders a free model as a dash, never $0.00", async () => {
+    // A local/fake model costs no API dollars, but "$0.00" would read as "this
+    // paid thing was free". Tokens still show.
+    const stream = new FakeStream();
+    await answerWith(stream, { usage: usage({ total: 900 }), cost: 0 });
+
+    const meter = await screen.findByTestId("usage-meter");
+    expect(meter.textContent).toContain("900 tokens");
+    expect(meter.textContent).toContain("—");
+    expect(meter.textContent).not.toContain("$0.00");
+  });
+
+  it("never rounds a real cost down to $0.00", async () => {
+    const stream = new FakeStream();
+    await answerWith(stream, { usage: usage({ total: 50 }), cost: 0.000002 });
+
+    const meter = await screen.findByTestId("usage-meter");
+    expect(meter.textContent).toContain("<$0.01");
+    expect(meter.textContent).not.toContain("$0.00 ");
+  });
+
+  it("shows a >= prefix when the chat total is incomplete", async () => {
+    const stream = new FakeStream();
+    await answerWith(stream, { usage: usage({ total: 5000 }), cost: 0.04, costComplete: false });
+
+    const meter = await screen.findByTestId("usage-meter");
+    expect(meter.textContent).toMatch(/≥\s*\$0\.04/);
+  });
+
+  it("seeds the meter from the server when an existing thread is opened", async () => {
+    vi.mocked(getChatMessages).mockResolvedValue([
+      { ts: 1, session_id: "s1", track: "Spa", car: "Ferrari", lap_id: null,
+        question: "q", answer: "a", tool_calls: null },
+    ]);
+    vi.mocked(getChatUsage).mockResolvedValue({
+      usage: usage({ total: 12400, messages: 3 }), cost: 0.031, cost_complete: true,
+    });
+    const stream = new FakeStream();
+
+    render(ChatPanel, { props: { stream, chatId: "c9" } });
+
+    const meter = await screen.findByTestId("usage-meter");
+    expect(vi.mocked(getChatUsage)).toHaveBeenCalledWith("c9");
+    expect(meter.textContent).toMatch(/12\.4k tokens/);
+    expect(meter.textContent).toMatch(/\$0\.031/);
+  });
+
+  it("a failed usage fetch leaves the thread usable and the meter hidden", async () => {
+    vi.mocked(getChatMessages).mockResolvedValue([
+      { ts: 1, session_id: "s1", track: "Spa", car: "Ferrari", lap_id: null,
+        question: "spa question", answer: "spa answer", tool_calls: null },
+    ]);
+    vi.mocked(getChatUsage).mockRejectedValue(new Error("sidecar not up"));
+    const stream = new FakeStream();
+
+    render(ChatPanel, { props: { stream, chatId: "c9" } });
+
+    expect(await screen.findByText("spa question")).toBeTruthy();
+    expect(screen.queryByTestId("usage-meter")).toBeNull();
+  });
+
+  it("with the Settings cost estimate off, shows tokens but no dollar figure", async () => {
+    vi.mocked(getSettings).mockResolvedValue({ show_cost: false } as SettingsResponse);
+    const stream = new FakeStream();
+    await answerWith(stream, { usage: usage({ total: 1200 }), cost: 0.011 });
+
+    const meter = await screen.findByTestId("usage-meter");
+    await waitFor(() => expect(meter.textContent).not.toContain("$"));
+    expect(meter.textContent).toMatch(/1\.2k tokens/);
+    expect(meter.textContent).not.toContain("0.011");
+  });
+
+  it("a failed settings fetch still shows the cost (the default is on)", async () => {
+    vi.mocked(getSettings).mockRejectedValue(new Error("sidecar not up"));
+    const stream = new FakeStream();
+    await answerWith(stream, { usage: usage({ total: 1200 }), cost: 0.011 });
+
+    const meter = await screen.findByTestId("usage-meter");
+    expect(meter.textContent).toMatch(/\$0\.011/);
+  });
+
+  it("zeroes the meter on + New session", async () => {
+    const stream = new FakeStream();
+    await answerWith(stream, { usage: usage({ total: 1200 }), cost: 0.011 });
+    expect(await screen.findByTestId("usage-meter")).toBeTruthy();
+
+    await fireEvent.click(screen.getByRole("button", { name: /new session/i }));
+
+    await waitFor(() => expect(screen.queryByTestId("usage-meter")).toBeNull());
+  });
+
+  // --- the soft long-chat nudge (issue #39, task 7) ---
+
+  it("shows no nudge on a normal-length chat", async () => {
+    const stream = new FakeStream();
+    await answerWith(stream, { usage: usage({ total: 1200 }), cost: 0.011 });
+
+    expect(await screen.findByTestId("usage-meter")).toBeTruthy();
+    expect(screen.queryByTestId("long-chat-nudge")).toBeNull();
+  });
+
+  it("nudges toward a New chat once the chat gets long", async () => {
+    const stream = new FakeStream();
+    await answerWith(stream,
+      { usage: usage({ total: 200000 }), cost: 0.9, longChat: true });
+
+    const nudge = await screen.findByTestId("long-chat-nudge");
+    expect(nudge.textContent).toMatch(/long chat/i);
+    expect(nudge.textContent).toMatch(/new chat/i);
+  });
+
+  it("the nudge's action starts a fresh chat, so the next ask sends no chat_id", async () => {
+    const stream = new FakeStream();
+    await answerWith(stream,
+      { usage: usage({ total: 200000 }), cost: 0.9, longChat: true });
+    await screen.findByTestId("long-chat-nudge");
+
+    await fireEvent.click(screen.getByRole("button", { name: /start a new chat/i }));
+
+    await waitFor(() => expect(screen.queryByTestId("long-chat-nudge")).toBeNull());
+    expect(screen.getByText(/new chat — ask a question/i)).toBeTruthy();
+    expect(screen.queryByTestId("usage-meter")).toBeNull();
+
+    const textarea = screen.getByPlaceholderText(/ask your engineer/i);
+    await fireEvent.input(textarea, { target: { value: "fresh start" } });
+    await fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    expect(stream.ask).toHaveBeenLastCalledWith("fresh start",
+      { sessionId: undefined, lapId: undefined, chatId: undefined });
+  });
+
+  it("does not reappear after dismissal within the same thread", async () => {
+    const stream = new FakeStream();
+    await answerWith(stream,
+      { usage: usage({ total: 200000 }), cost: 0.9, longChat: true });
+    await screen.findByTestId("long-chat-nudge");
+
+    await fireEvent.click(screen.getByRole("button", { name: /dismiss/i }));
+    await waitFor(() => expect(screen.queryByTestId("long-chat-nudge")).toBeNull());
+
+    // a later answer in the SAME thread still reports long_chat -- stay dismissed
+    await answerAgain(stream,
+      { usage: usage({ total: 260000 }), cost: 1.2, longChat: true });
+
+    await waitFor(() => expect(screen.queryByTestId("usage-meter")).toBeTruthy());
+    expect(screen.queryByTestId("long-chat-nudge")).toBeNull();
   });
 });

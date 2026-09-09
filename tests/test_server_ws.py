@@ -319,3 +319,164 @@ def test_ws_coach_respects_imperial_units(tmp_path, monkeypatch):
     assert fake.last_system is not None
     assert "mph" in fake.last_system and "°F" in fake.last_system
     assert "km/h" not in fake.last_system
+
+
+# --- token usage / cost meter (issue #39) ---------------------------------
+
+def _ask(client, payload: dict) -> list[dict]:
+    """Ask one question over /coach and collect every frame through the terminal."""
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json(payload)
+        frames = []
+        while True:
+            ev = ws.receive_json()
+            frames.append(ev)
+            if ev["type"] in ("done", "error"):
+                return frames
+
+
+def test_coach_ws_done_carries_cumulative_usage_and_cost(tmp_path):
+    client, _ = _client(tmp_path)
+    frames = _ask(client, {"question": "where am I losing time?"})
+    done = frames[-1]
+    assert done["type"] == "done"
+    assert done["usage"]["total"] > 0
+    assert done["usage"]["messages"] == 1
+    assert done["cost"] is not None and done["cost_complete"] is True
+    assert done["model"] == "fake"
+    # the per-turn breakdown stays server-side -- it's noise on the wire
+    assert not any(f["type"] == "usage" for f in frames)
+
+
+def test_coach_ws_second_question_usage_accumulates(tmp_path):
+    client, _ = _client(tmp_path)
+    first = _ask(client, {"question": "q1"})[-1]
+    second = _ask(client, {"question": "q2", "chat_id": first["chat_id"]})[-1]
+    assert second["usage"]["total"] > first["usage"]["total"]
+    assert second["usage"]["messages"] == 2
+
+
+def test_coach_ws_persists_usage_onto_the_chat_row(tmp_path):
+    client, store = _client(tmp_path)
+    done = _ask(client, {"question": "q"})[-1]
+    assert store.chat_usage(done["chat_id"])["total"] == done["usage"]["total"]
+    row = store.conn.execute(
+        "SELECT model, input_tokens, output_tokens FROM coach_chat WHERE chat_id = ?",
+        (done["chat_id"],)).fetchone()
+    assert row[0] == "fake" and row[1] > 0 and row[2] > 0
+
+
+def test_coach_ws_reports_the_model_from_the_usage_event_not_config(tmp_path, monkeypatch):
+    """The id must come from the event the billed call emitted -- config may have
+    changed since the sidecar resolved its model."""
+    from simcoach import config
+    monkeypatch.setattr(config, "load_config",
+                        lambda *a, **k: {**config.DEFAULTS, "model": "opus"})
+    client, _ = _client(tmp_path)
+    done = _ask(client, {"question": "q"})[-1]
+    assert done["model"] == "fake"            # what actually billed, not "opus"
+
+
+def test_get_chat_usage_endpoint_seeds_the_meter(tmp_path):
+    client, _ = _client(tmp_path)
+    done = _ask(client, {"question": "q"})[-1]
+    r = client.get(f"/chats/{done['chat_id']}/usage").json()
+    assert r["usage"]["total"] == done["usage"]["total"]
+    assert r["cost"] == done["cost"] and r["cost_complete"] is True
+
+
+def test_get_chat_usage_is_zeroed_for_an_unknown_chat(tmp_path):
+    client, _ = _client(tmp_path)
+    r = client.get("/chats/nope/usage").json()
+    assert r["usage"]["total"] == 0 and r["usage"]["messages"] == 0
+    assert r["cost"] == 0.0 and r["cost_complete"] is True
+
+
+def test_get_chat_usage_flags_incomplete_for_an_all_legacy_chat(tmp_path):
+    """Every pre-v12 row billed real money but stores NULL usage. A chat that is
+    ALL such rows must never render as 'total=0, complete=True' -- that reads as
+    a free chat when it plainly was not."""
+    client, store = _client(tmp_path)
+    cid = store.create_chat()
+    for i in range(3):
+        store.save_chat(cid, "s", "Monza", "GT3", None, f"q{i}", f"a{i}")
+    r = client.get(f"/chats/{cid}/usage").json()
+    assert r["usage"]["total"] == 0
+    assert r["cost_complete"] is False
+
+
+def test_get_chat_usage_flags_incomplete_for_a_mixed_legacy_and_new_chat(tmp_path):
+    """The real-world case (chat-20260908T204046-6de917 in the live DB has 30
+    legacy rows): 29 legacy rows + one new, priced turn must still show the total
+    as incomplete, not '18.9k tokens * $0.045' with no caveat."""
+    client, store = _client(tmp_path)
+    cid = store.create_chat()
+    for i in range(29):
+        store.save_chat(cid, "s", "Monza", "GT3", None, f"q{i}", f"a{i}")
+    store.save_chat(cid, "s", "Monza", "GT3", None, "q30", "a30",
+                     usage={"input": 15000, "output": 3900}, model="claude-sonnet-5")
+    r = client.get(f"/chats/{cid}/usage").json()
+    assert r["usage"]["total"] == 18900
+    assert r["usage"]["messages"] == 30
+    assert r["cost_complete"] is False
+
+
+def test_get_chat_usage_is_complete_for_an_all_new_chat(tmp_path):
+    """Guard against overcorrecting: a chat with no legacy rows at all must still
+    report complete=True."""
+    client, store = _client(tmp_path)
+    cid = store.create_chat()
+    store.save_chat(cid, "s", "Monza", "GT3", None, "q", "a",
+                     usage={"input": 100, "output": 20}, model="claude-sonnet-5")
+    r = client.get(f"/chats/{cid}/usage").json()
+    assert r["cost_complete"] is True
+
+
+def test_coach_ws_usage_missing_degrades_the_meter_not_the_answer(tmp_path):
+    """A model that emits no usage event (e.g. _DeltaModel) must still answer and
+    persist; the meter just reads zero."""
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    app = create_app(store, Coach(_DeltaModel()))
+    client = TestClient(app, base_url="http://127.0.0.1")
+    done = _ask(client, {"question": "q"})[-1]
+    assert done["type"] == "done"
+    assert store.chat_messages(done["chat_id"])[0]["answer"] == "Brake later into 1."
+    assert done["usage"]["total"] == 0
+
+
+def test_coach_ws_long_chat_is_false_under_the_soft_limit(tmp_path):
+    client, _ = _client(tmp_path)
+    done = _ask(client, {"question": "q"})[-1]
+    assert done["usage"]["total"] < 150_000      # the default threshold
+    assert done["long_chat"] is False
+
+
+def test_coach_ws_long_chat_fires_past_the_soft_limit(tmp_path, monkeypatch):
+    """The core owns the threshold decision; the UI only renders the nudge."""
+    from simcoach import config
+    monkeypatch.setattr(config, "load_config",
+                        lambda *a, **k: {**config.DEFAULTS, "chat_token_soft_limit": 1})
+    client, _ = _client(tmp_path)
+    done = _ask(client, {"question": "q"})[-1]
+    assert done["usage"]["total"] >= 1
+    assert done["long_chat"] is True
+
+
+def test_coach_ws_long_chat_threshold_of_zero_disables_the_nudge(tmp_path, monkeypatch):
+    from simcoach import config
+    monkeypatch.setattr(config, "load_config",
+                        lambda *a, **k: {**config.DEFAULTS, "chat_token_soft_limit": 0})
+    client, _ = _client(tmp_path)
+    assert _ask(client, {"question": "q"})[-1]["long_chat"] is False
+
+
+def test_coach_ws_errored_turn_still_closes_clean(tmp_path, monkeypatch):
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    coach = Coach(FakeModel(reply="x"))
+    monkeypatch.setattr(coach, "ask_agentic_stream",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    app = create_app(store, coach)
+    client = TestClient(app, base_url="http://127.0.0.1")
+    frames = _ask(client, {"question": "q"})
+    assert frames[-1]["type"] == "error"
+    assert "usage" not in frames[-1]          # nothing persisted, nothing to report

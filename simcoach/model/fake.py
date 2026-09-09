@@ -1,5 +1,10 @@
 from typing import Callable
 
+from .base import RunResult, TokenUsage
+
+# Stand-in model id: never priced as a paid model (see simcoach.pricing.FREE).
+FAKE_MODEL_ID = "fake"
+
 
 class FakeModel:
     """Fake model for testing. Records calls and returns a fixed reply. `run` and
@@ -21,23 +26,28 @@ class FakeModel:
         self.last_messages = messages
         return self.reply
 
+    def _usage(self, messages: list[dict]) -> TokenUsage:
+        """Deterministic, network-free stand-in for billed usage (~4 chars/token)."""
+        return TokenUsage(input=sum(len(str(m)) for m in messages) // 4,
+                          output=len(self.reply) // 4)
+
     def run(self, system: str, messages: list[dict], tools: list[dict],
-            dispatch: Callable[[str, dict], str]) -> str:
-        """Dispatch the scripted tool calls, then return the fixed reply."""
+            dispatch: Callable[[str, dict], str]) -> RunResult:
+        """Dispatch the scripted tool calls, then return the fixed reply + usage."""
         self.last_system = system
         self.last_messages = messages
         self.last_tools = tools
         for name, inp in self.tool_script:
             result = dispatch(name, inp)
             self.dispatched.append((name, inp, result))
-        return self.reply
+        return RunResult(text=self.reply, usage=self._usage(messages))
 
     def run_stream(self, system: str, messages: list[dict], tools: list[dict],
                    dispatch: Callable[[str, dict], str]):
         """Dispatch the scripted tool calls, yielding a tool event per call, then
-        yield the fixed reply as one text event. Mirrors ClaudeModel: shows the
-        tool event before dispatching, and swallows a raising dispatch so the
-        loop continues."""
+        yield the fixed reply as one text event and one usage event. Mirrors
+        ClaudeModel: shows the tool event before dispatching, swallows a raising
+        dispatch so the loop continues, and puts usage last (one "turn")."""
         self.last_system = system
         self.last_messages = messages
         self.last_tools = tools
@@ -49,3 +59,5 @@ class FakeModel:
             except Exception:
                 pass
         yield {"type": "text", "text": self.reply}
+        yield {"type": "usage", "usage": self._usage(messages).as_dict(),
+               "model": FAKE_MODEL_ID}

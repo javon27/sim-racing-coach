@@ -467,6 +467,110 @@ def test_save_chat_rejects_null_chat_id(tmp_path):
         store.save_chat(None, "s1", "Le Mans", "Corvette", None, "q", "a")
 
 
+def test_save_chat_persists_usage_and_chat_usage_sums_it(tmp_path):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    cid = s.create_chat()
+    s.save_chat(cid, "sess", "Monza", "GT3", None, "q1", "a1",
+                usage={"input": 1000, "output": 100}, model="claude-sonnet-5")
+    s.save_chat(cid, "sess", "Monza", "GT3", None, "q2", "a2",
+                usage={"input": 2500, "output": 300, "cache_read": 40}, model="claude-sonnet-5")
+    u = s.chat_usage(cid)
+    assert (u["input"], u["output"], u["cache_read"], u["messages"]) == (3500, 400, 40, 2)
+    assert u["cache_write"] == 0
+    assert u["total"] == 3940
+    assert u["by_model"]["claude-sonnet-5"]["input"] == 3500
+
+
+def test_chat_usage_splits_by_model_and_tolerates_legacy_null_rows(tmp_path):
+    """A chat whose model changed mid-way is only priceable per row, and pre-v12
+    rows carry no usage at all — they must count as 0, not break the sum."""
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    cid = s.create_chat()
+    s.save_chat(cid, "sess", "Monza", "GT3", None, "q", "a")           # no usage at all
+    s.save_chat(cid, "sess", "Monza", "GT3", None, "q", "a",
+                usage={"input": 10, "output": 1}, model="claude-opus-5")
+    u = s.chat_usage(cid)
+    assert u["input"] == 10                                            # NULLs count as 0
+    assert u["messages"] == 2
+    assert set(u["by_model"]) == {"", "claude-opus-5"}
+    assert u["by_model"][""] == {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
+
+
+def test_chat_usage_counts_null_usage_rows_separately_from_zero(tmp_path):
+    """A pre-v12 row's NULL usage sums to 0 via COALESCE -- indistinguishable from a
+    turn that genuinely billed zero tokens. `null_usage_rows` must expose the NULL
+    count on its own so the caller can flag the chat as cost-incomplete even when
+    every bucket total happens to be zero."""
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    cid = s.create_chat()
+    s.save_chat(cid, "sess", "Monza", "GT3", None, "q1", "a1")  # legacy, NULL usage
+    s.save_chat(cid, "sess", "Monza", "GT3", None, "q2", "a2")  # legacy, NULL usage
+    assert s.chat_usage(cid)["null_usage_rows"] == 2
+
+    s.save_chat(cid, "sess", "Monza", "GT3", None, "q3", "a3",
+                usage={"input": 10, "output": 1}, model="claude-sonnet-5")
+    u = s.chat_usage(cid)
+    assert u["null_usage_rows"] == 2            # only the legacy rows, not the new one
+    assert u["messages"] == 3
+
+
+def test_chat_usage_is_zero_for_an_unknown_chat(tmp_path):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    u = s.chat_usage("nope")
+    assert u["messages"] == 0 and u["total"] == 0 and u["by_model"] == {}
+
+
+def test_chat_usage_is_scoped_to_one_chat(tmp_path):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    a, b = s.create_chat(), s.create_chat()
+    s.save_chat(a, "s", "Monza", "GT3", None, "q", "a",
+                usage={"input": 10}, model="claude-sonnet-5")
+    s.save_chat(b, "s", "Monza", "GT3", None, "q", "a",
+                usage={"input": 99}, model="claude-sonnet-5")
+    assert s.chat_usage(a)["input"] == 10
+
+
+def test_v11_schema_migrates_usage_columns_to_v12(tmp_path):
+    from simcoach.store import SCHEMA_VERSION, LapStore
+    db = str(tmp_path / "c.sqlite")
+    s = LapStore(db, str(tmp_path / "telem"))
+    cid_old = s.create_chat()
+    s.save_chat(cid_old, "s", "t", "c", None, "legacy q", "legacy a")
+    s.conn.execute("PRAGMA user_version = 11")
+    s.conn.commit(); s.conn.close()
+
+    s2 = LapStore(db, str(tmp_path / "telem"))
+    assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 12
+    cols = [r[1] for r in s2.conn.execute("PRAGMA table_info(coach_chat)")]
+    assert {"input_tokens", "output_tokens", "cache_read_tokens",
+            "cache_write_tokens", "model"} <= set(cols)
+    # the pre-v12 row survives and sums as zero
+    assert s2.chat_usage(cid_old)["total"] == 0
+    assert s2.chat_messages(cid_old)[0]["question"] == "legacy q"
+    cid = s2.create_chat()
+    s2.save_chat(cid, "s", "t", "c", None, "q", "a", usage={"input": 5, "output": 1})
+    assert s2.chat_usage(cid)["input"] == 5
+
+
+def test_v12_migration_tolerates_columns_already_present(tmp_path):
+    """A raced/partial v11->v12 upgrade: the columns exist but user_version is
+    still 11. Opening twice must not crash (matches the v4->v5 guard)."""
+    from simcoach.store import SCHEMA_VERSION, LapStore
+    db = str(tmp_path / "c.sqlite")
+    s = LapStore(db, str(tmp_path / "telem"))
+    s.conn.execute("PRAGMA user_version = 11")
+    s.conn.commit(); s.conn.close()                # columns already there from v12 fresh schema
+
+    LapStore(db, str(tmp_path / "telem"))
+    s2 = LapStore(db, str(tmp_path / "telem"))     # open again: no crash
+    assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+
+
 def test_v5_schema_migrates_source_column_to_v6(tmp_path, synthetic_lap):
     from simcoach.store import SCHEMA_VERSION, LapStore
     db_path = str(tmp_path / "c.sqlite")

@@ -36,6 +36,18 @@ def test_session_first_call_has_no_prior_history(tmp_path):
     assert m.last_messages[0]["role"] == "user"
 
 
+def test_coach_session_ask_still_returns_a_string_and_records_usage(tmp_path):
+    """CoachSession.ask()'s public shape is unchanged (a str) even though the
+    model now hands back a RunResult; usage is recorded alongside."""
+    ctx = _ctx(tmp_path)
+    sess = CoachSession(Coach(FakeModel(reply="ok")), car="c")
+    assert sess.ask(ctx, "q") == "ok"               # unwrapped, not a RunResult
+    assert sess.last_usage.total > 0
+    first = sess.last_usage.total
+    sess.ask(ctx, "q2")
+    assert sess.last_usage.total > first            # accumulates over the chat
+
+
 def test_session_reset(synthetic_lap):
     m = FakeModel()
     sess = CoachSession(Coach(m), car="c")

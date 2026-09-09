@@ -255,9 +255,12 @@ class Coach:
         driver_profile: DriverProfile | None = None,
         input_device: str | None = None,
         units: str = "metric",
-    ) -> str:
+    ):
         """Answer via the on-demand tool loop: the model fetches exactly the data the
-        question needs through `context`'s tools instead of receiving the whole lap."""
+        question needs through `context`'s tools instead of receiving the whole lap.
+
+        Returns the model's `RunResult` (`.text` + `.usage`) so callers can account
+        for what the turn cost; the usage is summed over every tool-loop call."""
         from simcoach.coach_tools import TOOLS
         _, _, spd_u, temp_u = unit_fns(units)
         system = self._augment_system(
