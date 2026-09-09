@@ -43,7 +43,7 @@ def resolve_track_map(track_name: str, tracks_dir: str = "simcoach/tracks") -> P
 
 def _read_map_json(p: Path) -> dict:
     try:
-        d = json.loads(p.read_text())
+        d = json.loads(p.read_text(encoding="utf-8"))
         return d if isinstance(d, dict) else {}
     except (OSError, ValueError):
         return {}

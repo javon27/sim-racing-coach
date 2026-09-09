@@ -101,6 +101,23 @@ def test_load_map_data_unshipped_track_is_wholly_user(tmp_path):
     assert load_map_data("Nope Raceway", str(bundled), user_dir=str(user)) == {}
 
 
+def test_load_map_data_reads_non_ascii_name_as_utf8(tmp_path):
+    # Regression: the shipped JSON is UTF-8 on disk; reading it without an explicit
+    # encoding falls back to the OS locale (cp1252 on Windows) and mojibakes accents
+    # (issue #29 -- "AutÃ³dromo" instead of "Autódromo").
+    from simcoach.track_lookup import load_map_data
+
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    slug = "autodromo_jose_carlos_pace"
+    (bundled / f"{slug}.json").write_text(
+        json.dumps({"name": "Autódromo José Carlos Pace"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    d = load_map_data("Autodromo Jose Carlos Pace", str(bundled))
+    assert d["name"] == "Autódromo José Carlos Pace"
+
+
 def test_load_map_data_merges_notes_overlay(tmp_path):
     from simcoach.track_lookup import load_map_data
     bundled = tmp_path / "bundled"; user = tmp_path / "user"
