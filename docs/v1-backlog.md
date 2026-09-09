@@ -247,3 +247,44 @@ Open questions to settle in the spec:
   owned/verified, never live-LLM-guessed, to preserve the invariant.
 - Do notes live IN the track JSON or a sibling file? (Editing/versioning implications.)
 - Coverage: which tracks ship with notes at v1 vs. added over time.
+
+## Per-corner geometry for coach grounding (2026-09-08) — SHIPPED
+Merged to main `1559297`. Spec: `docs/superpowers/specs/2026-09-08-per-corner-geometry-metrics-design.md`.
+The `draft-notes` digest now grounds the model in each corner's physical SHAPE
+(radius, elevation change, width, banking), not just identity + along-track
+position — so it stops inventing "downhill/banking" character from pasted guides.
+- `analysis.corner_geometry()` — pure extractor: radius (path curvature via
+  `ribbon._menger`), width + banking (ribbon arrays, index-aligned with the
+  path), elevation change (pos_y). Only metrics whose source exists are emitted;
+  never fabricated (honors the owned-data invariant). `analysis.geometry_clause()`
+  renders them, dropping sub-threshold elevation/banking as noise.
+- `_persist_map` bakes radius/width/banking on every map save (preserving any
+  prior elevation, since a corner/label edit has no pos_y at hand); `draft_notes`
+  appends the baked clause per corner. `corners.from_data` now ignores unknown
+  keys so the metrics ride in the map JSON without being identity fields.
+- `scripts/backfill_corner_geometry.py` — one-time populate from local
+  captures/laps. RAN it: 10 tracks got all four metrics from their point-cloud
+  captures; Laguna got radius + elevation from its 171 laps (the Corkscrew reads
+  a real 11 m→20 m plunge). Committed baked JSONs for all 11 shipped tracks.
+- Prereq shipped first: `POST /mapcapture/save-cloud` + a "Save capture only"
+  button (`91383ba`) — persists a raw point cloud WITHOUT rebuilding geometry, so
+  a track that already has a corner map (Laguna) can gain a capture for
+  cross-section metrics without replacing its layout.
+
+STILL OPEN:
+- [ ] **Laguna width/banking** — needs a boundary-weave re-drive: open Laguna →
+  Tracks → Edit → Generate map layout, drive out-lap + left-edge + weave +
+  right-edge laps, click **Save capture only**, then
+  `python scripts/backfill_corner_geometry.py weathertech_raceway_laguna_seca`.
+  Radius + elevation already present; only width/banking are null until then.
+- [ ] **`reconstruct_surface` elevation output** (ties to the 3D-viewer GAP
+  above): elevation is currently computed in the backfill directly from pos_y,
+  NOT added to `reconstruct_surface`'s return — so the per-station elevation
+  profile the 3D ribbon needs still isn't emitted. If/when the 3D viewer or a
+  save-time (vs backfill) elevation bake is built, add the pos_y-per-bin fit to
+  `reconstruct_surface` and persist it.
+- [ ] **Verify `save_lap_map` bake path via `test_server_reads`** — merged after
+  targeted suites (the `_persist_map` bake IS covered by a `test_server_tracks`
+  bake+digest integration test), but `test_server_reads` (which also hits the
+  bake through `PUT /laps/{id}/map`) wasn't run pre-merge (slow; the full suite
+  OOM'd running all at once). Run it in a small batch to close the gap.
