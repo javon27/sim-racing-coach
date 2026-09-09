@@ -1514,7 +1514,9 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             return {"ok": False, "error": str(e)}
 
     @app.post("/ingest")
-    def ingest():
+    def ingest(body: dict = Body(...)):
+        # Body(...) forces a JSON content-type -- CSRF guard, same mechanism as
+        # /mapcapture/* (see comment above them).
         return ingest_all(store)
 
     @app.delete("/data")

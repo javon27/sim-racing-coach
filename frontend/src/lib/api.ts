@@ -472,7 +472,12 @@ export interface IngestResult {
 }
 
 export function ingestHistory(): Promise<IngestResult> {
-  return request<IngestResult>("/ingest", { method: "POST" });
+  // Body required so the browser preflights (CSRF guard on the mutating route).
+  return request<IngestResult>("/ingest", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({}),
+  });
 }
 
 export interface TrackRow {

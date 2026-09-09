@@ -126,7 +126,11 @@ describe("api client", () => {
 
     const result = await ingestHistory();
 
-    expect(fetchMock).toHaveBeenCalledWith(`${BASE}/ingest`, { method: "POST" });
+    expect(fetchMock).toHaveBeenCalledWith(`${BASE}/ingest`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({}),
+    });
     expect(result).toEqual(payload);
   });
 

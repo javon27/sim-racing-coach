@@ -50,8 +50,15 @@ def _client(tmp_path, monkeypatch, mem_keyring):
 def test_post_ingest_returns_summary(tmp_path, monkeypatch, mem_keyring):
     c, store = _client(tmp_path, monkeypatch, mem_keyring)
 
-    r = c.post("/ingest")
+    r = c.post("/ingest", json={})
 
     assert r.status_code == 200
     assert r.json() == {"scanned": 1, "imported": 1, "skipped": 0, "unmatched": 0, "errors": 0}
     assert len(store.recent_race_sessions()) == 1
+
+
+def test_post_ingest_bodyless_is_422(tmp_path, monkeypatch, mem_keyring):
+    # JSON body required (CSRF guard, same mechanism as /mapcapture/*) -- a
+    # bodyless POST stops being a CORS "simple request" and is rejected.
+    c, _ = _client(tmp_path, monkeypatch, mem_keyring)
+    assert c.post("/ingest").status_code == 422
