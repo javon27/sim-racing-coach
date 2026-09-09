@@ -11,12 +11,14 @@ _SETUP_TERMS = (
     "ride_height", "rideheight", "ride", "spring", "damp", "bump", "rebound", "packer",
     "camber", "toe", "caster", "antiroll", "arb", "roll_bar", "pressure", "traction",
     "tc_", "migration", "balance", "steer", "duct", "radiator", "fuel", "engine_brak",
-    # LMU packs the anti-roll bars as ANTISWAY and the engine map as ELECTRIC_MOTOR_MAP,
-    # so "antiroll"/"arb"/"roll_bar" above never matched anything and both params were
-    # silently dropped from the prompt. Adding them renders exactly 3 more lines
-    # (VM_FRONT_ANTISWAY, VM_REAR_ANTISWAY, VM_ELECTRIC_MOTOR_MAP) -- all of them
-    # cockpit electronics, so all three carry the garage caveat below.
-    "antisway", "motor_map",
+    # Params the terms above silently dropped: LMU packs the anti-roll bars as ANTISWAY
+    # (not the "antiroll"/"arb"/"roll_bar" spellings listed) and the engine map as
+    # ELECTRIC_MOTOR_MAP, and nothing matched mixture or regen at all. All five are
+    # settings the driver actually has, so the coach could not see or discuss them.
+    # Together these render 5 more lines: VM_FRONT_ANTISWAY, VM_REAR_ANTISWAY,
+    # VM_ELECTRIC_MOTOR_MAP, VM_ENGINE_MIXTURE, VM_REGEN_LEVEL -- every one a cockpit
+    # electronic, so every one carries the garage caveat below.
+    "antisway", "motor_map", "mixture", "regen",
 )
 
 # Cockpit-adjustable ELECTRONICS -- the dials a driver turns mid-stint. LMU's REST
@@ -26,12 +28,21 @@ _SETUP_TERMS = (
 # supersedes the earlier note here that recorded brake balance as "unmeasured" and
 # left it uncaveated; the discard covers all cockpit electronics, BB included.
 #
-# The set is LMU's own: TelemInfoV01 pairs each of these with a *Max index
-# (mABS / mTC / mTCSlip / mTCCut / mMotorMap / mMigration / mFront+mRearAntiSway,
-# plus mRearBrakeBias) precisely because they are cockpit-adjustable. Anti-sway is
-# in that block, so it is treated as a dial even though the bar itself is mechanical
-# -- on cars without the rotary the garage value is the truth; to revert that call,
-# drop "antisway" from the tuple.
+# The criterion is CAN THE DRIVER CHANGE IT FROM THE COCKPIT -- not whether LMU
+# reports it live. For most of the set the two coincide: TelemInfoV01 pairs mABS /
+# mTC / mTCSlip / mTCCut / mMotorMap / mMigration / mFront+mRearAntiSway each with a
+# *Max index, and carries mRearBrakeBias, precisely because they are cockpit dials.
+# That pairing is strong evidence of cockpit-adjustability, not the definition of it:
+# engine mixture, regen level and engine brake map are cockpit controls in this sim
+# family too, yet no live source exists for them at all (mRegen is instantaneous
+# regen, a c_float with no *Max -- the actual energy flow, not the driver's dialed
+# level; there is no mEngineMixture field whatsoever). Having no live source makes
+# the garage value LESS verifiable, not more, so they are caveated: asserting a
+# possibly-stale value is exactly what issue #33 was filed for.
+#
+# Anti-sway is here because it sits in that cockpit-dial block, so LMU itself treats
+# it as driver-adjustable, even though the bar is mechanical. On a car whose bar has
+# no rotary this over-hedges one line; to revert, drop "antisway" from the tuple.
 #
 # Matched on the packed names so two things stay UNcaveated: the availability flags
 # (ANTILOCK_BRAKES / TRACTION_CONTROL, "Available") -- not dials -- and every
@@ -39,7 +50,7 @@ _SETUP_TERMS = (
 # cannot change on track; hedging those would make the coach hedge a fact.
 _ELECTRONICS_TERMS = (
     "antilockbrakesystem", "tractioncontrol", "brake_balance", "brake_migration",
-    "antisway", "motor_map",
+    "antisway", "motor_map", "engine_mixture", "engine_brak", "regen",
 )
 _GARAGE_CAVEAT = " [garage value — confirm what's dialed on-track]"
 
@@ -129,8 +140,9 @@ SYSTEM_PROMPT = (
     "(e.g. '-50 lbf/in') — give direction ('soften the front spring a step or two').\n"
     "- COCKPIT ELECTRONICS: a setup line ending [garage value — ...] is the GARAGE "
     "setting. LMU discards ANY electronics change the driver made on track once the car "
-    "returns to the garage — ABS, the TC family, engine/motor map, brake migration, "
-    "brake balance, anti-roll — so it never reports what they actually dialed in. Never "
+    "returns to the garage — ABS, the TC family, the engine and motor maps, mixture, "
+    "regen, brake migration, brake balance, anti-roll — so it never reports what they "
+    "actually dialed in. Never "
     "assert one as what they're currently running — name it as the garage value and ask "
     "them to confirm. Mechanical params (springs, ride height, camber, wings, dampers) "
     "carry no such marker and ARE the truth; state those plainly.\n"
@@ -233,8 +245,9 @@ AGENTIC_SYSTEM_PROMPT = (
     "(e.g. '-50 lbf/in') — give direction ('soften the front spring a step or two').\n"
     "- COCKPIT ELECTRONICS: a setup line ending [garage value — ...] is the GARAGE "
     "setting. LMU discards ANY electronics change the driver made on track once the car "
-    "returns to the garage — ABS, the TC family, engine/motor map, brake migration, "
-    "brake balance, anti-roll — so it never reports what they actually dialed in. Never "
+    "returns to the garage — ABS, the TC family, the engine and motor maps, mixture, "
+    "regen, brake migration, brake balance, anti-roll — so it never reports what they "
+    "actually dialed in. Never "
     "assert one as what they're currently running — name it as the garage value and ask "
     "them to confirm. Mechanical params (springs, ride height, camber, wings, dampers) "
     "carry no such marker and ARE the truth; state those plainly.\n"

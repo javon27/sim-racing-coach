@@ -206,10 +206,12 @@ def test_coach_skips_delta_text_when_delta_is_none(synthetic_lap):
 
 CAVEAT = "[garage value — confirm what's dialed on-track]"
 
+NO_INFO = ("N/A", "Non-adjustable", "None", "")
+
 # Every cockpit-adjustable electronic present in the real payload, and nothing else.
-# These are exactly the LMU TelemInfoV01 dial fields (mABS / mTC / mTCSlip / mTCCut /
-# mMotorMap / mMigration / mFront+mRearAntiSway / mRearBrakeBias) as they appear in the
-# garage setup.
+# The first nine are the LMU TelemInfoV01 dial fields as they appear in the garage
+# setup; the last three are cockpit controls LMU exposes no live source for at all,
+# which makes their garage value less verifiable, not more.
 EXPECTED_ELECTRONICS = {
     "VM_ANTILOCKBRAKESYSTEMMAP",       # mABS
     "VM_TRACTIONCONTROLMAP",           # mTC
@@ -220,6 +222,9 @@ EXPECTED_ELECTRONICS = {
     "VM_FRONT_ANTISWAY",               # mFrontAntiSway
     "VM_REAR_ANTISWAY",                # mRearAntiSway
     "VM_BRAKE_BALANCE",                # mRearBrakeBias
+    "VM_ENGINE_MIXTURE",               # no live field
+    "VM_REGEN_LEVEL",                  # mRegen is instantaneous flow, not the dial
+    "VM_ENGINE_BRAKEMAP",              # no live field
 }
 
 
@@ -249,12 +254,18 @@ def test_electronics_caveat_matches_exactly_the_cockpit_dials_in_a_real_payload(
     matched = {k for k in keys if any(t in packed(k) for t in _ELECTRONICS_TERMS)}
     assert matched == EXPECTED_ELECTRONICS
 
-    # The caveat is only reachable if the param survives _SETUP_TERMS and the no-info
-    # filter -- a caveat on a param the coach never sees is dead code. (This is how
-    # ANTISWAY / ELECTRIC_MOTOR_MAP were found to be dropped from the prompt entirely.)
+    # The caveat is only reachable if the param survives _SETUP_TERMS -- a caveat on a
+    # param the coach never sees is dead code. (This is how ANTISWAY, ELECTRIC_MOTOR_MAP,
+    # ENGINE_MIXTURE and REGEN_LEVEL were found to be dropped from the prompt entirely.)
     for key in EXPECTED_ELECTRONICS:
         assert any(t in packed(key) for t in _SETUP_TERMS), f"{key} never reaches the prompt"
-        assert keys[key] not in ("N/A", "Non-adjustable", "None", ""), key
+
+    # ...and then survives the no-info filter, which is per-car: this LMH exposes no
+    # engine-brake rotary, so VM_ENGINE_BRAKEMAP reads "N/A" and is correctly dropped
+    # here. Its term still earns its place for cars that do expose one.
+    assert {k for k in EXPECTED_ELECTRONICS if keys[k] not in NO_INFO} == (
+        EXPECTED_ELECTRONICS - {"VM_ENGINE_BRAKEMAP"})
+    assert keys["VM_ENGINE_MIXTURE"] == "Race" and keys["VM_REGEN_LEVEL"] == "0%"
 
     # Availability flags read "Available" -- state, not a dial. Must stay uncaveated.
     for flag in ("VM_ANTILOCK_BRAKES", "VM_TRACTION_CONTROL"):
@@ -281,11 +292,14 @@ def test_setup_lines_render_the_caveat_on_electronics_only():
                              "minValue": 0, "maxValue": 57, "isFreeSetting": True},
         "VM_FRONT_ANTISWAY": {"stringValue": "P28 (hard)", "value": 4,
                               "minValue": 0, "maxValue": 7, "isFreeSetting": True},
+        # A named (non-numeric) electronic: caveated, and with no step suffix to lean on.
+        "VM_ENGINE_MIXTURE": {"stringValue": "Race", "isFreeSetting": True},
         "VM_ANTILOCK_BRAKES": {"stringValue": "Available", "isFreeSetting": True},
         "VM_REAR_WING": {"stringValue": "6.5 deg", "value": 6,
                          "minValue": 0, "maxValue": 9, "isFreeSetting": True},
     }
     lines = {line.split(":")[0][2:]: line for line in _setup_lines(setup)}
+    assert lines["Engine Mixture"] == f"- Engine Mixture: Race {CAVEAT}"
     for dial in ("Antilockbrakesystemmap", "Brake Balance", "Front Antisway"):
         assert lines[dial].endswith(CAVEAT), lines[dial]
         assert "(step " in lines[dial]          # #32's ordinal suffix survives
