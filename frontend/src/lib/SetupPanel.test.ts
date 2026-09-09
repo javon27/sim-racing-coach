@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/svelte";
-import { getSetup } from "./api";
+import { getSetup, captureSetup } from "./api";
 import SetupPanel from "./SetupPanel.svelte";
 
 vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
-  return { ...actual, getSetup: vi.fn() };
+  return { ...actual, getSetup: vi.fn(), captureSetup: vi.fn() };
 });
 
 // A payload mixing adjustable (isFreeSetting:true) entries with the junk LMU
@@ -21,6 +21,8 @@ const mixedPayload = {
 describe("SetupPanel", () => {
   beforeEach(() => {
     vi.mocked(getSetup).mockReset();
+    vi.mocked(captureSetup).mockReset();
+    vi.mocked(captureSetup).mockResolvedValue({ saved: true });
   });
 
   afterEach(cleanup);

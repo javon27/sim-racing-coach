@@ -265,7 +265,7 @@
       <span
         class="meter"
         data-testid="usage-meter"
-        title="Tokens billed in this chat, and the estimated API cost of them."
+        title="Tokens billed in this chat, and the estimated API cost of them. Excludes setup capture, track-notes drafting, and memory operations, which are billed separately to your key."
       >{formatTokens(usedTokens)} tokens{showCost ? ` · ${formatCost(cost, costComplete)}` : ""}</span>
     {/if}
     <button type="button" class="new-chat" onclick={newSession}>+ New session</button>

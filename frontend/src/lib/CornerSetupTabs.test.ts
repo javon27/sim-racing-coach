@@ -1,17 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/svelte";
-import { getLapAnalysis, getSetup } from "./api";
+import { getLapAnalysis, getSetup, captureSetup } from "./api";
 import CornerSetupTabs from "./CornerSetupTabs.svelte";
 
 vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
-  return { ...actual, getLapAnalysis: vi.fn(), getSetup: vi.fn() };
+  return { ...actual, getLapAnalysis: vi.fn(), getSetup: vi.fn(), captureSetup: vi.fn() };
 });
 
 describe("CornerSetupTabs", () => {
   beforeEach(() => {
     vi.mocked(getLapAnalysis).mockReset();
     vi.mocked(getSetup).mockReset();
+    vi.mocked(captureSetup).mockReset();
+    vi.mocked(captureSetup).mockResolvedValue({ saved: true });
     vi.mocked(getLapAnalysis).mockResolvedValue({ lap_time: 0, corners: [] });
     // Real /setup shape: only isFreeSetting entries render (SetupPanel filters).
     vi.mocked(getSetup).mockResolvedValue({
