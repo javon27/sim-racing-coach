@@ -27,7 +27,7 @@ from ..analysis import analyze_lap, corner_geometry, geometry_clause
 from ..car_lookup import resolve_car
 from ..car_notes import load_car_notes, load_setup_concepts
 from ..coach_tools import CoachContext
-from ..corners import CornerMap, in_window
+from ..corners import CornerMap, in_window, validated_sectors
 from ..driver import DriverProfile
 from ..lmu.ingest import ingest_all
 from ..model.base import TokenUsage
@@ -758,17 +758,10 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             })
         corners.sort(key=lambda c: c["apex_dist"])
 
-        sectors = body.get("sectors") or []
-        if not isinstance(sectors, list):
-            raise HTTPException(422, "sectors must be a list")
         try:
-            sectors = [float(s) for s in sectors]
-        except (TypeError, ValueError):
-            raise HTTPException(422, "sectors must be numbers")
-        if any(not math.isfinite(s) or not (0.0 < s < length) for s in sectors):
-            raise HTTPException(422, "sector splits must be within (0, length)")
-        if any(a >= b for a, b in zip(sectors, sectors[1:])):
-            raise HTTPException(422, "sector splits must be strictly increasing")
+            sectors = validated_sectors(body.get("sectors") or [], length)
+        except (TypeError, ValueError) as e:
+            raise HTTPException(422, str(e)) from None
 
         sections = _clean_sections(body.get("sections"), length)
 

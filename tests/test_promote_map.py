@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.promote_map import PromoteError, promote
+from scripts.promote_map import PromoteError, main, promote
 
 SHIPPED_DIR = Path(__file__).resolve().parents[1] / "simcoach" / "tracks"
 
@@ -223,6 +223,51 @@ def test_self_promoting_a_shipped_map_is_a_byte_identical_no_op(tmp_path):
         shutil.copyfile(p, tracks / p.name)       # the shipped map --force replaces
         out = promote(src_dir / p.name, tracks, slug=p.stem, force=True)
         assert out.read_bytes() == p.read_bytes(), f"{p.name}: self-promote was not a no-op"
+
+
+@pytest.mark.parametrize("sectors,msg", [
+    ([700.0, 300.0], "strictly increasing"),      # descending
+    ([300.0, 300.0], "strictly increasing"),      # equal: zero-length sector 2
+    ([9999.0, 1.0], "within"),                    # outside (0, length), and descending
+    ([0.0, 500.0], "within"),                     # 0 is the S/F line, not a split
+    ([300.0, _LEN], "within"),                    # length itself is not a split either
+    (["one", "two"], "must be numbers"),
+    ("300,700", "must be a list"),
+])
+def test_refuses_sector_splits_the_editor_would_reject(tmp_path, sectors, msg):
+    """Sector splits are committed shipped data (#41 baked the captured ones into all
+    11 maps), and promote is the one path that can put an unvalidated set back -- a
+    hand-edited export must not reach simcoach/tracks/ with [9999, 1] in it. Same rule
+    as the editor's PUT, and it refuses rather than clamping."""
+    tracks = _tracks(tmp_path)
+    with pytest.raises(PromoteError, match=msg):
+        promote(_src(tmp_path, _map(sectors=sectors)), tracks)
+    assert list(tracks.iterdir()) == []          # nothing written
+
+
+@pytest.mark.parametrize("field", ["rotation", "path"])
+def test_a_non_finite_refuses_instead_of_raising(tmp_path, field):
+    """json.loads ACCEPTS the bare `NaN` literal, and only `length`, the corner windows
+    and (now) the sectors are range-checked -- so a NaN in `rotation` or the raw path
+    reached _serialize's allow_nan=False and came out as a bare ValueError. main()
+    catches only PromoteError, so the curator saw a traceback, not `refused: ...`.
+
+    Both fields are chosen for having no OTHER check in front of them: a NaN in
+    `sectors` is refused by validated_sectors and a short `path_dist` by the
+    length-match check, so neither would exercise this path."""
+    data = _map()
+    if field == "rotation":
+        data["rotation"] = math.nan
+    else:
+        data["path"][5] = [math.nan, math.nan]     # same length, so the shape check passes
+    src = _src(tmp_path, data)           # json.dumps emits the bare `NaN` literal
+    assert "NaN" in src.read_text(encoding="utf-8")
+    tracks = _tracks(tmp_path)
+    with pytest.raises(PromoteError):
+        promote(src, tracks)
+    assert list(tracks.iterdir()) == []                              # nothing written
+    assert main(["user_built_circuit", "--from", str(src),
+                 "--tracks-dir", str(tracks)]) == 1   # `refused:`, not a traceback
 
 
 def test_refuses_a_source_whose_stem_is_not_a_slug(tmp_path):

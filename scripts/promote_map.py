@@ -11,6 +11,13 @@ Curator tool, like backfill_corner_geometry.py -- it writes into the repo, so it
 only makes sense on a machine with the checkout. Run it, eyeball ``git diff``,
 commit.
 
+When you eyeball that diff, check ``radius_m`` on every corner for values you did
+not intend to change. This script is a faithful copier -- it preserves whatever
+per-corner geometry the source carries and never re-bakes it -- but a map that has
+been through the map editor carries the editor's re-baked radius (#62: Imola T13
+went 67.7 m -> 322.1 m, 4.8x, and the coach serves radius as owned fact). That
+corruption happens upstream; this diff is the last gate before it is committed.
+
     python scripts/promote_map.py <slug>              # from app-data
     python scripts/promote_map.py <slug> --from FILE  # from an exported file
     python scripts/promote_map.py <slug> --force      # replace a shipped map
@@ -29,7 +36,7 @@ import math
 import sys
 from pathlib import Path
 
-from simcoach.corners import Corner, clamp_corner_windows, in_window
+from simcoach.corners import Corner, clamp_corner_windows, in_window, validated_sectors
 from simcoach.track_lookup import guard_corner_notes, track_slug
 from simcoach.trackmap import direction_from_path
 
@@ -45,9 +52,19 @@ def _serialize(data: dict) -> bytes:
     """The shipped on-disk format: 2-space JSON, real UTF-8 (two shipped maps carry
     accented names), CRLF, no trailing newline. Written explicitly rather than left
     to the platform's text-mode newline translation, so the bytes are the same
-    wherever this runs."""
-    return json.dumps(data, indent=2, ensure_ascii=False,
-                      allow_nan=False).replace("\n", "\r\n").encode("utf-8")
+    wherever this runs.
+
+    `allow_nan=False` is the last line against a non-finite slipping into a shipped
+    map: json.loads ACCEPTS the bare `NaN`/`Infinity` literals, and only `length` and
+    the corner windows are range-checked, so a NaN in `path` or `rotation` reaches
+    here. Its bare ValueError becomes a PromoteError so the curator gets the tool's
+    `refused:` line rather than a traceback."""
+    try:
+        return json.dumps(data, indent=2, ensure_ascii=False,
+                          allow_nan=False).replace("\n", "\r\n").encode("utf-8")
+    except ValueError as e:
+        raise PromoteError(f"map is not serializable ({e}); NaN/Infinity cannot "
+                           f"be shipped") from None
 
 
 def _validated_corners(data: dict, length: float) -> list[dict]:
@@ -158,6 +175,13 @@ def promote(src: Path | str, tracks_dir: Path | str = TRACKS_DIR, *,
     if not isinstance(length, (int, float)) or not math.isfinite(length) or length <= 0:
         raise PromoteError("map has no usable `length`")
     length = float(length)
+    # Sector splits are committed shipped data since #41 baked the captured ones into
+    # all 11 maps, and this is the one path that can put an unvalidated set back. Same
+    # check the editor's PUT runs, from the same owner, so the two can't drift.
+    try:
+        validated_sectors(data.get("sectors") or [], length)
+    except (TypeError, ValueError) as e:
+        raise PromoteError(str(e)) from None
 
     target = tracks_dir / f"{slug}.json"
     if target.exists() and not force:

@@ -1,4 +1,6 @@
+import itertools
 import json
+import math
 from dataclasses import dataclass, fields
 
 import numpy as np
@@ -28,6 +30,28 @@ class Corner:
     end_dist: float
     label: str = ""                       # displayed designation ("8A"); defaults to str(number)
     apexes: list[float] | None = None  # lap_distances; defaults to [apex_dist] (double-apex -> 2)
+
+
+def validated_sectors(sectors, length: float) -> list[float]:
+    """Sector splits as floats, or TypeError/ValueError naming what's wrong.
+
+    Sector splits are committed shipped data (#41 baked captured splits into all 11
+    maps), so the same rule has to hold wherever one is written: the editor's
+    `PUT .../map` and the promote-to-shipped script. Owned here rather than inline in
+    the endpoint so the two can't drift -- each caller catches (TypeError, ValueError)
+    and translates the message into its own refusal (HTTP 422 / `refused:`). Refuses;
+    never clamps or repairs."""
+    if not isinstance(sectors, list):
+        raise TypeError("sectors must be a list")
+    try:
+        out = [float(s) for s in sectors]
+    except (TypeError, ValueError):
+        raise ValueError("sectors must be numbers") from None
+    if any(not math.isfinite(s) or not (0.0 < s < length) for s in out):
+        raise ValueError("sector splits must be within (0, length)")
+    if any(a >= b for a, b in itertools.pairwise(out)):
+        raise ValueError("sector splits must be strictly increasing")
+    return out
 
 
 def clamp_corner_windows(corners: list[Corner], length: float | None) -> None:
