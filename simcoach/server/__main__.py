@@ -15,7 +15,7 @@ from ..logging_setup import configure_logging
 from ..model.factory import LazyModel
 from ..paths import db_path, telemetry_dir
 from ..store import LapStore
-from .app import create_app, _capture_loop
+from .app import SIDECAR_PORT, create_app, _capture_loop
 
 
 def build_app():
@@ -63,7 +63,9 @@ def build_app():
 def main():
     import uvicorn
     configure_logging()
-    uvicorn.run(build_app(), host="127.0.0.1", port=8765, log_config=None)
+    # Port comes from app.py so the origin allowlist can't silently drift from the
+    # port we actually serve on (#60) -- change it in one place, both follow.
+    uvicorn.run(build_app(), host="127.0.0.1", port=SIDECAR_PORT, log_config=None)
 
 
 if __name__ == "__main__":

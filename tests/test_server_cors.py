@@ -32,6 +32,32 @@ def test_preflight_still_succeeds_for_real_client_origins(tmp_path):
         assert r.headers.get("access-control-allow-origin") == origin
 
 
+def test_preflight_from_another_localhost_port_is_refused_by_the_guard(tmp_path):
+    # #60: the guard sees the OPTIONS preflight before CORSMiddleware. Before the
+    # fix a foreign localhost port sailed past the guard and CORSMiddleware turned
+    # it away with 400 "Disallowed CORS origin" -- which is a CORS decision, not a
+    # refusal: the browser is free to send the *simple* request without any
+    # preflight at all, and that one would have executed. 403 here is the guard
+    # itself saying no. RED before the fix (it was 400).
+    c = _tc(tmp_path)
+    for origin in ("http://127.0.0.1:9999", "http://localhost:3000"):
+        r = c.options("/ingest", headers={"host": "127.0.0.1", "origin": origin,
+                                          "access-control-request-method": "POST"})
+        assert r.status_code == 403, f"{origin} preflight must be refused: {r.status_code}"
+        assert r.headers.get("access-control-allow-origin") in (None, "")
+
+
+def test_sidecar_own_origin_passes_the_guard(tmp_path):
+    # The third legitimate origin (the sidecar's own port) is same-origin for any
+    # page the sidecar itself serves, so a browser never preflights it and it is
+    # deliberately NOT in FRONTEND_ORIGINS -- CORSMiddleware still answers its
+    # preflight 400, exactly as before this change. What matters is that the
+    # origin guard lets it through; assert that, not a CORS header it never needs.
+    r = _tc(tmp_path).get("/health", headers={"host": "127.0.0.1",
+                                              "origin": "http://127.0.0.1:8765"})
+    assert r.status_code == 200
+
+
 def test_unknown_origin_is_refused_not_just_uncorsed(tmp_path):
     # This used to assert 200 + no access-control-allow-origin, on the theory that
     # withholding the CORS header is enough. It isn't: the browser withholds the
