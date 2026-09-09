@@ -302,6 +302,18 @@ def test_corner_geometry_clause_empty_for_unknown_corner():
     assert ctx._corner_geometry_clause("99") == ""
 
 
+def test_get_setup_surfaces_range(tmp_path, synthetic_lap):
+    # Issue #32: get_setup must expose each param's legal (range), confirmed real
+    # on the LMU REST payload, so the coach never suggests an out-of-range change.
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    ctx.setup = {
+        "VM_FRONTSPRING": {"stringValue": "1200", "isFreeSetting": True,
+                           "minValue": 800, "maxValue": 1200},
+    }
+    out = ctx.get_setup()
+    assert "Frontspring: 1200 (range 800-1200)" in out
+
+
 def test_dispatch_routes_and_handles_unknown(tmp_path, synthetic_lap):
     ctx, _, _ = _ctx(tmp_path, synthetic_lap)
     assert ctx.dispatch("get_corner", {"corner": "1"}).startswith("T1 ")

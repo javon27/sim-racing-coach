@@ -23,6 +23,28 @@ def test_setup_values_included_and_metadata_skipped(synthetic_lap):
     assert "Diff Pump" not in user             # N/A value filtered out
 
 
+def test_setup_range_shown_when_exposed(synthetic_lap):
+    # Issue #32: minValue/maxValue are real fields on the LMU REST setup payload
+    # (confirmed live) -- surface them so the coach can see a param's hard limits
+    # ("already at max") instead of guessing a magnitude that's out of range.
+    a = analyze_lap(synthetic_lap, CornerMap.load("simcoach/tracks/test_track.json"))
+    coach = Coach(FakeModel())
+    setup = {
+        "VM_REARWING": {"stringValue": "6", "isFreeSetting": True, "minValue": 0, "maxValue": 10},
+    }
+    _system, user = coach.build_prompt(a, "test_car", "help me", setup=setup)
+    assert "Rearwing: 6 (range 0-10)" in user
+
+
+def test_setup_no_range_suffix_when_not_exposed(synthetic_lap):
+    a = analyze_lap(synthetic_lap, CornerMap.load("simcoach/tracks/test_track.json"))
+    coach = Coach(FakeModel())
+    setup = {"VM_REARWING": {"stringValue": "6", "isFreeSetting": True}}
+    _system, user = coach.build_prompt(a, "test_car", "help me", setup=setup)
+    assert "Rearwing: 6" in user
+    assert "range" not in user
+
+
 def test_no_setup_section_when_absent(synthetic_lap):
     a = analyze_lap(synthetic_lap, CornerMap.load("simcoach/tracks/test_track.json"))
     coach = Coach(FakeModel())

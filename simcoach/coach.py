@@ -16,7 +16,15 @@ _SETUP_TERMS = (
 
 def _setup_lines(setup: dict) -> list[str]:
     """Human-meaningful setup params, formatted for the prompt (filters ~170 -> the
-    commonly-coached subset; flags tier-locked ones)."""
+    commonly-coached subset; flags tier-locked ones).
+
+    Appends each param's legal (range) from the REST payload's minValue/maxValue
+    when present -- real fields confirmed live against LMU's garage data (issue
+    #32) -- so the coach can see a param is already at its limit. The game does
+    NOT expose a step/increment field anywhere we've found; never fabricate one
+    here, and the system prompt tells the coach to hedge on step size instead of
+    quoting an exact amount.
+    """
     out = []
     for key, v in setup.items():
         if not isinstance(v, dict) or "stringValue" not in v:
@@ -29,7 +37,9 @@ def _setup_lines(setup: dict) -> list[str]:
             continue
         label = key[3:].replace("_", " ").title() if key.startswith("VM_") else key
         locked = "" if v.get("isFreeSetting", True) else " [locked this tier]"
-        out.append(f"- {label}: {v['stringValue']}{locked}")
+        lo, hi = v.get("minValue"), v.get("maxValue")
+        rng = f" (range {lo}-{hi})" if lo is not None and hi is not None else ""
+        out.append(f"- {label}: {v['stringValue']}{rng}{locked}")
     return out
 
 
@@ -73,6 +83,11 @@ SYSTEM_PROMPT = (
     "and the specific fix — a setup change with a direction and rough amount, or a driving "
     "cue — not broken out into labeled sections. Keep setup vs driving advice clearly "
     "distinct in your wording.\n"
+    "- SETUP RANGES: each setup line shows its legal (range lo-hi) when the game exposes "
+    "one — NEVER suggest a value outside it, and say so if a param is already at its limit. "
+    "The game does not expose the adjustment's step size, so NEVER state an exact increment "
+    "(e.g. '-50 lbf/in'); give direction only ('soften the front spring a bit') or ask the "
+    "driver to check the smallest step available in the garage.\n"
     "- Weigh context before over-reading a lap: tire temp/warm-up, fuel, wear. If the lap "
     "looks unrepresentative, say so.\n"
     "- Encouraging and constructive; acknowledge what's working, never berate. Honor the "
@@ -164,6 +179,11 @@ AGENTIC_SYSTEM_PROMPT = (
     "setup vs driving advice distinct.\n"
     "- Lead with the one thing that matters most. Weigh context before over-reading a lap (tire "
     "temp/warm-up, fuel, wear). Encouraging and constructive; note what's working; never berate.\n"
+    "- SETUP RANGES: get_setup shows each param's legal (range lo-hi) when the game exposes "
+    "one — NEVER suggest a value outside it, and say so if a param is already at its limit. "
+    "The game does not expose the adjustment's step size, so NEVER state an exact increment "
+    "(e.g. '-50 lbf/in'); give direction only ('soften the front spring a bit') or ask the "
+    "driver to check the smallest step available in the garage.\n"
     "- Match length to the question: a quick question gets a sentence or two; a broad one ('how's "
     "my race going') can be a few short paragraphs or a bullet list — thorough but never padded. "
     "The driver will ask follow-ups."

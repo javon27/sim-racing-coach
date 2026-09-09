@@ -69,6 +69,17 @@ def test_agentic_system_prompt_has_scope_guard():
     assert "nothing else" in AGENTIC_SYSTEM_PROMPT
 
 
+def test_system_prompts_warn_against_inventing_setup_increments():
+    """Issue #32: the game never exposes a step/increment field, so both the
+    legacy and agentic prompts must tell the coach to hedge on exact amounts
+    and respect each param's (range) rather than guessing a specific number."""
+    from simcoach.coach import AGENTIC_SYSTEM_PROMPT, SYSTEM_PROMPT
+    for prompt in (SYSTEM_PROMPT, AGENTIC_SYSTEM_PROMPT):
+        assert "SETUP RANGES:" in prompt
+        assert "step size" in prompt
+        assert "range" in prompt.lower()
+
+
 def test_coach_shows_delta_with_reference(synthetic_lap):
     """With a reference lap, the prompt surfaces the min_spd delta vs best."""
     from simcoach.model.fake import FakeModel
