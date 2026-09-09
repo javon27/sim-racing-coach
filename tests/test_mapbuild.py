@@ -48,9 +48,15 @@ def test_build_map_clamps_windows_so_the_file_matches_what_load_verifies(tmp_pat
     looked at the windows that actually landed on disk. build_map now applies the
     same clamp before serialising, making the two agree by construction.
 
-    _WIN_M is widened past half the minimum corner gap so the unclamped windows
-    genuinely overlap: with the shipped knobs (_MIN_GAP_M 120 >= 2 * _WIN_M 55) they
-    happen not to, which is exactly the accident this removes."""
+    _WIN_M is widened past half the minimum corner gap so two INTERIOR windows
+    overlap, which the shipped knobs prevent (_MIN_GAP_M 120 >= 2 * _WIN_M = 110,
+    so interior windows always sit >= 10 m apart). The guard is not merely
+    defensive, though: detect_corners merges peaks by LINEAR lap distance while
+    the clamp is CIRCULAR, so the first and last apexes of a lap are never
+    gap-checked against each other and the clamp does fire at the S/F seam with
+    the shipped knobs. Lap-end clipping keeps that from ever being an overlap on
+    disk -- it was a divergence between the file and CornerMap.load(), which is
+    what the self-verify step was reading."""
     monkeypatch.setattr(mapbuild, "_WIN_M", 80.0)
     ch = _close_corners_lap()
     obj = build_map("close", ch, length_m=1000)
@@ -68,6 +74,42 @@ def test_build_map_clamps_windows_so_the_file_matches_what_load_verifies(tmp_pat
     assert [(c.start_dist, c.end_dist) for c in loaded.corners] == \
            [(c["start_dist"], c["end_dist"]) for c in obj["corners"]], \
            "the load-time clamp still moved the windows: the file is not what gets verified"
+
+
+def _seam_corners_lap():
+    """A 3000 m lap with a LEFT at ~70 m and a RIGHT at ~2970 m -- 2900 m apart
+    LINEARLY (detect_corners' merge check never fuses them) but only 100 m apart
+    CIRCULARLY across the S/F seam, closer than _MIN_GAP_M (120 m) even with
+    unmodified shipped knobs."""
+    dist = np.linspace(0, 3000, 3001)
+    left = np.exp(-(((dist - 70) / 15) ** 2))
+    right = np.exp(-(((dist - 2970) / 15) ** 2))
+    steer = -0.5 * left + 0.5 * right          # RIGHT_IS_POSITIVE=True
+    speed = 200 - 110 * left - 130 * right
+    return {"lap_distance": dist, "speed": speed, "steering": steer}
+
+
+def test_build_map_clamp_fires_at_the_seam_with_shipped_knobs():
+    """#30 follow-up: the write-time clamp is not a no-op with the shipped knobs
+    (_MIN_GAP_M=120, _WIN_M=55). detect_corners merges by LINEAR lap distance
+    while clamp_corner_windows is CIRCULAR, so the first and last apexes of a lap
+    are never gap-checked against each other by detect_corners -- and here they
+    sit only 100 m apart across the seam, under _MIN_GAP_M, so the clamp trims
+    the first corner's start_dist inward even with unmodified constants."""
+    ch = _seam_corners_lap()
+    detected = detect_corners(ch)
+    assert len(detected) == 2  # 2900 m linear gap: nowhere near merged
+
+    obj = build_map("seam", ch, length_m=3000)
+    by_apex = sorted(obj["corners"], key=lambda c: c["apex_dist"])
+    first = by_apex[0]
+
+    # what build_map would have written with NO clamp (pre-#30-fix behaviour)
+    unclamped_start = round(max(0.0, first["apex_dist"] - mapbuild._WIN_M), 1)
+    assert first["start_dist"] != unclamped_start, (
+        "clamp did not fire at the seam -- with unmodified shipped knobs it should"
+    )
+    assert (first["apex_dist"], first["start_dist"], first["end_dist"]) == (70.0, 20.0, 125.0)
 
 
 def test_build_map_is_valid_and_direction_verified(tmp_path):
