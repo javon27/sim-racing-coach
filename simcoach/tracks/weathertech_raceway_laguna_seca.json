@@ -8,7 +8,7 @@
       "direction": "left",
       "start_dist": 370.2,
       "apex_dist": 459.9,
-      "end_dist": 549.6,
+      "end_dist": 495.8,
       "apexes": [
         459.9
       ],
@@ -22,7 +22,7 @@
       "label": "2",
       "name": "Andretti Hairpin",
       "direction": "left",
-      "start_dist": 442.1,
+      "start_dist": 495.8,
       "apex_dist": 531.8,
       "end_dist": 621.5,
       "apexes": [
@@ -104,7 +104,7 @@
       "direction": "right",
       "start_dist": 2267.6,
       "apex_dist": 2357.3,
-      "end_dist": 2447.0,
+      "end_dist": 2400.4,
       "apexes": [
         2357.3
       ],
@@ -118,9 +118,9 @@
       "label": "8",
       "name": "Corkscrew",
       "direction": "left",
-      "start_dist": 2353.8,
+      "start_dist": 2400.4,
       "apex_dist": 2443.5,
-      "end_dist": 2533.2,
+      "end_dist": 2479.4,
       "apexes": [
         2443.5
       ],
@@ -134,7 +134,7 @@
       "label": "9",
       "name": "Corkscrew",
       "direction": "right",
-      "start_dist": 2425.7,
+      "start_dist": 2479.4,
       "apex_dist": 2515.4,
       "end_dist": 2605.1,
       "apexes": [

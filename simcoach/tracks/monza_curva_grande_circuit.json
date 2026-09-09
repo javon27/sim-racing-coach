@@ -24,7 +24,7 @@
       "direction": "left",
       "start_dist": 2012.7,
       "apex_dist": 2093.2,
-      "end_dist": 2162.2,
+      "end_dist": 2139.2,
       "apexes": [
         2093.2
       ],
@@ -38,7 +38,7 @@
       "label": "3",
       "name": "Turn 3",
       "direction": "right",
-      "start_dist": 2041.7,
+      "start_dist": 2139.2,
       "apex_dist": 2185.2,
       "end_dist": 2328.7,
       "apexes": [
@@ -88,7 +88,7 @@
       "direction": "left",
       "start_dist": 3829.9,
       "apex_dist": 3910.4,
-      "end_dist": 3967.9,
+      "end_dist": 3956.4,
       "apexes": [
         3910.4
       ],
@@ -104,7 +104,7 @@
       "direction": "right",
       "start_dist": 3967.9,
       "apex_dist": 4002.4,
-      "end_dist": 4059.9,
+      "end_dist": 4054.1,
       "apexes": [
         4002.4
       ],

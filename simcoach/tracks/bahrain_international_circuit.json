@@ -8,7 +8,7 @@
       "direction": "right",
       "start_dist": 657.8,
       "apex_dist": 744.1,
-      "end_dist": 808.8,
+      "end_dist": 792.7,
       "apexes": [
         744.1
       ],
@@ -24,7 +24,7 @@
       "direction": "left",
       "start_dist": 808.8,
       "apex_dist": 841.2,
-      "end_dist": 916.6,
+      "end_dist": 895.1,
       "apexes": [
         841.2
       ],
@@ -86,9 +86,9 @@
       "label": "6",
       "name": "Turn 6",
       "direction": "right",
-      "start_dist": 1811.7,
+      "start_dist": 1844.1,
       "apex_dist": 1898.0,
-      "end_dist": 1962.7,
+      "end_dist": 1957.3,
       "apexes": [
         1898.0
       ],

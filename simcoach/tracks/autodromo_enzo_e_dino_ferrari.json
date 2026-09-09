@@ -24,7 +24,7 @@
       "direction": "left",
       "start_dist": 525.4,
       "apex_dist": 647.8,
-      "end_dist": 770.2,
+      "end_dist": 706.6,
       "apexes": [
         647.8
       ],
@@ -38,9 +38,9 @@
       "label": "3",
       "name": "Turn 3",
       "direction": "right",
-      "start_dist": 643.1,
+      "start_dist": 706.6,
       "apex_dist": 765.5,
-      "end_dist": 887.9,
+      "end_dist": 814.6,
       "apexes": [
         765.5
       ],
@@ -54,7 +54,7 @@
       "label": "4",
       "name": "Turn 4",
       "direction": "left",
-      "start_dist": 741.3,
+      "start_dist": 814.6,
       "apex_dist": 863.7,
       "end_dist": 986.1,
       "apexes": [
@@ -72,7 +72,7 @@
       "direction": "left",
       "start_dist": 1173.1,
       "apex_dist": 1295.5,
-      "end_dist": 1417.9,
+      "end_dist": 1354.4,
       "apexes": [
         1295.5
       ],
@@ -86,7 +86,7 @@
       "label": "6",
       "name": "Turn 6",
       "direction": "right",
-      "start_dist": 1290.9,
+      "start_dist": 1354.4,
       "apex_dist": 1413.3,
       "end_dist": 1535.7,
       "apexes": [
@@ -120,7 +120,7 @@
       "direction": "right",
       "start_dist": 1958.3,
       "apex_dist": 2080.7,
-      "end_dist": 2203.1,
+      "end_dist": 2188.7,
       "apexes": [
         2080.7
       ],
@@ -134,9 +134,9 @@
       "label": "9",
       "name": "Piratella",
       "direction": "left",
-      "start_dist": 2174.3,
+      "start_dist": 2188.7,
       "apex_dist": 2296.7,
-      "end_dist": 2419.1,
+      "end_dist": 2385.0,
       "apexes": [
         2296.7
       ],
@@ -150,9 +150,9 @@
       "label": "10",
       "name": "Turn 10",
       "direction": "left",
-      "start_dist": 2350.9,
+      "start_dist": 2385.0,
       "apex_dist": 2473.3,
-      "end_dist": 2595.7,
+      "end_dist": 2591.1,
       "apexes": [
         2473.3
       ],
@@ -166,9 +166,9 @@
       "label": "11",
       "name": "Acque Minerali",
       "direction": "right",
-      "start_dist": 2586.5,
+      "start_dist": 2591.1,
       "apex_dist": 2708.9,
-      "end_dist": 2831.3,
+      "end_dist": 2777.6,
       "apexes": [
         2708.9
       ],
@@ -182,9 +182,9 @@
       "label": "12",
       "name": "Turn 12",
       "direction": "right",
-      "start_dist": 2723.9,
+      "start_dist": 2777.6,
       "apex_dist": 2846.3,
-      "end_dist": 2968.7,
+      "end_dist": 2895.4,
       "apexes": [
         2846.3
       ],
@@ -198,7 +198,7 @@
       "label": "13",
       "name": "Turn 13",
       "direction": "left",
-      "start_dist": 2822.0,
+      "start_dist": 2895.4,
       "apex_dist": 2944.4,
       "end_dist": 3066.8,
       "apexes": [
@@ -216,7 +216,7 @@
       "direction": "right",
       "start_dist": 3155.7,
       "apex_dist": 3278.1,
-      "end_dist": 3400.5,
+      "end_dist": 3337.0,
       "apexes": [
         3278.1
       ],
@@ -230,7 +230,7 @@
       "label": "15",
       "name": "Turn 15",
       "direction": "left",
-      "start_dist": 3273.5,
+      "start_dist": 3337.0,
       "apex_dist": 3395.9,
       "end_dist": 3518.3,
       "apexes": [
@@ -248,7 +248,7 @@
       "direction": "right",
       "start_dist": 3823.1,
       "apex_dist": 3945.5,
-      "end_dist": 4067.9,
+      "end_dist": 4033.8,
       "apexes": [
         3945.5
       ],
@@ -262,9 +262,9 @@
       "label": "17",
       "name": "Turn 17",
       "direction": "left",
-      "start_dist": 3999.8,
+      "start_dist": 4033.8,
       "apex_dist": 4122.2,
-      "end_dist": 4244.6,
+      "end_dist": 4200.7,
       "apexes": [
         4122.2
       ],
@@ -278,7 +278,7 @@
       "label": "18",
       "name": "Turn 18",
       "direction": "left",
-      "start_dist": 4156.8,
+      "start_dist": 4200.7,
       "apex_dist": 4279.2,
       "end_dist": 4401.6,
       "apexes": [

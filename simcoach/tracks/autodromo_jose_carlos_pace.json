@@ -8,7 +8,7 @@
       "direction": "left",
       "start_dist": 290.8,
       "apex_dist": 376.4,
-      "end_dist": 436.2,
+      "end_dist": 427.7,
       "apexes": [
         376.4
       ],
@@ -24,7 +24,7 @@
       "direction": "right",
       "start_dist": 436.2,
       "apex_dist": 479.0,
-      "end_dist": 547.4,
+      "end_dist": 543.1,
       "apexes": [
         479.0
       ],
@@ -134,7 +134,7 @@
       "label": "9",
       "name": "Pinheirinho",
       "direction": "left",
-      "start_dist": 2412.2,
+      "start_dist": 2416.4,
       "apex_dist": 2480.6,
       "end_dist": 2566.1,
       "apexes": [
@@ -184,7 +184,7 @@
       "direction": "left",
       "start_dist": 3182.0,
       "apex_dist": 3267.5,
-      "end_dist": 3353.1,
+      "end_dist": 3327.4,
       "apexes": [
         3267.5
       ],
@@ -198,7 +198,7 @@
       "label": "13",
       "name": "Turn 13",
       "direction": "left",
-      "start_dist": 3280.6,
+      "start_dist": 3327.4,
       "apex_dist": 3387.3,
       "end_dist": 3494.0,
       "apexes": [
