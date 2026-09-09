@@ -65,8 +65,12 @@ def format_corner_line(cm, units: str = "metric") -> str:
         aids.append(f"TC {cm.tc_pct:.0%}")
     if aids:
         line += ", " + " ".join(aids)
-    if not math.isnan(getattr(cm, "track_edge_min", float("nan"))):
-        line += f", {cm.track_edge_min:.1f}m from edge"
+    edge_min = getattr(cm, "track_edge_min", float("nan"))
+    if not math.isnan(edge_min):
+        # Negative = the car went past the white line. Render that as "past edge"
+        # rather than a nonsensical "-0.4m from edge".
+        line += (f", {-edge_min:.1f}m past edge" if edge_min < 0
+                 else f", {edge_min:.1f}m from edge")
     # Double-apex: name it and give the per-apex minima so the coach advises on both.
     aps = cm.apexes or []
     if len(aps) > 1 and cm.apex_min_speeds:

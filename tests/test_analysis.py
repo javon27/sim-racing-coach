@@ -141,9 +141,41 @@ def test_track_edge_distance_uses_path_lateral(synthetic_lap):
     assert not math.isclose(near_edge, mid_track)
     assert abs(near_edge - 0.5) < 1e-6
 
-    # Guard: a car running slightly beyond the white line (|path_lateral| >
-    # |track_edge|) must clamp to 0, never report a nonsense negative distance.
-    assert edge_min_for(half_width + 1.0) == 0.0
+    # A car beyond the white line (|path_lateral| > |track_edge|) reports how far
+    # PAST it went, as a negative number. Clamping that to 0.0 flattened 168 of
+    # 468 real corners (36%) -- true minima with a median of -0.38m, worst -9.75m,
+    # at a median 153 km/h -- and no other signal reports them: the lap-level
+    # `valid` flag (mLapInvalidated) fired for none of the 168.
+    assert abs(edge_min_for(half_width + 1.0) - -1.0) < 1e-6
+
+
+def test_track_edge_past_edge_wording(synthetic_lap):
+    # A negative distance-to-edge must read as "past edge", not as a nonsense
+    # "-0.4m from edge".
+    import numpy as np
+
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap
+    from simcoach.format import format_corner_line
+    from simcoach.model_types import LapRecord
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    ch = dict(synthetic_lap.channels)
+    in_corner = (ch["lap_distance"] > 800) & (ch["lap_distance"] < 1200)
+
+    def line_for(path_lateral_in_corner):
+        c = dict(ch)
+        c["track_edge"] = np.where(in_corner, 4.0, 10.0)
+        c["path_lateral"] = np.where(in_corner, path_lateral_in_corner, 0.0)
+        lap = LapRecord(**{**synthetic_lap.__dict__, "channels": c})
+        return format_corner_line(analyze_lap(lap, cmap).corners[0], "metric")
+
+    past = line_for(4.4)            # 0.4m beyond the white line
+    assert "0.4m past edge" in past
+    assert "-0.4" not in past and "from edge" not in past
+
+    inside = line_for(3.8)          # still 0.2m inside the line
+    assert "0.2m from edge" in inside
+    assert "past edge" not in inside
 
 
 def test_extended_inputs_absent_without_channels(synthetic_lap):
