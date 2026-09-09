@@ -33,11 +33,24 @@ describe("CornerSetupTabs", () => {
 
     await fireEvent.click(screen.getByText("Setup"));
     expect(await screen.findByText("Front Anti-roll Bar")).toBeTruthy();
-    expect(screen.queryByText(/select a lap/i)).toBeNull();
+    expect(screen.getByText(/select a lap/i).closest("[hidden]")).toBeTruthy();
 
     await fireEvent.click(screen.getByText("Corners"));
-    expect(screen.getByText(/select a lap/i)).toBeTruthy();
-    expect(screen.queryByText("Front Anti-roll Bar")).toBeNull();
+    expect(screen.getByText(/select a lap/i).closest("[hidden]")).toBeNull();
+    expect(screen.getByText("Front Anti-roll Bar").closest("[hidden]")).toBeTruthy();
+  });
+
+  it("keeps the Setup panel mounted across tab switches (issue #36: no refetch/reload flash)", async () => {
+    render(CornerSetupTabs, { props: { lapId: null } });
+
+    await fireEvent.click(screen.getByText("Setup"));
+    expect(await screen.findByText("Front Anti-roll Bar")).toBeTruthy();
+    expect(getSetup).toHaveBeenCalledTimes(1);
+
+    await fireEvent.click(screen.getByText("Corners"));
+    await fireEvent.click(screen.getByText("Setup"));
+    expect(screen.getByText("Front Anti-roll Bar")).toBeTruthy();
+    expect(getSetup).toHaveBeenCalledTimes(1); // still mounted, no re-fetch
   });
 
   it("no longer has a Map tab (the canonical map moved to the Coach right pane)", () => {

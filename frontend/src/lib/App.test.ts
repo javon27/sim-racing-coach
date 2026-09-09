@@ -44,6 +44,14 @@ vi.mock("./api", async () => {
 describe("App shell", () => {
   afterEach(cleanup);
 
+  // CornerSetupTabs (issue #36 fix) keeps the Setup panel mounted once
+  // opened, but mounts it lazily on first visit — these tests never touch
+  // the Setup tab, so getSetup() isn't actually called; mock stays as a
+  // defensive default in case a future test opens it.
+  beforeEach(() => {
+    vi.mocked(getSetup).mockResolvedValue({});
+  });
+
   // The shell mounts after the splash finishes its boot (health + prefetch),
   // so these await the shell rather than querying synchronously.
   it("renders the three nav items and a theme toggle", async () => {
