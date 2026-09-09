@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 import time
 
-from simcoach.analysis import analyze_lap
+from simcoach.analysis import analyze_lap, geometry_clause
 from simcoach.coach import _setup_lines
 from simcoach.format import (
     find_corner,
@@ -69,10 +69,13 @@ TOOLS = [
     {
         "name": "get_corner",
         "description": "The telemetry facts for ONE corner, by number (e.g. '10') or name "
-                       "(e.g. 'Village'). Use this for a question about a specific corner "
-                       "instead of pulling the whole lap. Pass `which` to target a specific "
-                       "lap — do this whenever the conversation is about a particular lap "
-                       "(e.g. 'lap 2'); it defaults to the latest lap otherwise.",
+                       "(e.g. 'Village'), plus its baked geometry (radius/width/banking/"
+                       "elevation change) and authored note when the map has them. Use this "
+                       "for shape/elevation/radius/banking questions, not just lap facts — "
+                       "never invent geometry from general knowledge, and use it instead of "
+                       "pulling the whole lap. Pass `which` to target a specific lap — do "
+                       "this whenever the conversation is about a particular lap (e.g. "
+                       "'lap 2'); it defaults to the latest lap otherwise.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -100,7 +103,11 @@ TOOLS = [
     {
         "name": "get_setup",
         "description": "The car's current adjustable setup values, so setup advice can name "
-                       "specific changes. Includes which adjustments are legal this tier.",
+                       "specific changes. Includes which adjustments are legal this tier, and "
+                       "each param's current position as (step N of lo-hi) -- an option INDEX, "
+                       "not a physical value: use it to see whether a param is already at its "
+                       "limit and which way it can move, never restate it as a rate/pressure/"
+                       "angle. Step size is NOT exposed; give direction, not an exact amount.",
         "input_schema": {"type": "object", "properties": {}},
     },
     {
@@ -469,8 +476,14 @@ class CoachContext:
             names = ", ".join(f"T{c.label or c.corner_no} {c.name}" for c in analysis.corners)
             return f"No corner matching {corner!r}. Corners this track: {names}"
         line = format_corner_line(cm, self.units)
-        note = self._corner_note(cm.label or cm.corner_no)
-        return f"{line}\nAuthored note: {note}" if note else line
+        label = cm.label or cm.corner_no
+        note = self._corner_note(label)
+        if note:
+            line += f"\nAuthored note: {note}"
+        geo = self._corner_geometry_clause(label, cm.direction)
+        if geo:
+            line += f"\nGeometry (baked from the track map): {geo}"
+        return line
 
     def _corner_note(self, label) -> str | None:
         """Authored note for one corner label from the merged map, or None.
@@ -492,6 +505,19 @@ class CoachContext:
             if m and int(m.group(1)) <= n <= int(m.group(2)):
                 return text
         return None
+
+    def _corner_geometry_clause(self, label, direction) -> str:
+        """Baked geometry (radius/width/banking/elevation) for one corner label, as
+        an owned-data clause, or '' if the map carries none for this corner.
+
+        `direction` is the corner's computed turn direction; banking reads as
+        banked or off-camber only against it (issue #35).
+        """
+        geometry = getattr(self.cmap, "geometry", None) or {}
+        metrics = geometry.get(str(label))
+        if not metrics:
+            return ""
+        return geometry_clause(metrics, direction)
 
     def get_track_notes(self, corner=None):
         notes = getattr(self.cmap, "notes", None) or {}

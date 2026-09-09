@@ -77,9 +77,11 @@ def reconstruct_ribbon(left_channels: dict, right_channels: dict, bins: int = 50
     width = np.hypot(lx - rx, lz - rz)
     seg = np.hypot(np.diff(cx), np.diff(cz))
     dist = np.concatenate([[0.0], np.cumsum(seg)])
-    # Bank from elevation. Convention MATCHES reconstruct_surface: positive = the
-    # RIGHT edge is higher (surface fits y vs +lateral offset). atan2 handles
-    # width->0; missing pos_y -> flat. Sign still rig-unverified on a banked track.
+    # Bank from elevation. Convention MATCHES reconstruct_surface: positive =
+    # banked for a right-hander, negative = banked for a left-hander (surface
+    # fits y vs +lateral offset; rig-validated, 9756b65). atan2 handles
+    # width->0; missing pos_y -> flat. Which side +lateral lands on in (x, z)
+    # is an observed convention here, not derived from RIGHT_IS_POSITIVE.
     if ly is not None and ry is not None:
         bank = np.arctan2(ry - ly, np.maximum(width, 1e-9))
     else:
@@ -171,7 +173,10 @@ def _smooth_curve(x: np.ndarray, z: np.ndarray, base_w: int, pct: float = 88.0) 
 
 
 def _lateral(cx: np.ndarray, cz: np.ndarray):
-    """Unit lateral (perpendicular to the centered-diff tangent, rot +90), closed loop."""
+    """Unit lateral (perpendicular to the centered-diff tangent, rot +90), closed
+    loop. Which side (+lateral) this lands on is an empirical (x, z)-handedness
+    fact, not derived from RIGHT_IS_POSITIVE -- see reconstruct_ribbon's bank
+    comment and 9756b65 for the rig-validated banking sign convention it feeds."""
     tx, tz = np.roll(cx, -1) - np.roll(cx, 1), np.roll(cz, -1) - np.roll(cz, 1)
     tn = np.hypot(tx, tz); tn[tn == 0] = 1.0
     return -tz / tn, tx / tn
@@ -188,7 +193,8 @@ def _lap_grid(x, z, d, max_len, bins):
 
 def _bank_per_bin(X, Z, Y, members, ctr_x, ctr_z, lat_x, lat_z, bins, w=_SMOOTH_W):
     """Cross-slope angle per bin from ALL samples: fit pos_y vs lateral offset.
-    Positive = right (+lateral) edge higher (matches reconstruct_ribbon)."""
+    Positive = banked for a right-hander, negative = banked for a left-hander
+    (rig-validated, 9756b65; matches reconstruct_ribbon)."""
     bnk = np.full(bins, np.nan)
     for b in range(bins):
         mm = members[b]

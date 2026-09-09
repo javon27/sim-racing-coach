@@ -399,6 +399,71 @@ def test_get_corner_output_includes_authored_note(tmp_path, synthetic_lap):
     assert "Authored note: brake earlier than it looks" in out
 
 
+def test_get_corner_output_includes_baked_geometry(tmp_path, synthetic_lap):
+    # Issue #35: radius/elevation/banking baked into the map must reach the
+    # coach through get_corner, not be left stranded at map-build time.
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    ctx.cmap.geometry = {"1": {"radius_m": 66.0, "elev_delta_m": -11.0, "banking_deg": 2.0}}
+    out = ctx.get_corner("1")
+    # T1 is a LEFT hairpin and +2.0 favours right (9756b65), so this reads
+    # off-camber -- the corner's computed direction must reach the clause (#35).
+    assert ("Geometry (baked from the track map): "
+            "radius ~66m, downhill 11m, 2\N{DEGREE SIGN} off-camber") in out
+    # same magnitude, sign flipped to favour the left-hander -> banked
+    ctx.cmap.geometry = {"1": {"radius_m": 66.0, "banking_deg": -2.0}}
+    assert "2\N{DEGREE SIGN} banked" in ctx.get_corner("1")
+
+
+def test_get_corner_output_omits_geometry_line_when_none_baked(tmp_path, synthetic_lap):
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    out = ctx.get_corner("1")
+    assert "Geometry" not in out
+
+
+def test_corner_geometry_clause_empty_for_unknown_corner():
+    ctx = _ctx_with_notes({})
+    assert ctx._corner_geometry_clause("99", None) == ""
+
+
+def test_get_setup_surfaces_step_position(tmp_path, synthetic_lap):
+    # Issue #32: minValue/maxValue are ORDINAL option indices, not physical bounds.
+    # Real captured shape: VM_BRAKE_BALANCE = stringValue "51.5:48.5", value 22,
+    # minValue 0, maxValue 57 -- bias *position* 22 of 0-57, NOT "max 57".
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    ctx.setup = {
+        "VM_BRAKE_BALANCE": {"stringValue": "51.5:48.5", "value": 22, "isFreeSetting": True,
+                             "minValue": 0, "maxValue": 57},
+    }
+    out = ctx.get_setup()
+    assert "Brake Balance: 51.5:48.5 (step 22 of 0-57)" in out
+    assert "(range" not in out
+
+
+def test_get_setup_omits_step_without_ordinal(tmp_path, synthetic_lap):
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    ctx.setup = {
+        "VM_BRAKE_BALANCE": {"stringValue": "51.5:48.5", "isFreeSetting": True,
+                             "minValue": 0, "maxValue": 57},
+    }
+    out = ctx.get_setup()
+    assert "Brake Balance: 51.5:48.5" in out
+    assert "0-57" not in out
+
+
+def test_get_last_setup_renders_step_position(tmp_path):
+    # The third _setup_lines caller must render identically -- and must not
+    # double-format a line that already carries its step suffix.
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    store.save_session_setup("s1--online", "spa", "gt3", {
+        "VM_REAR_WING": {"stringValue": "6.5 deg", "value": 6, "isFreeSetting": True,
+                         "minValue": 0, "maxValue": 9},
+    })
+    ctx = CoachContext(store, track="spa", car="gt3")
+    out = ctx.dispatch("get_last_setup", {})
+    assert "Rear Wing: 6.5 deg (step 6 of 0-9)" in out
+    assert out.count("step 6 of 0-9") == 1
+
+
 def test_dispatch_routes_and_handles_unknown(tmp_path, synthetic_lap):
     ctx, _, _ = _ctx(tmp_path, synthetic_lap)
     assert ctx.dispatch("get_corner", {"corner": "1"}).startswith("T1 ")

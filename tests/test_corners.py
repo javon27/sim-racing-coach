@@ -369,3 +369,29 @@ def test_clamp_rounding_never_pushes_an_apex_outside_its_window():
     assert in_window(c2.apex_dist, c2.start_dist, c2.end_dist), (
         f"apex {c2.apex_dist} rounded out of window [{c2.start_dist}, {c2.end_dist}]"
     )
+
+
+def test_corner_map_carries_baked_geometry():
+    # Baked geometry metrics (radius_m/width_m/banking_deg/elev_delta_m) live in
+    # the map JSON alongside corner-identity fields but aren't Corner fields --
+    # from_data must keep them reachable (issue #35), keyed by corner label.
+    from simcoach.corners import CornerMap
+    data = {
+        "corners": [
+            {"number": 1, "name": "T1", "direction": "left", "apex_dist": 50.0,
+             "start_dist": 10.0, "end_dist": 90.0,
+             "radius_m": 66.0, "width_m": 12.0, "banking_deg": 2.0, "elev_delta_m": -11.0},
+            {"number": 2, "name": "T2", "direction": "right", "apex_dist": 150.0,
+             "start_dist": 110.0, "end_dist": 190.0},  # no geometry for this one
+        ],
+    }
+    cm = CornerMap.from_data(data)
+    assert cm.geometry["1"] == {"radius_m": 66.0, "width_m": 12.0,
+                                 "banking_deg": 2.0, "elev_delta_m": -11.0}
+    assert "2" not in cm.geometry
+
+
+def test_corner_map_geometry_default_empty():
+    from simcoach.corners import CornerMap
+    cm = CornerMap.from_data({"corners": []})
+    assert cm.geometry == {}
