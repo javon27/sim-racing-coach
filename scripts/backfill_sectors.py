@@ -14,6 +14,12 @@ overwrites an already-seeded or hand-edited split.
 Reads machine-local app-data (the lap store); writes simcoach/tracks/*.json.
 Run once on the curator machine, then commit the JSON changes.
 
+[RIG] The `mCurrentSector` -> sector-number mapping these bounds come from is
+flagged UNCONFIRMED in `simcoach/lmu/smm.py`. The captured values agree tightly
+per track (Laguna: 48 laps within ~11 m) and Monza GP's S1 lands ~1988 m, right
+at the real line before Variante della Roggia -- but an in-game eyeball against
+the drawn sector lines is still wanted before these are treated as verified.
+
     python scripts/backfill_sectors.py [slug ...]
 """
 from __future__ import annotations
@@ -84,6 +90,13 @@ def seed_sectors(d: dict, bounds: list[float] | None) -> bool:
     return True
 
 
+def _bounds_lap_count(conn: sqlite3.Connection, slug: str) -> int:
+    """How many captured laps back this slug's bounds -- printed so the bake record
+    shows whether a map was seeded off 48 agreeing laps or a single one."""
+    rows = conn.execute("SELECT track FROM laps WHERE sector_bounds IS NOT NULL")
+    return sum(1 for (track,) in rows if track_slug(track) == slug)
+
+
 def backfill(slugs=None):
     conn = sqlite3.connect(str(db_path()))
     files = sorted(TRACKS_DIR.glob("*.json"))
@@ -93,11 +106,16 @@ def backfill(slugs=None):
             continue
         d = json.loads(f.read_text(encoding="utf-8"))
         bounds = _sector_bounds_for_slug(conn, slug)
+        n = _bounds_lap_count(conn, slug)
         if not seed_sectors(d, bounds):
-            print(f"{slug}: skip (sectors already set, or no captured bounds)")
+            why = ("sectors already set" if d.get("sectors") else
+                   "no captured bounds" if not bounds else
+                   "no length" if not (d.get("length") or d.get("length_m")) else
+                   f"bounds {bounds} failed validation against length {d.get('length')}")
+            print(f"{slug}: skip ({why}) | bounds laps={n}")
             continue
         f.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding="utf-8")
-        print(f"{slug}: seeded sectors {d['sectors']}")
+        print(f"{slug}: seeded sectors {d['sectors']} | bounds laps={n} | length={d.get('length')}")
     conn.close()
 
 

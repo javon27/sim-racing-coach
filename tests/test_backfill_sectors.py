@@ -3,7 +3,11 @@ import sqlite3
 
 import pytest
 
-from scripts.backfill_sectors import _sector_bounds_for_slug, seed_sectors
+from scripts.backfill_sectors import (
+    _bounds_lap_count,
+    _sector_bounds_for_slug,
+    seed_sectors,
+)
 from simcoach.track_lookup import track_slug
 
 # ---- seed_sectors -----------------------------------------------------------
@@ -143,6 +147,36 @@ def test_sector_bounds_for_a_layout_absent_from_the_store_is_none():
     # with the other layout's splits is the Critical corruption #41 asks about.
     conn = _conn_with_laps([(1, _MONZA_CG, json.dumps([700.0, 1400.0]))])
     assert _sector_bounds_for_slug(conn, "autodromo_nazionale_monza") is None
+
+
+def test_range_validation_alone_cannot_catch_a_cross_layout_mixup():
+    # Why the exact-slug match above is the ONLY guard against layout corruption,
+    # and seed_sectors' (0, length) check cannot be a second one: the real baked
+    # numbers (simcoach/tracks/*.json, 2026-09-09) put each Monza layout's captured
+    # splits comfortably inside the OTHER layout's length -- the two lengths differ
+    # by 38.5 m (0.7%). Any "does this look plausible for this length?" band wide
+    # enough to avoid false rejections would wave this straight through.
+    gp_len, cg_len = 5777.59, 5739.08
+    gp_bounds, cg_bounds = [1988.5, 3800.0], [1951.4, 3757.4]
+    for length in (gp_len, cg_len):
+        for bounds in (gp_bounds, cg_bounds):
+            d = {"length": length, "sectors": []}
+            assert seed_sectors(d, bounds) is True  # in range either way
+    assert abs(gp_len - cg_len) / gp_len < 0.01
+
+
+def test_bounds_lap_count_is_slug_exact():
+    # The bake record's "bounds laps=N" must count only the map's OWN layout --
+    # an inflated count would misrepresent how well-backed a seeded split is.
+    conn = _conn_with_laps([
+        (1, _MONZA_GP, json.dumps([1988.5, 3800.0])),
+        (2, _MONZA_GP, json.dumps([1988.6, 3800.1])),
+        (3, _MONZA_GP, None),                          # no bounds -> not counted
+        (4, _MONZA_CG, json.dumps([1951.4, 3757.4])),
+    ])
+    assert _bounds_lap_count(conn, "autodromo_nazionale_monza") == 2
+    assert _bounds_lap_count(conn, "monza_curva_grande_circuit") == 1
+    assert _bounds_lap_count(conn, "weathertech_raceway_laguna_seca") == 0
 
 
 def test_series_suffix_variants_still_share_one_slug():
