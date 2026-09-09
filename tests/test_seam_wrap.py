@@ -78,6 +78,36 @@ def test_approach_look_back_crosses_the_seam_for_a_corner_starting_at_zero():
     assert cm.apex_dist - cm.brake_point == 260.0
 
 
+def _throttle_lap(on_lo, on_hi, length=5000.0, step=10.0):
+    """A lap at a steady speed with the throttle above the 0.8 gate only in
+    [on_lo, on_hi], and braking everywhere else so the corner has a min-speed point."""
+    dist = np.arange(0.0, length, step)
+    on = (dist >= on_lo) & (dist <= on_hi)
+    return LapRecord("lmu", "T", "C", 90.0, True, 0.0, {
+        "lap_distance": dist, "speed": np.where(on, 200.0, 80.0),
+        "brake": np.where(on, 0.0, 1.0), "throttle": np.where(on, 1.0, 0.0),
+        "steering": np.full(dist.size, -0.4),
+    })
+
+
+def test_throttle_point_on_a_wrap_corner_whose_apex_precedes_the_seam():
+    """start 4800 -> apex 4950 -> seam -> end 100. A throttle-on sample BEFORE the
+    apex is not a throttle point at all (the clause stays silent); one after the
+    apex reports its real distance, seam or no seam -- never apex + a whole lap."""
+    corner = Corner(1, "Seam", "left", start_dist=4800.0, apex_dist=4950.0, end_dist=100.0)
+    cmap = CornerMap([corner], length=5000.0)
+
+    early = analyze_lap(_throttle_lap(4810.0, 4820.0), cmap).corners[0]
+    assert early.throttle_point is None                       # before the apex: no point
+    assert "back to throttle" not in format_corner_line(early)
+
+    late = analyze_lap(_throttle_lap(4990.0, 5000.0), cmap).corners[0]
+    assert late.throttle_point - late.apex_dist == 40.0       # 4990, still pre-seam
+
+    across = analyze_lap(_throttle_lap(0.0, 60.0), cmap).corners[0]
+    assert across.throttle_point - across.apex_dist == 50.0   # 0.0, one lap on
+
+
 def _write(tmp_path, corners):
     p = tmp_path / "t.json"
     p.write_text(json.dumps({"corners": corners, "length": 5000}))

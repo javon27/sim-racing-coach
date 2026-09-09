@@ -18,7 +18,10 @@ class CornerMetrics:
     min_spd: float
     exit_spd: float
     brake_point: float
-    throttle_point: float
+    # None = the driver never got past the throttle gate in this corner. A distance
+    # sentinel can't express that: any value here reads as a real throttle point to
+    # anything computing `throttle_point - apex_dist`.
+    throttle_point: float | None
     trailbrake_overlap: float
     peak_brake: float = 0.0          # max brake input in the corner (0..1)
     peak_lat_g: float = 0.0          # max |lateral g| — how hard the car was loaded
@@ -130,7 +133,7 @@ def _metrics_for_corner(
             min_spd=float("nan"),
             exit_spd=float("nan"),
             brake_point=corner.end_dist,
-            throttle_point=corner.end_dist,
+            throttle_point=None,
             trailbrake_overlap=0.0,
             label=label, apexes=apexes,
         )
@@ -153,7 +156,7 @@ def _metrics_for_corner(
             min_spd=float("nan"),
             exit_spd=float("nan"),
             brake_point=corner.end_dist,
-            throttle_point=corner.end_dist,
+            throttle_point=None,
             trailbrake_overlap=0.0,
             label=label, apexes=apexes,
         )
@@ -206,11 +209,22 @@ def _metrics_for_corner(
             # rather than report a "brake point" the apex appears to precede.
             brake_point = d0 - lap_len if d0 > corner.apex_dist else d0
 
+    # Throttle point: first sample past the 0.8 gate at/after the min-speed point, and
+    # None when there isn't one. Explicitly None rather than a distance sentinel -- the
+    # old `corner.end_dist` sits AFTER the apex by construction, so format_corner_line
+    # rendered (end_dist - apex_dist) as "back to throttle Nm after apex" for every
+    # corner the driver never took past 80% throttle: track geometry stated to the
+    # coach as a driver input.
     after_min = np.where(win_throttle[min_i:] > 0.8)[0]
-    throttle_point = end_after_apex
+    throttle_point = None
     if after_min.size:
         d1 = float(win_dist[min_i + after_min[0]])
-        throttle_point = d1 + lap_len if wrap and d1 < corner.apex_dist else d1
+        # Is d1 at/after the apex? Not "d1 >= apex_dist" -- across the seam the later
+        # distance is the SMALLER number. Measure forward from the apex, wrap-aware,
+        # and accept only what still lands inside the corner's post-apex extent.
+        fwd = (d1 - corner.apex_dist) % lap_len
+        if fwd <= (corner.end_dist - corner.apex_dist) % lap_len:
+            throttle_point = d1 if d1 >= corner.apex_dist else d1 + lap_len
 
     trailbrake_overlap = float(np.mean((win_brake > 0.1) & (np.abs(win_steering) > 0.1)))
     peak_brake = float(np.nanmax(win_brake)) if win_brake.size else 0.0

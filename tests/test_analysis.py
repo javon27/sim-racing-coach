@@ -206,6 +206,29 @@ def test_tire_summary_absent_without_channels(synthetic_lap):
     assert a.tire_means is None and a.tire_warmup is None
 
 
+def test_no_throttle_clause_when_the_driver_never_gets_past_the_gate(synthetic_lap):
+    """A corner the driver never takes past 80% throttle has NO throttle point. The
+    old sentinel was corner.end_dist -- after the apex by construction -- so
+    format_corner_line rendered (end_dist - apex_dist) as a driver input: track
+    geometry stated to the coach as fact. Wet running, traffic, a fuel-save stint
+    or a short-shifted slow corner all reach this."""
+    import dataclasses
+
+    import numpy as np
+
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap
+    from simcoach.format import format_corner_line
+
+    ch = dict(synthetic_lap.channels)
+    ch["throttle"] = np.full(len(ch["lap_distance"]), 0.6)   # never above the 0.8 gate
+    lap = dataclasses.replace(synthetic_lap, channels=ch)
+    c1 = analyze_lap(lap, CornerMap.load("simcoach/tracks/test_track.json")).corners[0]
+
+    assert c1.throttle_point is None
+    assert "back to throttle" not in format_corner_line(c1, "metric")
+
+
 def test_analyze_lap_delta(synthetic_lap):
     from simcoach.analysis import analyze_lap
     from simcoach.corners import CornerMap
@@ -239,7 +262,11 @@ def test_analyze_lap_metrics_tolerates_partial_nan_speed(synthetic_lap):
     c1 = a.corners[0]
 
     assert abs(c1.min_spd - 30.0) < 1e-6
-    assert 800 <= c1.throttle_point <= 1200
+    # The fixture holds 0.1 throttle across the whole of corner 1's window, so there
+    # is no throttle point. This used to read `800 <= throttle_point <= 1200` and
+    # passed on the old end_dist sentinel -- i.e. on the corner's geometry, never on
+    # a throttle reading.
+    assert c1.throttle_point is None
 
 
 def test_analyze_lap_metrics_all_nan_speed_window_is_degenerate(synthetic_lap):
@@ -260,7 +287,7 @@ def test_analyze_lap_metrics_all_nan_speed_window_is_degenerate(synthetic_lap):
 
     assert np.isnan(c1.min_spd)
     assert c1.brake_point == 1200.0
-    assert c1.throttle_point == 1200.0
+    assert c1.throttle_point is None   # no samples to find one in, so no claim
 
 
 def test_analyze_lap_delta_is_none_when_min_spd_is_nan(synthetic_lap):

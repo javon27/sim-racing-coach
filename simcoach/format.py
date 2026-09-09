@@ -45,12 +45,14 @@ def format_corner_line(cm, units: str = "metric") -> str:
         # rather than render nan speeds + the defaulted (fake) brake/throttle.
         return f"{tag} {cm.name} ({cm.direction}){sect}: no telemetry captured here"
     brake_before = cm.apex_dist - cm.brake_point
-    thr_after = cm.throttle_point - cm.apex_dist
     brake_txt = (
         f"brake {brake_before:.0f}m before apex @ {cm.peak_brake:.0%} peak"
         if brake_before > 0 else "no heavy braking"
     )
-    thr_txt = f", back to throttle {thr_after:.0f}m after apex" if thr_after > 0 else ""
+    # None = the driver never got past the throttle gate here. Say nothing rather
+    # than turn the corner's own geometry into a claimed driver input.
+    thr_txt = (f", back to throttle {cm.throttle_point - cm.apex_dist:.0f}m after apex"
+               if cm.throttle_point is not None else "")
     line = (
         f"{tag} {cm.name} ({cm.direction}){sect}: "
         f"{spd(cm.entry_spd):.0f}→min {spd(cm.min_spd):.0f}→{spd(cm.exit_spd):.0f} {spd_u}, "

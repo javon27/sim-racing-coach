@@ -124,6 +124,19 @@ def _overlaps(corners: list[dict], length: float) -> list[str]:
     return bad
 
 
+def _merge_notes(*blocks: dict | None) -> dict | None:
+    """Later blocks win; `corners` merges key-by-key instead of being replaced.
+    None when nothing survives."""
+    out: dict = {}
+    corners: dict = {}
+    for b in blocks:
+        if b:
+            out.update(b)
+            corners.update(b.get("corners") or {})
+    out["corners"] = corners
+    return out if any(out.values()) else None
+
+
 def promote(src: Path | str, tracks_dir: Path | str = TRACKS_DIR, *,
             slug: str | None = None, force: bool = False) -> Path:
     """Validate the user map at `src` and write it into `tracks_dir` as a shipped
@@ -152,12 +165,14 @@ def promote(src: Path | str, tracks_dir: Path | str = TRACKS_DIR, *,
             f"{target} already ships. Shipped geometry is authoritative and the user's "
             f"copy is only an annotation overlay on it -- pass --force to replace it "
             f"deliberately (git diff/checkout is the undo).")
+    shipped: dict = {}
     if target.exists():
         # Byte-fidelity proof: this writer must reproduce the shipped file it is
         # about to replace, byte for byte, or the whole shipped set's format is
         # about to drift. Abort rather than reformat 10k lines under a map edit.
         old = target.read_bytes()
-        if _serialize(json.loads(old.decode("utf-8"))) != old:
+        shipped = json.loads(old.decode("utf-8"))
+        if _serialize(shipped) != old:
             raise PromoteError(
                 f"{target}: shipped format has drifted from this writer's output; "
                 f"promoting would reformat the file. Fix _serialize first.")
@@ -177,10 +192,20 @@ def promote(src: Path | str, tracks_dir: Path | str = TRACKS_DIR, *,
         raise PromoteError("corner windows still overlap after clamping: " + "; ".join(bad))
 
     out = {**data, "track": slug, "corners": corners}
-    # Notes travel with the map they were authored against, guarded by the same rule
-    # the editor's save uses so a stale label can't rebind a note to another corner.
-    notes = guard_corner_notes(slug, data.get("notes"), len(data.get("corners") or []),
-                               [c["label"] for c in corners])
+    # Authored notes from BOTH maps survive, each guarded against the corners it was
+    # written for: #37's rule is "keep the ones whose label still binds", not "always
+    # keep" (that bound a hairpin's note to a renumbered corner) and not "drop the
+    # target's" (that made --force a data-loss footgun in the operation a curator
+    # thinks is safest -- promoting a shipped map from its own file has to be a no-op).
+    # Two calls rather than one merged bag, because the count arm needs each origin's
+    # own corner count: a 12-corner shipped map replaced by a 15-corner rebuild must
+    # drop the old per-corner notes wholesale while the source keeps its own.
+    labels = [c["label"] for c in corners]
+    notes = _merge_notes(
+        guard_corner_notes(slug, shipped.get("notes"), len(shipped.get("corners") or []),
+                           labels),
+        guard_corner_notes(slug, data.get("notes"), len(data.get("corners") or []), labels),
+    )
     if notes:
         out["notes"] = notes
     else:

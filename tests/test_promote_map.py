@@ -157,6 +157,21 @@ def test_authored_notes_survive_but_a_stale_corner_key_is_dropped(tmp_path):
     assert written["notes"]["corners"] == {"1": "brake late"}
 
 
+def test_force_keeps_the_shipped_maps_notes_that_still_bind(tmp_path):
+    """--force must run the notes guard, not bypass it: a note whose label survives
+    the replacement is kept, one whose label is gone is dropped rather than rebound."""
+    tracks = _tracks(tmp_path)
+    promote(_src(tmp_path, _map(notes={"overview": "curator wrote this",
+                                       "corners": {"2": "late apex", "3": "flat"}})),
+            tracks)
+    replacement = _map(notes={"corners": {"1": "from the driver"}})
+    replacement["corners"][2]["label"] = "3A"     # corner 3 relabelled: "3" no longer binds
+    written = json.loads(promote(_src(tmp_path, replacement), tracks, force=True)
+                         .read_text("utf-8"))
+    assert written["notes"]["overview"] == "curator wrote this"   # not corner-keyed
+    assert written["notes"]["corners"] == {"1": "from the driver", "2": "late apex"}
+
+
 def test_refuses_a_source_whose_stem_is_not_a_slug(tmp_path):
     with pytest.raises(PromoteError, match="not a valid track slug"):
         promote(_src(tmp_path, _map(), name="Not A Slug.json"), _tracks(tmp_path))

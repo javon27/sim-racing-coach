@@ -56,7 +56,7 @@ export interface CornerMetrics {
   min_spd: number;
   exit_spd: number;
   brake_point: number;
-  throttle_point: number;
+  throttle_point: number | null;   // null = never past the throttle gate in this corner
   trailbrake_overlap: number;
   peak_brake: number;
   peak_lat_g: number;
