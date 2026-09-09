@@ -4,8 +4,20 @@ from simcoach import config
 
 
 def test_defaults_present():
-    for k in ("units", "input_device", "model", "corner_naming", "driver"):
+    for k in ("units", "input_device", "model", "corner_naming", "driver", "show_cost"):
         assert k in config.DEFAULTS
+
+
+def test_show_cost_defaults_to_true(tmp_path):
+    """The driver sees what the coach costs unless they turn it off."""
+    assert config.DEFAULTS["show_cost"] is True
+    assert config.load_config(str(tmp_path / "fresh.json"))["show_cost"] is True
+
+
+def test_show_cost_round_trips_false(tmp_path):
+    p = tmp_path / "c.json"
+    config.save_config({"show_cost": False}, str(p))
+    assert config.load_config(str(p))["show_cost"] is False
 
 
 def test_load_merges_file_over_defaults(tmp_path):

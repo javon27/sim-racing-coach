@@ -133,6 +133,7 @@ export interface SettingsResponse {
   input_device: "wheel" | "controller";
   model: "opus" | "sonnet" | "haiku";
   corner_naming: "names" | "numbers";
+  show_cost: boolean;
   log_level: string;
   driver: DriverProfile;
   api_key_set: boolean;

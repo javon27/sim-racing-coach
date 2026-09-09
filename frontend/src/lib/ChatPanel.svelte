@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { CoachStream, type CoachPhase, type ToolActivity } from "./coach";
-  import { getChatMessages, getChatUsage, type ChatUsage } from "./api";
+  import { getChatMessages, getChatUsage, getSettings, type ChatUsage } from "./api";
 
   let {
     sessionId,
@@ -97,6 +97,9 @@
   let usedTokens = $state(0);
   let cost: number | null = $state(null);
   let costComplete = $state(true);
+  // Settings `show_cost` hides only the dollar figure; tokens always show. Read the
+  // same way CornerPanel reads `units` — defaults on, so a settings hiccup shows it.
+  let showCost = $state(true);
 
   function formatTokens(n: number): string {
     return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
@@ -183,7 +186,18 @@
     }
   });
 
+  // Read the Settings toggle the same way CornerPanel reads `units`. Best-effort:
+  // the sidecar may not be up yet, so any failure keeps the default (show it).
+  async function loadShowCost() {
+    try {
+      showCost = (await getSettings()).show_cost !== false;
+    } catch {
+      /* keep the default */
+    }
+  }
+
   onMount(() => {
+    loadShowCost();
     const unsubscribe = stream.subscribe((s) => {
       const snap = s as { phase: CoachPhase; toolActivity: ToolActivity | null; answer: string; chatId: string | null; error: string | null; usage?: ChatUsage | null; cost?: number | null; costComplete?: boolean };
       phase = snap.phase;
@@ -243,7 +257,7 @@
         class="meter"
         data-testid="usage-meter"
         title="Tokens billed in this chat, and the estimated API cost of them."
-      >{formatTokens(usedTokens)} tokens · {formatCost(cost, costComplete)}</span>
+      >{formatTokens(usedTokens)} tokens{showCost ? ` · ${formatCost(cost, costComplete)}` : ""}</span>
     {/if}
     <button type="button" class="new-chat" onclick={newSession}>+ New session</button>
   </div>

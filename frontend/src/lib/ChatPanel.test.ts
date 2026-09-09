@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/svelte";
-import { getChatMessages, getChatUsage, type ChatUsage } from "./api";
+import { getChatMessages, getChatUsage, getSettings, type ChatUsage, type SettingsResponse } from "./api";
 import type { CoachPhase, ToolActivity } from "./coach";
 import ChatPanel from "./ChatPanel.svelte";
 
 vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
-  return { ...actual, getChatMessages: vi.fn(), getChatUsage: vi.fn() };
+  return { ...actual, getChatMessages: vi.fn(), getChatUsage: vi.fn(), getSettings: vi.fn() };
 });
 
 function usage(overrides: Partial<ChatUsage> = {}): ChatUsage {
@@ -42,6 +42,8 @@ describe("ChatPanel", () => {
     vi.mocked(getChatMessages).mockReset();
     vi.mocked(getChatUsage).mockReset();
     vi.mocked(getChatUsage).mockResolvedValue({ usage: usage(), cost: 0, cost_complete: true });
+    vi.mocked(getSettings).mockReset();
+    vi.mocked(getSettings).mockResolvedValue({ show_cost: true } as SettingsResponse);
   });
 
   afterEach(cleanup);
@@ -276,6 +278,26 @@ describe("ChatPanel", () => {
 
     expect(await screen.findByText("spa question")).toBeTruthy();
     expect(screen.queryByTestId("usage-meter")).toBeNull();
+  });
+
+  it("with the Settings cost estimate off, shows tokens but no dollar figure", async () => {
+    vi.mocked(getSettings).mockResolvedValue({ show_cost: false } as SettingsResponse);
+    const stream = new FakeStream();
+    await answerWith(stream, { usage: usage({ total: 1200 }), cost: 0.011 });
+
+    const meter = await screen.findByTestId("usage-meter");
+    await waitFor(() => expect(meter.textContent).not.toContain("$"));
+    expect(meter.textContent).toMatch(/1\.2k tokens/);
+    expect(meter.textContent).not.toContain("0.011");
+  });
+
+  it("a failed settings fetch still shows the cost (the default is on)", async () => {
+    vi.mocked(getSettings).mockRejectedValue(new Error("sidecar not up"));
+    const stream = new FakeStream();
+    await answerWith(stream, { usage: usage({ total: 1200 }), cost: 0.011 });
+
+    const meter = await screen.findByTestId("usage-meter");
+    expect(meter.textContent).toMatch(/\$0\.011/);
   });
 
   it("zeroes the meter on + New session", async () => {

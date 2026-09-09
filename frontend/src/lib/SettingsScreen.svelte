@@ -55,6 +55,7 @@
     const cfg = {
       units: settings.units,
       corner_naming: settings.corner_naming,
+      show_cost: settings.show_cost,
       input_device: settings.input_device,
       model: settings.model,
       driver: settings.driver,
@@ -312,6 +313,17 @@
             <option value="sonnet">Sonnet</option>
             <option value="haiku">Haiku</option>
           </select>
+        </div>
+      </div>
+      <div class="field">
+        <span class="lbl">Cost estimate<InfoTip text="Show the estimated $ next to the chat's token count. Token counts always show; this only hides the dollar figure." /></span>
+        <div class="control">
+          <input
+            type="checkbox"
+            aria-label="Cost estimate"
+            bind:checked={settings.show_cost}
+            onchange={saveConfig}
+          />
         </div>
       </div>
       <div class="field">

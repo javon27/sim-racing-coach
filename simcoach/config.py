@@ -15,6 +15,7 @@ DEFAULTS = {
     "input_device": "wheel",      # "wheel" or "controller"
     "model": "sonnet",            # "opus" | "sonnet" | "haiku" -> make_model
     "corner_naming": "names",     # "names" or "numbers"
+    "show_cost": True,            # show the estimated $ on the chat meter (tokens always show)
     "log_level": "INFO",          # stdlib logging level name; see logging_setup
     "lmu_dir": None,              # override for lmu.install.lmu_userdata_dir()
     "lmu_build": None,            # last-seen LMU Steam build id (detected, persisted)
