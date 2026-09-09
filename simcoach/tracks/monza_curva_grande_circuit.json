@@ -2650,7 +2650,10 @@
     5727.58,
     5739.08
   ],
-  "sectors": [],
+  "sectors": [
+    1951.4,
+    3757.4
+  ],
   "sections": [
     {
       "name": "Variante della Rogglia",
