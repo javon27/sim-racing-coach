@@ -23,6 +23,7 @@ class FakeStream {
   usage: ChatUsage | null = null;
   cost: number | null = null;
   costComplete = true;
+  longChat = false;
   ask = vi.fn();
   #listeners = new Set<(value: this) => void>();
 
@@ -178,18 +179,25 @@ describe("ChatPanel", () => {
   // --- the usage/cost meter (issue #39) ---
 
   async function answerWith(stream: FakeStream, meter: {
-    usage: ChatUsage; cost: number | null; costComplete?: boolean;
-  }) {
-    render(ChatPanel, { props: { stream } });
+    usage: ChatUsage; cost: number | null; costComplete?: boolean; longChat?: boolean;
+  }, props: Record<string, unknown> = {}) {
+    render(ChatPanel, { props: { stream, ...props } });
     const textarea = await screen.findByPlaceholderText(/ask your engineer/i);
     await fireEvent.input(textarea, { target: { value: "where am I losing time?" } });
     await fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await answerAgain(stream, meter);
+  }
+
+  async function answerAgain(stream: FakeStream, meter: {
+    usage: ChatUsage; cost: number | null; costComplete?: boolean; longChat?: boolean;
+  }) {
     stream.phase = "done";
     stream.answer = "Brake later into T3.";
     stream.chatId = "chat-1";
     stream.usage = meter.usage;
     stream.cost = meter.cost;
     stream.costComplete = meter.costComplete ?? true;
+    stream.longChat = meter.longChat ?? false;
     stream.notify();
   }
 
@@ -308,5 +316,61 @@ describe("ChatPanel", () => {
     await fireEvent.click(screen.getByRole("button", { name: /new session/i }));
 
     await waitFor(() => expect(screen.queryByTestId("usage-meter")).toBeNull());
+  });
+
+  // --- the soft long-chat nudge (issue #39, task 7) ---
+
+  it("shows no nudge on a normal-length chat", async () => {
+    const stream = new FakeStream();
+    await answerWith(stream, { usage: usage({ total: 1200 }), cost: 0.011 });
+
+    expect(await screen.findByTestId("usage-meter")).toBeTruthy();
+    expect(screen.queryByTestId("long-chat-nudge")).toBeNull();
+  });
+
+  it("nudges toward a New chat once the chat gets long", async () => {
+    const stream = new FakeStream();
+    await answerWith(stream,
+      { usage: usage({ total: 200000 }), cost: 0.9, longChat: true });
+
+    const nudge = await screen.findByTestId("long-chat-nudge");
+    expect(nudge.textContent).toMatch(/long chat/i);
+    expect(nudge.textContent).toMatch(/new chat/i);
+  });
+
+  it("the nudge's action starts a fresh chat, so the next ask sends no chat_id", async () => {
+    const stream = new FakeStream();
+    await answerWith(stream,
+      { usage: usage({ total: 200000 }), cost: 0.9, longChat: true });
+    await screen.findByTestId("long-chat-nudge");
+
+    await fireEvent.click(screen.getByRole("button", { name: /start a new chat/i }));
+
+    await waitFor(() => expect(screen.queryByTestId("long-chat-nudge")).toBeNull());
+    expect(screen.getByText(/new chat — ask a question/i)).toBeTruthy();
+    expect(screen.queryByTestId("usage-meter")).toBeNull();
+
+    const textarea = screen.getByPlaceholderText(/ask your engineer/i);
+    await fireEvent.input(textarea, { target: { value: "fresh start" } });
+    await fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    expect(stream.ask).toHaveBeenLastCalledWith("fresh start",
+      { sessionId: undefined, lapId: undefined, chatId: undefined });
+  });
+
+  it("does not reappear after dismissal within the same thread", async () => {
+    const stream = new FakeStream();
+    await answerWith(stream,
+      { usage: usage({ total: 200000 }), cost: 0.9, longChat: true });
+    await screen.findByTestId("long-chat-nudge");
+
+    await fireEvent.click(screen.getByRole("button", { name: /dismiss/i }));
+    await waitFor(() => expect(screen.queryByTestId("long-chat-nudge")).toBeNull());
+
+    // a later answer in the SAME thread still reports long_chat -- stay dismissed
+    await answerAgain(stream,
+      { usage: usage({ total: 260000 }), cost: 1.2, longChat: true });
+
+    await waitFor(() => expect(screen.queryByTestId("usage-meter")).toBeTruthy());
+    expect(screen.queryByTestId("long-chat-nudge")).toBeNull();
   });
 });

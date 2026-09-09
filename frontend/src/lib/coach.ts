@@ -33,6 +33,8 @@ export class CoachStream {
   usage: ChatUsage | null = null;
   cost: number | null = null;
   costComplete = true;
+  // The server's soft "this chat is getting long" signal (it owns the threshold).
+  longChat = false;
 
   #ws: WebSocket | null = null;
   #listeners = new Set<(value: this) => void>();
@@ -54,6 +56,7 @@ export class CoachStream {
     this.usage = null;
     this.cost = null;
     this.costComplete = true;
+    this.longChat = false;
     this.#settled = false;
     this.#notify();
 
@@ -82,6 +85,7 @@ export class CoachStream {
             this.usage = data.usage ?? null;
             this.cost = data.cost ?? null;
             this.costComplete = data.cost_complete ?? true;
+            this.longChat = data.long_chat === true;
             this.#settled = true;
             this.#close();
             break;

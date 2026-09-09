@@ -25,6 +25,7 @@
       usage?: ChatUsage | null;
       cost?: number | null;
       costComplete?: boolean;
+      longChat?: boolean;
       ask(question: string, opts: { sessionId?: string; lapId?: number; chatId?: string }): void;
       subscribe(run: (value: unknown) => void): () => void;
     };
@@ -116,10 +117,17 @@
     return `${prefix}$${c < 1 ? c.toFixed(3) : c.toFixed(2)}`;
   }
 
+  // Soft long-chat nudge. The server decides WHEN (it owns the threshold); this only
+  // renders it, and dismissing sticks for the rest of the thread so it never nags.
+  let longChat = $state(false);
+  let nudgeDismissed = $state(false);
+
   function clearMeter() {
     usedTokens = 0;
     cost = null;
     costComplete = true;
+    longChat = false;
+    nudgeDismissed = false;
   }
 
   // Keep the newest message/streaming text in view, unless the user has
@@ -199,7 +207,7 @@
   onMount(() => {
     loadShowCost();
     const unsubscribe = stream.subscribe((s) => {
-      const snap = s as { phase: CoachPhase; toolActivity: ToolActivity | null; answer: string; chatId: string | null; error: string | null; usage?: ChatUsage | null; cost?: number | null; costComplete?: boolean };
+      const snap = s as { phase: CoachPhase; toolActivity: ToolActivity | null; answer: string; chatId: string | null; error: string | null; usage?: ChatUsage | null; cost?: number | null; costComplete?: boolean; longChat?: boolean };
       phase = snap.phase;
       toolActivity = snap.toolActivity;
       answer = snap.answer;
@@ -214,6 +222,7 @@
           usedTokens = snap.usage.total;
           cost = snap.cost ?? null;
           costComplete = snap.costComplete ?? true;
+          longChat = snap.longChat === true;
         }
       } else if (snap.phase === "error") {
         messages = [...messages, { role: "coach", text: snap.error ?? "Something went wrong." }];
@@ -261,6 +270,21 @@
     {/if}
     <button type="button" class="new-chat" onclick={newSession}>+ New session</button>
   </div>
+  {#if longChat && !nudgeDismissed}
+    <!-- Soft nudge only: nothing is summarized or truncated. Prior sessions stay
+         reachable through the coach's own history tools, so a reset loses nothing
+         it cannot re-fetch. -->
+    <div class="nudge" data-testid="long-chat-nudge" role="status">
+      <span>Long chat — start a New chat to keep it snappy.</span>
+      <button type="button" class="nudge-go" onclick={newChat}>Start a new chat</button>
+      <button
+        type="button"
+        class="nudge-x"
+        aria-label="Dismiss"
+        onclick={() => (nudgeDismissed = true)}
+      >×</button>
+    </div>
+  {/if}
   <div class="chat-scroll" bind:this={scrollEl}>
     <div class="thread">
       {#if messages.length === 0 && !waiting}
@@ -351,6 +375,42 @@
   }
   .new-chat:hover {
     border-color: var(--accent);
+  }
+  .nudge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--faint);
+    border-bottom: 1px solid var(--line);
+  }
+  .nudge-go {
+    font-family: var(--body);
+    font-size: 11px;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 3px 9px;
+    cursor: pointer;
+  }
+  .nudge-go:hover {
+    border-color: var(--accent);
+  }
+  .nudge-x {
+    margin-left: auto;
+    font-size: 14px;
+    line-height: 1;
+    color: var(--faint);
+    background: none;
+    border: none;
+    padding: 0 2px;
+    cursor: pointer;
+  }
+  .nudge-x:hover {
+    color: var(--text);
   }
   .chat-empty {
     color: var(--faint);

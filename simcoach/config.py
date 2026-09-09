@@ -16,6 +16,10 @@ DEFAULTS = {
     "model": "sonnet",            # "opus" | "sonnet" | "haiku" -> make_model
     "corner_naming": "names",     # "names" or "numbers"
     "show_cost": True,            # show the estimated $ on the chat meter (tokens always show)
+    # Past this many billed tokens in one chat, the chat screen softly suggests
+    # starting a New chat. A SOFT nudge only -- nothing is summarized or truncated.
+    # 0 disables it.
+    "chat_token_soft_limit": 150_000,
     "log_level": "INFO",          # stdlib logging level name; see logging_setup
     "lmu_dir": None,              # override for lmu.install.lmu_userdata_dir()
     "lmu_build": None,            # last-seen LMU Steam build id (detected, persisted)

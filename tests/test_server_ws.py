@@ -404,6 +404,32 @@ def test_coach_ws_usage_missing_degrades_the_meter_not_the_answer(tmp_path):
     assert done["usage"]["total"] == 0
 
 
+def test_coach_ws_long_chat_is_false_under_the_soft_limit(tmp_path):
+    client, _ = _client(tmp_path)
+    done = _ask(client, {"question": "q"})[-1]
+    assert done["usage"]["total"] < 150_000      # the default threshold
+    assert done["long_chat"] is False
+
+
+def test_coach_ws_long_chat_fires_past_the_soft_limit(tmp_path, monkeypatch):
+    """The core owns the threshold decision; the UI only renders the nudge."""
+    from simcoach import config
+    monkeypatch.setattr(config, "load_config",
+                        lambda *a, **k: {**config.DEFAULTS, "chat_token_soft_limit": 1})
+    client, _ = _client(tmp_path)
+    done = _ask(client, {"question": "q"})[-1]
+    assert done["usage"]["total"] >= 1
+    assert done["long_chat"] is True
+
+
+def test_coach_ws_long_chat_threshold_of_zero_disables_the_nudge(tmp_path, monkeypatch):
+    from simcoach import config
+    monkeypatch.setattr(config, "load_config",
+                        lambda *a, **k: {**config.DEFAULTS, "chat_token_soft_limit": 0})
+    client, _ = _client(tmp_path)
+    assert _ask(client, {"question": "q"})[-1]["long_chat"] is False
+
+
 def test_coach_ws_errored_turn_still_closes_clean(tmp_path, monkeypatch):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     coach = Coach(FakeModel(reply="x"))

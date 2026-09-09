@@ -1321,6 +1321,11 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                     # or aggregate failure costs the meter, never the answer.
                     terminal.update(_usage_view(app.state.store.chat_usage(chat_id)))
                     terminal["model"] = used_model
+                    # Soft long-chat nudge: the core decides, the UI only renders it.
+                    # A SOFT signal — nothing is summarized, windowed or truncated;
+                    # the driver chooses whether to start a New chat. 0 disables it.
+                    soft = cfg.get("chat_token_soft_limit") or 0
+                    terminal["long_chat"] = bool(soft) and terminal["usage"]["total"] >= soft
                 except Exception:
                     pass
             _emit(terminal)

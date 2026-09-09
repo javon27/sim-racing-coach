@@ -191,6 +191,28 @@ describe("CoachStream", () => {
     expect(stream.cost).toBeNull();
   });
 
+  it("captures the long_chat nudge flag from the done frame", () => {
+    const stream = new CoachStream();
+    stream.ask("q");
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.();
+
+    emit(ws, { type: "done", chat_id: "c1", usage: { total: 200000 }, cost: 1, cost_complete: true, long_chat: true });
+
+    expect(stream.longChat).toBe(true);
+  });
+
+  it("defaults long_chat to false when the frame omits it", () => {
+    const stream = new CoachStream();
+    stream.ask("q");
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.();
+
+    emit(ws, { type: "done", chat_id: "c1" });
+
+    expect(stream.longChat).toBe(false);
+  });
+
   it("clears usage when a new ask starts", () => {
     const stream = new CoachStream();
     stream.ask("q1");
