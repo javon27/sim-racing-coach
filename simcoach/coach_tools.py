@@ -9,7 +9,6 @@ current session (track/car/lap), which the live-session re-resolution keeps fres
 """
 from __future__ import annotations
 
-import re
 import time
 
 from simcoach.analysis import analyze_lap, geometry_clause
@@ -23,7 +22,7 @@ from simcoach.format import (
     format_wheel_report,
 )
 from simcoach.fuel import fuel_per_lap_from_channel, laps_remaining
-from simcoach.track_lookup import load_track_knowledge
+from simcoach.track_lookup import load_track_knowledge, note_key_binds
 
 # Tool specs advertised to the model (Anthropic tool-use format).
 TOOLS = [
@@ -489,21 +488,28 @@ class CoachContext:
     def _corner_note(self, label) -> str | None:
         """Authored note for one corner label from the merged map, or None.
 
-        Notes may be keyed by a hyphen range ("10-11") covering several
-        corners, while corner maps label corners individually ("10", "11").
-        Fall back to a range match when the label is a plain integer.
+        Notes may be keyed by a hyphen range ("10-11") covering several corners,
+        while corner maps label corners individually ("10", "11"). `note_key_binds`
+        owns that grammar, shared with the map-save guard that decides which notes
+        survive a rebuild -- the two must agree on what a key names, or the guard
+        deletes notes this path could still serve.
+
+        Not a pure delegation: two rules live here rather than in the grammar.
+        An exact label is looked up FIRST, so a specific '12' note wins over a
+        '11-13' note covering it whatever order the dict happens to carry them in.
+        And the range scan takes the first covering key it meets, so two overlapping
+        ranges resolve by insertion order -- no shipped map has any.
         """
+        # 'corner' reaches here straight from the model's tool call, so it is arbitrary
+        # text; `note_key_binds` is total and the lookups are by string, so no shape of
+        # it can raise out of an LLM-callable tool.
         notes = getattr(self.cmap, "notes", None) or {}
         by_corner = notes.get("corners") or {}
         label = str(label)
-        if label in by_corner:
+        if label in by_corner:   # an exact label wins over a range that covers it
             return by_corner[label]
-        if not label.isdigit():
-            return None
-        n = int(label)
         for key, text in by_corner.items():
-            m = re.fullmatch(r"(\d+)-(\d+)", key)
-            if m and int(m.group(1)) <= n <= int(m.group(2)):
+            if note_key_binds(key, {label}):
                 return text
         return None
 

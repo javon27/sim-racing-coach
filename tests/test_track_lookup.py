@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from simcoach.track_lookup import load_track_knowledge, resolve_track_map, track_slug
+from simcoach.track_lookup import (
+    load_track_knowledge,
+    note_key_binds,
+    resolve_track_map,
+    track_slug,
+)
 
 KNOWLEDGE = Path(__file__).resolve().parents[1] / "simcoach" / "knowledge"
 
@@ -166,3 +171,192 @@ def test_every_shipped_knowledge_note_is_reachable():
     for p in notes:
         assert track_slug(p.stem) == p.stem, p.name
         assert load_track_knowledge(p.stem).startswith("#"), p.name
+
+
+# --- per-corner note-key grammar -------------------------------------------------
+# Two shapes across all 12 shipped maps: a single label ('7', 119 keys) and an
+# inclusive numeric range ('2-4', '11-13', 16 keys). Nothing else occurs.
+
+def test_note_key_binds_single_label_is_plain_membership():
+    assert note_key_binds("7", {"6", "7", "8"})
+    assert not note_key_binds("7", {"6", "8"})
+
+
+def test_note_key_binds_range_covers_every_corner_it_spans():
+    # Endpoints AND the corners between them -- '11-13' names 12, and that is how
+    # the coach's read path resolves it, so the save guard must agree.
+    assert note_key_binds("11-13", {"12"})
+    assert note_key_binds("11-13", {"11"})
+    assert note_key_binds("11-13", {"13"})
+    assert not note_key_binds("11-13", {"10", "14"})
+
+
+def test_note_key_binds_range_survives_partially():
+    assert note_key_binds("2-4", {"1", "2", "3A", "4A"})       # 2 is still there
+    assert not note_key_binds("2-4", {"1", "2A", "3A", "4A"})  # names nothing left
+
+
+def test_note_key_binds_unparseable_key_names_only_itself():
+    # A GP-style '2A-2B' or a comma list is not a shape the coach's read path can
+    # resolve, so it binds only on an exact label match -- keeping it on the
+    # strength of its parts would preserve data nothing can ever serve.
+    assert not note_key_binds("2A-2B", {"2A", "2B"})
+    assert not note_key_binds("1,2", {"1", "2"})
+    assert note_key_binds("2A-2B", {"2A-2B"})
+
+
+def test_note_key_binds_absurd_range_is_bounded_not_resolved():
+    # Authored keys are free text (`PUT /notes` validates nothing), and the groups are
+    # fed to int(). A run of digits past CPython's 4300-digit int() limit made the
+    # parse RAISE, which is a 500 on every later map save and a dead coach tool -- for
+    # a key already persisted to disk. So the grammar bounds the groups at three
+    # digits, the width of a real corner number, and anything longer is not a range:
+    # it names only itself, like '2A-2B'.
+    assert not note_key_binds("1-999999999", {"7"})
+    assert not note_key_binds("1-" + "9" * 5000, {"7"})
+    assert note_key_binds("1-999999999", {"1-999999999"})   # still its own label
+    assert note_key_binds("100-102", {"101"})                # three digits is in grammar
+
+
+def test_note_key_binds_descending_range_is_not_a_range():
+    # A range is ASCENDING. fbdcb6d briefly sorted() the endpoints, which silently
+    # widened the read path (main resolved '13-11' to nothing) and disagreed with the
+    # UI, where `rangeOf` never normalises -- so the guard would keep a note that the
+    # Tracks screen shows the user as matching no corner. Zero shipped keys are
+    # inverted, so strict costs nothing and all three readers agree.
+    assert not note_key_binds("13-11", {"12"})
+    assert not note_key_binds("13-11", {"11"})
+    assert not note_key_binds("13-11", {"13"})
+    assert note_key_binds("13-11", {"13-11"})   # still its own label
+
+
+def test_note_key_binds_matches_the_ui_grammar():
+    # This grammar has a THIRD reader: TracksScreen.svelte's `rangeOf` decides which
+    # notes collapse under a range row and which are flagged to the user as orphans.
+    # A key the Python guard keeps -- and the coach then states as owned fact -- must
+    # not be one the UI calls an orphan, so pin the JS source that has to agree. A
+    # cross-language run would need node plus a Svelte parse; reading the literal is
+    # the cheap version and still fails if someone edits it.
+    from simcoach.track_lookup import _MAX_CORNER_DIGITS, _MAX_RANGE_SPAN
+    svelte = (Path(__file__).resolve().parents[1]
+              / "frontend" / "src" / "lib" / "TracksScreen.svelte").read_text(encoding="utf-8")
+    for literal in (f"const MAX_CORNER_DIGITS = {_MAX_CORNER_DIGITS};",
+                    f"const MAX_RANGE_SPAN = {_MAX_RANGE_SPAN};",
+                    "String.raw`\\d{1,${MAX_CORNER_DIGITS}}`",      # the shared number
+                    "hi < lo || hi - lo >= MAX_RANGE_SPAN ? null",  # ascending + capped
+                    "CORNER_NUM.test(label) && String(n) === label"):  # canonical labels
+        assert literal in svelte, f"TracksScreen grammar changed, re-check agreement: {literal}"
+    # Agreement on the keys that distinguish the two candidate grammars. Python is the
+    # lenient one by default (`\d` is Unicode, and it could normalise direction), so
+    # every row here is a case where it had to be held DOWN to the UI.
+    ui_is_range = {"11-13": True, "2-4": True, "1-2": True,   # plain ascending: both
+                   "13-11": False,        # UI never normalises -> neither do we
+                   "١-٣": False,         # Number('١') is NaN; `\d` would have matched
+                   "１-３": False,    # fullwidth: same trap
+                   "²-³": False,        # isdigit(), not int()-able, not Number()-able
+                   "2A-2B": False, "1,2": False, "7": False, "": False}
+    for key, is_range in ui_is_range.items():
+        # A range binds a label it spans; a non-range can only bind its own exact self.
+        assert note_key_binds(key, {"1", "2", "3", "11", "12", "13"}) == is_range, key
+
+
+def test_note_key_binds_wide_range_names_nothing():
+    # A span wider than _MAX_RANGE_SPAN is not a complex. This bounds how many corners
+    # ONE authored key can speak for: '1-999' bound every numeric corner on the track,
+    # survived every same-count map save, and was served to the driver as an
+    # `Authored note:` owned fact for each of them.
+    #
+    # PARTIAL. The cap is 100 and the largest shipped map has 30 corners, so '1-30'
+    # still blankets an entire real circuit and still binds. What the cap removes is
+    # the key that blankets any map regardless of size, plus an unbounded probe loop.
+    # Bounding the blast radius properly means a cap near the real complex width (the
+    # widest shipped range is 3), which would also start dropping a sector-wide note
+    # someone may have authored -- a call for the #64 work, not a side effect here.
+    assert note_key_binds("1-100", {"50"})          # span 100: still a complex
+    assert not note_key_binds("1-101", {"50"})      # wider: names nothing
+    assert not note_key_binds("1-999", {"7"})       # the blanket key
+    assert note_key_binds("1-999", {"1-999"})       # still its own label
+
+
+def test_note_key_binds_is_strict_where_the_ui_is_now_strict_too():
+    # These are the cases where the two readers used to disagree, all three classes of
+    # them: a label `Number()` coerced to a covered integer ('07' is 7, a string probe
+    # matches only '7'), a range endpoint of 4+ digits, and a span over _MAX_RANGE_SPAN.
+    # The UI bound all of them and this guard bound none, which is the DATA-LOSS
+    # direction -- the Tracks screen collapsed the note under a range row, telling the
+    # author it was bound, while the next map save dropped it with only a log line.
+    #
+    # Closed in both directions now: TracksScreen was narrowed to match (its grammar is
+    # pinned in the test above), and a node comparison over 360 key x label pairs shows
+    # zero disagreements. Kept as the Python half of that invariant -- the JS half is
+    # pinned by source literals, and this is what fails if the bound moves here.
+    for label in ("07", "007", "0007", " 7 ", "7.0", "+7", "0x7", "1e1"):
+        assert not note_key_binds("5-9", {label})   # non-canonical: only '7' is 7
+    assert not note_key_binds("0-0", {""})          # an empty label is not 0
+    assert not note_key_binds("1-1000", {"7"})      # 4-digit endpoint: not a range
+    assert not note_key_binds("1-101", {"50"})      # over the span cap: not a range
+    assert note_key_binds("5-9", {"7"})             # the canonical form still binds
+
+
+def test_note_key_binds_never_parses_a_label():
+    # STRUCTURAL, not guarded -- the point of the design, so don't "simplify" the probe
+    # back into a label parse (tried in 019dc26, reverted in b181604). A corner label is
+    # free text from the editor's label box. '²' U+00B2 and friends satisfy str.isdigit()
+    # but RAISE on int(), so parsing the label side turned a typed superscript into an
+    # HTTP 500 on save -- or, when `any` short-circuited on an earlier label first, a 200
+    # that persisted the label and then broke every read of it. A guarded parse passes
+    # this test too, which is exactly why the comment above the code says not to.
+    for odd in ("²", "₂", "⑥"):        # ² ₂ ⑥ -- isdigit(), not int()-able
+        assert odd.isdigit(), f"{odd!r} no longer exercises the isdigit()/int() gap"
+        assert not note_key_binds("1-3", {odd})       # no raise, no spurious bind
+        assert not note_key_binds("5-6", {"1", "2", odd})
+        assert note_key_binds(odd, {odd})             # an exact label still binds
+    # Arabic-Indic digits parse under int() but are not corner labels: ASCII only.
+    assert not note_key_binds("1-3", {"١"})      # '١' == 1 under int()
+    assert not note_key_binds("١-٣", {"2"})  # '١-٣' is not a range key
+
+
+def test_note_key_binds_is_total_over_hostile_input():
+    # The contract both callers rely on: a bool for every (key, labels) pair, never a
+    # raise. Each is used as a predicate inside a comprehension, so one exception is a
+    # 500 on a map save or a dead LLM-callable tool -- and the keys and labels both
+    # come from unvalidated user input. This is the test that stops the whole class.
+    labels = [set(), {"7"}, {"1", "2", "3"}, {"8A", "2A-2B"},
+              {"²", "₂", "⑥"}, {"١"}, {""}, {" 7 "}, {"07"},
+              {str(n) for n in range(1, 101)}]
+    keys = ["7", "", " 7 ", "7 - 9", "-7", "7-", "7--9", "13-11", "7_0", "0x7", "0",
+            "0-0", "1,2", "2A-2B", "١-٣", "１-３", "+1-3", "1-+3",
+            "1.0-3", "1-3-5", "999-1", "1-" + "9" * 5000, "9" * 4301, "\n1-3",
+            "1-3\n", "²-³", None, 7, 7.5, True, ("1-3",)]
+    for key in keys:
+        for labs in labels:
+            out = note_key_binds(key, labs)   # must not raise
+            assert out is True or out is False, f"{key!r}/{labs!r} -> {out!r}"
+
+
+def test_note_key_binds_distributes_over_labels():
+    # The equivalence the save guard's correctness argument rests on: asking about a
+    # whole label set is the same as asking about each label alone. The coach's read
+    # path only ever passes one label, the save guard passes the whole map -- if these
+    # could disagree the guard would delete notes the coach still serves.
+    keys = ["7", "11-13", "13-11", "1-100", "1-101", "2A-2B", "1-999999999", "0", ""]
+    label_sets = [set(), {"7"}, {"12"}, {"11", "12", "13"}, {"8A", "12"},
+                  {"²", "7"}, {"100", "101"}, {"0"}, {""}]
+    for key in keys:
+        for labs in label_sets:
+            assert note_key_binds(key, labs) == any(note_key_binds(key, {lab}) for lab in labs), \
+                f"{key!r} / {labs!r}"
+
+
+def test_shipped_note_keys_all_bind_to_their_own_map():
+    # Every authored per-corner note in the shipped set names a corner that exists.
+    # A failure here means a shipped map's notes are already unreachable.
+    tracks = Path(__file__).resolve().parents[1] / "simcoach" / "tracks"
+    seen = 0
+    for p in sorted(tracks.glob("*.json")):
+        data = json.loads(p.read_text(encoding="utf-8"))
+        labels = {str(c.get("label") or c.get("number")) for c in (data.get("corners") or [])}
+        for key in ((data.get("notes") or {}).get("corners") or {}):
+            assert note_key_binds(str(key), labels), f"{p.name}: {key!r} names no corner"
+            seen += 1
+    assert seen > 100, "expected the shipped maps to carry authored per-corner notes"
