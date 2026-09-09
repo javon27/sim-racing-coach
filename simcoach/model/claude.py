@@ -33,10 +33,17 @@ class ClaudeModel:
         Returns:
             The model's text response.
         """
+        # Same cache breakpoint as the tool loop, so a large system prompt on this
+        # path caches too. INERT on today's three callers (server/app.py track-notes
+        # draft, memory distillation, key ping): their system prompts are <=86 tokens,
+        # under the 512-1024 minimum cacheable prefix, so the API silently declines to
+        # cache and charges no write premium. Their bulk (pasted guides, digests) is
+        # in the USER message, which is after this breakpoint — moving that content
+        # into `system`, or marking the user block, is what would make it bite.
         resp = self.client.messages.create(
             model=self.model,
             max_tokens=self.max_tokens,
-            system=system,
+            system=_cached_system(system),
             messages=messages,
             thinking=self._thinking_param(),
         )

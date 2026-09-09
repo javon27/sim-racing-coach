@@ -136,6 +136,27 @@ def test_system_prompt_text_survives_the_cache_wrapper():
     assert [b["text"] for b in system] == [SYSTEM]
 
 
+def test_complete_carries_the_same_cache_breakpoint():
+    """`complete()` is the non-agentic path (server/app.py track-notes draft, memory
+    distillation, key ping — all billed to the driver's own BYO key and invisible to
+    the #39 meter). It gets the same breakpoint so a large system prompt on this path
+    caches. Note this is INERT for those three callers today: their system prompts are
+    <=86 tokens, under the 512-1024 minimum cacheable prefix, so the API silently
+    declines to cache and charges no write premium — see the comment on `complete`."""
+    client = _ScriptedClient(tool_turns=0)
+    m = ClaudeModel.__new__(ClaudeModel)
+    m.model = "claude-sonnet-5"
+    m.max_tokens = 100
+    m.thinking = False
+    m.client = client
+    assert m.complete(SYSTEM, [{"role": "user", "content": "q"}]) == "Brake later into 1."
+
+    kw = client.calls[0]
+    assert "tools" not in kw  # no tools on this path: system IS the whole prefix
+    assert kw["system"] == [{"type": "text", "text": SYSTEM,
+                             "cache_control": {"type": "ephemeral"}}]
+
+
 def test_empty_system_is_not_sent_as_an_empty_text_block():
     """An empty `text` block is a 400. Falsy system stays a bare string."""
     client = _ScriptedClient(tool_turns=0)
