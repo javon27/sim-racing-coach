@@ -30,7 +30,7 @@ class Corner:
     apexes: list[float] | None = None  # lap_distances; defaults to [apex_dist] (double-apex -> 2)
 
 
-def _clamp_corner_windows(corners: list[Corner], length: float | None) -> None:
+def clamp_corner_windows(corners: list[Corner], length: float | None) -> None:
     """Trim each corner's start/end at the midpoint to its neighbors' apexes (by
     apex_dist, circularly around the lap) so adjacent corner windows never
     overlap. A window already inside its bounds is left untouched -- only the
@@ -40,7 +40,11 @@ def _clamp_corner_windows(corners: list[Corner], length: float | None) -> None:
     Root-cause fix for adjacent-corner telemetry contamination (e.g. Laguna's
     T7 window bleeding into the Corkscrew) -- general for ANY track, not
     special-cased. Mutates `corners` in place; no-op without >=2 corners or a
-    known lap length (can't do circular midpoint math without it)."""
+    known lap length (can't do circular midpoint math without it).
+
+    Shared by both layers: mapbuild applies it before writing a new map, so the
+    file on disk is already clamped, and from_data applies it on load as a guard
+    for maps written before that (or by hand)."""
     n = len(corners)
     if n < 2 or not length:
         return
@@ -132,7 +136,7 @@ class CornerMap:
                 c.label = str(c.number)
             if not c.apexes:                      # back-compat: single-apex default
                 c.apexes = [c.apex_dist]
-        _clamp_corner_windows(corners, data.get("length") or data.get("length_m"))
+        clamp_corner_windows(corners, data.get("length") or data.get("length_m"))
         return cls(corners, _load_sections(data), data.get("notes") or {})
 
     def corner_at(self, dist: float) -> Corner | None:

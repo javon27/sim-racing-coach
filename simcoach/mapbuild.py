@@ -19,6 +19,8 @@ from pathlib import Path
 
 import numpy as np
 
+from simcoach.corners import Corner, clamp_corner_windows
+
 # tuned on live LMU laps (Silverstone/Interlagos/Monza/etc.), RIGHT_IS_POSITIVE=True
 _SMOOTH_M = 15.0     # window for smoothing |steering|
 _MIN_STEER = 0.05    # ignore near-straight wobble
@@ -75,7 +77,7 @@ def build_map(slug: str, channels: dict, length_m: float | None = None) -> dict:
     """Build a numbered-geometry corner-map dict from a lap's channels."""
     dist = np.asarray(channels["lap_distance"], dtype=float)
     length = float(length_m) if length_m else math.ceil(float(dist.max()))
-    corners = []
+    built = []
     for n, c in enumerate(detect_corners(channels), 1):
         apex = c["apex_dist"]
         start = max(0.0, apex - _WIN_M)
@@ -83,10 +85,16 @@ def build_map(slug: str, channels: dict, length_m: float | None = None) -> dict:
         # guard the degenerate window at the very start/end of the lap
         if not (start < apex < end):
             start, end = max(0.0, apex - 1), min(length, apex + 1)
-        corners.append({
-            "number": n, "name": f"Turn {n}", "direction": c["direction"],
-            "start_dist": round(start, 1), "apex_dist": apex, "end_dist": round(end, 1),
-        })
+        built.append(Corner(number=n, name=f"Turn {n}", direction=c["direction"],
+                            start_dist=round(start, 1), apex_dist=apex,
+                            end_dist=round(end, 1)))
+    # Clamp here, not only on load: otherwise the file on disk keeps the raw
+    # +/-_WIN_M windows while the self-verify step below (and every consumer) sees
+    # the clamped ones, so the map QA never looks at what was actually written.
+    clamp_corner_windows(built, length)
+    corners = [{"number": c.number, "name": c.name, "direction": c.direction,
+                "start_dist": c.start_dist, "apex_dist": c.apex_dist,
+                "end_dist": c.end_dist} for c in built]
     return {
         "track": slug,
         "_config_note": "Auto-built from one captured lap by simcoach.mapbuild.",
