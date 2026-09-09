@@ -104,8 +104,20 @@ def test_tauri_and_dev_origins_still_allowed(tmp_path, monkeypatch, mem_keyring)
         assert r.status_code == 200, f"{origin} must stay allowed, got {r.status_code}"
 
 
-def test_hostile_origin_blocked_on_reads_too(tmp_path, monkeypatch, mem_keyring):
-    # Not filtered to mutating methods: GET /setup writes (save_session_setup),
-    # so a read-looking route is reachable via <img src=...> and must 403 too.
+def test_hostile_origin_get_carrying_origin_is_blocked(tmp_path, monkeypatch, mem_keyring):
+    # Not filtered to mutating methods: any GET that CARRIES a disallowed Origin
+    # (a cors-mode fetch, not a no-cors <img>/<script> load) is refused too.
     c, _ = _client(tmp_path, monkeypatch, mem_keyring)
     assert c.get("/setup", headers={"Origin": "http://evil.example"}).status_code == 403
+
+
+def test_no_origin_get_is_not_blocked_this_is_why_issue_51_exists(tmp_path, monkeypatch, mem_keyring):
+    # A browser does NOT attach Origin to a no-cors GET (<img src=...>, <script>,
+    # <link>, <iframe>, top-level navigation all send none), so _bad_origin sees
+    # no Origin and this guard does NOT stop the request -- it reaches the
+    # handler. This is the residual gap the comment above _host_guard documents:
+    # GET /setup's write (save_session_setup) is closed by not writing on a GET,
+    # tracked as #51, not by this guard. Pins the real (non-403) behaviour so a
+    # future reader can't mistake the guard for covering this case.
+    c, _ = _client(tmp_path, monkeypatch, mem_keyring)
+    assert c.get("/setup").status_code == 200

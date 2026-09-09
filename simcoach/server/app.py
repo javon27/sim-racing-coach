@@ -420,6 +420,11 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         latest = app.state.latest
         return latest["record"].track if latest is not None else None
 
+    # add_middleware inserts at index 0, so this call must come BEFORE _host_guard
+    # below to make _host_guard the OUTERMOST middleware -- it sees OPTIONS
+    # preflights before CORSMiddleware does. Security doesn't depend on the
+    # ordering (either order refuses), but the insert-at-0 semantics are easy to
+    # get backwards in a later tidy-up.
     app.add_middleware(CORSMiddleware, allow_origins=FRONTEND_ORIGINS,
                         allow_methods=["*"], allow_headers=["*"])
 
@@ -430,11 +435,15 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # hands the RESPONSE back to script -- a CORS-simple request is sent and
         # EXECUTED regardless, so CORS can never prevent a side effect. Refusing a
         # disallowed Origin here can. Deliberately NOT filtered to mutating
-        # methods: a cross-origin request from a disallowed origin has no
-        # legitimate caller, and GET /setup writes (save_session_setup), so it is
-        # reachable via <img src=...>. A MISSING Origin stays allowed by design
-        # (see _bad_origin) -- only browsers set it, so native/Tauri and
-        # non-browser clients are unaffected.
+        # methods: any request that CARRIES a disallowed Origin (all mutating
+        # methods, plus a cors-mode GET) has no legitimate caller and is refused.
+        # BUT a browser does not attach Origin to a no-cors GET -- <img>,
+        # <script>, <link>, <iframe>, and top-level navigation all send none --
+        # so this guard does NOT stop a same-window `<img src="/setup">`-style
+        # read/write; _bad_origin sees no Origin and allows it through by design
+        # (a MISSING Origin must stay allowed so native/Tauri and non-browser
+        # clients work). That GET /setup writes (save_session_setup) is closed
+        # by not writing on a GET, tracked as #51 -- not by this guard.
         host = (request.headers.get("host") or "").split(":")[0].lower()
         if host not in ALLOWED_HOSTS or _bad_origin(request.headers.get("origin")):
             return JSONResponse({"detail": "forbidden host"}, status_code=403)
