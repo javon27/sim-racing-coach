@@ -1508,7 +1508,12 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         return {"api_key_set": True}
 
     @app.post("/settings/test-key")
-    def test_key():
+    def test_key(body: dict = Body(...)):
+        # Body(...) required as a CSRF guard (same mechanism as /mapcapture/*,
+        # see comment above them). Sharper here than elsewhere: this handler
+        # makes a real, BILLED Anthropic call, so a cross-origin page could loop
+        # it with mode:"no-cors" and burn the user's API credit without ever
+        # needing to read a response.
         try:
             cfg = config.load_config()
             model = make_model(model=cfg.get("model"))
