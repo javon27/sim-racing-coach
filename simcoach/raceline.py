@@ -248,7 +248,7 @@ def solve_corners(left_edge, right_edge, car=CarParams(), telem=None, bank=None,
     corners a single speed threshold would merge stay separate, while a sustained
     constant-radius arc stays one corner (prominence split, not fixed spacing). A
     speed profile over the min-curvature line still supplies each corner's
-    ``min_speed`` (calibrated from ``telem`` peak lat_g/long_g when given).
+    ``min_speed_kmh`` (calibrated from ``telem`` peak lat_g/long_g when given).
 
     Tunables (calibrated against driver-verified maps -- Algarve/Imola/Monza,
     avg F1 ~0.94): ``kappa_min`` 1/m curvature floor (~1/500 m radius), ``min_prom``
@@ -257,9 +257,15 @@ def solve_corners(left_edge, right_edge, car=CarParams(), telem=None, bank=None,
     over-smoothed the way a fixed bin count would be -- same fix as reconstruction).
 
     Each corner: ``{apex_idx, start_idx, end_idx, apex_dist, start_dist, end_dist,
-    min_speed}``. The *_idx values are station indices aligned with the input
+    min_speed_kmh}``. The *_idx values are station indices aligned with the input
     edges / ribbon dist arrays -- use these for placement. start>end is a valid
     S/F-seam wrap; the window is never zero-length.
+
+    ``min_speed_kmh`` is km/h: ``speed_profile`` is SI (m/s), so it is converted
+    here to match the captured ``speed`` channel, ``mapbuild.detect_corners`` and
+    what the coach displays. The unit is in the key name on purpose -- the old
+    unitless ``min_speed`` meant m/s here and km/h in mapbuild, 3.6x apart with
+    both values plausible for a racing speed (#55).
     """
     if telem is not None:
         car = _calibrate(car, telem)
@@ -296,7 +302,7 @@ def solve_corners(left_edge, right_edge, car=CarParams(), telem=None, bank=None,
             "apex_dist": float(dist[i]),
             "start_dist": float(dist[si]),
             "end_dist": float(dist[ei]),
-            "min_speed": float(v[i]),
+            "min_speed_kmh": float(v[i]) * 3.6,   # speed_profile is m/s (SI)
         })
 
     corners.sort(key=lambda c: c["apex_dist"])

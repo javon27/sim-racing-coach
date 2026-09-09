@@ -8,8 +8,9 @@ class TokenUsage:
 
     Summable on purpose: the agentic tool loop makes up to MAX_TOOL_ITERATIONS + 1
     API calls per question, and the cost is the SUM of them, not the last one.
-    `cache_read`/`cache_write` read 0 until prompt caching is in use, but the
-    provider reports them for free so they are carried."""
+    `cache_read`/`cache_write` are populated once the loop's stable prefix is
+    cached (issue #42): iteration 1 of a question writes it, iterations 2..N read
+    it. They price differently from `input` — see simcoach/pricing.py."""
     input: int = 0
     output: int = 0
     cache_read: int = 0

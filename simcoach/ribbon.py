@@ -78,12 +78,17 @@ def reconstruct_ribbon(left_channels: dict, right_channels: dict, bins: int = 50
     seg = np.hypot(np.diff(cx), np.diff(cz))
     dist = np.concatenate([[0.0], np.cumsum(seg)])
     # Bank from elevation. Convention MATCHES reconstruct_surface: positive =
-    # banked for a right-hander, negative = banked for a left-hander (surface
-    # fits y vs +lateral offset; rig-validated, 9756b65). atan2 handles
-    # width->0; missing pos_y -> flat. Which side +lateral lands on in (x, z)
-    # is an observed convention here, not derived from RIGHT_IS_POSITIVE.
+    # banked for a right-hander, negative = banked for a left-hander
+    # (rig-validated, 9756b65). reconstruct_surface gets that by fitting y against
+    # the +lateral offset and +lateral is the driver's LEFT (#58, see _lateral), so
+    # here it is the LEFT edge being higher that reads positive. This subtracted the
+    # other way round while claiming the two matched -- they disagreed by a sign.
+    # Nothing in the app calls reconstruct_ribbon (capture goes through
+    # reconstruct_surface), so no shipped number moves; it was a trap waiting for
+    # whoever revived the edge-lap capture path. atan2 handles width->0; no pos_y
+    # -> flat.
     if ly is not None and ry is not None:
-        bank = np.arctan2(ry - ly, np.maximum(width, 1e-9))
+        bank = np.arctan2(ly - ry, np.maximum(width, 1e-9))
     else:
         bank = np.zeros(len(grid))
 
@@ -174,9 +179,17 @@ def _smooth_curve(x: np.ndarray, z: np.ndarray, base_w: int, pct: float = 88.0) 
 
 def _lateral(cx: np.ndarray, cz: np.ndarray):
     """Unit lateral (perpendicular to the centered-diff tangent, rot +90), closed
-    loop. Which side (+lateral) this lands on is an empirical (x, z)-handedness
-    fact, not derived from RIGHT_IS_POSITIVE -- see reconstruct_ribbon's bank
-    comment and 9756b65 for the rig-validated banking sign convention it feeds."""
+    loop. **+lateral is the driver's LEFT side of travel** -- an empirical
+    (x, z)-handedness fact, not derived from RIGHT_IS_POSITIVE. Settled in #58 off
+    the shipped maps: every corner with >=1 deg of baked camber reads positive on
+    right-handers and negative on left-handers, and since those corners really are
+    cambered (outer edge higher), the higher side of a cambered right-hander is the
+    driver's LEFT -- the side this calls positive. The opposite reading would make
+    Parabolica, both Lesmos, Rainey and Tosa all off-camber. Agrees with both the
+    rig-validated banking sign (9756b65) and trackmap's direction convention.
+    Pinned from both sides by test_lateral_points_left_of_travel_not_right and
+    test_left_key_is_the_inside_of_a_cambered_left_hander, the latter tying this
+    handedness to that banking sign so neither can move alone."""
     tx, tz = np.roll(cx, -1) - np.roll(cx, 1), np.roll(cz, -1) - np.roll(cz, 1)
     tn = np.hypot(tx, tz); tn[tn == 0] = 1.0
     return -tz / tn, tx / tn
@@ -193,8 +206,9 @@ def _lap_grid(x, z, d, max_len, bins):
 
 def _bank_per_bin(X, Z, Y, members, ctr_x, ctr_z, lat_x, lat_z, bins, w=_SMOOTH_W):
     """Cross-slope angle per bin from ALL samples: fit pos_y vs lateral offset.
-    Positive = banked for a right-hander, negative = banked for a left-hander
-    (rig-validated, 9756b65; matches reconstruct_ribbon)."""
+    Positive = the +lateral side is higher; +lateral is the driver's LEFT (#58),
+    so positive = banked for a right-hander and negative = banked for a
+    left-hander (rig-validated, 9756b65; matches reconstruct_ribbon)."""
     bnk = np.full(bins, np.nan)
     for b in range(bins):
         mm = members[b]
@@ -208,8 +222,9 @@ def _bank_per_bin(X, Z, Y, members, ctr_x, ctr_z, lat_x, lat_z, bins, w=_SMOOTH_
 
 
 def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
-    """Reconstruct the track from free-driving passes. The two BOUND laps (most-
-    negative / most-positive mean lateral offset) build the EDGES; in-between
+    """Reconstruct the track from free-driving passes. The two BOUND laps build the
+    EDGES -- most-POSITIVE mean lateral offset = the driver's LEFT, most-negative =
+    the RIGHT, since +lateral is the left side of travel (#58) -- while in-between
     weaving laps only contribute elevation across the width. Returns
     {left, right, center, width, bank, dist} (world), or {} with no usable data.
 
@@ -262,13 +277,24 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
     cx, cz = _smooth(_fill_nan(cx), sw), _smooth(_fill_nan(cz), sw)
     lat_x, lat_z = _lateral(cx, cz)
 
-    # Classify laps by mean lateral offset: most-negative = LEFT, most-positive =
-    # RIGHT, the rest weave (elevation only). Edges from the bound laps directly.
+    # Classify laps by mean lateral offset. +lateral is the driver's LEFT (see
+    # _lateral), so most-POSITIVE = LEFT and most-negative = RIGHT; the rest weave
+    # (elevation only). Edges from the bound laps directly. #58 relabelled these --
+    # they shipped inverted, harmlessly (width is symmetric, both edges are drawn),
+    # but any per-edge feature would have inherited a mirrored answer. Labels only:
+    # width, center, bank and dist are bit-identical either way, so the
+    # rig-validated banking sign of 9756b65 is untouched.
+    #   Residual: the 10 shipped maps that store a `ribbon` (every one except
+    #   test_track and Laguna) still hold left/right under the OLD labels --
+    #   measured mirrored, all 10 the same way, no mixed state, so a rebuild is one
+    #   uniform swap. Left alone because no consumer reads those arrays per-edge
+    #   (both are drawn; solve_corners is order-invariant). A per-edge feature must
+    #   rebuild them first.
     off_all = (X - cx[bi]) * lat_x[bi] + (Z - cz[bi]) * lat_z[bi]
     lap_means = np.array([off_all[a:b].mean() for a, b in slices])
     total_spread = float(np.ptp(off_all))
     if len(slices) >= 2 and total_spread > 0 and np.ptp(lap_means) > 0.2 * total_spread:
-        li, ri = int(lap_means.argmin()), int(lap_means.argmax())
+        li, ri = int(lap_means.argmax()), int(lap_means.argmin())
         a, b = slices[li]; lx, lz = _lap_grid(X[a:b], Z[a:b], D[a:b], max_len, bins)
         a, b = slices[ri]; rx, rz = _lap_grid(X[a:b], Z[a:b], D[a:b], max_len, bins)
         lx, lz, rx, rz = (_smooth(lx, swl), _smooth(lz, swl),
@@ -306,8 +332,9 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
                 arr[bad] = np.nan
                 arr[:] = _fill_nan(arr, period=bins)
             off_lo, off_hi = _smooth(off_lo, swl), _smooth(off_hi, swl)
-            lx, lz = cx + off_lo * lat_x, cz + off_lo * lat_z
-            rx, rz = cx + off_hi * lat_x, cz + off_hi * lat_z
+            # +lateral is the driver's LEFT, so off_hi is the LEFT edge (#58).
+            lx, lz = cx + off_hi * lat_x, cz + off_hi * lat_z
+            rx, rz = cx + off_lo * lat_x, cz + off_lo * lat_z
             wid = off_hi - off_lo
         else:  # single pass / no envelope -> degenerate centerline, zero width
             lx, lz, rx, rz = cx.copy(), cz.copy(), cx.copy(), cz.copy()

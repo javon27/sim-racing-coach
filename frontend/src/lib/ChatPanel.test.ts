@@ -210,6 +210,20 @@ describe("ChatPanel", () => {
     expect(meter.textContent).toMatch(/\$0\.011/);
   });
 
+  it("scopes the meter's tooltip to this chat (#56: excludes setup/notes/memory)", async () => {
+    // Model.complete() (setup capture, track-notes drafting, memory
+    // distillation) bypasses the instrumented streaming path and is billed to
+    // the driver's own key but counted nowhere -- the tooltip must say so
+    // rather than let the figure read as total spend.
+    const stream = new FakeStream();
+    await answerWith(stream, { usage: usage({ total: 1200, messages: 1 }), cost: 0.011 });
+
+    const meter = await screen.findByTestId("usage-meter");
+    expect(meter.title).toBe(
+      "Tokens billed in this chat, and the estimated API cost of them. Excludes setup capture, track-notes drafting, and memory operations, which are billed separately to your key.",
+    );
+  });
+
   it("hides the meter on an empty new chat", async () => {
     const stream = new FakeStream();
     render(ChatPanel, { props: { stream } });

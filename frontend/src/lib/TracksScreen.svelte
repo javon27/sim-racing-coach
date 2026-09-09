@@ -23,9 +23,22 @@
   // into a single row; only a key that matches no corner and no covering range is a
   // true orphan (surfaced, never silently dropped). Corners are owned by the map (edit
   // them via the map editor), so there's no free-form add here.
+  // A corner number, in a note key and in a corner label: 1-3 ASCII digits, ascending,
+  // spanning at most MAX_RANGE_SPAN corners. COUNTERPART of `note_key_binds` in
+  // simcoach/track_lookup.py (_MAX_CORNER_DIGITS / _NOTE_RANGE / _MAX_RANGE_SPAN),
+  // which is the guard deciding which notes survive a map save. The two must stay
+  // identical: a key that guard drops while this screen shows it collapsed under a
+  // range row is authored prose deleted with no warning to the person who wrote it.
+  const MAX_CORNER_DIGITS = 3;
+  const MAX_RANGE_SPAN = 100;
+  const NUM = String.raw`\d{1,${MAX_CORNER_DIGITS}}`;
+  const CORNER_NUM = new RegExp(`^${NUM}$`);
+  const RANGE_KEY = new RegExp(`^(${NUM})-(${NUM})$`);
   const rangeOf = (k: string): [number, number] | null => {
-    const m = /^(\d+)-(\d+)$/.exec(k);
-    return m ? [Number(m[1]), Number(m[2])] : null;
+    const m = RANGE_KEY.exec(k);
+    if (!m) return null;
+    const [lo, hi] = [Number(m[1]), Number(m[2])];
+    return hi < lo || hi - lo >= MAX_RANGE_SPAN ? null : [lo, hi];   // '13-11' is not one
   };
   const cornerView = $derived.by(() => {
     const keys = Object.keys(notes.corners);
@@ -36,7 +49,12 @@
     for (const c of map.corners) {
       const label = c.label || String(c.number);
       const n = Number(label);
-      const cover = Number.isInteger(n) ? ranges.find(({ r }) => n >= r[0] && n <= r[1]) : undefined;
+      // CANONICAL decimal only. `Number()` alone coerced '07', ' 7 ', '7.0', '+7', '0x7'
+      // and '1e1' to 7 and collapsed that corner under a range covering 7, while the
+      // Python guard probes `str(n) in labels` and matches only '7' -- so the note showed
+      // as bound here and was dropped on the next map save.
+      const cover = CORNER_NUM.test(label) && String(n) === label
+        ? ranges.find(({ r }) => n >= r[0] && n <= r[1]) : undefined;
       if (cover) {
         if (!usedRange.has(cover.key)) { usedRange.add(cover.key); rows.push({ key: cover.key, label: cover.key }); }
         continue; // a covered corner shows under its range row, not its own

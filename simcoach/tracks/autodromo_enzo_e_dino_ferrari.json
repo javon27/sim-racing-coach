@@ -2810,7 +2810,10 @@
     4887.75,
     4897.57
   ],
-  "sectors": [],
+  "sectors": [
+    1206.5,
+    2727.4
+  ],
   "sections": [
     {
       "name": "Variante Tamburello",

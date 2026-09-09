@@ -13,7 +13,6 @@ import sys
 import tempfile
 import threading
 import time
-import urllib.parse
 from dataclasses import asdict
 from pathlib import Path
 
@@ -64,21 +63,61 @@ def _usage_view(agg: dict) -> dict:
 _CLEAN_LAP_RATIO = 1.07  # keep laps within +7% of the track/car best (drop in/out/off laps)
 _MAP_BUFFER_MAX = 8      # cap mapping-mode buffer (need only 2 edges; keep last N)
 
-ALLOWED_HOSTS = {"127.0.0.1", "localhost"}  # port stripped before compare
+# Host-header allowlist (port stripped before compare) -- AND an input to
+# ALLOWED_ORIGINS below, which is a cross product of these hostnames with our two
+# local ports. Adding a hostname here to accept a new Host therefore also grants
+# it two ORIGINS, widening the CSRF guard without anyone editing it: adding
+# "tauri.localhost" (plausible -- it is already an allowed origin host) would
+# auto-admit http://tauri.localhost:5173 and :8765. Widen this set deliberately.
+ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
 REST_PROBE_TTL = 2.0  # s: liveness probe rate cap so /status polling can't hammer LMU's REST
+SIDECAR_PORT = 8765   # the port simcoach/server/__main__.py serves on (it imports this)
+VITE_DEV_PORT = 5173  # `npm run dev` / src-tauri/tauri.conf.json devUrl
 FRONTEND_ORIGINS = ["http://localhost:5173", "http://tauri.localhost"]
-ALLOWED_ORIGIN_HOSTS = ALLOWED_HOSTS | {"tauri.localhost"}
+
+# FULL origins (scheme + host + port), never bare hostnames. Comparing the
+# hostname alone let ANY app on ANY localhost port through the guard (#60) --
+# another local dev server, or an XSS in one, could drive every guarded route,
+# which is exactly what the guard exists to stop. Three sources, no invention:
+#   - FRONTEND_ORIGINS: the Vite dev origin (src-tauri/tauri.conf.json devUrl)
+#     and the Windows Tauri webview origin.
+#   - "tauri://localhost", the webview origin Tauri uses on macOS/Linux. NOT a
+#     new permission: the old hostname-only compare accepted it (hostname
+#     "localhost"), so dropping it here would lock the app's own webview out of
+#     its own sidecar on those platforms. #54 tracks the wider cross-platform
+#     origin question and stays untouched -- FRONTEND_ORIGINS (the CORS list) is
+#     deliberately NOT changed here.
+#   - our two local ports (sidecar + Vite dev) under BOTH names ALLOWED_HOSTS
+#     accepts as a Host. 127.0.0.1 and localhost are the same machine and the
+#     same server: accepting Host "localhost:8765" while refusing Origin
+#     "http://localhost:8765" would be incoherent, and the same argument applies
+#     to the dev port -- hence the cross product rather than four literals, so
+#     the host list and the port list cannot drift apart.
+# Deliberately dropped vs the old behaviour: "https://tauri.localhost" and every
+# other scheme on these hostnames. Nothing serves them; the old guard only let
+# them through because it never looked past the hostname.
+# NOT auto-widened: if Vite falls back to 5174 (5173 already taken) or you use
+# `vite preview` on 4173, that origin is refused with a 403 -- add the port here
+# deliberately. Allowing a range would hand the guard back to any local app.
+ALLOWED_ORIGINS = set(FRONTEND_ORIGINS) | {"tauri://localhost"} | {
+    f"http://{h}:{p}" for h in ALLOWED_HOSTS for p in (SIDECAR_PORT, VITE_DEV_PORT)
+}
 
 
 def _bad_origin(origin: str | None) -> bool:
-    """True if a browser Origin is present AND its host isn't allowed. A missing
-    Origin (native/Tauri client, or a non-browser client) is allowed — only a
-    browser sets Origin, and that's the cross-site-WS vector we're blocking.
-    Port-blind by design (any localhost port is fine for a local desktop app)."""
+    """True if a browser Origin is present AND isn't an exact ALLOWED_ORIGINS
+    match. A missing Origin (native/Tauri client, or a non-browser client) is
+    allowed — only a browser sets Origin, and that's the cross-site-WS/CSRF
+    vector we're blocking; no browser omits Origin on a mutating request.
+
+    Compares scheme+host+port, not just the host (#60). Exact string match after
+    lowercasing: scheme and host are case-insensitive, and a browser never sends
+    a path, a trailing slash, or an explicit default port on an Origin — so
+    anything that isn't the literal allowed origin is refused. That also refuses
+    "null", "file://" and bare "http://[::1]" for free, as before."""
     if not origin:
         return False
-    host = (urllib.parse.urlparse(origin).hostname or "").lower()
-    return host not in ALLOWED_ORIGIN_HOSTS
+    return origin.lower() not in ALLOWED_ORIGINS
 
 
 def _clean(v):
@@ -471,10 +510,12 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # BUT a browser does not attach Origin to a no-cors GET -- <img>,
         # <script>, <link>, <iframe>, and top-level navigation all send none --
         # so this guard does NOT stop a same-window `<img src="/setup">`-style
-        # read/write; _bad_origin sees no Origin and allows it through by design
-        # (a MISSING Origin must stay allowed so native/Tauri and non-browser
-        # clients work). That GET /setup writes (save_session_setup) is closed
-        # by not writing on a GET, tracked as #51 -- not by this guard.
+        # read; _bad_origin sees no Origin and allows it through by design (a
+        # MISSING Origin must stay allowed so native/Tauri and non-browser
+        # clients work). That used to matter because GET /setup wrote to the DB
+        # (save_session_setup); fixed by #51 -- persistence now lives behind
+        # POST /setup/capture, so a no-Origin GET here is read-only and has no
+        # side effect for this guard to miss.
         host = (request.headers.get("host") or "").split(":")[0].lower()
         if host not in ALLOWED_HOSTS or _bad_origin(request.headers.get("origin")):
             return JSONResponse({"detail": "forbidden host"}, status_code=403)
@@ -767,6 +808,11 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             out["name"] = name
         if keep_ribbon:
             out["ribbon"] = keep_ribbon  # keep the reconstructed surface across edits
+        # Carry the authored notes overlay across a rebuild instead of wiping it (#37),
+        # dropping only the per-corner notes whose keys no longer name a corner that
+        # exists. `guard_corner_notes` owns that rule (and asks `note_key_binds` which
+        # corners a key names, so a range key like '2-4' survives) -- the promote-to-
+        # shipped script calls the same function, so the two paths cannot drift.
         notes = guard_corner_notes(track_slug(track), existing.get("notes"),
                                    len(existing.get("corners") or []),
                                    [c["label"] for c in corners])
@@ -1152,26 +1198,46 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     def setup():
         # Phase 1: raw dict from LmuRest, unfiltered. Filtering to the
         # human-meaningful subset is deferred to the Setup-panel phase (Phase 4).
+        # Read-only: no store write here. A GET must stay safe to prefetch,
+        # cache, retry, or replay -- persistence is the explicit POST below
+        # (#51: this used to write on every GET).
         rest = _ensure_rest()
         if not rest:
             return {}
         try:
-            data = rest.get_setup()
+            return rest.get_setup()
         except Exception:
             return {}
-        # Continuous capture: every time the Setup panel pulls the live setup and
-        # we know which session it belongs to, persist the real-adjustable subset
-        # (same isFreeSetting filter as the panel) so "what did we run here last
-        # time?" survives a session ending. Best-effort — never break the fetch.
-        if data:
-            try:
-                st = status()
-                if st["track"] and st["car"] and st["session_id"]:
-                    free = {k: data[k] for k in adjustable_from_setup(data)}
-                    store.save_session_setup(st["session_id"], st["track"], st["car"], free)
-            except Exception:
-                logging.getLogger(__name__).warning("session setup capture failed", exc_info=True)
-        return data
+
+    @app.post("/setup/capture")
+    def setup_capture(body: dict = Body(...)):
+        # Continuous capture: persists what the sim CURRENTLY reports via
+        # LmuRest, same as the old GET-time capture did -- NOT whatever the
+        # caller sent. `body` is unused except to force a non-simple request
+        # (the CSRF preflight, same as every other POST here); trusting
+        # caller-supplied setup content was a prompt-injection sink, since it
+        # lands verbatim in get_last_setup()'s output and the coach reads that
+        # as fact. Same isFreeSetting filter as the panel, same session_id
+        # guard as before (skip when there's no session_id to key the row on),
+        # same best-effort -- never break the caller.
+        rest = _ensure_rest()
+        if not rest:
+            return {"saved": False}
+        try:
+            data = rest.get_setup()
+        except Exception:
+            return {"saved": False}
+        if not data:
+            return {"saved": False}
+        try:
+            st = status()
+            if st["track"] and st["car"] and st["session_id"]:
+                free = {k: data[k] for k in adjustable_from_setup(data)}
+                store.save_session_setup(st["session_id"], st["track"], st["car"], free)
+                return {"saved": True}
+        except Exception:
+            logging.getLogger(__name__).warning("session setup capture failed", exc_info=True)
+        return {"saved": False}
 
     @app.get("/chats")
     def chats():

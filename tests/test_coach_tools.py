@@ -339,6 +339,46 @@ def test_reference_times_not_in_single_corner_view():
     assert "1:41.500" not in ctx.get_track_notes(corner="1")
 
 
+def _knowledge(slug):
+    from pathlib import Path
+    return (Path(__file__).resolve().parents[1] / "simcoach" / "knowledge"
+            / f"{slug}.md").read_text(encoding="utf-8")
+
+
+def test_get_track_notes_falls_back_to_knowledge_file_when_no_map():
+    # COTA has an authored note but NO corner-map JSON, so cmap is None. Before the
+    # fallback the coach could not reach a word of it.
+    ctx = CoachContext(store=None, cmap=None, track="Circuit of the Americas", car="GT3")
+    out = ctx.get_track_notes()
+    assert out == _knowledge("circuit_of_the_americas")   # verbatim, not reformatted
+    assert "Bobby Pin" in out
+
+
+def test_get_track_notes_falls_back_when_map_notes_are_empty():
+    # A map file exists but carries no `notes` — the authored .md still gets through.
+    ctx = _ctx_with_notes({})
+    ctx.track = "Fuji Speedway"
+    out = ctx.get_track_notes()
+    assert out == _knowledge("fuji_speedway")
+    assert "300R" in out
+
+
+def test_map_notes_win_over_knowledge_file():
+    # Guard (green before and after): the map file stays authoritative where it has
+    # notes — the fallback must never shadow it.
+    ctx = _ctx_with_notes({"overview": "rhythm track", "corners": {"1": "brake earlier"}})
+    ctx.track = "Silverstone Grand Prix Circuit"   # has a knowledge/*.md too
+    out = ctx.get_track_notes()
+    assert "rhythm track" in out and "brake earlier" in out
+    assert "Silverstone (Grand Prix layout) notes" not in out
+
+
+def test_get_track_notes_with_neither_map_nor_knowledge_file():
+    # Guard (green before and after): no map, no note -> the plain "none yet" answer.
+    ctx = CoachContext(store=None, cmap=None, track="Nowhere Circuit", car="GT3")
+    assert "no authored notes" in ctx.get_track_notes().lower()
+
+
 def test_record_driver_learning_writes_pending(tmp_path, synthetic_lap):
     ctx, store, _ = _ctx(tmp_path, synthetic_lap)
     out = ctx.record_driver_learning("consistently late on throttle")
@@ -390,6 +430,50 @@ def test_corner_note_resolves_ranged_key_on_real_track():
     ctx = CoachContext(store=None, cmap=cmap, track="Algarve", car="GT3")
     assert "brake earlier than it looks" in ctx.get_track_notes(corner="10")
     assert ctx._corner_note("10") == ctx._corner_note("11")
+
+
+def test_corner_note_survives_labels_int_cannot_parse():
+    # The label reaching the read path comes from the map, and the editor's label box
+    # is free text -- '²' U+00B2, '₂' U+2082, '⑥' U+2465 all satisfy str.isdigit() and
+    # RAISE on int(). Parsing the label inside the range check made _corner_note (and
+    # so the LLM-callable get_track_notes) throw for any map carrying one.
+    ctx = _ctx_with_notes({"overview": "rhythm track",
+                           "corners": {"1-3": "the opening complex", "²": "the squared one"}})
+    assert ctx._corner_note("²") == "the squared one"        # its own exact key wins
+    assert "the squared one" in ctx.get_track_notes(corner="²")
+    for odd in ("₂", "⑥"):                                   # no exact key, no bind
+        assert ctx._corner_note(odd) is None
+        assert f"No authored note for corner {odd}." in ctx.get_track_notes(corner=odd)
+    assert ctx._corner_note("2") == "the opening complex"    # the range still resolves
+    assert "the squared one" in ctx.get_track_notes()        # listing all notes is fine
+
+
+def test_corner_note_survives_an_overlong_range_key():
+    # A note key of 5000 digits is persistable (`PUT /notes` validates nothing) and
+    # made the int() parse raise -- for EVERY label, including ones the map does not
+    # have, because the poison key is reached before any comparison. One such key on
+    # disk took out the whole read path, while GET .../notes still returned 200 so the
+    # editor showed nothing wrong.
+    poison = "1-" + "9" * 5000
+    ctx = _ctx_with_notes({"corners": {poison: "nonsense", "1": "brake late"}})
+    assert ctx._corner_note("1") == "brake late"     # ordinary labels keep working
+    assert ctx._corner_note("99") is None
+    assert ctx._corner_note("2") is None             # the poison key names nothing
+    assert "brake late" in ctx.get_track_notes(corner="1")
+
+
+def test_corner_note_exact_label_wins_in_either_dict_order():
+    # GUARD (passes before this commit too). Pins the precedence rule that lives in
+    # _corner_note rather than in the shared grammar, so a later "simplification" that
+    # folds the exact-label lookup into the range scan cannot silently lose it.
+    # An exact '12' note must beat a '11-13' range covering it whichever order the
+    # authored dict happens to carry them in -- the read path looks the label up
+    # before it scans for a covering range, so this cannot depend on insertion order.
+    for corners in ({"12": "the exact one", "11-13": "the complex"},
+                    {"11-13": "the complex", "12": "the exact one"}):
+        ctx = _ctx_with_notes({"corners": corners})
+        assert ctx._corner_note("12") == "the exact one", corners
+        assert ctx._corner_note("11") == "the complex", corners
 
 
 def test_get_corner_output_includes_authored_note(tmp_path, synthetic_lap):

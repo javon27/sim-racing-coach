@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getSetup } from "./api";
+  import { getSetup, captureSetup } from "./api";
 
   let setup: Record<string, unknown> = $state({});
   let phase: "loading" | "ok" | "empty" | "none" = $state("loading");
@@ -12,6 +12,11 @@
           phase = "empty";
         } else {
           phase = adjustable(res).length === 0 ? "none" : "ok";
+          // Trigger persistence of what the sim currently reports (#51: GET
+          // /setup no longer writes; the server re-reads the setup itself
+          // rather than trusting this response body). Fire-and-forget --
+          // must never block or fail the panel.
+          captureSetup().catch(() => {});
         }
       })
       .catch(() => {

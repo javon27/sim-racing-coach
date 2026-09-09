@@ -68,6 +68,25 @@ def test_ws_coach_rejects_hostile_origin_good_host(tmp_path):
             ws.receive_json()
 
 
+def test_ws_coach_rejects_another_localhost_port(tmp_path):
+    # #60 on the WS path (its own _bad_origin call site, not covered by the HTTP
+    # middleware): a page on any other localhost port is exactly the cross-site-WS
+    # attacker this guard exists for, and the hostname-only compare let it in.
+    # RED before the fix -- the connect used to be accepted.
+    # The send_text is what keeps this test HONEST: pre-fix the socket is accepted,
+    # so a bare receive_json() would block forever on a handler waiting for input
+    # (a hang, not a failure). Sending first guarantees a reply on the broken path,
+    # so the missing raise fails fast instead of wedging the suite.
+    client, _ = _client(tmp_path)
+    import pytest
+    from starlette.websockets import WebSocketDisconnect
+    with pytest.raises(WebSocketDisconnect), client.websocket_connect(
+            "/coach", headers={"host": "127.0.0.1",
+                               "origin": "http://localhost:3000"}) as ws:
+        ws.send_text("not json at all")
+        ws.receive_json()
+
+
 def test_ws_coach_malformed_message_errors_not_crash(tmp_path):
     client, _ = _client(tmp_path)
     with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:

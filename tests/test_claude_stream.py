@@ -114,8 +114,8 @@ def test_run_sums_usage_across_tool_loop_iterations():
 
 
 def test_run_sums_cache_buckets_too():
-    """cache_read/cache_write read 0 today (no prompt caching in the repo) but are
-    captured so the meter is right the day caching lands."""
+    """cache_read/cache_write are real once the loop caches its prefix (issue #42);
+    they must sum across the loop like input/output, not report just the last call."""
     m = _model(usages=(_Usage(1, 1, cr=7, cw=3), _Usage(1, 1, cr=5, cw=2)))
     res = m.run("sys", [{"role": "user", "content": "q"}],
                 tools=[{"name": "get_corner"}], dispatch=lambda n, i: "corner data")

@@ -16,11 +16,11 @@ number. `ponytail:` prices drift, so keep the table here and update it here.
     standard price. Do not "correct" it back to $3/$15 from a stale memory.
 
     cache_write here is the 5-minute ephemeral TTL rate (1.25x input), which
-    is what every current caller means by "cache write" — there is no prompt
-    caching in this codebase yet (issue #42). The 1-hour TTL prices at 2x
-    input, not 1.25x. When #42 lands, if it uses `ttl: "1h"`, price it at
-    2x input rather than reusing this column, or the meter will under-report
-    those writes by 37.5%.
+    is what every current caller means by "cache write". Issue #42 landed
+    prompt caching on `{"type": "ephemeral"}` — the DEFAULT 5-minute TTL — so
+    this column is the right rate for it. The 1-hour TTL prices at 2x input,
+    not 1.25x: if anything ever passes `ttl: "1h"`, price it at 2x rather
+    than reusing this column, or the meter under-reports those writes by 37.5%.
 
 Unknown model -> None, never 0.0: a fabricated $0 is a lie a BYO-key driver
 would act on. A genuinely free provider (the fake model, a future local model)
@@ -30,8 +30,8 @@ as "—" rather than "$0.00" so the meter never implies a paid thing was free.
 from __future__ import annotations
 
 # model_id: ($ per MILLION tokens) input, output, cache_read, cache_write
-# cache_write is the 5-minute-TTL rate (1.25x input). The 1-hour-TTL rate is
-# 2x input, not represented here — see the module docstring and issue #42.
+# cache_write is the 5-minute-TTL rate (1.25x input), which is the TTL the coach
+# loop uses. The 1-hour-TTL rate is 2x input, not represented here — see docstring.
 PRICES: dict[str, tuple[float, float, float, float]] = {
     "claude-opus-5":    (5.00, 25.00, 0.50, 6.25),
     "claude-sonnet-5":  (2.00, 10.00, 0.20, 2.50),
