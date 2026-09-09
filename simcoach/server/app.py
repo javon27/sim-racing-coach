@@ -24,7 +24,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from .. import config, logging_setup, paths, secrets
-from ..analysis import analyze_lap, corner_geometry, geometry_clause
+from ..analysis import analyze_lap, corner_geometry, geometry_clause, input_traces
 from ..car_lookup import resolve_car
 from ..car_notes import load_car_notes, load_setup_concepts
 from ..coach_tools import CoachContext
@@ -618,6 +618,39 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                  "shipped": _is_shipped(track), "curating": _curating(),
                  "track_name": _track_file_data(track).get("name") or track}
         return m
+
+    @app.get("/track/inputs")
+    def track_inputs():
+        # Driver-input traces (throttle/brake/steering) for the Pit Wall graphs (#21):
+        # the LAST completed lap and the current track/car BEST, both resampled onto
+        # the same uniform lap_distance grid so they overlay directly.
+        #
+        # UI-ONLY. This is raw ~50 Hz telemetry, downsampled here in the sidecar (not
+        # in the Svelte component) and returned to the chart. It never enters a coach
+        # prompt -- the model only ever sees the per-corner summary.
+        #
+        # Keyed on the LIVE track like /track/map: a practice session has no completed
+        # lap_id to route through /laps/{id}/..., and `status()` already owns the
+        # "latest capture still matches the live session" staleness check.
+        st = status()
+        if not st["track"]:
+            return {"last": None, "best": None}
+        latest = app.state.latest if st["lap_id"] is not None else None
+
+        def _trace(rec, lap_id):
+            tr = input_traces(rec)
+            if not tr:
+                return None  # imported/result-log lap: no channels to draw
+            return {**tr, "lap_id": lap_id, "lap_time": rec.lap_time}
+
+        last = _trace(latest["record"], st["lap_id"]) if latest else None
+        best_rec = store.best_lap(st["track"], st["car"])
+        # `best_lap` returns a record, not its id, so identity is by capture timestamp
+        # (unique per lap). Same lap -> don't draw the identical trace twice.
+        same = (latest is not None and best_rec is not None
+                and best_rec.timestamp == latest["record"].timestamp)
+        best = None if (best_rec is None or same) else _trace(best_rec, None)
+        return {"last": last, "best": best}
 
     @app.get("/tracks/{slug}/map")
     def track_map_by_slug(slug: str):

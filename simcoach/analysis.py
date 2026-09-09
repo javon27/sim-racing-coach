@@ -393,3 +393,78 @@ def geometry_clause(metrics: dict, direction: str | None) -> str:
         camber = "banked" if favours == direction else "off-camber"
         parts.append(f"{abs(bk):.0f}\N{DEGREE SIGN} {camber}")
     return ", ".join(parts)
+
+
+# --- Driver-input traces (UI: Pit Wall graphs, issue #21) ---------------------
+#
+# The two source structs run at DIFFERENT rates: throttle/brake/steering come from
+# the telemetry struct at ~48.6 Hz, `lap_distance` from the scoring struct at ~5 Hz.
+# So the stored lap_distance channel is a STAIRCASE -- roughly ten identical values,
+# then a jump. Plotting inputs straight against it collapses ~10 input samples onto
+# one x and draws visible stair steps that hide the modulation the graph exists to
+# show.
+#
+# Fix: treat the FIRST sample of each held run as a knot (that is when the scoring
+# value became visible) and linearly interpolate lap_distance across the samples in
+# between, using the sample index as a uniform-time axis. Any residual lag is a
+# constant few milliseconds shared by every lap, so overlaid laps stay aligned --
+# and the lap-distance axis (the repo's alignment key) is preserved rather than
+# swapped for a time axis.
+_INPUT_CHANNELS = ("throttle", "brake", "steering")
+
+
+def input_traces(record: LapRecord, bins: int = 500) -> dict:
+    """Throttle/brake/steering resampled onto a uniform lap_distance grid.
+
+    Pure and deterministic; UI-facing only (never fed to the model). Returns
+    ``{"length", "dist", "throttle", "brake", "steering"}`` with `bins` points per
+    channel, or ``{}`` when the lap lacks a channel or is too short.
+
+    `bins` bounds the payload: a full lap at 48.6 Hz is 4k-10k samples per channel.
+    """
+    ch = record.channels
+    if not all(k in ch for k in ("lap_distance", *_INPUT_CHANNELS)):
+        return {}
+    arrays = {k: np.asarray(ch[k], dtype=float) for k in ("lap_distance", *_INPUT_CHANNELS)}
+    n = min(len(a) for a in arrays.values())
+    if n < 2:
+        return {}
+    arrays = {k: a[:n] for k, a in arrays.items()}
+
+    mask = np.ones(n, dtype=bool)
+    for a in arrays.values():
+        mask &= np.isfinite(a)
+    keep = np.flatnonzero(mask)
+    if keep.size < 2:
+        return {}
+    d = arrays["lap_distance"][keep]
+
+    # Knots = first sample of each held run, in ORIGINAL sample numbering (so the
+    # index axis stays a uniform-time axis even after dropping non-finite samples).
+    run_start = np.r_[True, np.diff(d) != 0]
+    ki, kd = keep[run_start], d[run_start]
+    # Drop any knot that doesn't advance (a distance reset would otherwise fold the
+    # lap back on itself); np.interp needs a strictly-increasing xp/fp pair.
+    forward = np.r_[True, np.diff(kd) > 0]
+    ki, kd = ki[forward], kd[forward]
+    if ki.size < 2:
+        return {}
+    # The trailing partial run has no next knot to interpolate toward; extend it at
+    # the last observed rate so the final ~0.2 s isn't clamped flat.
+    if ki[-1] < keep[-1]:
+        rate = (kd[-1] - kd[-2]) / (ki[-1] - ki[-2])
+        kd = np.append(kd, kd[-1] + rate * (keep[-1] - ki[-1]))
+        ki = np.append(ki, keep[-1])
+
+    dist = np.interp(keep, ki, kd)
+    grid = np.linspace(float(dist[0]), float(dist[-1]), bins)
+    # ponytail: plain point-sampling on the grid. At 500 bins that is ~9-19x
+    # decimation of a 48.6 Hz lap (~0.2-0.4 s per point) -- finer than any real
+    # brake or throttle application, so nothing visible aliases. Switch to per-bin
+    # min/max envelopes if a much lower `bins` is ever wanted.
+    out: dict = {"length": round(float(dist[-1]), 1),
+                 "dist": [round(float(v), 1) for v in grid]}
+    for k in _INPUT_CHANNELS:
+        vals = np.interp(grid, dist, arrays[k][keep])
+        out[k] = [round(float(v), 3) for v in vals]
+    return out

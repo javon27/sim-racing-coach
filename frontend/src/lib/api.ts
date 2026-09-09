@@ -375,6 +375,28 @@ export interface RibbonPreview {
   track_name?: string; // session track name, shown in the header + saved with the layout
 }
 
+// Driver-input traces for the Pit Wall graphs (#21). Already resampled onto a
+// uniform lap_distance grid and downsampled to 500 points per channel by the
+// sidecar — this client only fetches, the component only draws.
+export interface InputTrace {
+  lap_id: number | null;
+  lap_time: number;
+  length: number;
+  dist: number[];
+  throttle: number[];
+  brake: number[];
+  steering: number[];
+}
+
+export interface InputTraces {
+  last: InputTrace | null;
+  best: InputTrace | null; // null when the last lap IS the best (nothing to compare)
+}
+
+export function getInputTraces(): Promise<InputTraces> {
+  return request<InputTraces>("/track/inputs");
+}
+
 export function startMapCapture(): Promise<{ active: boolean }> {
   // Body required so the browser preflights (CSRF guard on the mutating route).
   return request<{ active: boolean }>("/mapcapture/start", {
