@@ -11,28 +11,42 @@ _SETUP_TERMS = (
     "ride_height", "rideheight", "ride", "spring", "damp", "bump", "rebound", "packer",
     "camber", "toe", "caster", "antiroll", "arb", "roll_bar", "pressure", "traction",
     "tc_", "migration", "balance", "steer", "duct", "radiator", "fuel", "engine_brak",
+    # LMU packs the anti-roll bars as ANTISWAY and the engine map as ELECTRIC_MOTOR_MAP,
+    # so "antiroll"/"arb"/"roll_bar" above never matched anything and both params were
+    # silently dropped from the prompt. Adding them renders exactly 3 more lines
+    # (VM_FRONT_ANTISWAY, VM_REAR_ANTISWAY, VM_ELECTRIC_MOTOR_MAP) -- all of them
+    # cockpit electronics, so all three carry the garage caveat below.
+    "antisway", "motor_map",
 )
 
-# Driver-aid MAPS (ABS + the TC family) -- the ones a driver rotates on a wheel
-# dial mid-lap. LMU's REST reports the GARAGE setup and on-track aid changes never
-# reach it (LMU discards them on entering the garage), so these values can differ
-# from what the driver is actually running (issue #33). Matched on the packed map
-# names so the availability flags (ANTILOCK_BRAKES / TRACTION_CONTROL, "Available")
-# -- which are not driver-adjustable on track -- are left alone.
+# Cockpit-adjustable ELECTRONICS -- the dials a driver turns mid-stint. LMU's REST
+# reports the GARAGE setup and ANY electronic change made on track is lost when the
+# car returns to the garage, so these values can differ from what the driver is
+# actually running (issue #33). Source: the app's driver, stated 2026-09-09 -- this
+# supersedes the earlier note here that recorded brake balance as "unmeasured" and
+# left it uncaveated; the discard covers all cockpit electronics, BB included.
 #
-# Brake balance (VM_BRAKE_BALANCE) is deliberately NOT caveated, though drivers
-# adjust it on track too: #33 evidences the discard for ABS/TC only, and whether
-# LMU treats BB the same way is unmeasured. Caveating a value that IS live would
-# make the coach hedge a fact. smm.py now captures mRearBrakeBias so the next rig
-# lap can settle it -- if the garage and telemetry values disagree on track, add
-# "brake_balance" here.
-_AID_MAP_TERMS = ("antilockbrakesystem", "tractioncontrol")
-_AID_CAVEAT = " [garage value — confirm what's dialed on-track]"
+# The set is LMU's own: TelemInfoV01 pairs each of these with a *Max index
+# (mABS / mTC / mTCSlip / mTCCut / mMotorMap / mMigration / mFront+mRearAntiSway,
+# plus mRearBrakeBias) precisely because they are cockpit-adjustable. Anti-sway is
+# in that block, so it is treated as a dial even though the bar itself is mechanical
+# -- on cars without the rotary the garage value is the truth; to revert that call,
+# drop "antisway" from the tuple.
+#
+# Matched on the packed names so two things stay UNcaveated: the availability flags
+# (ANTILOCK_BRAKES / TRACTION_CONTROL, "Available") -- not dials -- and every
+# mechanical param (springs, ride height, camber, wings, dampers), which a driver
+# cannot change on track; hedging those would make the coach hedge a fact.
+_ELECTRONICS_TERMS = (
+    "antilockbrakesystem", "tractioncontrol", "brake_balance", "brake_migration",
+    "antisway", "motor_map",
+)
+_GARAGE_CAVEAT = " [garage value — confirm what's dialed on-track]"
 
 
 def _setup_lines(setup: dict) -> list[str]:
     """Human-meaningful setup params, formatted for the prompt (filters ~170 -> the
-    commonly-coached subset; flags tier-locked ones and garage-sourced driver aids).
+    commonly-coached subset; flags tier-locked ones and garage-sourced electronics).
 
     Appends "(step N of lo-hi)" -- the param's ORDINAL position among the garage's
     available options (issue #32). minValue/maxValue on LMU's garage payload are
@@ -62,8 +76,8 @@ def _setup_lines(setup: dict) -> list[str]:
         locked = "" if v.get("isFreeSetting", True) else " [locked this tier]"
         lo, hi, cur = v.get("minValue"), v.get("maxValue"), v.get("value")
         step = "" if None in (lo, hi, cur) else f" (step {cur} of {lo}-{hi})"
-        aid = _AID_CAVEAT if any(t in k for t in _AID_MAP_TERMS) else ""
-        out.append(f"- {label}: {v['stringValue']}{step}{locked}{aid}")
+        garage = _GARAGE_CAVEAT if any(t in k for t in _ELECTRONICS_TERMS) else ""
+        out.append(f"- {label}: {v['stringValue']}{step}{locked}{garage}")
     return out
 
 
@@ -113,9 +127,13 @@ SYSTEM_PROMPT = (
     "only to tell whether a param is already at its limit and which way it can still "
     "move. One step's physical size is not exposed, so NEVER state an exact increment "
     "(e.g. '-50 lbf/in') — give direction ('soften the front spring a step or two').\n"
-    "- DRIVER AIDS: a setup line ending [garage value — ...] is the GARAGE setting; LMU "
-    "never reports ABS/TC changes the driver made on track. Never assert one as what "
-    "they're currently running — name it as the garage value and ask them to confirm.\n"
+    "- COCKPIT ELECTRONICS: a setup line ending [garage value — ...] is the GARAGE "
+    "setting. LMU discards ANY electronics change the driver made on track once the car "
+    "returns to the garage — ABS, the TC family, engine/motor map, brake migration, "
+    "brake balance, anti-roll — so it never reports what they actually dialed in. Never "
+    "assert one as what they're currently running — name it as the garage value and ask "
+    "them to confirm. Mechanical params (springs, ride height, camber, wings, dampers) "
+    "carry no such marker and ARE the truth; state those plainly.\n"
     "- Weigh context before over-reading a lap: tire temp/warm-up, fuel, wear. If the lap "
     "looks unrepresentative, say so.\n"
     "- Encouraging and constructive; acknowledge what's working, never berate. Honor the "
@@ -213,9 +231,13 @@ AGENTIC_SYSTEM_PROMPT = (
     "only to tell whether a param is already at its limit and which way it can still "
     "move. One step's physical size is not exposed, so NEVER state an exact increment "
     "(e.g. '-50 lbf/in') — give direction ('soften the front spring a step or two').\n"
-    "- DRIVER AIDS: a setup line ending [garage value — ...] is the GARAGE setting; LMU "
-    "never reports ABS/TC changes the driver made on track. Never assert one as what "
-    "they're currently running — name it as the garage value and ask them to confirm.\n"
+    "- COCKPIT ELECTRONICS: a setup line ending [garage value — ...] is the GARAGE "
+    "setting. LMU discards ANY electronics change the driver made on track once the car "
+    "returns to the garage — ABS, the TC family, engine/motor map, brake migration, "
+    "brake balance, anti-roll — so it never reports what they actually dialed in. Never "
+    "assert one as what they're currently running — name it as the garage value and ask "
+    "them to confirm. Mechanical params (springs, ride height, camber, wings, dampers) "
+    "carry no such marker and ARE the truth; state those plainly.\n"
     "- Match length to the question: a quick question gets a sentence or two; a broad one ('how's "
     "my race going') can be a few short paragraphs or a bullet list — thorough but never padded. "
     "The driver will ask follow-ups."
