@@ -37,7 +37,16 @@ def _sector_bounds_for_slug(conn: sqlite3.Connection, slug: str) -> list[float] 
     track, so any car's captured bounds are the track's. Mirrors
     `LapStore.sector_bounds`, but slug-matched (across cars) instead of keyed on
     one exact track/car pair, the same way `backfill_corner_geometry._store_samples`
-    slug-matches laps. None if no lap for this slug has them yet."""
+    slug-matches laps. None if no lap for this slug has them yet.
+
+    Across CARS only -- it cannot reach across LAYOUTS (#41). `slug` is a map
+    file's stem, which is `track_slug(<full live track name>)`, and the layout is
+    part of that name ('Autodromo Nazionale Monza' vs 'Monza Curva Grande
+    Circuit'). track_slug collapses only case, accents, punctuation and a trailing
+    series suffix (' - ELMS'/' - WEC') -- never a layout -- so two layouts never
+    share a slug, and any two names that DID share one would also share the single
+    map file. Pinned by tests/test_backfill_sectors.py::
+    test_sector_bounds_never_cross_monza_layouts."""
     rows = conn.execute(
         "SELECT track, sector_bounds FROM laps WHERE sector_bounds IS NOT NULL ORDER BY id DESC"
     ).fetchall()
