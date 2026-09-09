@@ -44,6 +44,13 @@ vi.mock("./api", async () => {
 describe("App shell", () => {
   afterEach(cleanup);
 
+  // CornerSetupTabs now keeps both tab panels mounted (issue #36 fix), so
+  // SetupPanel's getSetup() fires on Coach-screen mount even though these
+  // tests never touch the Setup tab.
+  beforeEach(() => {
+    vi.mocked(getSetup).mockResolvedValue({});
+  });
+
   // The shell mounts after the splash finishes its boot (health + prefetch),
   // so these await the shell rather than querying synchronously.
   it("renders the three nav items and a theme toggle", async () => {

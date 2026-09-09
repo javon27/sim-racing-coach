@@ -28,8 +28,10 @@
   </button>
 </div>
 
-{#if activeTab === "corners"}
+
+<div hidden={activeTab !== "corners"}>
   <CornerPanel {lapId} />
-{:else}
+</div>
+<div hidden={activeTab !== "setup"}>
   <SetupPanel />
-{/if}
+</div>
