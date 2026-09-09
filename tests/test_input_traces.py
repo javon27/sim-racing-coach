@@ -43,33 +43,47 @@ def test_grid_is_uniform_and_strictly_increasing():
     assert np.allclose(steps, steps[0], atol=0.11)  # emitted distances round to 0.1 m
 
 
-def test_sub_scoring_tick_input_survives():
+def test_sub_scoring_tick_input_survives_at_every_phase():
     """The load-bearing consequence of the rate mismatch: ~10 input samples share
     one lap_distance, so anything the driver does INSIDE one 5 Hz scoring tick (a
     stab, a quick lift) is invisible to any method that keys on the distinct stored
-    distances -- it only ever sees one sample per tick. De-staircasing gives every
-    48.6 Hz sample its own distance, so the lift survives."""
-    rec = _staircase_lap()
-    stored = np.asarray(rec.channels["lap_distance"])
+    distances -- it only ever sees one sample per tick.
+
+    De-staircasing gives every 48.6 Hz sample its own distance, but that alone is
+    not enough: at 500 bins one bin spans 180-400 ms, i.e. AT OR COARSER than the
+    scoring tick, so point-sampling the grid drops the lift whenever it happens to
+    land between two grid points. The per-bin min/max envelope is what makes the
+    lift survive, so the phase is SWEPT across a whole tick — passing at one lucky
+    offset proves nothing.
+
+    Le Mans scale (13.6 km, 3:20) is the hard case: the widest bins.
+    """
+    base = _staircase_lap(n=9720, length=13600.0)
+    stored = np.asarray(base.channels["lap_distance"])
     # Precondition: the fixture really is a staircase (else the test proves nothing).
     assert len(np.unique(stored)) < len(stored) / 5
     tick = np.flatnonzero(np.r_[True, np.diff(stored) != 0])
+    span = tick[21] - tick[20]  # samples in one scoring tick (~9-10)
+    assert span >= 5
 
-    # A ~0.1 s lift entirely inside one scoring tick, starting after its first sample.
-    lo = tick[20] + 2
-    rec.channels["throttle"][:] = 1.0
-    rec.channels["throttle"][lo:lo + 5] = 0.0
-    assert lo + 5 < tick[21], "lift must sit inside a single scoring tick"
+    misses, hidden = [], 0
+    for phase in range(span):
+        rec = _staircase_lap(n=9720, length=13600.0)
+        lo = tick[20] + phase
+        rec.channels["throttle"][:] = 1.0
+        rec.channels["throttle"][lo:lo + 5] = 0.0  # ~0.1 s lift
+        # Phases where the lift lands entirely between two scoring updates are
+        # invisible to anything keyed on the distinct stored distances.
+        if phase > 0 and lo + 5 <= tick[21]:
+            assert rec.channels["throttle"][tick].min() == 1.0
+            hidden += 1
+        if min(input_traces(rec, bins=500)["throttle"]["lo"]) >= 0.5:
+            misses.append(phase)
+    assert hidden >= 3, "fixture must exercise phases the scoring rate cannot see"
+    assert not misses, f"lift lost at phases {misses} of {span}"
 
-    # What a distinct-distance keyed resample can see: one sample per tick.
-    per_tick = rec.channels["throttle"][tick]
-    assert per_tick.min() == 1.0, "the lift is invisible at the scoring rate"
 
-    tr = input_traces(rec, bins=200)
-    assert min(tr["throttle"]) < 0.5
-
-
-def test_channels_track_the_true_signal():
+def test_envelope_brackets_the_true_signal():
     rec = _staircase_lap()
     tr = input_traces(rec, bins=200)
     d = np.asarray(tr["dist"])
@@ -78,17 +92,33 @@ def test_channels_track_the_true_signal():
     t = np.arange(n) / 48.6
     true_dist = 5000.0 * t / t[-1]
     expect = np.interp(d, true_dist, rec.channels["throttle"])
-    assert np.max(np.abs(np.asarray(tr["throttle"]) - expect)) < 0.05
+    lo = np.asarray(tr["throttle"]["lo"])
+    hi = np.asarray(tr["throttle"]["hi"])
+    assert np.all(lo <= hi)
+    # The band contains the signal, and is tight on a smooth trace.
+    assert np.all(lo <= expect + 0.05) and np.all(hi >= expect - 0.05)
+    assert np.max(hi - lo) < 0.1
     # De-staircasing recovers the lap length to ~0.2% (the final partial run is
     # extrapolated at the last observed rate, not measured).
     assert tr["length"] == pytest.approx(5000.0, rel=5e-3)
 
 
+def test_bins_with_no_sample_still_get_a_value():
+    # More bins than raw samples: every bin must still carry a finite lo/hi, else
+    # the chart draws a hole.
+    tr = input_traces(_staircase_lap(n=60), bins=500)
+    for k in ("throttle", "brake", "steering"):
+        assert len(tr[k]["lo"]) == len(tr[k]["hi"]) == 500
+        assert all(np.isfinite(v) for v in tr[k]["lo"] + tr[k]["hi"])
+
+
 def test_values_are_rounded_and_json_safe():
     tr = input_traces(_staircase_lap(), bins=32)
-    for key in ("dist", "throttle", "brake", "steering"):
-        assert all(isinstance(v, float) for v in tr[key])
-        assert all(np.isfinite(v) for v in tr[key])
+    assert all(isinstance(v, float) and np.isfinite(v) for v in tr["dist"])
+    for key in ("throttle", "brake", "steering"):
+        for edge in ("lo", "hi"):
+            vals = tr[key][edge]
+            assert all(isinstance(v, float) and np.isfinite(v) for v in vals)
 
 
 def test_missing_channel_returns_empty():
@@ -109,4 +139,28 @@ def test_non_finite_samples_are_dropped():
     rec.channels["throttle"][5] = np.nan
     rec.channels["lap_distance"][7] = np.inf
     tr = input_traces(rec, bins=64)
-    assert all(np.isfinite(v) for v in tr["throttle"])
+    assert all(np.isfinite(v) for v in tr["throttle"]["lo"] + tr["throttle"]["hi"])
+
+
+def test_backward_distance_step_cannot_break_monotonicity():
+    """A lap_distance dip (a wrap, a scoring glitch) must not leave the resampled
+    axis non-monotonic. Comparing each knot only to its IMMEDIATE predecessor is
+    not enough: after a dip, the next knot passes as long as it beats the dipped
+    value, so the axis stays out of order — and np.interp then returns garbage on
+    an unsorted xp WITHOUT raising."""
+    rec = _staircase_lap()
+    d = rec.channels["lap_distance"]
+    ticks = np.flatnonzero(np.r_[True, np.diff(d) != 0])
+    # Dip well below the running maximum, then resume from there. The knot after
+    # the dip is > the dip but still < the pre-dip maximum.
+    peak = d[ticks[20]]
+    d[ticks[20]:ticks[21]] = peak - 900.0
+    d[ticks[21]:ticks[22]] = peak - 800.0
+    d[ticks[22]:ticks[23]] = peak - 700.0
+
+    tr = input_traces(rec, bins=200)
+    assert tr, "a recoverable distance glitch should not blank the trace"
+    axis = np.asarray(tr["dist"])
+    assert np.all(np.diff(axis) > 0)
+    for k in ("throttle", "brake", "steering"):
+        assert all(np.isfinite(v) for v in tr[k]["lo"] + tr[k]["hi"])

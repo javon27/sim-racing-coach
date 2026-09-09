@@ -42,13 +42,15 @@ def test_inputs_returns_last_lap_traces(tmp_path, synthetic_lap, monkeypatch):
     last = b["last"]
     assert last["lap_id"] == lap_id
     assert last["lap_time"] == synthetic_lap.lap_time
-    # Downsampled server-side: a fixed grid, far fewer points than the 1000 raw samples.
-    assert len(last["dist"]) == len(last["throttle"]) == 500
-    assert len(last["brake"]) == len(last["steering"]) == 500
+    # Downsampled server-side to a fixed grid of per-bin min/max envelopes, far
+    # fewer points than the 1000 raw samples.
+    assert len(last["dist"]) == 500
+    for k in ("throttle", "brake", "steering"):
+        assert len(last[k]["lo"]) == len(last[k]["hi"]) == 500
     assert last["dist"] == sorted(last["dist"])
     assert last["length"] > 0
     # The synthetic lap brakes hard in two corners; the trace must show it.
-    assert max(last["brake"]) > 0.5
+    assert max(last["brake"]["hi"]) > 0.5
 
 
 def test_best_omitted_when_it_is_the_last_lap(tmp_path, synthetic_lap, monkeypatch):

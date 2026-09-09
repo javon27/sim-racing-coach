@@ -376,16 +376,26 @@ export interface RibbonPreview {
 }
 
 // Driver-input traces for the Pit Wall graphs (#21). Already resampled onto a
-// uniform lap_distance grid and downsampled to 500 points per channel by the
-// sidecar — this client only fetches, the component only draws.
+// uniform lap_distance grid and reduced to 500 bins by the sidecar — this client
+// only fetches, the component only draws.
+//
+// Each channel is a per-bin min/max ENVELOPE, not a point sample: one bin spans
+// 180-400 ms, at or coarser than the game's 200 ms scoring tick, so a point
+// sample would drop a stab or a lift depending on where it fell. `dist` holds
+// the bin centres.
+export interface InputBand {
+  lo: number[];
+  hi: number[];
+}
+
 export interface InputTrace {
   lap_id: number | null;
   lap_time: number;
   length: number;
   dist: number[];
-  throttle: number[];
-  brake: number[];
-  steering: number[];
+  throttle: InputBand;
+  brake: InputBand;
+  steering: InputBand;
 }
 
 export interface InputTraces {

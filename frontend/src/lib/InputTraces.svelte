@@ -3,9 +3,15 @@
      against lap distance, last lap overlaid on the reference best.
 
      DUMB BY DESIGN. The sidecar (GET /track/inputs -> analysis.input_traces) does
-     the de-staircasing of the 5 Hz lap_distance channel and the downsample to 500
-     points per channel; this file only maps numbers to an SVG path. No resampling,
-     no smoothing, no analysis here — that belongs in the core.
+     the de-staircasing of the 5 Hz lap_distance channel and the reduction to 500
+     bins; this file only maps numbers to an SVG path. No resampling, no smoothing,
+     no analysis here — that belongs in the core.
+
+     Each channel arrives as a per-bin min/max BAND, because one bin spans
+     180-400 ms — at or coarser than the game's 200 ms scoring tick — so a point
+     sample would drop a stab or a lift depending on phase. Drawn as a filled
+     polygon (hi edge out, lo edge back) that is also stroked, so a steady input,
+     where the two edges coincide, still draws as a line.
 
      Laps are paired by NORMALIZED lap progress, the same convention ribbon.py uses:
      both laps start at the S/F line, so t = (d - d0) / (dN - d0) lines them up even
@@ -30,23 +36,21 @@
 
   const H = ROWS.length * ROW_H + (ROWS.length - 1) * GAP + AXIS_H;
 
-  function path(tr: InputTrace, key: (typeof ROWS)[number]["key"], top: number,
+  function band(tr: InputTrace, key: (typeof ROWS)[number]["key"], top: number,
                 lo: number, hi: number): string {
     const d = tr.dist;
-    const v = tr[key];
-    const n = Math.min(d.length, v.length);
+    const b = tr[key];
+    const n = Math.min(d.length, b.lo.length, b.hi.length);
     if (n < 2) return "";
     const d0 = d[0];
     const span = d[n - 1] - d0 || 1;
     const rng = hi - lo || 1;
-    let out = "";
-    for (let i = 0; i < n; i++) {
-      const x = ((d[i] - d0) / span) * W;
-      const y = top + (1 - (v[i] - lo) / rng) * ROW_H;
-      out += `${i ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)}`;
-      if (i < n - 1) out += " ";
-    }
-    return out;
+    const px = (i: number) => (((d[i] - d0) / span) * W).toFixed(1);
+    const py = (v: number) => (top + (1 - (v - lo) / rng) * ROW_H).toFixed(1);
+    const out: string[] = [];
+    for (let i = 0; i < n; i++) out.push(`${i ? "L" : "M"}${px(i)} ${py(b.hi[i])}`);
+    for (let i = n - 1; i >= 0; i--) out.push(`L${px(i)} ${py(b.lo[i])}`);
+    return `${out.join(" ")} Z`;
   }
 
   const rows = $derived(
@@ -57,8 +61,8 @@
         top,
         // Zero line only where it sits inside the plot (steering); pedals rest on the floor.
         zero: r.lo < 0 ? top + (1 - (0 - r.lo) / (r.hi - r.lo)) * ROW_H : null,
-        last: traces?.last ? path(traces.last, r.key, top, r.lo, r.hi) : "",
-        best: traces?.best ? path(traces.best, r.key, top, r.lo, r.hi) : "",
+        last: traces?.last ? band(traces.last, r.key, top, r.lo, r.hi) : "",
+        best: traces?.best ? band(traces.best, r.key, top, r.lo, r.hi) : "",
       };
     }),
   );
@@ -159,17 +163,22 @@
   .xgrid {
     opacity: 0.6;
   }
+  /* Filled band + stroked outline: a steady input collapses the band to zero
+     height, and the stroke keeps it visible as a line. */
   .line {
-    fill: none;
-    stroke-width: 1.5;
+    stroke-width: 1.2;
     stroke-linejoin: round;
     vector-effect: non-scaling-stroke;
   }
   .line.last {
     stroke: var(--accent);
+    fill: var(--accent);
+    fill-opacity: 0.35;
   }
   .line.best {
     stroke: var(--good);
+    fill: var(--good);
+    fill-opacity: 0.22;
     opacity: 0.85;
   }
   .labels span {

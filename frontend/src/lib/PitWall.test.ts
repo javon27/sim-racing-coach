@@ -24,9 +24,10 @@ function snapshot(lap: number): FieldSnapshot {
   };
 }
 
+const band = (v: number[]) => ({ lo: [...v], hi: [...v] });
 const TRACE = {
-  lap_id: 4, lap_time: 92.5, length: 1000,
-  dist: [0, 500, 1000], throttle: [1, 0, 1], brake: [0, 1, 0], steering: [0, 0, 0],
+  lap_id: 4, lap_time: 92.5, length: 1000, dist: [0, 500, 1000],
+  throttle: band([1, 0, 1]), brake: band([0, 1, 0]), steering: band([0, 0, 0]),
 };
 
 afterEach(() => {
