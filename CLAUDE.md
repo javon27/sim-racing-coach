@@ -16,8 +16,18 @@ Design specs (read before changing the areas they cover):
 - `docs/superpowers/specs/2026-08-31-agentic-tool-call-coach-design.md` — the
   tool-use coach loop.
 
-`docs/vision.md` is the north star; `docs/v1-backlog.md` tracks live-driving
-feedback still open.
+`docs/vision.md` is the north star.
+
+## Tracking work
+
+- **Open work → GitHub Issues** (the single source of truth). Labels: `area:*`
+  (coach/tracks/ui/capture/infra), `rig-verify` (needs a live eyeball at the rig),
+  `bug`/`enhancement`/`chore`, `future` (roadmap). `docs/v1-backlog.md` is now just a
+  pointer to Issues; shipped work lives in git history + closed issues.
+- **Design → specs/plans** in `docs/superpowers/`.
+- **Durable context / decisions (the *why*) → project memory** (auto-memory,
+  `.remember`). Memory is NOT a task list — never let it drift back into a backlog;
+  open tasks belong in Issues.
 
 ## What this is
 
