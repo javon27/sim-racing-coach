@@ -202,3 +202,44 @@ def test_coach_skips_delta_text_when_delta_is_none(synthetic_lap):
     _, user_content = c.build_prompt(a, "test_car", "where am I losing time?")
     c1_line = [l for l in user_content.splitlines() if l.startswith("T1 ")][0]
     assert "vs best" not in c1_line
+
+
+def test_setup_lines_flag_driver_aid_maps_as_garage_sourced():
+    """Issue #33: LMU's REST reports the GARAGE setup, and on-track ABS/TC changes
+    never reach it (LMU discards them on entering the garage). The aid maps must
+    therefore render with a garage caveat so the coach flags rather than asserts
+    them; every other param stays untouched."""
+    from simcoach.coach import _setup_lines
+    setup = {
+        "VM_ANTILOCKBRAKESYSTEMMAP": {"stringValue": "9 (Understeer)", "value": 9,
+                                      "minValue": 0, "maxValue": 10, "isFreeSetting": True},
+        "VM_TRACTIONCONTROLMAP": {"stringValue": "8", "value": 8,
+                                  "minValue": 0, "maxValue": 12, "isFreeSetting": True},
+        "VM_TRACTIONCONTROLPOWERCUTMAP": {"stringValue": "7", "value": 7,
+                                          "minValue": 0, "maxValue": 12, "isFreeSetting": True},
+        "VM_TRACTIONCONTROLSLIPANGLEMAP": {"stringValue": "9", "value": 9,
+                                           "minValue": 0, "maxValue": 12, "isFreeSetting": True},
+        "VM_BRAKE_BALANCE": {"stringValue": "51.5:48.5", "value": 22,
+                             "minValue": 0, "maxValue": 57, "isFreeSetting": True},
+        # Availability flags, not maps the driver rotates on track -- no caveat.
+        "VM_ANTILOCK_BRAKES": {"stringValue": "Available", "isFreeSetting": True},
+        "VM_TRACTION_CONTROL": {"stringValue": "Available", "isFreeSetting": True},
+    }
+    lines = {line.split(":")[0][2:]: line for line in _setup_lines(setup)}
+    caveat = "[garage value — confirm what's dialed on-track]"
+    for aid in ("Antilockbrakesystemmap", "Tractioncontrolmap",
+                "Tractioncontrolpowercutmap", "Tractioncontrolslipanglemap"):
+        assert lines[aid].endswith(caveat), lines[aid]
+        assert "(step " in lines[aid]          # #32's ordinal suffix survives
+    for plain in ("Brake Balance", "Antilock Brakes", "Traction Control"):
+        assert caveat not in lines[plain], lines[plain]
+
+
+def test_system_prompts_tell_the_coach_to_flag_not_assert_driver_aids():
+    """Issue #33: both prompts must instruct the coach to treat a flagged aid as
+    the garage setting to confirm, never as the driver's current one."""
+    from simcoach.coach import AGENTIC_SYSTEM_PROMPT, SYSTEM_PROMPT
+    for prompt in (SYSTEM_PROMPT, AGENTIC_SYSTEM_PROMPT):
+        assert "DRIVER AIDS:" in prompt
+        assert "garage value" in prompt
+        assert "Never assert" in prompt

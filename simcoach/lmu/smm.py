@@ -219,6 +219,13 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
       lat_g = mLocalAccel.x / 9.80665 (x is lateral in local vehicle coords);
         long_g = mLocalAccel.z / 9.80665 (z is longitudinal; braking/accel).
       tire/brake temps: Kelvin -> Celsius (-273.15).
+      elapsed_time / lap_start_et: mElapsedTime / mLapStartET, seconds, as-is;
+        time_into_lap = their difference (seconds into the current lap).
+      abs_map/tc_map/tc_slip_map/tc_cut_map/motor_map/migration/
+        front_antisway/rear_antisway (+ each _max): cockpit map indices, uint8
+        as-is -> float. Ordinals, not physical values. MEANING UNVERIFIED.
+      rear_brake_bias: mRearBrakeBias, raw, no conversion. SCALE UNVERIFIED
+        (fraction vs percent).
       per-wheel [fl,fr,rl,rr]: wheel_rot (mRotation, rad/s -- lockup ~ 0 while
         moving), brake_temp, brake_press (mBrakePressure), grip (mGripFract,
         0..1), tire_load (mTireLoad, N), tire_press (mPressure, kPa), tire_wear
@@ -237,6 +244,20 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
         "lat_g": telem.mLocalAccel.x / 9.80665,
         "long_g": telem.mLocalAccel.z / 9.80665,
         "lap_distance": lap_dist,
+        # In-lap time axis (issue #38). lap_distance comes off the SCORING struct
+        # and only advances at ~5 Hz, so integrating delta-t as ds/(v/3.6) is
+        # coarse -- measured net-delta error median 0.206 s, max 1.212 s. These
+        # two fields are declared on TelemInfoV01, the same struct as mLocalVel,
+        # so they are EXPECTED to be per-poll fresh at ~50 Hz -- INFERRED FROM
+        # STRUCT MEMBERSHIP, NOT MEASURED (they appear in no capture yet). The
+        # first rig lap after this lands confirms or refutes it.
+        # time_into_lap is stored purely for ergonomics -- lap_start_et is itself
+        # per-sample, so elapsed_time - lap_start_et at read time is element-wise
+        # identical. It is NOT monotonic either way: samples carrying the next
+        # lap's mLapStartET drop back toward zero at the seam.
+        "elapsed_time": telem.mElapsedTime,
+        "lap_start_et": telem.mLapStartET,
+        "time_into_lap": telem.mElapsedTime - telem.mLapStartET,
         # World position for the track-map outline. x/z = horizontal plane;
         # y = elevation (banking, hills) for elevation-aware maps / 3D replay.
         # Appended raw even if non-finite -- the map builder filters.
@@ -247,6 +268,41 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
         "rpm": telem.mEngineRPM,
         "abs_active": 1.0 if telem.mABSActive else 0.0,
         "tc_active": 1.0 if telem.mTCActive else 0.0,
+        # Cockpit-adjustable map INDICES + their ceilings (issues #33, #38).
+        # Distinct from abs_active/tc_active above, which are engagement flags.
+        # WHAT THESE HOLD IS INFERRED FROM NAME AND SHAPE, NOT MEASURED: the
+        # struct declares each as a current+ceiling uint8 pair, the same shape as
+        # the garage payload's value/maxValue, and the first four line up
+        # one-to-one with the garage keys VM_ANTILOCKBRAKESYSTEMMAP,
+        # VM_TRACTIONCONTROLMAP, ...POWERCUTMAP and ...SLIPANGLEMAP -- which is
+        # why the aid ones are named after those keys. Whether they carry the
+        # LIVE on-track index (the real fix for #33, where the coach currently
+        # hedges the garage value in the prompt), the garage value, or something
+        # else is unknown; the first rig lap after this lands settles it.
+        # Captured now regardless: a lap driven without them can never get them back.
+        "abs_map": float(telem.mABS),
+        "abs_map_max": float(telem.mABSMax),
+        "tc_map": float(telem.mTC),
+        "tc_map_max": float(telem.mTCMax),
+        "tc_slip_map": float(telem.mTCSlip),
+        "tc_slip_map_max": float(telem.mTCSlipMax),
+        "tc_cut_map": float(telem.mTCCut),
+        "tc_cut_map_max": float(telem.mTCCutMax),
+        "motor_map": float(telem.mMotorMap),
+        "motor_map_max": float(telem.mMotorMapMax),
+        "migration": float(telem.mMigration),
+        "migration_max": float(telem.mMigrationMax),
+        "front_antisway": float(telem.mFrontAntiSway),
+        "front_antisway_max": float(telem.mFrontAntiSwayMax),
+        "rear_antisway": float(telem.mRearAntiSway),
+        "rear_antisway_max": float(telem.mRearAntiSwayMax),
+        # Brake bias, the other cockpit dial the garage payload can disagree with
+        # (VM_BRAKE_BALANCE, rendered front:rear e.g. "51.5:48.5"). Unlike the
+        # uint8 indices above this is a plain double in the offset-anchored region
+        # with unambiguous rF2 semantics, so it is the field most likely to settle
+        # the brake-balance half of #33. Stored raw, no conversion: the scale
+        # (fraction ~0.485 vs percent ~48.5) is INFERRED, NOT MEASURED.
+        "rear_brake_bias": telem.mRearBrakeBias,
         "fuel": telem.mFuel,
         "virtual_energy": telem.mVirtualEnergy,
         "soc": telem.mSoC,

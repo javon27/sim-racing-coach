@@ -169,6 +169,86 @@ def test_sample_from_telem_maps_energy_channels():
     assert abs(sample["battery_charge"] - 0.42) < 1e-9
 
 
+def test_sample_from_telem_maps_lap_time_channels():
+    """Issue #38 prerequisite: capture the in-lap time axis. mElapsedTime and
+    mLapStartET are declared on TelemInfoV01 but were never read, so every lap
+    driven so far is permanently missing a time channel and delta-t has to be
+    integrated as ds/(v/3.6) off the 5 Hz scoring lap_distance.
+
+    time_into_lap is derived per-sample rather than at read time so it stays
+    correct across the lap seam, where mLapStartET jumps mid-array."""
+    t = roundtrip(make_telem(mElapsedTime=1234.5, mLapStartET=1200.0))
+    s = sample_from_telem(t, lap_dist=0.0)
+    assert s["elapsed_time"] == 1234.5
+    assert s["lap_start_et"] == 1200.0
+    assert abs(s["time_into_lap"] - 34.5) < 1e-9
+
+
+def test_sample_from_telem_maps_driver_aid_index_channels():
+    """Issues #33/#38: TelemInfoV01 declares each cockpit-adjustable map as a
+    current+ceiling uint8 pair, the same shape as the garage payload's
+    value/maxValue. The four aid ones are named after the garage keys they would
+    be cross-checked against (VM_ANTILOCKBRAKESYSTEMMAP, VM_TRACTIONCONTROLMAP,
+    ...POWERCUTMAP, ...SLIPANGLEMAP); the rest mirror the struct.
+
+    Capture only -- what these fields actually hold on track is unmeasured.
+    abs_map is distinct from the existing abs_active, which is engagement."""
+    t = roundtrip(make_telem(
+        mABS=3, mABSMax=10, mTC=4, mTCMax=12, mTCSlip=10, mTCSlipMax=12,
+        mTCCut=3, mTCCutMax=12, mMotorMap=2, mMotorMapMax=6,
+        mMigration=5, mMigrationMax=9, mFrontAntiSway=1, mFrontAntiSwayMax=7,
+        mRearAntiSway=6, mRearAntiSwayMax=7,
+    ))
+    s = sample_from_telem(t, lap_dist=0.0)
+    assert (s["abs_map"], s["abs_map_max"]) == (3.0, 10.0)
+    assert (s["tc_map"], s["tc_map_max"]) == (4.0, 12.0)
+    assert (s["tc_slip_map"], s["tc_slip_map_max"]) == (10.0, 12.0)
+    assert (s["tc_cut_map"], s["tc_cut_map_max"]) == (3.0, 12.0)
+    assert (s["motor_map"], s["motor_map_max"]) == (2.0, 6.0)
+    assert (s["migration"], s["migration_max"]) == (5.0, 9.0)
+    assert (s["front_antisway"], s["front_antisway_max"]) == (1.0, 7.0)
+    assert (s["rear_antisway"], s["rear_antisway_max"]) == (6.0, 7.0)
+    # the engagement booleans are untouched and still mean something else
+    assert s["abs_active"] == 1.0 and s["tc_active"] == 0.0
+
+
+def test_sample_from_telem_maps_rear_brake_bias():
+    """mRearBrakeBias is a plain double in the offset-anchored region with
+    unambiguous rF2 semantics, unlike the uint8 map indices above -- it is what
+    would settle the brake-balance half of #33. Stored raw: the scale (fraction
+    vs percent) is inferred, not measured, so no conversion is applied here."""
+    t = roundtrip(make_telem(mRearBrakeBias=0.485))
+    assert sample_from_telem(t, lap_dist=0.0)["rear_brake_bias"] == pytest.approx(0.485)
+
+
+def test_lap_time_channels_survive_a_store_round_trip(tmp_path):
+    """The new channels are purely additive: store.save/load pass channels through
+    generically via npz, so no schema migration is needed -- prove it end to end
+    from sample_from_telem output rather than a hand-built dict."""
+    from simcoach.model_types import LapRecord
+    from simcoach.store import LapStore
+
+    samples = [
+        sample_from_telem(roundtrip(make_telem(mElapsedTime=100.0 + i * 0.02,
+                                               mLapStartET=100.0, mABS=3, mABSMax=10,
+                                               mRearBrakeBias=0.485)),
+                          lap_dist=i * 1.0)
+        for i in range(5)
+    ]
+    channels = {k: [s[k] for s in samples] for k in samples[0]}
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    lap_id = store.save(LapRecord("lmu", "t", "c", 92.5, True, 0.0, channels))
+    back = store.load(lap_id).channels
+
+    assert list(back["time_into_lap"]) == pytest.approx([0.0, 0.02, 0.04, 0.06, 0.08])
+    assert list(back["elapsed_time"]) == pytest.approx([100.0 + i * 0.02 for i in range(5)])
+    assert list(back["lap_start_et"]) == pytest.approx([100.0] * 5)
+    assert list(back["abs_map"]) == pytest.approx([3.0] * 5)
+    assert list(back["abs_map_max"]) == pytest.approx([10.0] * 5)
+    assert list(back["rear_brake_bias"]) == pytest.approx([0.485] * 5)
+    assert list(back["speed"]) == pytest.approx([198.0] * 5)  # existing channels intact
+
+
 def test_sample_from_telem_speed_is_vector_magnitude():
     t = roundtrip(make_telem())
     t.mLocalVel.x, t.mLocalVel.y, t.mLocalVel.z = 3.0, 4.0, 0.0
