@@ -45,10 +45,17 @@ _MAX_CORNER_DIGITS = 3
 # across every shipped map (widest is 3 corners). Ranges are inclusive.
 _NOTE_RANGE = re.compile(rf"([0-9]{{1,{_MAX_CORNER_DIGITS}}})-([0-9]{{1,{_MAX_CORNER_DIGITS}}})")
 
-# Widest span still read as a corner complex. Bounds the probe loop below, and bounds
-# how many corners ONE authored key can speak for: a blanket '1-999' used to bind every
-# numeric corner on the track and be served to the driver as `Authored note:` fact for
-# each of them. Only a partial mitigation -- see the note in the test of the same name.
+# Widest span still read as a corner complex. Bounds how many corners ONE authored key
+# can speak for: a blanket '1-999' bound every numeric corner on the track and was
+# served to the driver as `Authored note:` owned fact for each of them.
+#
+# PARTIAL, and not tuned any tighter on purpose. 100 only removes the range that
+# blankets a map of ANY size -- the largest shipped map has 30 corners, so '1-30' still
+# blankets a real circuit and still binds. Bounding the blast radius is #64's job (the
+# guard keys on corner COUNT, which is why a same-count relabel can rebind a note at
+# all); a span cap is a proxy for that, and tightening it toward the real complex width
+# would start silently dropping a plausible sector-wide note -- the very failure this
+# branch exists to fix.
 _MAX_RANGE_SPAN = 100
 
 
@@ -68,10 +75,11 @@ def note_key_binds(key: str, labels: set[str]) -> bool:
 
     There is a THIRD reader of this grammar, in the UI: `TracksScreen.svelte`'s
     `rangeOf`/`cornerView`, which decides which notes collapse under a range row and
-    which are flagged to the user as matching no corner. It is deliberately the
-    strictest of the three (ASCII digits, ascending only), and this grammar is held
-    down to it -- a note the guard keeps and the coach states as owned fact must not
-    be the same note the Tracks screen calls an orphan. Loosen one, loosen both.
+    which are flagged to the user as matching no corner. The two are now IDENTICAL by
+    construction and a test pins them that way -- a note the guard keeps and the coach
+    states as owned fact must not be one the Tracks screen calls an orphan, and a note
+    that screen shows collapsed under a range must not be one this guard deletes on the
+    next save. Loosen one, loosen both.
 
     TOTAL: returns a bool for every (key, labels) pair and never raises. Both callers
     use it as a predicate inside a comprehension, and both get their keys and labels
@@ -84,17 +92,19 @@ def note_key_binds(key: str, labels: set[str]) -> bool:
     m = _NOTE_RANGE.fullmatch(key)
     if not m:
         return False
-    lo, hi = int(m.group(1)), int(m.group(2))     # NOT sorted, deliberately -- below
+    # NOT sorted: a descending '13-11' needs no code of its own, because 13 <= n <= 11
+    # is false for every n -- which is what `main` did and what the UI does.
+    lo, hi = int(m.group(1)), int(m.group(2))
     if hi - lo >= _MAX_RANGE_SPAN:
         return False
-    # Probes the label set over the span instead of parsing each label. `labels` comes
-    # from the MAP, so no key-side regex reaches it, and the editor's label box is free
-    # text where '²' U+00B2, '₂' U+2082 and '⑥' U+2465 all satisfy str.isdigit() and
-    # RAISE on int() -- comparing as strings leaves no parse to get wrong. It is also
-    # why a descending key needs no code: range(13, 12) is empty, so '13-11' binds
-    # nothing, matching both `main` and the UI. Both callers pass a set, so each probe
-    # is O(1); a list here would make this quadratic.
-    return any(str(n) in labels for n in range(lo, hi + 1))
+    # The label side takes the SAME bound as the key side, and for the same reason:
+    # `labels` comes from the map, so no key-side regex reaches it, and the editor's
+    # label box is free text where '²' U+00B2, '₂' U+2082 and '⑥' U+2465 all satisfy
+    # str.isdigit() and RAISE on int(). With the bound the parse cannot raise, and
+    # int() is what keeps '07' equal to 7 -- as `Number('07')` is in the UI. Spelled
+    # out rather than reusing _NOTE_RANGE's class because this runs per label per key.
+    return any(len(lab) <= _MAX_CORNER_DIGITS and lab.isascii() and lab.isdigit()
+               and lo <= int(lab) <= hi for lab in labels)
 
 
 def track_slug(track_name: str) -> str:

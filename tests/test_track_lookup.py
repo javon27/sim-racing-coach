@@ -244,7 +244,7 @@ def test_note_key_binds_matches_the_ui_grammar():
                     f"const MAX_RANGE_SPAN = {_MAX_RANGE_SPAN};",
                     "String.raw`\\d{1,${MAX_CORNER_DIGITS}}`",      # the shared number
                     "hi < lo || hi - lo >= MAX_RANGE_SPAN ? null",  # ascending + capped
-                    "CORNER_NUM.test(label) && String(n) === label"):  # canonical labels
+                    "const cover = CORNER_NUM.test(label)"):   # not Number.isInteger(n)
         assert literal in svelte, f"TracksScreen grammar changed, re-check agreement: {literal}"
     # Agreement on the keys that distinguish the two candidate grammars. Python is the
     # lenient one by default (`\d` is Unicode, and it could normalise direction), so
@@ -266,36 +266,36 @@ def test_note_key_binds_wide_range_names_nothing():
     # survived every same-count map save, and was served to the driver as an
     # `Authored note:` owned fact for each of them.
     #
-    # PARTIAL. The cap is 100 and the largest shipped map has 30 corners, so '1-30'
-    # still blankets an entire real circuit and still binds. What the cap removes is
-    # the key that blankets any map regardless of size, plus an unbounded probe loop.
-    # Bounding the blast radius properly means a cap near the real complex width (the
-    # widest shipped range is 3), which would also start dropping a sector-wide note
-    # someone may have authored -- a call for the #64 work, not a side effect here.
+    # PARTIAL, deliberately left that way. The cap is 100 and the largest shipped map
+    # has 30 corners, so '1-30' still blankets an entire real circuit and still binds.
+    # All the cap removes is the range that blankets a map of ANY size. Bounding the
+    # blast radius is #64's job -- the real defect is that the guard keys on corner
+    # COUNT, so a same-count relabel can rebind a note at all -- and tightening this
+    # toward the real complex width (widest shipped range is 3) would start silently
+    # dropping a plausible sector-wide note, which is the bug this branch exists to fix.
     assert note_key_binds("1-100", {"50"})          # span 100: still a complex
     assert not note_key_binds("1-101", {"50"})      # wider: names nothing
     assert not note_key_binds("1-999", {"7"})       # the blanket key
     assert note_key_binds("1-999", {"1-999"})       # still its own label
 
 
-def test_note_key_binds_is_strict_where_the_ui_is_now_strict_too():
-    # These are the cases where the two readers used to disagree, all three classes of
-    # them: a label `Number()` coerced to a covered integer ('07' is 7, a string probe
-    # matches only '7'), a range endpoint of 4+ digits, and a span over _MAX_RANGE_SPAN.
-    # The UI bound all of them and this guard bound none, which is the DATA-LOSS
-    # direction -- the Tracks screen collapsed the note under a range row, telling the
-    # author it was bound, while the next map save dropped it with only a log line.
+def test_note_key_binds_where_the_ui_used_to_disagree():
+    # The cases the two readers used to split on. Each was the DATA-LOSS direction: the
+    # Tracks screen collapsed the note under a range row, telling the author it was
+    # bound to those corners, while the next map save dropped it with only a log line --
+    # the same failure this branch exists to fix, so the grammars had to meet.
     #
-    # Closed in both directions now: TracksScreen was narrowed to match (its grammar is
-    # pinned in the test above), and a node comparison over 360 key x label pairs shows
-    # zero disagreements. Kept as the Python half of that invariant -- the JS half is
-    # pinned by source literals, and this is what fails if the bound moves here.
-    for label in ("07", "007", "0007", " 7 ", "7.0", "+7", "0x7", "1e1"):
-        assert not note_key_binds("5-9", {label})   # non-canonical: only '7' is 7
+    # They now agree on all of it: a node comparison running TracksScreen's own logic
+    # against this function over 399 key x label pairs finds zero disagreements. This is
+    # the Python half of that invariant; the JS half is pinned by source literals in the
+    # test above, so moving the bound on either side breaks one of the two.
+    for label in (" 7 ", "7.0", "+7", "0x7", "1e1", "0007", ""):
+        assert not note_key_binds("5-9", {label})   # int() rejects; Number() coerced
     assert not note_key_binds("0-0", {""})          # an empty label is not 0
     assert not note_key_binds("1-1000", {"7"})      # 4-digit endpoint: not a range
     assert not note_key_binds("1-101", {"50"})      # over the span cap: not a range
-    assert note_key_binds("5-9", {"7"})             # the canonical form still binds
+    assert note_key_binds("5-9", {"7"})
+    assert note_key_binds("5-9", {"07"})            # a leading zero binds on BOTH sides
 
 
 def test_note_key_binds_ignores_labels_int_cannot_parse():

@@ -49,11 +49,12 @@
     for (const c of map.corners) {
       const label = c.label || String(c.number);
       const n = Number(label);
-      // CANONICAL decimal only. `Number()` alone coerced '07', ' 7 ', '7.0', '+7', '0x7'
-      // and '1e1' to 7 and collapsed that corner under a range covering 7, while the
-      // Python guard probes `str(n) in labels` and matches only '7' -- so the note showed
-      // as bound here and was dropped on the next map save.
-      const cover = CORNER_NUM.test(label) && String(n) === label
+      // CORNER_NUM, not `Number.isInteger(n)`: bare `Number()` coerced ' 7 ', '7.0',
+      // '+7', '0x7', '1e1' and '' to integers and collapsed that corner under a range
+      // covering them, where the Python guard's `lab.isdigit()` rejects every one -- so
+      // the note showed as bound here and was dropped on the next map save. Leading
+      // zeros DO bind on both sides ('07' is 7 to int() and to Number() alike).
+      const cover = CORNER_NUM.test(label)
         ? ranges.find(({ r }) => n >= r[0] && n <= r[1]) : undefined;
       if (cover) {
         if (!usedRange.has(cover.key)) { usedRange.add(cover.key); rows.push({ key: cover.key, label: cover.key }); }
