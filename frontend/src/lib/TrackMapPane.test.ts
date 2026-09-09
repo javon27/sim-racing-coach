@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/svelte";
-import { getSessionLaps, getLapMap } from "./api";
+import { getSessionLaps, getLapMap, getStatus, getCurrentMap, type StatusResponse } from "./api";
 import TrackMapPane from "./TrackMapPane.svelte";
 
 vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
-  return { ...actual, getSessionLaps: vi.fn(), getLapMap: vi.fn() };
+  return { ...actual, getSessionLaps: vi.fn(), getLapMap: vi.fn(), getStatus: vi.fn(), getCurrentMap: vi.fn() };
 });
 
 const mapFixture = {
@@ -23,12 +23,27 @@ const mapFixture = {
   ],
 };
 
+const noStatus: StatusResponse = {
+  track: null,
+  car: null,
+  on_track: false,
+  activity: null,
+  has_map: false,
+  lmu_connected: false,
+  session_id: null,
+  lap_id: null,
+};
+
 describe("TrackMapPane", () => {
   beforeEach(() => {
     vi.mocked(getSessionLaps).mockReset();
     vi.mocked(getLapMap).mockReset();
+    vi.mocked(getStatus).mockReset();
+    vi.mocked(getCurrentMap).mockReset();
     vi.mocked(getSessionLaps).mockResolvedValue([{ id: 9, lap_time: 216, valid: 1, ts: 100 }]);
     vi.mocked(getLapMap).mockResolvedValue(mapFixture);
+    vi.mocked(getStatus).mockResolvedValue(noStatus);
+    vi.mocked(getCurrentMap).mockResolvedValue({});
     try {
       localStorage.clear();
     } catch {
@@ -38,12 +53,31 @@ describe("TrackMapPane", () => {
 
   afterEach(cleanup);
 
-  it("shows the empty state with no session, pointing editing to Track view", () => {
+  it("shows the empty state with no session and no live track, pointing editing to Track view", async () => {
     render(TrackMapPane, { props: { sessionId: undefined } });
     expect(screen.getByText(/no map yet/i)).toBeTruthy();
     // Editing/capture moved to Track view — the rail no longer offers Generate map.
     expect(screen.queryByText("Generate map")).toBeNull();
     expect(getSessionLaps).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(getStatus).toHaveBeenCalled());
+  });
+
+  it("loads the live track's map as soon as the track is detected, with no lap yet", async () => {
+    vi.mocked(getStatus).mockResolvedValue({ ...noStatus, track: "Live Track", on_track: true, activity: "track", has_map: true });
+    vi.mocked(getCurrentMap).mockResolvedValue({ ...mapFixture, track_name: "Live Track" });
+    const { container } = render(TrackMapPane, { props: { sessionId: undefined } });
+    expect(await screen.findByText("Live Track")).toBeTruthy();
+    expect(await screen.findByText("T1")).toBeTruthy();
+    expect(container.querySelector("polyline")).toBeTruthy();
+    expect(getSessionLaps).not.toHaveBeenCalled();
+  });
+
+  it("shows the build-me hint when a live track is detected but has no stored map", async () => {
+    vi.mocked(getStatus).mockResolvedValue({ ...noStatus, track: "New Track", on_track: true, activity: "track", has_map: false });
+    vi.mocked(getCurrentMap).mockResolvedValue({});
+    render(TrackMapPane, { props: { sessionId: undefined } });
+    expect(await screen.findByText("New Track")).toBeTruthy();
+    expect(await screen.findByText(/no map for this track yet/i)).toBeTruthy();
   });
 
   it("resolves the session's first lap and renders its canonical map", async () => {
