@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { withRetry, getSessionLaps } from "./api";
+  import { withRetry, getSessionLaps, getStatus, getCurrentMap, type TrackMap as TrackMapData } from "./api";
   import TrackMap from "./TrackMap.svelte";
   import TrackMapEditor from "./TrackMapEditor.svelte";
 
@@ -9,7 +9,7 @@
   let trackName: string | null = $state(null);
   let viewing = $state(false); // 🔍 opens the map enlarged, read-only (editing lives in Track view)
 
-  // The map is canonical per-track: any lap of the selected session resolves it.
+  // A selected/past session: the map is canonical per-track; any lap of it resolves it.
   $effect(() => {
     const sid = sessionId;
     if (!sid) {
@@ -30,13 +30,48 @@
         }
       });
   });
+
+  // No session selected yet (fresh live session, zero completed laps): resolve the
+  // map from LIVE track detection instead of waiting for a lap. Same /status signal
+  // SessionBar already polls; the canonical per-track map (no lap needed) is the
+  // same seam PitWall already uses for its live map.
+  let liveTrack: string | null = $state(null);
+  let liveMap: TrackMapData | null = $state(null);
+
+  async function pollLive() {
+    try {
+      const status = await getStatus();
+      liveTrack = status.track;
+      if (!status.track) {
+        liveMap = null;
+        return;
+      }
+      const m = await getCurrentMap();
+      liveMap = "path" in m && m.path.length > 0 ? m : null;
+    } catch {
+      // transient poll failure - keep last good data
+    }
+  }
+
+  $effect(() => {
+    if (sessionId) {
+      liveTrack = null;
+      liveMap = null;
+      return;
+    }
+    pollLive();
+    const timer = setInterval(pollLive, 2000);
+    return () => clearInterval(timer);
+  });
+
+  const displayTrack = $derived(sessionId ? trackName : liveTrack);
 </script>
 
 <section class="map-pane">
   <header>
     <div class="ttl-text">
       <h2>Track map</h2>
-      {#if trackName}<span class="tname">{trackName}</span>{/if}
+      {#if displayTrack}<span class="tname">{displayTrack}</span>{/if}
     </div>
     <div class="acts">
       {#if lapId !== null}
@@ -51,6 +86,12 @@
   <div class="map-body">
     {#if lapId !== null}
       <TrackMap {lapId} />
+    {:else if !sessionId && liveTrack}
+      <!-- Live session, no completed lap yet: the track is detected, so draw its
+           canonical map directly (mapData bypasses the lapId fetch) instead of
+           waiting on a lap. TrackMap's own "none" phase (mapData === null) covers
+           "track detected, no map built yet" with its own build-me hint. -->
+      <TrackMap mapData={liveMap} />
     {:else}
       <p class="empty">No map yet — build one in Track view (Tracks → Edit).</p>
     {/if}
