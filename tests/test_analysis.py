@@ -28,9 +28,31 @@ def test_brake_point_found_when_braking_is_in_the_approach(synthetic_lap):
     brake[(dist >= c.start_dist - 120) & (dist < c.start_dist)] = 0.8  # approach only
     lap = LapRecord(**{**synthetic_lap.__dict__, "channels": {**ch, "brake": brake}})
     c1 = analyze_lap(lap, cmap).corners[0]
+    assert c1.brake_point is not None              # a point was actually found
     assert c1.brake_point < c.start_dist           # captured in the approach
     assert c1.brake_point < c1.apex_dist           # sane "before apex" readout
-    assert c1.brake_point != c.end_dist            # not the no-brake sentinel
+
+
+def test_no_brake_clause_when_the_driver_never_brakes(synthetic_lap):
+    """A corner taken flat has no brake point. The old sentinel was a distance at/after
+    the apex, which only stayed silent while it landed on that side -- the same shape
+    that made throttle_point render track geometry as a driver input. None cannot."""
+    import dataclasses
+
+    import numpy as np
+
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap
+    from simcoach.format import format_corner_line
+
+    ch = dict(synthetic_lap.channels)
+    ch["brake"] = np.zeros_like(ch["lap_distance"])   # flat all lap
+    lap = dataclasses.replace(synthetic_lap, channels=ch)
+    c1 = analyze_lap(lap, CornerMap.load("simcoach/tracks/test_track.json")).corners[0]
+
+    assert c1.brake_point is None
+    line = format_corner_line(c1, "metric")
+    assert "before apex" not in line and "no heavy braking" in line
 
 
 def test_tire_summary_and_prompt(synthetic_lap):
@@ -286,8 +308,10 @@ def test_analyze_lap_metrics_all_nan_speed_window_is_degenerate(synthetic_lap):
     c1 = a.corners[0]
 
     assert np.isnan(c1.min_spd)
-    assert c1.brake_point == 1200.0
-    assert c1.throttle_point is None   # no samples to find one in, so no claim
+    # Both used to be corner 1's end_dist (1200.0) -- the corner's own geometry, not a
+    # reading. No usable samples means no point was found, in either channel.
+    assert c1.brake_point is None
+    assert c1.throttle_point is None
 
 
 def test_analyze_lap_delta_is_none_when_min_spd_is_nan(synthetic_lap):

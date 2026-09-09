@@ -17,10 +17,15 @@ class CornerMetrics:
     apex_spd: float
     min_spd: float
     exit_spd: float
-    brake_point: float
-    # None = the driver never got past the throttle gate in this corner. A distance
-    # sentinel can't express that: any value here reads as a real throttle point to
-    # anything computing `throttle_point - apex_dist`.
+    # None = no such point exists in this corner: the driver never braked / never got
+    # past the throttle gate. A distance sentinel can't express that -- any value here
+    # reads as a real point to anything computing `apex_dist - brake_point`, and stays
+    # silent only while it happens to sit on the correct side of apex_dist.
+    # brake_point may legitimately be NEGATIVE: a corner braking across the S/F seam
+    # reports a distance before the line, so `apex_dist - brake_point` stays a positive
+    # metres-before-apex (#7). Not-None + negative is a valid state; only "not found"
+    # is None.
+    brake_point: float | None
     throttle_point: float | None
     trailbrake_overlap: float
     peak_brake: float = 0.0          # max brake input in the corner (0..1)
@@ -132,7 +137,7 @@ def _metrics_for_corner(
             apex_spd=float("nan"),
             min_spd=float("nan"),
             exit_spd=float("nan"),
-            brake_point=corner.end_dist,
+            brake_point=None,
             throttle_point=None,
             trailbrake_overlap=0.0,
             label=label, apexes=apexes,
@@ -155,7 +160,7 @@ def _metrics_for_corner(
             apex_spd=float("nan"),
             min_spd=float("nan"),
             exit_spd=float("nan"),
-            brake_point=corner.end_dist,
+            brake_point=None,
             throttle_point=None,
             trailbrake_overlap=0.0,
             label=label, apexes=apexes,
@@ -186,13 +191,7 @@ def _metrics_for_corner(
     # either side of the seam are not in distance order.
     back = (corner.apex_dist - dist) % lap_len       # 0 at the apex, grows backwards
     sel = np.where(back <= (corner.apex_dist - corner.start_dist + 250.0) % lap_len)[0]
-    # "No braking found" sentinel: a distance at/after the apex, so every consumer's
-    # `apex_dist - brake_point` stays <= 0 and renders as "no heavy braking" / "—".
-    end_after_apex = (
-        corner.apex_dist + (corner.end_dist - corner.apex_dist) % lap_len
-        if wrap else corner.end_dist
-    )
-    brake_point = end_after_apex
+    brake_point = None   # no braking found; never a distance standing in for that
     if sel.size:
         order = sel[np.argsort(back[sel], kind="stable")]  # apex first, then backwards
         on = brake[order] > 0.1
