@@ -524,21 +524,24 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # The map is the track's CANONICAL layout, the same for every lap -- the
         # lap_id only selects the track (+car). avg=0: frozen file, else averaged
         # over the track's own pos laps (cached). avg=1: force a fresh re-average
-        # (editor, to pick up newly-driven laps before re-freezing).
-        try:
-            rec = store.load(lap_id)
-        except (KeyError, FileNotFoundError):
+        # (editor, to pick up newly-driven laps before re-freezing). Only the
+        # track/car strings are needed (not the lap's own telemetry), so an older
+        # session imported from a result log (no telemetry_path) still resolves
+        # an already-mapped track's frozen layout.
+        tc = store.lap_track_car(lap_id)
+        if tc is None:
             raise HTTPException(404, "lap not found")
-        m = _canonical_map(rec.track, rec.car, force=bool(avg))
+        track, car = tc
+        m = _canonical_map(track, car, force=bool(avg))
         if m:
             # The game's real S1/S2 boundaries (if any lap captured them) so the
             # editor can seed sector splits at the true positions, not thirds.
             # `shipped`: the geometry is a built-in the user may annotate but not rebuild.
             # `curating`: dev (source) build — layout tools + the track name are editable.
             # `track_name`: stored display-name override, else the live/canonical name.
-            m = {**m, "detected_sectors": store.sector_bounds(rec.track, rec.car) or [],
-                 "shipped": _is_shipped(rec.track), "curating": _curating(),
-                 "track_name": _track_file_data(rec.track).get("name") or rec.track}
+            m = {**m, "detected_sectors": store.sector_bounds(track, car) or [],
+                 "shipped": _is_shipped(track), "curating": _curating(),
+                 "track_name": _track_file_data(track).get("name") or track}
         return m
 
     @app.get("/track/map")

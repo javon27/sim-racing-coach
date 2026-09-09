@@ -229,6 +229,36 @@ def test_map_prefers_frozen_path_over_reaverage(tmp_path):
     assert len(forced["dist"]) != len(default["dist"])           # avg=1 re-averaged
 
 
+def test_map_for_result_log_lap_with_no_telemetry(tmp_path):
+    # Issue #28: an older session imported from a result log (no telemetry --
+    # source='result', telemetry_path NULL) must still resolve the track's
+    # already-mapped (frozen) layout. The map only needs the lap's track name,
+    # not its own telemetry.
+    from simcoach.lmu.results import ResultLap, ResultSession
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    rs = ResultSession(
+        sim="lmu", track="Curveland", car="GT3", car_class="GT3", date_ts=1,
+        session_type="race", position=3, class_position=2, best_lap=90.0,
+        finish_status="Finished",
+        laps=[ResultLap(lap_no=1, lap_time=90.0, sectors=[], valid=True)],
+        incidents=[], penalties=[],
+    )
+    store.save_result_session(rs, session_id="race-1")
+    lap_id = store.session_laps("race-1")[0]["id"]
+    coach = Coach(FakeModel())
+    tracks = tmp_path / "tracks"
+    tracks.mkdir()
+    (tracks / "curveland.json").write_text(json.dumps({
+        "track": "curveland", "corners": [],
+        "path": [[0, 0], [1, 0], [2, 0], [2, 1], [2, 2]],
+        "path_dist": [0, 100, 200, 300, 400],
+    }))
+    app = create_app(store, coach, tracks_dir=str(tracks))
+    r = _tc(app).get(f"/laps/{lap_id}/map")
+    assert r.status_code == 200
+    assert r.json()["dist"] == [0.0, 100.0, 200.0, 300.0, 400.0]
+
+
 def test_map_cache_invalidated_after_put(tmp_path):
     app, lap_id, tracks = _curve_app(tmp_path)
     c = _tc(app)
