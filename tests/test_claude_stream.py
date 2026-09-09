@@ -143,6 +143,18 @@ def test_missing_usage_contributes_zero_not_an_error():
     assert res.usage.total == 0
 
 
+def test_usage_field_names_match_the_installed_sdk():
+    """`_usage_of` (simcoach/model/claude.py) reads these four names with a
+    defensive `getattr(..., 0)` -- an absent field silently contributes 0,
+    indistinguishable from a measured zero. That's correct only as long as the
+    installed SDK still names its fields this way; this pins that assumption so a
+    future SDK bump that renames one turns into a red test here instead of a
+    silent under-report on the dollar meter."""
+    from anthropic.types import Usage
+    assert {"input_tokens", "output_tokens", "cache_read_input_tokens",
+             "cache_creation_input_tokens"} <= set(Usage.model_fields)
+
+
 class _FakeClientDispatchError:
     """A tool_use turn whose dispatch raises, then a final text turn. Records
     every create() call's kwargs so the test can inspect the tool_result sent
