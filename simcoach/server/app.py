@@ -712,6 +712,11 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             out["name"] = name
         if keep_ribbon:
             out["ribbon"] = keep_ribbon  # keep the reconstructed surface across edits
+        if existing.get("notes"):
+            # Authored notes (overview/per-corner/reference_times) are keyed by
+            # corner label, which survives a re-derive in the common case -- carry
+            # them across a rebuild/regenerate rather than silently wiping them.
+            out["notes"] = existing["notes"]
         _write_track_json(track, out)
         # Invalidate cmap + canonical caches so the next GET returns the new
         # canonical map (now frozen into the file).

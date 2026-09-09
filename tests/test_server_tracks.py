@@ -177,6 +177,26 @@ def test_save_track_map_by_slug_persists(tmp_path):
     assert all(c["direction"] in ("left", "right", "straight") for c in written["corners"])
 
 
+def test_save_track_map_by_slug_preserves_authored_notes(tmp_path):
+    # Issue #37: rebuilding/regenerating a track's layout (PUT .../map) must not
+    # silently wipe the authored notes overlay -- it's expensive to author and
+    # keyed by corner label, which survives a re-derive in the common case.
+    client, tracks_dir = _client_with_frozen_path(tmp_path)
+    client.put("/tracks/algarve_international_circuit/notes", json={
+        "track": "Algarve International Circuit",
+        "notes": {"overview": "rhythm track", "corners": {"1": "brake late"},
+                  "reference_times": {"GT3": "1:32.500"}, "source": "me"}})
+    r = client.put("/tracks/algarve_international_circuit/map", json={
+        "corners": [
+            {"number": 1, "label": "1", "name": "Turn 1", "apex_dist": 50.0},
+        ]})
+    assert r.status_code == 200, r.text
+    written = json.loads((tracks_dir / "algarve_international_circuit.json").read_text())
+    assert written["notes"]["overview"] == "rhythm track"
+    assert written["notes"]["corners"] == {"1": "brake late"}
+    assert written["notes"]["reference_times"] == {"GT3": "1:32.500"}
+
+
 def test_save_track_map_by_slug_rejects_empty_corners(tmp_path):
     client, _ = _client_with_frozen_path(tmp_path)
     r = client.put("/tracks/algarve_international_circuit/map", json={"corners": []})
