@@ -393,3 +393,21 @@ def test_dropped_note_log_survives_and_bounds_non_str_note_values(caplog):
     assert "dropped 7 authored" in msg                    # exact count, every type survived
     assert len(msg) < 2_000, f"log is {len(msg)} chars"   # 20 x 200 + preamble is the ceiling
     assert "x" * 201 not in msg and "z" * 201 not in msg  # no value contributes over 200
+
+
+def test_dropped_note_log_bounds_a_list_note_value(caplog):
+    # SEPARATE from the all-types test above, on purpose: there the int raises before the
+    # list is ever formatted, so that test red-verifies the CRASH and can never observe
+    # the amplifier. This one has no scalar to crash on, so it fails on SIZE.
+    #
+    # `v[:200]` on a list slices 200 ELEMENTS, not 200 characters. One such value among
+    # ordinary string notes logged 2,000,982 chars (25 of them: 40,016,322). A partial fix
+    # that stringified non-str SCALARS and left lists unsliced would pass every other test
+    # in this file -- this is the one that catches it.
+    values = {"1": "brake late", "2": ["x" * 10_000] * 200, "3": "flat in 6th"}
+    with caplog.at_level(logging.WARNING, logger="simcoach.track_lookup"):
+        guard_corner_notes("algarve", {"corners": values}, len(values), ["99"] * len(values))
+    (rec,) = [r for r in caplog.records if "dropped" in r.getMessage()]
+    msg = rec.getMessage()
+    assert len(msg) < 1_000, f"log is {len(msg)} chars"   # ~384 bounded, 2,000,982 was not
+    assert "dropped 3 authored" in msg
