@@ -126,6 +126,28 @@ def test_mapcapture_save_drops_orphaned_corner_notes_on_relabel(tmp_path, caplog
     assert "the corners they name no longer exist" in caplog.text
 
 
+def test_mapcapture_save_of_corner_less_rebuild_keeps_every_note(tmp_path):
+    # A thin 2-pass capture can yield ZERO solver corners, and this route still saves
+    # (it exists to persist the reconstructed SURFACE -- see
+    # test_server_reads.py::test_mapcapture_save_writes_track_json, which asserts that
+    # deliberately). The empty corner set used to read as a count change and drop EVERY
+    # per-corner note, in dev straight into the shipped tracks dir. Zero new corners
+    # can't rebind anything, so there is nothing to protect against: keep them all.
+    app, client, tracks_dir = _client(tmp_path)
+    assert _put_notes(client, {"1": "brake late", "2": "flat in 6th"}).status_code == 200
+    app.state.last_ribbon = _ribbon([])
+
+    r = client.post("/mapcapture/save", json={})
+
+    assert r.status_code == 200, r.text          # the surface still persists
+    written = _written(tracks_dir)
+    assert written["corners"] == []
+    assert written["notes"]["corners"] == {"1": "brake late", "2": "flat in 6th"}
+    assert written["notes"]["overview"] == "rhythm track"
+    assert written["notes"]["reference_times"] == {"GT3": "1:32.500"}
+    assert written["notes"]["source"] == "me"
+
+
 @pytest.mark.xfail(strict=True, reason=(
     "POST-MERGE CONTRACT, not a flake: this branch forked before note_key_binds, so "
     "_carry_notes still tests the raw key against the labels and a range key cannot "

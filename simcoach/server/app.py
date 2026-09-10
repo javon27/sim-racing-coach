@@ -1152,7 +1152,15 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         }
         # _write_track_json REPLACES the file, so the authored notes overlay has to be
         # carried forward here too -- same owner, same rule, as the editor's save.
-        carried = _carry_notes(existing, corners, track)
+        #
+        # EXCEPT on a corner-less rebuild. A thin capture can yield zero solver corners
+        # and this route still has a job to do (it exists to persist the reconstructed
+        # SURFACE; corners are a first-pass bonus -- see
+        # test_mapcapture_save_writes_track_json). Zero new corners cannot rebind a note
+        # to the wrong corner, so the count-change rule has nothing to protect against
+        # and dropping every per-corner note would be pure loss. Carry the overlay
+        # verbatim instead. _persist_map never reaches this -- it 422s on an empty list.
+        carried = _carry_notes(existing, corners, track) if corners else existing.get("notes")
         if carried:
             out["notes"] = carried
         _write_track_json(track, out)
