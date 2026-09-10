@@ -12,6 +12,7 @@ from simcoach.coach import Coach
 from simcoach.coach_tools import CoachContext
 from simcoach.corners import CornerMap
 from simcoach.model.fake import FakeModel
+from simcoach.model_types import LapRecord
 from simcoach.server.app import create_app
 from simcoach.store import LapStore
 
@@ -628,3 +629,88 @@ def test_dropped_note_log_is_bounded(tmp_path, caplog):
     assert len(msg) < 10_000, f"warning record is {len(msg)} chars"   # was the whole ~62 KB
     assert "dropped 31 authored" in msg           # the exact count still reported
     assert '"1": "note 1 ' in msg                 # and a sample is still recoverable
+
+
+# --- /tracks lists driven-but-unmapped tracks (#69) + capture coverage (#66) ----------
+
+def _live_lap(store, name: str, n: int = 1) -> None:
+    # A LIVE-captured lap: store.save writes the .npz and sets telemetry_path, which is
+    # exactly what separates a re-processable lap from a result-log import.
+    for _ in range(n):
+        store.save(LapRecord("lmu", name, "Oreca 07", 60.0, True, 0.0,
+                             {"lap_distance": np.array([0.0, 1.0]),
+                              "pos_x": np.array([0.0, 1.0]),
+                              "pos_y": np.array([0.0, 0.0]),
+                              "pos_z": np.array([0.0, 0.0])}))
+
+
+def _result_lap(store, name: str, n: int = 1) -> None:
+    # A result-log import: summary row, telemetry_path NULL, no point cloud. Inserted
+    # directly so the test asserts on the column list_tracks actually reads.
+    for _ in range(n):
+        store.conn.execute(
+            "INSERT INTO laps (ts, sim, track, car, lap_time, valid, telemetry_path) "
+            "VALUES (0, 'lmu', ?, 'Oreca 07', 100.0, 1, NULL)", (name,))
+    store.conn.commit()
+
+
+def test_get_tracks_lists_driven_track_with_no_map_file(tmp_path):
+    # The #69 case: laps driven live, point clouds on disk, no <slug>.json -- the row has
+    # to exist (it is the only place a map can be built) with has_map False.
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    _live_lap(store, "Silverstone National Circuit", 3)
+    rows = client.get("/tracks").json()
+    row = next(t for t in rows if t["slug"] == "silverstone_national_circuit")
+    assert row["has_map"] is False
+    assert row["captures"] == 3                  # not 0, and not collapsed to a bool
+    assert row["name"] == "Silverstone National Circuit"
+    assert row["has_notes"] is False and row["user_edited"] is False
+
+
+def test_get_tracks_result_log_only_track_is_not_buildable(tmp_path):
+    # Spa's 991 imported laps carry no cloud: a big lap count must NOT make a track look
+    # buildable. The live track in the same store is the positive control -- without it
+    # this test would also pass if the union were dropped entirely.
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    _result_lap(store, "Circuit de Spa-Francorchamps", 991)
+    _live_lap(store, "Silverstone National Circuit", 2)
+    slugs = [t["slug"] for t in client.get("/tracks").json()]
+    assert "silverstone_national_circuit" in slugs          # control: the union works
+    assert "circuit_de_spa_francorchamps" not in slugs      # the claim
+
+
+def test_get_tracks_mapped_track_row_shape_unchanged(tmp_path):
+    # A track with a map file keeps the row it always had, and gains `captures` as an
+    # int. Asserted as an exact key set so a renamed/dropped field is caught here.
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    _result_lap(store, "Algarve International Circuit", 40)
+    rows = client.get("/tracks").json()
+    row = next(t for t in rows if t["slug"] == "algarve_international_circuit")
+    assert set(row) == {"slug", "name", "has_map", "has_notes", "user_edited", "captures"}
+    assert row["has_map"] is True
+    assert row["has_notes"] is False
+    assert row["user_edited"] is False
+    assert row["captures"] == 0        # 40 result laps are not captures
+
+
+def test_get_tracks_driven_mapped_track_listed_once_with_count(tmp_path):
+    # The union must dedupe: a track that has BOTH a map file and live laps is one row
+    # carrying the count, never two rows.
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    _live_lap(store, "Algarve International Circuit", 5)
+    rows = [t for t in client.get("/tracks").json()
+            if t["slug"] == "algarve_international_circuit"]
+    assert len(rows) == 1
+    assert rows[0]["has_map"] is True and rows[0]["captures"] == 5
+
+
+def test_get_tracks_sums_captures_across_raw_names_of_one_slug(tmp_path):
+    # Live names differ by championship suffix ("- ELMS") while track_slug collapses them
+    # to one file/slug. The count is per SLUG, so 2 + 3 is one row of 5, not a row of 3
+    # that silently drops the other session.
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    _live_lap(store, "Paul Ricard", 2)
+    _live_lap(store, "Paul Ricard - ELMS", 3)
+    rows = [t for t in client.get("/tracks").json() if t["slug"] == "paul_ricard"]
+    assert len(rows) == 1
+    assert rows[0]["captures"] == 5

@@ -1027,16 +1027,43 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         for base in (bundled, user_dir):
             if base.exists():
                 slugs.update(p.stem for p in base.glob("*.json"))
+        # A track DRIVEN live but never mapped has no .json to glob, so it used to be
+        # absent from this list entirely -- and this screen is the only place a map gets
+        # built, so there was no entry point for exactly the tracks that need one (#69).
+        # Union it in, and carry the count so the row can say how many laps would back a
+        # build (a one-lap map is thin -- #41).
+        #
+        # telemetry_path IS NOT NULL is the whole distinction: save_result_session
+        # backfills summary-only rows with no .npz, so Spa's ~991 imported laps are NOT
+        # re-processable and must not read as buildable (#66). Counted per SLUG, not per
+        # raw name: "Paul Ricard" and "Paul Ricard - ELMS" share one map file.
+        captures: dict[str, int] = {}
+        names: dict[str, str] = {}
+        with store._lock:   # store.py shares one connection with the capture thread
+            rows = store.conn.execute(
+                "SELECT track, COUNT(*) FROM laps "
+                "WHERE telemetry_path IS NOT NULL AND track IS NOT NULL "
+                "GROUP BY track").fetchall()
+        for name, n in rows:
+            slug = track_slug(name)
+            if slug:
+                captures[slug] = captures.get(slug, 0) + n
+                names.setdefault(slug, name)
+        slugs.update(captures)
         out = []
         for slug in sorted(slugs):
             merged = _track_file_data(slug)
             notes = merged.get("notes") or {}
             out.append({
                 "slug": slug,
-                "name": merged.get("name") or slug.replace("_", " ").title(),
+                # No map file yet -> the live name the laps were recorded under beats a
+                # title-cased slug ("Paul Ricard - ELMS" vs "Paul Ricard Elms").
+                "name": (merged.get("name") or names.get(slug)
+                         or slug.replace("_", " ").title()),
                 "has_map": bool(merged.get("path") or merged.get("corners")),
                 "has_notes": bool(notes.get("overview") or notes.get("corners")),
                 "user_edited": (user_dir / f"{slug}.json").exists(),
+                "captures": captures.get(slug, 0),
             })
         return out
 

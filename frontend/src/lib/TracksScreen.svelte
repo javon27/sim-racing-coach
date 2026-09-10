@@ -140,6 +140,16 @@
       .catch(() => { if (selected?.slug === s) map = null; });
   }
 
+  const lapWord = (n: number): string => `${n} lap${n === 1 ? "" : "s"}`;
+
+  // The build action is just "select it, then open the map editor" -- the editor already
+  // owns the rebuild-from-saved-capture -> save pair (POST /mapcapture/rebuild + /save).
+  // No second write route to a track file.
+  function buildMap(t: TrackRow) {
+    selectTrack(t);
+    mapOpen = true;
+  }
+
   function wordCount(s: string): number {
     return s.trim() ? s.trim().split(/\s+/).length : 0;
   }
@@ -208,8 +218,16 @@
                 <span class="badge" class:good={t.has_map}>{t.has_map ? "map" : "no map"}</span>
                 <span class="badge" class:good={t.has_notes}>{t.has_notes ? "notes" : "no notes"}</span>
                 <span class="badge">{t.user_edited ? "edited" : "shipped"}</span>
+                {#if t.captures > 0}<span class="badge">{lapWord(t.captures)}</span>{/if}
               </span>
             </button>
+            {#if !t.has_map && t.captures > 0}
+              <!-- Driven, never mapped (#69). EXPLICIT action, never automatic: a map
+                   built from one lap is thin (#41), so the button says what backs it. -->
+              <button type="button" class="build" onclick={() => buildMap(t)}>
+                Build map from {lapWord(t.captures)}
+              </button>
+            {/if}
           </li>
         {/each}
       </ul>
@@ -382,6 +400,12 @@
     color: var(--good);
     border-color: var(--good);
     background: var(--good-soft);
+  }
+  .build {
+    width: 100%;
+    margin-top: 4px;
+    font-size: 11px;
+    padding: 5px 10px;
   }
   .empty {
     color: var(--faint);

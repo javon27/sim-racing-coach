@@ -567,6 +567,9 @@ export interface TrackRow {
   has_map: boolean;
   has_notes: boolean;
   user_edited: boolean;
+  /** Live-captured laps (with a .npz point cloud) for this track. Result-log imports
+   *  are summary-only and never counted, so 0 means nothing to rebuild from. */
+  captures: number;
 }
 
 export interface TrackNotes {
