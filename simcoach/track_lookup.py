@@ -221,13 +221,30 @@ def guard_corner_notes(slug: str, old_notes: dict | None, old_corner_count: int,
             if old_corner_count == len(new_labels) else {})
     dropped = {k: v for k, v in old_corners.items() if k not in kept}
     if dropped:
-        # Loud, and with the text, so the author can recover it from the log.
+        # Loud, and with the text, so the author can recover it from the log -- but
+        # BOUNDED. This dumped every dropped note in full, and wrote 4.6 MB in a single
+        # warning() call on a probe that stored many notes: a log sink is not a place
+        # unbounded user input gets to land. 20 keys with 200 chars of each note is enough
+        # to re-author from, and the count stays exact. The bound belongs HERE rather than
+        # in the endpoint that found it, because the promote script shares this function
+        # and reads `notes` straight out of an arbitrary user JSON file -- a more exposed
+        # sink than a localhost PUT with per-field caps in front of it.
+        #
+        # `str(v)`, because that exposure is exactly why the value is not known to BE a
+        # str: `PUT /notes` coerces, the promote path does not, and this function keeps
+        # values as-is (only keys are stringified). `v[:200]` then raised on an int/float/
+        # bool/None note and a KeyError on a dict -- a 500 on the map-save path for any
+        # legacy or hand-edited file -- and on a LIST it sliced 200 ELEMENTS, turning the
+        # bound into an amplifier: 25 keys of 1000x10k-char lists logged 40 MB in one
+        # call, 8.7x the 4.6 MB this is here to prevent. Sorting keys only, never
+        # `.items()`, for the same reason: tuple comparison would reach the values.
+        sample = {k: str(dropped[k])[:200] for k in sorted(dropped)[:20]}
         logging.getLogger(__name__).warning(
             "track %s: dropped %d authored per-corner note(s) on map save (%s); "
-            "re-author them against the new layout. Dropped: %s",
+            "re-author them against the new layout. Dropped (%d shown): %s",
             slug, len(dropped),
             "corner count changed" if old_corner_count != len(new_labels)
             else "the corners they name no longer exist",
-            json.dumps(dropped, ensure_ascii=False))
+            len(sample), json.dumps(sample, ensure_ascii=False))
     notes = {**(old_notes or {}), "corners": kept}
     return notes if any(notes.values()) else None
