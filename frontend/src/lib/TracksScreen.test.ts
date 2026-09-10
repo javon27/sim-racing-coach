@@ -13,7 +13,7 @@ afterEach(cleanup);
 const wire = (o: unknown) => JSON.parse(JSON.stringify(o)) as Record<string, string>;
 
 vi.spyOn(api, "listTracks").mockResolvedValue([
-  { slug: "algarve_international_circuit", name: "Algarve", has_map: true, has_notes: false, user_edited: false, captures: 0 },
+  { slug: "algarve_international_circuit", name: "Algarve", has_map: true, has_notes: false, user_edited: false, captures: 0, live_laps: 0, elevation_laps: 0 },
 ]);
 vi.spyOn(api, "getTrackNotes").mockResolvedValue({ overview: "", corners: {}, reference_times: {}, source: "" });
 vi.spyOn(api, "getTrackMap").mockResolvedValue({});
@@ -314,7 +314,7 @@ test("a driven-but-unmapped track shows its lap count and a build action", async
   vi.spyOn(api, "listTracks").mockResolvedValue([
     {
       slug: "silverstone_national_circuit", name: "Silverstone National Circuit",
-      has_map: false, has_notes: false, user_edited: false, captures: 27,
+      has_map: false, has_notes: false, user_edited: false, captures: 27, live_laps: 27, elevation_laps: 27,
     },
   ]);
   render(TracksScreen);
@@ -333,7 +333,7 @@ test("a mapped track renders as before, with no build action", async () => {
   vi.spyOn(api, "listTracks").mockResolvedValue([
     {
       slug: "algarve_international_circuit", name: "Algarve", has_map: true,
-      has_notes: false, user_edited: false, captures: 35,
+      has_notes: false, user_edited: false, captures: 35, live_laps: 35, elevation_laps: 35,
     },
   ]);
   render(TracksScreen);
@@ -352,7 +352,7 @@ test("a track with laps but no clouds gets no build action", async () => {
   vi.spyOn(api, "listTracks").mockResolvedValue([
     {
       slug: "circuit_de_spa_francorchamps", name: "Spa", has_map: false,
-      has_notes: false, user_edited: false, captures: 0,
+      has_notes: false, user_edited: false, captures: 0, live_laps: 0, elevation_laps: 0,
     },
   ]);
   render(TracksScreen);
@@ -360,4 +360,51 @@ test("a track with laps but no clouds gets no build action", async () => {
   expect(within(row).getByText("no map")).toBeTruthy();
   expect(within(row).queryByText(/laps?$/)).toBeNull();
   expect(within(row).queryByRole("button", { name: /build map/i })).toBeNull();
+});
+
+test("live laps that carry no position data explain the row and offer no build", async () => {
+  // Sebring: 15 live laps, every one recorded before position capture existed, so none
+  // can ever be rebuilt from. The row must SAY that -- hiding it would leave the driver
+  // thinking the track is covered when it needs re-driving (#66) -- and must not offer a
+  // build that walks straight back into the 422 this feature exists to remove.
+  vi.spyOn(api, "listTracks").mockResolvedValue([
+    {
+      slug: "sebring_international_raceway", name: "Sebring", has_map: false,
+      has_notes: false, user_edited: false, captures: 0, live_laps: 15, elevation_laps: 0,
+    },
+  ]);
+  render(TracksScreen);
+  const row = (await screen.findByText("Sebring")).closest("li")!;
+  expect(within(row).getByText("15 laps, none with position data")).toBeTruthy();
+  expect(within(row).queryByRole("button", { name: /build map/i })).toBeNull();
+});
+
+test("a buildable track with too little elevation says so", async () => {
+  // Monza Curva Grande: 5 usable clouds, 1 carrying pos_y. Banking is fitted from pos_y
+  // across the WIDTH, so one racing line gives the fit no lateral spread -- measured at
+  // ~25x the true magnitude. Buildable, but not silently.
+  vi.spyOn(api, "listTracks").mockResolvedValue([
+    {
+      slug: "monza_curva_grande_circuit", name: "Monza CG", has_map: false,
+      has_notes: false, user_edited: false, captures: 5, live_laps: 5, elevation_laps: 1,
+    },
+  ]);
+  render(TracksScreen);
+  const row = (await screen.findByText("Monza CG")).closest("li")!;
+  expect(within(row).getByText("5 laps")).toBeTruthy();
+  expect(within(row).getByText("elevation from 1 lap")).toBeTruthy();
+  expect(within(row).getByRole("button", { name: "Build map from 5 laps" })).toBeTruthy();
+});
+
+test("a track with enough elevation laps shows no elevation warning", async () => {
+  vi.spyOn(api, "listTracks").mockResolvedValue([
+    {
+      slug: "silverstone_national_circuit", name: "Silverstone", has_map: false,
+      has_notes: false, user_edited: false, captures: 17, live_laps: 27, elevation_laps: 17,
+    },
+  ]);
+  render(TracksScreen);
+  const row = (await screen.findByText("Silverstone")).closest("li")!;
+  expect(within(row).getByText("17 laps")).toBeTruthy();   // usable, not the 27 rows
+  expect(within(row).queryByText(/elevation/i)).toBeNull();
 });

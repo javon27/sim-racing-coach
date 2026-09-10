@@ -633,15 +633,22 @@ def test_dropped_note_log_is_bounded(tmp_path, caplog):
 
 # --- /tracks lists driven-but-unmapped tracks (#69) + capture coverage (#66) ----------
 
-def _live_lap(store, name: str, n: int = 1) -> None:
+def _live_lap(store, name: str, n: int = 1, *, pos: bool = True, pos_y: bool = True) -> None:
     # A LIVE-captured lap: store.save writes the .npz and sets telemetry_path, which is
-    # exactly what separates a re-processable lap from a result-log import.
+    # what separates a re-processable lap from a result-log import.
+    #
+    # pos=False is a PRE-POSITION lap, the shape this store really holds for laps recorded
+    # before position capture landed: a real .npz with real channels and no pos_* at all.
+    # It can never be rebuilt from, so it must not count toward the build gate.
+    # pos_y=False is the other real shape: position but no elevation.
     for _ in range(n):
-        store.save(LapRecord("lmu", name, "Oreca 07", 60.0, True, 0.0,
-                             {"lap_distance": np.array([0.0, 1.0]),
-                              "pos_x": np.array([0.0, 1.0]),
-                              "pos_y": np.array([0.0, 0.0]),
-                              "pos_z": np.array([0.0, 0.0])}))
+        ch = {"lap_distance": np.array([0.0, 1.0]), "speed": np.array([100.0, 100.0])}
+        if pos:
+            ch["pos_x"] = np.array([0.0, 1.0])
+            ch["pos_z"] = np.array([0.0, 0.0])
+            if pos_y:
+                ch["pos_y"] = np.array([0.0, 0.0])
+        store.save(LapRecord("lmu", name, "Oreca 07", 60.0, True, 0.0, ch))
 
 
 def _result_lap(store, name: str, n: int = 1) -> None:
@@ -686,11 +693,14 @@ def test_get_tracks_mapped_track_row_shape_unchanged(tmp_path):
     _result_lap(store, "Algarve International Circuit", 40)
     rows = client.get("/tracks").json()
     row = next(t for t in rows if t["slug"] == "algarve_international_circuit")
-    assert set(row) == {"slug", "name", "has_map", "has_notes", "user_edited", "captures"}
+    assert set(row) == {"slug", "name", "has_map", "has_notes", "user_edited",
+                        "captures", "live_laps", "elevation_laps"}
     assert row["has_map"] is True
     assert row["has_notes"] is False
     assert row["user_edited"] is False
     assert row["captures"] == 0        # 40 result laps are not captures
+    assert row["live_laps"] == 0
+    assert row["elevation_laps"] == 0
 
 
 def test_get_tracks_driven_mapped_track_listed_once_with_count(tmp_path):
@@ -714,3 +724,55 @@ def test_get_tracks_sums_captures_across_raw_names_of_one_slug(tmp_path):
     rows = [t for t in client.get("/tracks").json() if t["slug"] == "paul_ricard"]
     assert len(rows) == 1
     assert rows[0]["captures"] == 5
+
+
+def test_get_tracks_counts_only_laps_whose_npz_really_has_position(tmp_path):
+    # THE dead-button bug. Position capture landed partway through this store's history,
+    # so pre-position laps are real .npz files with real channels and no pos_* at all.
+    # A row-count badge made Sebring (15 live, 0 usable) offer "Build map from 15 laps",
+    # which then 422'd -- the very error #69 exists to remove. `captures` is the gate and
+    # must count USABLE laps; `live_laps` keeps the row explainable.
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    _live_lap(store, "Sebring International Raceway", 15, pos=False)
+    _live_lap(store, "Silverstone National Circuit", 4, pos=False)
+    _live_lap(store, "Silverstone National Circuit", 3)          # 7 rows, 3 usable
+    rows = client.get("/tracks").json()
+
+    sebring = next(t for t in rows if t["slug"] == "sebring_international_raceway")
+    assert sebring["live_laps"] == 15      # the row exists, and explains itself...
+    assert sebring["captures"] == 0        # ...but offers nothing to build from
+
+    silver = next(t for t in rows if t["slug"] == "silverstone_national_circuit")
+    assert silver["live_laps"] == 7
+    assert silver["captures"] == 3         # the usable subset, not the row count
+
+
+def test_get_tracks_counts_elevation_laps_separately(tmp_path):
+    # Banking is fitted from pos_y across the width. Measured on real Silverstone clouds:
+    # 0 elevation laps -> bank 0.0 in every bin (asserts FLAT), 1 -> ~25x the true
+    # magnitude off a single line. So a usable lap is not automatically an elevating one.
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    _live_lap(store, "Monza Curva Grande Circuit", 4, pos_y=False)
+    _live_lap(store, "Monza Curva Grande Circuit", 1)            # 5 usable, 1 elevating
+    _live_lap(store, "Paul Ricard", 3, pos_y=False)              # 3 usable, 0 elevating
+    rows = client.get("/tracks").json()
+
+    monza = next(t for t in rows if t["slug"] == "monza_curva_grande_circuit")
+    assert monza["captures"] == 5           # pos_y is NOT required to rebuild...
+    assert monza["elevation_laps"] == 1     # ...but its absence is reported
+
+    ricard = next(t for t in rows if t["slug"] == "paul_ricard")
+    assert ricard["captures"] == 3
+    assert ricard["elevation_laps"] == 0
+
+
+def test_get_tracks_counts_survive_a_deleted_npz(tmp_path):
+    # A laps row can outlive its file. That lap is unusable, but it is still a live row.
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    _live_lap(store, "Silverstone National Circuit", 3)
+    (Path(store.data_dir) / "1.npz").unlink()
+    row = next(t for t in client.get("/tracks").json()
+               if t["slug"] == "silverstone_national_circuit")
+    assert row["live_laps"] == 3
+    assert row["captures"] == 2
+    assert row["elevation_laps"] == 2

@@ -989,7 +989,19 @@ def test_mapcapture_rebuild_corrupt_capture_is_422(tmp_path):
     c = _tc(app)
     c.post("/mapcapture/build", json={})
     c.post("/mapcapture/save", json={})
-    (tmp_path / "data" / "captures" / "maptrack.npz").write_bytes(b"not an npz")  # corrupt
+    # The store must HOLD live laps for this track, or this test cannot tell a REFUSAL
+    # from simply having nothing to fall back to -- setting map_buffer directly never
+    # persists a lap, so it used to pass under both readings.
+    for zsign in (1, -1, 1):
+        store.save(_edge("MapTrack", zsign, 100.0))
+    cap = tmp_path / "data" / "captures" / "maptrack.npz"
+    cap.unlink()
+    r = c.post("/mapcapture/rebuild", json={"slug": "maptrack"})
+    assert r.status_code == 200, r.text          # those live laps ARE reachable...
+    assert r.json()["lap_count"] == 3
+    # ...so the 422 below is the corrupt capture being refused, not an empty store. A
+    # driver who asked for that artifact must not silently get geometry off other data.
+    cap.write_bytes(b"not an npz")                                          # corrupt
     assert c.post("/mapcapture/rebuild", json={}).status_code == 422  # clean 422, not 500
 
 

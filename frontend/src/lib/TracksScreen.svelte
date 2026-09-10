@@ -142,6 +142,25 @@
 
   const lapWord = (n: number): string => `${n} lap${n === 1 ? "" : "s"}`;
 
+  // What the coverage badge says. `captures` is the BUILD GATE -- laps whose .npz really
+  // holds the rebuild channels, not laps that merely have a file. Position capture landed
+  // partway through this store's history, so a track can hold live laps and none that can
+  // ever be rebuilt from (Sebring: 15 live, 0 usable). Say that rather than hiding the
+  // row: the driver needs to know those laps are unrecoverable and the track wants
+  // re-driving (#66).
+  const coverage = (t: TrackRow): string =>
+    t.captures > 0 ? lapWord(t.captures)
+    : t.live_laps > 0 ? `${lapWord(t.live_laps)}, none with position data`
+    : "";
+  // Banking is fitted from pos_y across the WIDTH. Measured on real Silverstone clouds:
+  // 0 elevation laps -> bank is 0.0 in all 500 bins (asserts FLAT, doesn't omit); 1 lap
+  // -> +0.31/-0.85 against a true +0.033/-0.027, ~25x, because one racing line gives the
+  // fit no lateral spread. Both numbers are measured, not a derived threshold -- warn at
+  // exactly those two and stay quiet otherwise.
+  const elevationWarning = (t: TrackRow): string =>
+    t.captures === 0 || t.elevation_laps > 1 ? ""
+    : t.elevation_laps === 0 ? "no elevation" : "elevation from 1 lap";
+
   // The build action is just "select it, then open the map editor" -- the editor already
   // owns the rebuild-from-saved-capture -> save pair (POST /mapcapture/rebuild + /save).
   // No second write route to a track file.
@@ -218,12 +237,15 @@
                 <span class="badge" class:good={t.has_map}>{t.has_map ? "map" : "no map"}</span>
                 <span class="badge" class:good={t.has_notes}>{t.has_notes ? "notes" : "no notes"}</span>
                 <span class="badge">{t.user_edited ? "edited" : "shipped"}</span>
-                {#if t.captures > 0}<span class="badge">{lapWord(t.captures)}</span>{/if}
+                {#if coverage(t)}<span class="badge">{coverage(t)}</span>{/if}
+                {#if elevationWarning(t)}<span class="badge warn">{elevationWarning(t)}</span>{/if}
               </span>
             </button>
             {#if !t.has_map && t.captures > 0}
-              <!-- Driven, never mapped (#69). EXPLICIT action, never automatic: a map
-                   built from one lap is thin (#41), so the button says what backs it. -->
+              <!-- Driven, never mapped (#69). Gated on `captures`, NOT on live_laps: a
+                   button offering to build from laps that carry no position data leads
+                   straight back to the 422 this issue exists to remove.
+                   EXPLICIT action, never automatic, and it says what backs it (#41). -->
               <button type="button" class="build" onclick={() => buildMap(t)}>
                 Build map from {lapWord(t.captures)}
               </button>
@@ -400,6 +422,10 @@
     color: var(--good);
     border-color: var(--good);
     background: var(--good-soft);
+  }
+  .badge.warn {
+    color: var(--bad, #e66);
+    border-color: var(--bad, #e66);
   }
   .build {
     width: 100%;

@@ -173,6 +173,27 @@ def _clean(v):
 
 
 _POS_CHANNELS = ("pos_x", "pos_y", "pos_z", "lap_distance")
+# What reconstruct_surface actually requires of a lap. pos_y is NOT in here: it is
+# optional there (it only fits BANK), so demanding it would reject usable laps -- but
+# a lap without it contributes no elevation, and ribbon.py rounds a non-finite bank to
+# 0.0, which reads as FLAT rather than as unknown. Hence _lap_elevation_count.
+_REBUILD_CHANNELS = ("pos_x", "pos_z", "lap_distance")
+
+
+def _lap_npz_keys(path) -> frozenset[str]:
+    """Channel names in a lap .npz WITHOUT decompressing anything -- an .npz is a zip
+    and NpzFile.files reads only the archive directory. Missing/corrupt/truncated file
+    -> empty set, so a caller counting usable laps and a caller loading them agree.
+
+    ponytail: ~0.3 ms/lap (49 ms for the 173 live laps on the dev store), uncached
+    because /tracks is opened by hand, not polled. It scales linearly with lap count:
+    cache on telemetry_path (immutable once written) if that stops being true.
+    """
+    try:
+        with np.load(str(path)) as z:
+            return frozenset(z.files)
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile):
+        return frozenset()
 
 
 def _save_cloud(path, laps) -> None:
@@ -317,39 +338,42 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         files = list(d.glob("*.npz")) if d.exists() else []
         return max(files, key=lambda p: p.stat().st_mtime) if files else None
 
-    def _lap_clouds(track: str) -> list[dict]:
-        # Fallback cloud for a track that never got a dedicated mapping capture: the
-        # position channels off its own LIVE laps' .npz files, in the same shape
-        # _load_cloud returns, so reconstruct_surface can't tell the two apart.
+    def _live_lap_paths() -> list[tuple[str, str, str]]:
+        # (slug, raw live name, telemetry_path) for every LIVE-captured lap, newest last.
         #
-        # The per-lap .npz always carried pos_x/y/z + lap_distance -- it was the REBUILD
-        # PATH that never looked at them, only at captures/<slug>.npz. That makes #66's
-        # "drive 3-4 laps and the track is permanently re-processable" true of the data
-        # all along but, until this, false of the code.
-        #
-        # telemetry_path IS NOT NULL is the whole distinction (same as list_tracks):
-        # save_result_session rows are summary-only with no file, so a track with ~991
-        # imported laps and no capture stays correctly unbuildable.
-        slug = track_slug(track)
-        if not slug:
-            return []
+        # telemetry_path IS NOT NULL is the whole distinction: save_result_session rows
+        # are summary-only with no file, so a track with ~991 imported laps and no
+        # capture is correctly not buildable (#66). Slugged here because laps store the
+        # raw live name ("Paul Ricard - ELMS") while a map file is keyed by slug.
         with store._lock:   # store.py shares one connection with the capture thread
             rows = store.conn.execute(
                 "SELECT track, telemetry_path FROM laps "
                 "WHERE telemetry_path IS NOT NULL AND track IS NOT NULL "
                 "ORDER BY id").fetchall()
+        return [(track_slug(n), n, p) for n, p in rows if track_slug(n)]
+
+    def _lap_clouds(track: str) -> list[dict]:
+        # Fallback cloud for a track that never got a dedicated mapping capture: the
+        # position channels off its own LIVE laps' .npz files, in the same shape
+        # _load_cloud returns, so reconstruct_surface can't tell the two apart.
+        #
+        # The per-lap .npz has carried pos_x/pos_z/lap_distance since position capture
+        # landed -- it was the REBUILD PATH that never looked at them, only at
+        # captures/<slug>.npz. Laps recorded BEFORE that (47 channels, no pos_*) can
+        # never be rebuilt from and are skipped here and uncounted in /tracks.
+        slug = track_slug(track)
+        if not slug:
+            return []
         laps = []
-        for name, p in rows:
-            if track_slug(name) != slug:
-                continue          # laps store the raw live name; the map is keyed by slug
+        for lap_slug, _name, p in _live_lap_paths():
+            if lap_slug != slug:
+                continue
             try:
                 with np.load(p) as z:
                     ch = {c: z[c] for c in _POS_CHANNELS if c in z.files}
             except (OSError, ValueError, KeyError, zipfile.BadZipFile):
                 continue          # a row outlives its file: skip the lap, not the rebuild
-            # The triple reconstruct_surface actually requires; pos_y is optional there
-            # (it only fits bank), so demanding it would drop usable laps.
-            if all(c in ch for c in ("pos_x", "pos_z", "lap_distance")):
+            if all(c in ch for c in _REBUILD_CHANNELS):
                 laps.append(ch)
         return laps
 
@@ -1067,32 +1091,35 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # A track DRIVEN live but never mapped has no .json to glob, so it used to be
         # absent from this list entirely -- and this screen is the only place a map gets
         # built, so there was no entry point for exactly the tracks that need one (#69).
-        # Union it in, and carry the count so the row can say how many laps would back a
-        # build (a one-lap map is thin -- #41).
+        # Union it in, with the counts the Build action is gated on.
         #
-        # telemetry_path IS NOT NULL is the whole distinction: save_result_session
-        # backfills summary-only rows with no .npz, so Spa's ~991 imported laps are NOT
-        # re-processable and must not read as buildable (#66). Counted per SLUG, not per
-        # raw name: "Paul Ricard" and "Paul Ricard - ELMS" share one map file.
+        # `captures` counts laps whose .npz ACTUALLY HOLDS the channels a rebuild needs,
+        # not laps that merely have a file. That is not a rounding error: position
+        # capture landed partway through this store's history, so pre-position laps carry
+        # 47 channels with no pos_* at all -- Sebring has 15 live laps and 0 usable, and
+        # a DB count there offered "Build map from 15 laps" that then 422'd with the very
+        # error #69 exists to remove. A dead button is worse than no row.
         #
-        # ponytail: a DB count, so it counts laps that HAVE a file, not laps whose file
-        # still carries position channels -- Silverstone's first 10 laps predate pos_x/
-        # pos_z capture, so the row says 27 where a rebuild finds 17. Opening 164 .npz
-        # files per request to be exact is the wrong trade for a coverage badge; the
-        # rebuild preview reports the real number before anything is saved.
+        # `live_laps` is the raw row count, so a row with captures 0 can still say WHY it
+        # is there and unbuildable ("none with position data") -- the driver needs to know
+        # those laps are unrecoverable and the track wants re-driving (#66).
+        #
+        # `elevation_laps` counts the subset carrying pos_y. ribbon.py treats pos_y as
+        # optional but rounds a non-finite bank to 0.0, so a map built without it reads
+        # FLAT rather than unknown, and geometry_clause then states that as fact.
         captures: dict[str, int] = {}
+        live: dict[str, int] = {}
+        elevation: dict[str, int] = {}
         names: dict[str, str] = {}
-        with store._lock:   # store.py shares one connection with the capture thread
-            rows = store.conn.execute(
-                "SELECT track, COUNT(*) FROM laps "
-                "WHERE telemetry_path IS NOT NULL AND track IS NOT NULL "
-                "GROUP BY track").fetchall()
-        for name, n in rows:
-            slug = track_slug(name)
-            if slug:
-                captures[slug] = captures.get(slug, 0) + n
-                names.setdefault(slug, name)
-        slugs.update(captures)
+        for slug, name, p in _live_lap_paths():
+            live[slug] = live.get(slug, 0) + 1
+            names.setdefault(slug, name)
+            keys = _lap_npz_keys(p)
+            if all(c in keys for c in _REBUILD_CHANNELS):
+                captures[slug] = captures.get(slug, 0) + 1
+                if "pos_y" in keys:
+                    elevation[slug] = elevation.get(slug, 0) + 1
+        slugs.update(live)
         out = []
         for slug in sorted(slugs):
             merged = _track_file_data(slug)
@@ -1107,6 +1134,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 "has_notes": bool(notes.get("overview") or notes.get("corners")),
                 "user_edited": (user_dir / f"{slug}.json").exists(),
                 "captures": captures.get(slug, 0),
+                "live_laps": live.get(slug, 0),
+                "elevation_laps": elevation.get(slug, 0),
             })
         return out
 
@@ -1387,7 +1416,10 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         res["track_name"] = _track_file_data(track).get("name") or track
         # How many laps back this geometry, so the driver knows before committing it:
         # a map off 1-3 clouds is thin (#41's Imola sector splits rest on a single lap).
+        # elevation_count is the subset with pos_y -- at 0, ribbon.py's bank rounds a
+        # non-finite fit to 0.0 and the saved map asserts FLAT where it knows nothing.
         res["lap_count"] = len(laps)
+        res["elevation_count"] = sum(1 for ch in laps if "pos_y" in ch)
         return res
 
     @app.get("/setup")
