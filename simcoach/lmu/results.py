@@ -62,6 +62,15 @@ class ResultSession:
     laps: list[ResultLap]
     incidents: list[str]
     penalties: list[dict]
+    # The grid slot the race was STARTED from. Live capture never samples it (the
+    # first lap it records is already underway), so the result log is the only
+    # source -- without it the coach reads its first captured lap as the start and
+    # can report a race backwards (issue #67).
+    grid_position: int | None = None
+    class_grid_position: int | None = None
+    # True when another HUMAN was on track, i.e. what live capture calls an "online"
+    # session (smm: any vehicle with mControl == 2). See _is_online for the signal.
+    online: bool | None = None
 
 
 _SESSION_TAG_RE = re.compile(r"^(Practice|Qualify|Warmup|Race)\d*$")
@@ -101,6 +110,22 @@ def _find_player_driver(session_elem: ET.Element, names: set[str]) -> ET.Element
         if (driver.findtext("Name") or "").strip().lower() in names:
             return driver
     return None
+
+
+def _is_online(session_elem: ET.Element) -> bool:
+    """Was another human on track? Live capture's session id ends `--online` when any
+    vehicle has mControl == 2 (a remotely controlled car), so a result log has to answer
+    the same question or the two can't be matched to each other.
+
+    The signal is the NUMBER of drivers flagged `isPlayer`. A multiplayer result file
+    sets it on every driver (hence the module docstring calling it useless for *picking*
+    the player); an offline file sets it only on the human. Measured over 1401 real
+    result logs: every offline file ('Race Weekend') has exactly 1, every multiplayer
+    file with 2+ entries has it on all of them, and it is never partial. `Setting` alone
+    is NOT usable -- the 5 single-entry 'Multiplayer' files are one human alone on a
+    server, which mControl (no remote car) correctly reads as offline, as this does."""
+    return sum(1 for d in session_elem.findall("Driver")
+               if (d.findtext("isPlayer") or "").strip() == "1") > 1
 
 
 def _player_laps(driver: ET.Element) -> list[ResultLap]:
@@ -177,6 +202,9 @@ def parse_result(path, player_names: str | Iterable[str]) -> ResultSession | Non
             session_type=re.sub(r"\d+$", "", session_elem.tag).lower(),
             position=_to_int(driver.findtext("Position")),
             class_position=_to_int(driver.findtext("ClassPosition")),
+            grid_position=_to_int(driver.findtext("GridPos")),
+            class_grid_position=_to_int(driver.findtext("ClassGridPos")),
+            online=_is_online(session_elem),
             best_lap=_to_float(driver.findtext("BestLapTime")),
             finish_status=driver.findtext("FinishStatus"),
             laps=_player_laps(driver),

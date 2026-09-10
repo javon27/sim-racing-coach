@@ -635,12 +635,29 @@ class CoachContext:
         rr = self.store.race_session(self.session_id) if self.session_id else None
         # Race stint only — a session_id spans practice/qualy/race, so an all-phase arc
         # would read the start/worst from an earlier phase (wrong start position).
-        arc = self.store.session_position_arc(self.session_id, phase="race") if self.session_id else None
+        # Bound the arc to the race the result row actually describes: phase='race'
+        # alone spans every race in the sitting, so a second race's grid would be
+        # reported next to the first race's lap positions. With no result row (a race
+        # still being driven, whose log does not exist yet) there is no race_ts, so fall
+        # back to the floor the store derives from the last logged race.
+        arc = None
+        if self.session_id:
+            since = (rr.get("race_ts") if rr
+                     else self.store.unlogged_race_since(self.session_id))
+            arc = self.store.session_position_arc(
+                self.session_id, phase="race", since=since,
+                until=rr.get("next_race_ts") if rr else None)
         if not rr and not arc:
             return ("No race result recorded for this session (practice/qualy, or not a "
                     "completed race).")
         lines = []
         if rr:
+            if rr["grid_position"] is not None:
+                grid = f"Started P{rr['grid_position']} on the grid"
+                if (rr["class_grid_position"] is not None
+                        and rr["class_grid_position"] != rr["grid_position"]):
+                    grid += f" (P{rr['class_grid_position']} in class)"
+                lines.append(grid + ".")
             parts = []
             if rr["position"] is not None:
                 parts.append(f"Finished P{rr['position']} overall")
@@ -659,10 +676,16 @@ class CoachContext:
                 texts = [str(p.get("text") or p) for p in penalties[:3]]
                 lines.append(f"Penalties ({len(penalties)}): {'; '.join(texts)}")
         if arc:
-            lines.append(
-                f"In-race: started P{arc['start']}, as low as P{arc['worst']}, "
-                f"currently/finished P{arc['last']}."
-            )
+            # NEVER call arc['start'] a starting position: it is the first lap capture
+            # happened to record, which is already underway (issue #67 reported a P9
+            # start as P18 this way). The grid slot only ever comes from the result log.
+            line = (f"Live per-lap positions over {arc['laps']} captured lap(s): "
+                    f"P{arc['start']} on the first captured lap, as low as "
+                    f"P{arc['worst']}, P{arc['last']} on the most recent.")
+            if not (rr and rr["grid_position"] is not None):
+                line += (" The grid position was not captured, so the first captured lap "
+                         "is NOT the starting position -- do not report a start.")
+            lines.append(line)
         return "\n".join(lines)
 
     def get_setup(self):
