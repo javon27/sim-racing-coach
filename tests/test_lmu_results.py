@@ -78,6 +78,10 @@ def test_parse_result_extracts_player_session():
     # samples it; without it the coach reports a race backwards (issue #67).
     assert session.grid_position == 9
     assert session.class_grid_position == 4
+    # Two drivers, both flagged isPlayer -> another human was on track, which is what
+    # live capture's `--online` suffix means. Needed to match a result to a live session
+    # without handing an offline stint an online race's outcome.
+    assert session.online is True
     assert session.best_lap == 120.9103
     assert session.finish_status == "Finished Normally"
 
@@ -93,6 +97,29 @@ def test_parse_result_extracts_player_session():
     assert any("Warning issued" in text for text in session.incidents)
     assert len(session.penalties) == 1
     assert "Drive Thru" in session.penalties[0]["text"]
+
+
+def test_parse_result_reads_offline_from_a_lone_isplayer(tmp_path):
+    """An OFFLINE result flags only the human; the AI field does not get isPlayer. Built
+    from the real shape of 2026_09_10_00_39_07-16R1 (18 drivers, 1 isPlayer, Setting
+    'Race Weekend'). `Setting` is NOT the signal -- 5 real logs say 'Multiplayer' for one
+    human alone on a server, which live capture reads as offline, as this does."""
+    xml = tmp_path / "offline.xml"
+    xml.write_text(
+        "<rFactorXML><RaceResults><DateTime>1789017807</DateTime>"
+        "<TrackCourse>Silverstone National Circuit</TrackCourse><Setting>Race Weekend</Setting>"
+        "<Race><Stream/>"
+        "<Driver><Name>Jayson G</Name><VehName>Team WRT 2026 #32:WEC</VehName>"
+        "<isPlayer>1</isPlayer><GridPos>9</GridPos><Position>18</Position>"
+        "<Lap num=\"1\" s1=\"26.1\">70.4068</Lap></Driver>"
+        "<Driver><Name>AI Opponent</Name><VehName>Other #7:WEC</VehName>"
+        "<Position>1</Position></Driver>"
+        "</Race></RaceResults></rFactorXML>")
+
+    session = results.parse_result(xml, "Jayson G")
+    assert session is not None
+    assert session.online is False
+    assert session.grid_position == 9 and session.position == 18
 
 
 def test_parse_result_returns_none_when_player_absent():

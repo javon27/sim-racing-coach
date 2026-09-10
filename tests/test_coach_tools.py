@@ -283,17 +283,27 @@ def test_get_race_result_for_a_live_session_reports_the_real_arc(tmp_path, synth
     result_sid = "2026_09_10_00_39_07-16R1"   # the XML stem: NOT the live id
     contact = "Jayson G(0) reported contact (948.15) with another vehicle"
     store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
-    # Live capture got 9 of the 10 race laps, the first of them already running P18.
-    for i, place in enumerate([18, 2, 18, 18, 18, 18, 18, 18, 18]):
+    # Live capture got every timed lap the XML lists, at the sim's full float precision,
+    # the first of them already running P18. So the dedupe leaves NO result lap row and
+    # the link has to hold without one.
+    live_times = [70.40680694580078, 88.20706176757812, 92.79763793945312,
+                  66.87100219726562, 62.2532958984375, 60.8125, 62.413330078125,
+                  63.27410888671875, 76.2119140625]
+    for i, (lt, place) in enumerate(zip(live_times, [18, 2, 18, 18, 18, 18, 18, 18, 18])):
         store.save(LapRecord(**{**synthetic_lap.__dict__, "track": track, "car": car,
-                                "timestamp": 1789017974.0 + 63.0 * i, "phase": "race",
+                                "lap_time": lt, "phase": "race",
+                                "timestamp": 1789017974.0 + 63.0 * i,
                                 "session_id": live_sid, "position": place}))
     store.save_result_session(ResultSession(
         sim="lmu", track=track, car=car, car_class="GT3", date_ts=1789017807.0,
         session_type="race", position=18, class_position=18, best_lap=60.8125,
         finish_status="Finished Normally", grid_position=9, class_grid_position=9,
-        laps=[ResultLap(lap_no=1, lap_time=70.4068, sectors=[], valid=True)],
+        online=False,
+        laps=[ResultLap(lap_no=i + 1, lap_time=t, sectors=[], valid=True) for i, t in
+              enumerate([70.4068, 88.2071, 92.7976, 66.8710, 62.2533, 60.8125,
+                         62.4133, 63.2741, 76.2119])],
         incidents=[contact], penalties=[]), session_id=result_sid)
+    assert store.session_lap_ids(result_sid) == [], "fixture must leave no result laps"
 
     ctx = CoachContext(store, track=track, car=car, session_id=live_sid, on_track=True)
     out = ctx.get_race_result()
@@ -304,6 +314,8 @@ def test_get_race_result_for_a_live_session_reports_the_real_arc(tmp_path, synth
     # The first captured lap ran P18; that is not a start position and must not be sold
     # as one -- reporting it as the start is what inverted the whole race narrative.
     assert "started P18" not in out and "started p18" not in out.lower()
+    # With a known grid slot the disclaimer is unnecessary and must not appear.
+    assert "grid position was not captured" not in out
 
 
 def test_no_lap_context_is_honest(tmp_path):

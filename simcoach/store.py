@@ -164,7 +164,12 @@ CREATE TABLE IF NOT EXISTS race_sessions (
     incidents TEXT,
     penalties TEXT,
     grid_position INTEGER,
-    class_grid_position INTEGER
+    class_grid_position INTEGER,
+    track TEXT,
+    car TEXT,
+    phase TEXT,
+    ts REAL,
+    mode TEXT
 );
 """ + _COACH_CHAT_SCHEMA + _PROFILE_SCHEMA
 
@@ -292,15 +297,21 @@ class LapStore:
                     if "model" not in cols:
                         _add_column(self.conn, "coach_chat", "model TEXT")
             if current_version < 13:
-                # v12 -> v13: the GRID position the race started from, parsed from the
-                # result log but previously dropped. Without it the coach read its first
-                # captured lap as the start (issue #67). Guard the ADD COLUMNs on the
-                # table existing, like the v6/v9 steps.
+                # v12 -> v13: give race_sessions the GRID position the race started from
+                # (parsed from the result log but previously dropped -- without it the
+                # coach read its first captured lap as the start, issue #67) AND its own
+                # session identity. The identity columns matter because the row is keyed
+                # by the result-log id: with no track/car/phase/ts/mode of its own, the
+                # only way to find it from a live session was to join through `laps`,
+                # which result-lap dedupe and clear_all both empty. Guard the ADD COLUMNs
+                # on the table existing, like the v6/v9 steps.
                 cols = [r[1] for r in self.conn.execute("PRAGMA table_info(race_sessions)")]
                 if cols:
-                    for c in ("grid_position", "class_grid_position"):
+                    for c, t in (("grid_position", "INTEGER"), ("class_grid_position", "INTEGER"),
+                                 ("track", "TEXT"), ("car", "TEXT"), ("phase", "TEXT"),
+                                 ("ts", "REAL"), ("mode", "TEXT")):
                         if c not in cols:
-                            _add_column(self.conn, "race_sessions", f"{c} INTEGER")
+                            _add_column(self.conn, "race_sessions", f"{c} {t}")
                 # Forget which result files are imported, so the next ingest re-reads them
                 # and backfills the grid positions the old rows never stored. Ingest is
                 # idempotent on (path, mtime), so without this those races stay blank
@@ -839,17 +850,29 @@ class LapStore:
                 out.append(d)
             return out
 
-    def session_position_arc(self, session_id: str, phase: str | None = None) -> dict | None:
+    def session_position_arc(self, session_id: str, phase: str | None = None,
+                             since: float | None = None,
+                             until: float | None = None) -> dict | None:
         """The session's live per-lap race-position arc, or None if no lap carried
         a position. Lower place number = better, so best = min. Ordered by ts so
         start/last are the first/last lap actually driven. Pass phase='race' to scope
         to the race stint — a session_id spans practice/qualy/race, and positions from
-        those earlier phases would otherwise pollute the start/worst/finish figures."""
+        those earlier phases would otherwise pollute the start/worst/finish figures.
+
+        since/until bound the arc in time, for a sitting that ran more than one race:
+        phase='race' alone spans every race the session covers, which would describe
+        two different races in one arc."""
         query = "SELECT position FROM laps WHERE session_id = ? AND position IS NOT NULL"
         params: list = [session_id]
         if phase is not None:
             query += " AND phase = ?"
             params.append(phase)
+        if since is not None:
+            query += " AND ts >= ?"
+            params.append(since)
+        if until is not None:
+            query += " AND ts < ?"
+            params.append(until)
         query += " ORDER BY ts"
         with self._lock:
             rows = self.conn.execute(query, params).fetchall()
@@ -865,22 +888,35 @@ class LapStore:
         }
 
     def clear_all(self) -> None:
-        """Wipe all persisted data: laps, setups, corner metrics, coach chat,
-        and the raw per-lap telemetry files. Used by Settings > reset data."""
+        """Wipe all persisted data: laps, setups, corner metrics, coach chat, race
+        outcomes, the record of which result files were imported, and the raw per-lap
+        telemetry files. Used by Settings > reset data.
+
+        race_sessions and ingested_files are cleared too: leaving them behind left race
+        outcomes with no laps to belong to, and told the next ingest every result file
+        was already imported -- so a reset could never be undone by re-importing."""
         with self._lock:
-            for t in ("corner_metrics", "coach_chat", "laps", "setups"):
+            for t in ("corner_metrics", "coach_chat", "laps", "setups",
+                      "race_sessions", "ingested_files"):
                 self.conn.execute(f"DELETE FROM {t}")
             self.conn.commit()
         for f in Path(self.data_dir).glob("*.npz"):
             f.unlink(missing_ok=True)
 
-    def _already_stored_lap_times(self, rs) -> list[float | None]:
-        """Lap times already stored for the same stint as this result session --
-        same track/car/phase, timestamped inside the weekend window around the
-        result's own timestamp. Includes NULL times (a result lap with no time) so
-        those dedupe too. Must be called under self._lock."""
-        query = "SELECT lap_time FROM laps WHERE track IS ? AND car IS ? AND phase IS ?"
-        params: list = [rs.track, rs.car, rs.session_type]
+    def _already_stored_lap_times(self, rs, session_id: str) -> list[float | None]:
+        """Lap times already stored for THIS result session -- the live capture of the
+        same stint, plus this result file's own earlier import. Includes NULL times (a
+        result lap with no time) so those dedupe too. Must be called under self._lock.
+
+        The `source = 'live' OR session_id = ?` scope is load-bearing: LMU writes P1/P2,
+        and repeated races, as separate files with the same track/car/phase in one
+        sitting, so a plain (track, car, phase, window) scope let session 2's laps
+        dedupe against session 1's rows and silently dropped real laps (379 of 7066 on
+        a fresh import of 1402 real logs). Only live rows and this same file's rows can
+        legitimately already hold a lap this file lists."""
+        query = ("SELECT lap_time FROM laps WHERE track IS ? AND car IS ? AND phase IS ? "
+                 "AND (source = 'live' OR session_id = ?)")
+        params: list = [rs.track, rs.car, rs.session_type, session_id]
         if rs.date_ts is not None:
             query += " AND ts BETWEEN ? AND ?"
             params += [rs.date_ts - _SESSION_GAP_S, rs.date_ts + _SESSION_GAP_S]
@@ -895,7 +931,9 @@ class LapStore:
         lap arrived twice (issue #68: 19 rows for a 10-lap race). The already-stored
         row wins because a live one is strictly richer -- telemetry `.npz`, per-lap
         position, sector bounds -- while the result copy has none of those; skipping
-        also makes a re-import of the same file a no-op. Matching is a lap-time match
+        also makes a re-import of the same file a no-op. Scoped to this session's own
+        rows (see _already_stored_lap_times) so a sibling session is never raided.
+        Matching is a lap-time match
         within _LAP_TIME_TOL_S (not `==`: see that constant) and each stored lap
         absorbs at most one result lap, so two genuinely identical times still keep
         two rows. A result lap with no time ('--.----') -- the lap live capture tends to
@@ -905,7 +943,7 @@ class LapStore:
             return sectors[i] if sectors is not None and len(sectors) > i else None
 
         with self._lock, self.conn:
-            unclaimed = self._already_stored_lap_times(rs)
+            unclaimed = self._already_stored_lap_times(rs, session_id)
             rows = []
             for lap in rs.laps:
                 if lap.lap_time is None:
@@ -929,11 +967,13 @@ class LapStore:
             self.conn.execute(
                 "INSERT OR REPLACE INTO race_sessions "
                 "(session_id, position, class_position, finish_status, incidents, penalties, "
-                "grid_position, class_grid_position) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "grid_position, class_grid_position, track, car, phase, ts, mode) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (session_id, rs.position, rs.class_position, rs.finish_status,
                  json.dumps(rs.incidents or []), json.dumps(rs.penalties or []),
-                 rs.grid_position, rs.class_grid_position),
+                 rs.grid_position, rs.class_grid_position,
+                 rs.track, rs.car, rs.session_type, rs.date_ts,
+                 None if rs.online is None else ("online" if rs.online else "offline")),
             )
 
     def _linked_result_session(self, session_id: str) -> str | None:
@@ -943,24 +983,44 @@ class LapStore:
         Live capture keys laps by `track--car--online|offline`; result ingest keys them
         by the XML stem, so `race_sessions` rows can never be found from a live id by
         session_id alone -- that join failure is why the coach reported a race backwards
-        (issue #67). Match instead on what both sides do share: the same track and car
-        (live capture and the result log agree on both strings), a race phase, and a
-        timestamp inside the live session's own window. Newest match wins, so a second
-        race in the same sitting supersedes the first."""
+        (issue #67). Match instead on the identity race_sessions now carries itself:
+        same track and car (both sides agree on the strings), a race phase, the same
+        online/offline mode, and a timestamp inside the live session's RACE window.
+
+        Resolving against race_sessions rather than joining through `laps` is what keeps
+        this working: result laps are skipped when live capture already holds them, so a
+        cleanly captured race leaves zero result lap rows and a laps-join finds nothing
+        -- restoring #67's symptom on exactly the races that were captured best.
+
+        Scope rules, each guarding a way to attach the wrong race:
+        - Only a live session with RACE laps resolves; a practice-only session must not
+          inherit the sitting's race result.
+        - NEAREST result to the first captured race lap, not the newest -- a live stint
+          that is race 1 must not be handed race 2's outcome.
+        - Mode must match. One online race in the window would otherwise answer for both
+          `t--c--online` and `t--c--offline`, so an offline session would report a grid
+          slot and a finish it never drove. Rows ingested before mode existed carry NULL
+          and are still allowed, but always lose to an exact-mode match."""
         row = self.conn.execute(
             "SELECT track, car, MIN(ts), MAX(ts) FROM laps "
-            "WHERE session_id = ? AND source = 'live'",
+            "WHERE session_id = ? AND source = 'live' AND phase = 'race'",
             (session_id,),
         ).fetchone()
         if row is None or row[2] is None:
             return None
         track, car, first, last = row
-        hit = self.conn.execute(
-            "SELECT l.session_id FROM laps l JOIN race_sessions r ON r.session_id = l.session_id "
-            "WHERE l.source = 'result' AND l.phase = 'race' AND l.track IS ? AND l.car IS ? "
-            "AND l.ts BETWEEN ? AND ? ORDER BY l.ts DESC LIMIT 1",
-            (track, car, first - _SESSION_GAP_S, last + _SESSION_GAP_S),
-        ).fetchone()
+        base = _session_base(session_id)
+        mode = ("online" if base.endswith("--online")
+                else "offline" if base.endswith("--offline") else None)
+        query = ("SELECT session_id FROM race_sessions WHERE phase = 'race' "
+                 "AND track IS ? AND car IS ? AND ts IS NOT NULL AND ts BETWEEN ? AND ?")
+        params: list = [track, car, first - _SESSION_GAP_S, last + _SESSION_GAP_S]
+        order = "ORDER BY ABS(ts - ?) LIMIT 1"
+        if mode is not None:
+            query += " AND (mode IS NULL OR mode = ?)"
+            params.append(mode)
+            order = "ORDER BY (mode IS NULL), ABS(ts - ?) LIMIT 1"
+        hit = self.conn.execute(f"{query} {order}", params + [first]).fetchone()
         return hit[0] if hit is not None else None
 
     def race_session(self, session_id: str) -> dict | None:
@@ -971,15 +1031,24 @@ class LapStore:
         _linked_result_session) -- the row is keyed by the XML stem, so a live session
         has no row of its own."""
         cols = ("SELECT position, class_position, finish_status, incidents, penalties, "
-                "grid_position, class_grid_position FROM race_sessions WHERE session_id = ?")
+                "grid_position, class_grid_position, track, car, ts, mode "
+                "FROM race_sessions WHERE session_id = ?")
         with self._lock:
             row = self.conn.execute(cols, (session_id,)).fetchone()
             if row is None:
                 linked = self._linked_result_session(session_id)
                 row = self.conn.execute(cols, (linked,)).fetchone() if linked else None
-        if row is None:
-            return None
-        pos, cls_pos, finish, incidents, penalties, grid, cls_grid = row
+            if row is None:
+                return None
+            pos, cls_pos, finish, incidents, penalties, grid, cls_grid, track, car, ts, mode = row
+            # When this race is one of several in a sitting, the live session spans them
+            # all -- so hand the caller the window this race occupies (its own start, up
+            # to the next race's) or the per-lap arc would mix two races into one answer.
+            next_ts = self.conn.execute(
+                "SELECT MIN(ts) FROM race_sessions WHERE phase = 'race' AND track IS ? "
+                "AND car IS ? AND ts > ? AND (mode IS NULL OR mode IS ?)",
+                (track, car, ts, mode),
+            ).fetchone()[0] if ts is not None else None
 
         def _load(s):
             try:
@@ -995,6 +1064,8 @@ class LapStore:
             "penalties": _load(penalties),
             "grid_position": grid,
             "class_grid_position": cls_grid,
+            "race_ts": ts,
+            "next_race_ts": next_ts,
         }
 
     def is_ingested(self, path: str, mtime: float) -> bool:
