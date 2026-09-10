@@ -227,9 +227,11 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
       rear_brake_bias: mRearBrakeBias, raw, no conversion. SCALE UNVERIFIED
         (fraction vs percent).
       per-wheel [fl,fr,rl,rr]: wheel_rot (mRotation, rad/s -- lockup ~ 0 while
-        moving), brake_temp, brake_press (mBrakePressure), grip (mGripFract,
-        0..1), tire_load (mTireLoad, N), tire_press (mPressure, kPa), tire_wear
-        (mWear, 0..1). gear/rpm/abs_active/tc_active read as-is.
+        moving), brake_temp, brake_press (mBrakePressure), tire_press
+        (mPressure, kPa), tire_wear (mWear, 0..1). gear/rpm/abs_active/tc_active
+        read as-is. grip (mGripFract) and tire_load (mTireLoad) are captured raw
+        but NEVER POPULATED BY LMU -- rig-confirmed flat 0.0 always (#43); no
+        coach output reads them, see the comment at the capture site.
       virtual_energy / soc / battery_charge: read as-is, no unit conversion --
         all three are already fractions/percent-scale per the struct fields
         (mVirtualEnergy, mSoC, mBatteryChargeFraction), unlike fuel (liters)
@@ -312,6 +314,13 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
         w = wheels[i]
         sample[f"tire_temp_{name}"] = w.mTemperature[1] - 273.15
         sample[f"tire_press_{name}"] = w.mPressure
+        # #43: mTireLoad and mGripFract are never populated by LMU -- rig-confirmed
+        # flat 0.0 across 4479 frames (hard braking + a deliberate slide) and swept
+        # 157/157 stored laps on 5 cars. No coach output is derived from either.
+        # Capture raw anyway and report nothing: it costs nothing, and if a future
+        # LMU build ever fills them in, the stored clouds become useful
+        # retroactively without re-driving. Do not remove this as "dead code" --
+        # it is deliberately unused, not forgotten.
         sample[f"tire_load_{name}"] = w.mTireLoad
         sample[f"tire_wear_{name}"] = w.mWear
         sample[f"grip_{name}"] = w.mGripFract

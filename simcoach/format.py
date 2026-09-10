@@ -60,8 +60,6 @@ def format_corner_line(cm, units: str = "metric") -> str:
         f"{spd(cm.entry_spd):.0f}→min {spd(cm.min_spd):.0f}→{spd(cm.exit_spd):.0f} {spd_u}, "
         f"{brake_txt}{thr_txt}, trail {cm.trailbrake_overlap:.0%}, peak {cm.peak_lat_g:.1f}g"
     )
-    if not math.isnan(cm.min_grip):
-        line += f", min grip {cm.min_grip:.2f}"   # 1.0 = full grip; low = sliding/locking
     # Extended inputs/loads (guarded — older laps lack these channels).
     if not math.isnan(getattr(cm, "peak_brake_g", float("nan"))):
         line += f", brake {cm.peak_brake_g:.1f}g"

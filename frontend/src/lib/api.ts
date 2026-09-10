@@ -60,7 +60,6 @@ export interface CornerMetrics {
   trailbrake_overlap: number;
   peak_brake: number;
   peak_lat_g: number;
-  min_grip: number | null;
   peak_brake_g: number | null;
   peak_accel_g: number | null;
   peak_steer: number | null;
