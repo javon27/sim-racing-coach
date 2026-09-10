@@ -13,10 +13,11 @@ commit.
 
 When you eyeball that diff, check ``radius_m`` on every corner for values you did
 not intend to change. This script is a faithful copier -- it preserves whatever
-per-corner geometry the source carries and never re-bakes it -- but a map that has
-been through the map editor carries the editor's re-baked radius (#62: Imola T13
-went 67.7 m -> 322.1 m, 4.8x, and the coach serves radius as owned fact). That
-corruption happens upstream; this diff is the last gate before it is committed.
+per-corner geometry the source carries and never re-bakes it -- and the editor no
+longer re-bakes it either (#62). But a map SAVED through the editor before that fix
+still carries the re-baked values it wrote then (#62: Imola T13 went 67.7 m ->
+322.1 m, 4.8x, and the coach serves radius as owned fact), so for an app-data map
+of unknown age this diff is still the last gate before it is committed.
 
     python scripts/promote_map.py <slug>              # from app-data
     python scripts/promote_map.py <slug> --from FILE  # from an exported file

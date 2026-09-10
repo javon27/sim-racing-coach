@@ -20,7 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
-from simcoach.analysis import corner_geometry
+from simcoach.analysis import CORNER_GEOMETRY_KEYS, corner_geometry
 from simcoach.ribbon import reconstruct_surface
 from simcoach.server.__main__ import db_path, telemetry_dir
 from simcoach.server.app import _load_cloud
@@ -28,7 +28,10 @@ from simcoach.store import LapStore
 from simcoach.track_lookup import track_slug
 
 TRACKS_DIR = Path("simcoach/tracks")
-_METRIC_KEYS = ("radius_m", "width_m", "banking_deg", "elev_delta_m")
+# This script is the ONLY writer allowed to change these -- the editor's save path
+# carries them forward instead of re-deriving them (#62). Shared owner so the two
+# lists cannot drift.
+_METRIC_KEYS = CORNER_GEOMETRY_KEYS
 
 
 def _elev_on_path(samples, path_dist, bins: int = 500):

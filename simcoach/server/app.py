@@ -23,7 +23,14 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from .. import config, logging_setup, paths, secrets
-from ..analysis import analyze_lap, corner_geometry, geometry_clause, input_traces
+from ..analysis import (
+    CORNER_GEOMETRY_KEYS,
+    SIGNED_GEOMETRY_KEYS,
+    analyze_lap,
+    corner_geometry,
+    geometry_clause,
+    input_traces,
+)
 from ..car_lookup import resolve_car
 from ..car_notes import load_car_notes, load_setup_concepts
 from ..coach_tools import CoachContext
@@ -50,6 +57,43 @@ _DEFAULT_TRACKS_DIR = Path(__file__).resolve().parent.parent / "tracks"
 # 6x the 50-word per-corner budget the drafting prompt states, so it cannot clip prose
 # authored to spec. Over-limit input is REJECTED, never truncated -- silently shortening
 # authored notes is the class of bug this path just got fixed for.
+def _apex_key(corner: dict):
+    """Identity of a corner for carrying baked geometry across a save (#62): its apex
+    distance, rounded the way _persist_map writes it. `label` and `number` both get
+    rewritten by the editor (free-text box / positional renumber), so neither names the
+    same corner before and after an edit -- the apex is where the metric was measured.
+    None for a corner with no usable apex, which matches nothing rather than everything.
+    """
+    try:
+        a = float(corner["apex_dist"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return round(a, 1) if math.isfinite(a) else None
+
+
+def _measurable(key: str, value) -> bool:
+    """Is a stored geometry value one that could have been MEASURED, and so is worth
+    carrying forward rather than recomputing (#62)?
+
+    These come off disk, including hand-edited and third-party maps, so `null`, a
+    string, a dict, a non-finite float and a zero/negative LENGTH are not data to
+    preserve -- they fall through to the computed value, which is what the pre-#62 code
+    would have written anyway. NaN/Infinity matter most: _write_track_json serialises
+    with allow_nan=False, so carrying one forward turns a save into a 500.
+
+    Which metrics are signed is `analysis.SIGNED_GEOMETRY_KEYS`, beside the key list
+    itself, so this cannot become a second independent list of the metrics that exist.
+
+    The bool check is load-bearing, not defensive noise: bool IS an int in Python, so
+    `True > 0` would carry a stored `true` through as a measurement.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    if not math.isfinite(value):
+        return False
+    return value > 0 or key in SIGNED_GEOMETRY_KEYS
+
+
 _MAX_NOTE_KEYS = 100
 _MAX_NOTE_KEY_CHARS = 80
 _MAX_NOTE_CHARS = 2000
@@ -844,20 +888,73 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         name = (new_name.strip()[:80] if isinstance(new_name, str) and new_name.strip()
                 else _track_file_data(track).get("name"))
 
-        # Bake per-corner geometry: radius from the path, width/banking from the
-        # ribbon (index-aligned with the frozen path) when present. Elevation needs
-        # pos_y we don't have on a corner/label edit -> carry forward any baked value.
+        # Per-corner geometry is OWNED, BAKED data (scripts/backfill_corner_geometry.py),
+        # not a save-time derivation. CARRY THE EXISTING BAKE FORWARD UNTOUCHED and
+        # compute only the metrics a corner has none of -- one the curator just added.
+        # Re-deriving what is already baked rewrote it silently, two ways (#62):
+        #
+        #  - radius_m. The shipped radii were baked in 1559297 against the PRE-CLAMP
+        #    corner windows, which were WIDER than today's and reached into the
+        #    neighbouring corner. 35254d5 (#30) narrowed them and did not re-bake, so a
+        #    stored radius is the tightest point of a window that no longer exists --
+        #    and corner_geometry reports the tightest point, so what it captured is the
+        #    NEIGHBOUR's. Recomputing here therefore CHANGES the value: 18 corners
+        #    across 7 shipped maps moved, Imola T13 67.7 -> 322.1 m (4.8x) on a save
+        #    whose only intended change was a corner NAME. radius_m reaches the driver
+        #    as owned fact through geometry_clause (#35), so that is a 2nd-gear corner
+        #    described as a sweeper.
+        #      Where those wide windows came from: on 13 of the 18 they are exactly
+        #    THIS function's own `pad = max(20.0, length * 0.025)` default a few dozen
+        #    lines up (Imola 4897.57 m -> 122.4; Laguna 3586.2 -> 89.7); the other 5
+        #    are asymmetric spans from some earlier writer. NOT mapbuild's _WIN_M,
+        #    which is 55.0 and always has been -- do not "correct" the numbers here to
+        #    it. So the editor baked against its own over-wide default and #30 then
+        #    narrowed it.
+        #  - width_m/banking_deg. Laguna's came from the point cloud, not from a stored
+        #    ribbon (d69d5ec), so this path has no source for them and dropped all 24.
+        #
+        # Re-baking is a deliberate curator commit with a reviewable diff (that is what
+        # backfill_corner_geometry.py is for), never a side effect of clicking Save.
+        # NOTE this only stops the save path CHANGING the values. All 18 stored radii
+        # are still wrong and still reach the driver, and the error is one-directional
+        # -- a superset window's max curvature is >= the subset's, so shipped <=
+        # recomputed on every one of them, i.e. the coach calls a fast corner a slow
+        # one. Worst: Bahrain Endurance T13 40.8 vs 340.7 (8.3x). Fixing THAT is #73.
+        #
+        # Matched on APEX DISTANCE -- not label, not number. Both of those are things
+        # the editor rewrites out from under the curator: `label` is the free-text box
+        # they type in (TrackMapEditor's `lbl-in`), and `number` is reassigned
+        # POSITIONALLY by its renumber() on every insert. Keying on either hands a
+        # corner the bake measured at a different corner. Measured on Imola: renaming
+        # label "13" to "13A" loses T13's whole bake under a label key; inserting one
+        # corner makes 1 corner inherit a neighbour's geometry under a label key and 18
+        # under a number key, against 0 under an apex key. The apex is WHERE THE METRIC
+        # WAS MEASURED, so it is the only identity that means "the same corner".
+        #   Corollary, deliberate: MOVING an apex does drop that corner's bake and
+        # re-measure it. That is the curator changing the geometry, in a diff they can
+        # see -- and it means any corner they reposition self-heals its stale #73
+        # radius. Exact at the 1 dp boundary (+0.049 keeps the bake, +0.05 re-measures).
         rib_w = keep_ribbon.get("width") if isinstance(keep_ribbon, dict) else None
         rib_b = keep_ribbon.get("bank") if isinstance(keep_ribbon, dict) else None
-        geo = corner_geometry(path, dist, corners, width=rib_w, bank=rib_b)
-        prior = {str(pc.get("label") or pc.get("number")): pc
-                 for pc in (existing.get("corners") or [])}
-        for c in corners:
-            lab = str(c.get("label") or c.get("number"))
-            c.update(geo.get(lab, {}))
-            ped = prior.get(lab, {}).get("elev_delta_m")
-            if ped is not None:
-                c["elev_delta_m"] = ped
+        # corner_geometry keys its result by label, and two corners can arrive sharing
+        # one: the editor's "add corner" sends an empty label and the server fills it
+        # with a positional number an existing corner may already hold. Address the
+        # result positionally so a duplicate label cannot collapse two corners into one.
+        # (That duplicate label still gets WRITTEN -- only `number` is checked unique,
+        # at the top of this function. Separate defect, not this one's to fix.)
+        probe = [dict(c, label=str(i)) for i, c in enumerate(corners)]
+        geo = corner_geometry(path, dist, probe, width=rib_w, bank=rib_b)
+        prior = {_apex_key(pc): pc for pc in (existing.get("corners") or [])}
+        for i, c in enumerate(corners):
+            baked = prior.get(_apex_key(c), {})
+            for k in CORNER_GEOMETRY_KEYS:
+                # elev_delta_m is never in `geo` here (no pos_y on a corner/label edit),
+                # so for it this is the carry-forward it always was.
+                v = baked.get(k)
+                if not _measurable(k, v):
+                    v = geo.get(str(i), {}).get(k)
+                if v is not None:
+                    c[k] = v
 
         out = {
             "track": track_slug(track),
