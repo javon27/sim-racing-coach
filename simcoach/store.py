@@ -40,9 +40,23 @@ _LAP_TIME_TOL_S = 0.001
 # ponytail: a calibrated margin, not a derived bound. It only has to separate a post-race
 # cooldown lap (one lap, ~60-90 s, still stamped phase='race') from the next race in the
 # sitting (>= ~40 min later in the real data; the tightest genuine last-lap-to-mtime gap
-# measured is -47 s). Sim-clock fields cannot do this job: FinishTime runs from the green
-# flag while DateTime runs from session start, so ts + FinishTime undershoots the real end
-# by +122 to +2243 s. Narrow it if a cooldown stint is ever seen crossing it.
+# measured is -46.8 s, leaving 646.8 s of headroom). Sim-clock fields cannot do this job:
+# FinishTime runs from the green flag while DateTime runs from session start, so
+# ts + FinishTime undershoots the real end by +122 to +2243 s. Narrow it if a cooldown
+# stint is ever seen crossing it.
+#
+# Trusting an mtime has two failure directions, and they are not symmetric:
+#   - SAFE: an mtime rewritten BACKWARDS, or a clock that jumps forward, only makes the
+#     guard refuse more readily, which costs the grid/finish line and claims nothing.
+#   - CONFIDENT-WRONG: an mtime rewritten FORWARDS (a backup restore, a sync tool, any
+#     touch) or a clock stepped backwards disarms the guard and reinstates the stale-row
+#     bug verbatim. A forward mtime is also self-reinforcing: it fails is_ingested(), so
+#     the file re-imports and re-stamps logged_ts permanently.
+# Deliberately NOT guarded. The only bound that does not depend on the file is a sim-clock
+# one, and the FinishTime spread above is exactly why that cannot work -- a clamp would
+# reintroduce the error it was measured to have. A NULL logged_ts has the same shape and
+# also goes unguarded: it disables the check entirely, and is only reachable through a
+# save_result_session caller that omits the argument (real data is 1399/1399 stamped).
 _RACE_LOG_LAG_S = 600
 
 
@@ -1101,7 +1115,24 @@ class LapStore:
 
         Used to floor the per-lap arc on that race alone: with no result row there is no
         `race_ts` to bound it, so the arc would otherwise span every race in the sitting
-        and report an earlier race's worst position as this one's."""
+        and report an earlier race's worst position as this one's.
+
+        Known limit: the floor reaches back to the last LOGGED race, not the last race, so
+        two consecutive unlogged races would merge into one arc. Measured unreachable on
+        the real data: of 112 consecutive race pairs across 233 sittings, 110 have the
+        earlier race's log already written when the next race STARTS (median 967 s early),
+        and the two exceptions are -1 s and -0 s against the next race's start stamp --
+        while a race's first lap cannot complete for at least 67 s after that stamp (min
+        over 333 races, median 132 s). So the previous log always exists >= 66 s before the
+        next race's first lap row does, and this never merges. It matches the observed
+        behaviour that LMU writes the log when you leave the session: starting another race
+        requires leaving, which writes it.
+
+        Do NOT try to derive the boundary from lap-timestamp discontinuities instead. That
+        was measured and it does not separate: in the one real session spanning two races
+        (11 laps, ONE real boundary) a >300 s gap rule fires 6 times, because pit stops,
+        incidents and garage time produce 316-924 s gaps inside a single race while genuine
+        within-race gaps reach 2.1x the lap time. It would shred one race into many."""
         with self._lock:
             return self._linked_result_session(session_id)[1]
 
