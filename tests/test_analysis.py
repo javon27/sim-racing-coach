@@ -76,16 +76,18 @@ def test_min_grip_is_not_a_field_or_output(synthetic_lap):
 
 
 def test_corner_metrics_fields_vary_or_are_allowlisted():
-    # General regression for #43's bug CLASS, not just the one field: a raw
-    # channel that never varies (LMU's mGripFract, always flat 0.0) reached
-    # coach output as a real per-corner measurement because the only guard was
-    # isnan, and a dead-but-valid 0.0 sails through that guard. This test
-    # doesn't know the name "grip" -- it walks every numeric CornerMetrics
-    # field by reflection and demands that two corners driven with distinctly
-    # different inputs produce distinctly different values for it. A future
-    # field that comes back identical across both either isn't really wired to
-    # per-corner telemetry (the #43 shape) or is legitimately corner-invariant
-    # and belongs on ALLOWLISTED with a reason -- it can't pass silently.
+    # #43's min_grip reached coach output as a real per-corner measurement
+    # because the only guard was isnan, and LMU's channel (always flat 0.0)
+    # is non-nan. This test catches the general SHAPE of that: a per-corner
+    # derivation whose result doesn't actually depend on its per-corner input.
+    # It does NOT prove a source channel is live or dead at the game level --
+    # that needs real capture (scripts/dead_channel_sweep.py reads what LMU
+    # actually wrote). This test only walks every numeric CornerMetrics field
+    # by reflection and demands two corners driven with distinctly different
+    # inputs produce distinctly different values. A field that comes back
+    # identical either ignores its input (the bug) or this fixture doesn't
+    # exercise it differently (yet) -- fix the fixture, or allowlist it with
+    # a reason. It can't pass silently either way.
     import dataclasses
     import math
 
@@ -100,41 +102,62 @@ def test_corner_metrics_fields_vary_or_are_allowlisted():
     dist = np.linspace(0, 3000, n)
     in1 = (dist > 800) & (dist < 1200)
     in2 = (dist > 2000) & (dist < 2400)
-    after1 = (dist > 1000) & (dist < 1200)   # back-on-throttle half of corner1
-    after2 = (dist > 2200) & (dist < 2400)   # back-on-throttle half of corner2
+    # Corner1: a REAL coast -- brake released at 1000, throttle not applied
+    # until 1080, nothing in between. Corner2: brake stays on right up to (and
+    # through) the throttle application at 2200 -- full overlap, zero coast.
+    # This contrast is deliberate, not incidental: a flat/mirrored fixture here
+    # previously made trailbrake_overlap AND a future coast-distance field tie
+    # between the two corners even though neither was a dead channel -- they
+    # just weren't being driven differently. See the plan at
+    # docs/superpowers/plans/2026-09-08-engineer-grade-analysis.md for the
+    # coast_dist / apex_gear fields this sets up for (not added here -- #38).
+    brake_zone1 = (dist > 800) & (dist < 1000)
+    # 1000 <= dist < 1080 is the gap itself -- neither pedal touched, left as
+    # the default 0.0 below rather than given its own mask.
+    throttle_zone1 = (dist >= 1080) & (dist < 1200)
+    after2 = (dist > 2200) & (dist < 2400)         # corner2's throttle-on phase
 
     speed = np.full(n, 80.0)
     speed[in1], speed[in2] = 30.0, 50.0                    # different apex speeds
     brake = np.zeros(n)
-    brake[in1], brake[in2] = 0.8, 0.5                      # different peak brake
-    throttle = np.zeros(n) + 1.0
-    throttle[in1 | in2] = 0.0
-    throttle[after1 | after2] = 1.0                        # both corners exit on throttle
+    brake[brake_zone1] = 0.8                               # corner1: released before the apex
+    brake[in2] = 0.5                                       # corner2: held the whole window
+    throttle = np.zeros(n)
+    throttle[throttle_zone1] = 1.0
+    throttle[after2] = 1.0
     steer = np.zeros(n)
     steer[in1] = -0.5                                      # corner1: steering held all the way through
-    steer[in2 & ~after2] = 0.8                             # corner2: steering only the first half
+    steer[in2] = 0.8                                       # corner2: steering held all the way through
     lat_g = np.where(in1, -1.0, np.where(in2, 1.6, 0.1))   # independent, different peak per corner
     long_g = np.zeros(n)
-    long_g[in1] = -1.4
-    long_g[after1] = 0.3                                   # overwrites part of corner1 -> accel phase
-    long_g[in2] = -0.9
-    long_g[after2] = 0.6                                   # overwrites part of corner2 -> accel phase
+    long_g[brake_zone1] = -1.4
+    long_g[throttle_zone1] = 0.3
+    long_g[in2 & ~after2] = -0.9
+    long_g[after2] = 0.6
     abs_active = np.zeros(n)
-    abs_active[in1] = 1.0                                  # ABS only in corner1
+    abs_active[brake_zone1] = 1.0                          # ABS only in corner1's braking phase
     tc_active = np.zeros(n)
     tc_active[after2] = 1.0                                # TC only in corner2's exit
     track_edge = np.where(in1, 4.0, np.where(in2, 5.0, 10.0))
     path_lateral = np.where(in1, 3.8, np.where(in2, 4.0, 0.0))
-    # A raw channel shaped exactly like the real #43 bug: flat 0.0 everywhere,
+    # Different gears per corner (3rd vs 4th) -- realistic, and ready for a
+    # future apex_gear field (#38) so it won't tie the way coast_dist would
+    # have. No CornerMetrics field reads "gear" yet; this channel is unused
+    # today and costs nothing to have ready.
+    gear = np.full(n, 5.0)
+    gear[in1], gear[in2] = 3.0, 4.0
+    # A raw channel shaped like LMU's real mGripFract: flat 0.0 everywhere,
     # never responding to the very different braking/steering above. Captured
-    # (real capture keeps sampling it), but must never surface as a measurement.
+    # (real capture keeps sampling it, see smm.py), but must never surface as
+    # a measurement -- this is the regression for #43 specifically, not what
+    # the loop below is generally checking for (see the assertion message).
     dead = np.zeros(n)
 
     ch = {
         "lap_distance": dist, "speed": speed, "brake": brake, "throttle": throttle,
         "steering": steer, "lat_g": lat_g, "long_g": long_g,
         "abs_active": abs_active, "tc_active": tc_active,
-        "track_edge": track_edge, "path_lateral": path_lateral,
+        "track_edge": track_edge, "path_lateral": path_lateral, "gear": gear,
     }
     for w in ("fl", "fr", "rl", "rr"):
         ch[f"grip_{w}"] = dead
@@ -143,10 +166,11 @@ def test_corner_metrics_fields_vary_or_are_allowlisted():
     corners = analyze_lap(lap, cmap).corners
     assert len(corners) == 2
 
-    # Bookkeeping fields that are legitimately the same shape regardless of
-    # driving: min_spd_delta is None unless a reference lap is supplied (not
-    # exercised here), so it's filtered out below as non-numeric already --
-    # listed for documentation, not because the filter needs it.
+    # Fields that are legitimately the same regardless of driving belong here,
+    # WITH A REASON, instead of being silently skipped. min_spd_delta is None
+    # unless a reference lap is supplied (not exercised here) and is already
+    # filtered out below as non-numeric, so nothing needs listing today --
+    # this set exists for the next field that's a genuine tie, not a bug.
     ALLOWLISTED: set[str] = set()
 
     checked = 0
@@ -161,9 +185,14 @@ def test_corner_metrics_fields_vary_or_are_allowlisted():
                              and math.isnan(v1) and math.isnan(v2))
         assert not same, (
             f"CornerMetrics.{f.name} is identical ({v1!r}) across two corners "
-            "driven with deliberately different inputs -- looks like a "
-            "dead/unwired channel reaching coach output as a fake measurement "
-            "(the #43 bug shape), or it belongs on ALLOWLISTED with a reason."
+            "driven with deliberately different inputs. Two explanations, not "
+            "one: either its derivation ignores its per-corner input (the bug "
+            "this test hunts for), or this fixture just doesn't exercise it "
+            "differently yet. This test does NOT prove the source channel "
+            "itself is live -- for that see scripts/dead_channel_sweep.py, "
+            "which reads what the game actually wrote. Fix the fixture to "
+            "exercise the field if it should vary, or add it to ALLOWLISTED "
+            "with a reason if it's genuinely corner-invariant."
         )
     assert checked >= 10  # sanity: this actually exercised most numeric fields
 
