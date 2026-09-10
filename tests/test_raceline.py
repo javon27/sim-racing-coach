@@ -228,6 +228,31 @@ def test_bank_without_turn_sign_is_refused_not_guessed():
         speed_profile(line, 1.5, 9.81, 14.0, 9.0, bank=np.full(len(line), 0.1))
 
 
+def test_a_flat_bank_needs_no_turn_sign_and_reads_as_bank_none():
+    """The guard must not reject "flat, expressed as data" -- a shape this repo
+    really produces (ribbon.reconstruct_ribbon zeroes bank when the capture has no
+    elevation channel; its _round maps non-finite to 0.0). tan(0) * anything == 0,
+    so the sign provably cannot matter and there is nothing to decide. But ONE
+    non-zero station is signal, and signal still has to be signed -- otherwise the
+    exemption would quietly become the missing default that #63 was."""
+    left, right = _annulus()
+    _, line = min_curvature_line(left, right, iterations=2000)
+    v_none, _ = speed_profile(line, 1.5, 9.81, 14.0, 9.0)
+
+    v_zeros, _ = speed_profile(line, 1.5, 9.81, 14.0, 9.0, bank=np.zeros(len(line)))
+    assert np.array_equal(v_none, v_zeros)            # identical, not merely close
+    # all-non-finite says the same thing ("no elevation data"), and must not poison
+    # the profile with NaN either
+    v_nan, _ = speed_profile(line, 1.5, 9.81, 14.0, 9.0,
+                             bank=np.full(len(line), np.nan))
+    assert np.array_equal(v_none, v_nan)
+
+    one_real_station = np.zeros(len(line))
+    one_real_station[5] = np.radians(3.0)
+    with pytest.raises(ValueError, match="turn_sign"):
+        speed_profile(line, 1.5, 9.81, 14.0, 9.0, bank=one_real_station)
+
+
 def test_telem_calibration_raises_corner_speed_cap():
     left, right, _ = _stadium_edges()
     base = solve_corners(left, right)  # defaults: mu = 1.5
