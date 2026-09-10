@@ -431,3 +431,112 @@ def geometry_clause(metrics: dict, direction: str | None) -> str:
         camber = "banked" if favours == direction else "off-camber"
         parts.append(f"{abs(bk):.0f}\N{DEGREE SIGN} {camber}")
     return ", ".join(parts)
+
+
+# --- Driver-input traces (UI: Pit Wall graphs, issue #21) ---------------------
+#
+# The two source structs run at DIFFERENT rates: throttle/brake/steering come from
+# the telemetry struct at ~48.6 Hz, `lap_distance` from the scoring struct at ~5 Hz.
+# So the stored lap_distance channel is a STAIRCASE -- roughly ten identical values,
+# then a jump. Plotting inputs straight against it collapses ~10 input samples onto
+# one x and draws visible stair steps that hide the modulation the graph exists to
+# show.
+#
+# Fix, part 1: treat the FIRST sample of each held run as a knot (that is when the
+# scoring value became visible) and linearly interpolate lap_distance across the
+# samples in between, using the sample index as a uniform-time axis. smm.py polls
+# both structs on one loop iteration, so first-of-run is late by 0-20 ms (<=1.1 m at
+# 200 km/h), not by a whole tick; assuming constant speed between knots costs <=8 cm
+# under 1.5 g. The lag is shared by every lap, so overlaid laps stay aligned -- and
+# the lap-distance axis (the repo's alignment key) is preserved rather than swapped
+# for a time axis.
+#
+# Fix, part 2: reduce with a per-bin min/max ENVELOPE, never a point sample. 500
+# bins puts one bin at 180 ms (5 km lap) to 400 ms (Le Mans) -- AT OR COARSER than
+# the 200 ms scoring tick part 1 exists to see inside -- so point-sampling the grid
+# drops a 0.1 s lift at 9 of 10 phases, worse than the naive scoring-rate resample.
+# The envelope keeps both extremes of each bin, so no input event can fall between
+# grid points, at any phase. Raising `bins` narrows the bins but does not remove
+# the aliasing; the envelope does.
+_INPUT_CHANNELS = ("throttle", "brake", "steering")
+
+
+def input_traces(record: LapRecord, bins: int = 500) -> dict:
+    """Throttle/brake/steering resampled onto a uniform lap_distance grid.
+
+    Pure and deterministic; UI-facing only (never fed to the model). Returns
+    ``{"length", "dist", "throttle", "brake", "steering"}`` where `dist` is the
+    `bins` bin centres and each channel is ``{"lo": [...], "hi": [...]}`` — the
+    min/max of the samples in each bin. Returns ``{}`` when the lap lacks a
+    channel or is too short.
+
+    `bins` bounds the payload: a full lap at 48.6 Hz is 4k-10k samples per channel.
+    """
+    ch = record.channels
+    if not all(k in ch for k in ("lap_distance", *_INPUT_CHANNELS)):
+        return {}
+    arrays = {k: np.asarray(ch[k], dtype=float) for k in ("lap_distance", *_INPUT_CHANNELS)}
+    n = min(len(a) for a in arrays.values())
+    if n < 2:
+        return {}
+    arrays = {k: a[:n] for k, a in arrays.items()}
+
+    mask = np.ones(n, dtype=bool)
+    for a in arrays.values():
+        mask &= np.isfinite(a)
+    keep = np.flatnonzero(mask)
+    if keep.size < 2:
+        return {}
+    d = arrays["lap_distance"][keep]
+
+    # Knots = first sample of each held run, in ORIGINAL sample numbering (so the
+    # index axis stays a uniform-time axis even after dropping non-finite samples).
+    run_start = np.r_[True, np.diff(d) != 0]
+    ki, kd = keep[run_start], d[run_start]
+    # Keep only knots that beat the RUNNING MAXIMUM. Comparing each knot to its
+    # immediate predecessor is not enough: after a backward step (a wrap, a scoring
+    # glitch) the next knot passes as long as it beats the DIPPED value, leaving the
+    # axis non-monotonic -- and np.interp returns garbage on an unsorted xp without
+    # raising. This guarantees the strictly-increasing xp/fp pair np.interp needs.
+    forward = np.r_[True, kd[1:] > np.maximum.accumulate(kd)[:-1]]
+    ki, kd = ki[forward], kd[forward]
+    if ki.size < 2:
+        return {}
+    # The trailing partial run has no next knot to interpolate toward; extend it at
+    # the last observed rate so the final ~0.2 s isn't clamped flat.
+    if ki[-1] < keep[-1]:
+        rate = (kd[-1] - kd[-2]) / (ki[-1] - ki[-2])
+        kd = np.append(kd, kd[-1] + rate * (keep[-1] - ki[-1]))
+        ki = np.append(ki, keep[-1])
+
+    dist = np.interp(keep, ki, kd)
+
+    # Per-bin min/max ENVELOPE, not point-sampling. At 500 bins one bin spans
+    # 180 ms (5 km lap) to 400 ms (Le Mans) -- at or COARSER than the 200 ms
+    # scoring tick the de-staircasing above exists to see inside. Point-sampling
+    # the grid drops any event narrower than a bin whenever it lands between two
+    # grid points, which at Le Mans loses a 0.1 s lift more often than the naive
+    # scoring-rate resample does. Taking each bin's extremes instead means a stab
+    # or a lift cannot vanish at any phase; the chart draws the band.
+    edges = np.linspace(float(dist[0]), float(dist[-1]), bins + 1)
+    centres = (edges[:-1] + edges[1:]) / 2.0
+    idx = np.clip(np.searchsorted(edges, dist, side="right") - 1, 0, bins - 1)
+    empty = np.bincount(idx, minlength=bins) == 0
+
+    out: dict = {"length": round(float(dist[-1]), 1),
+                 "dist": [round(float(v), 1) for v in centres]}
+    for k in _INPUT_CHANNELS:
+        v = arrays[k][keep]
+        lo = np.full(bins, np.inf)
+        hi = np.full(bins, -np.inf)
+        np.minimum.at(lo, idx, v)
+        np.maximum.at(hi, idx, v)
+        if empty.any():
+            # Bins finer than the sample spacing hold nothing; interpolate them so
+            # the chart has no holes.
+            pt = np.interp(centres, dist, v)
+            lo = np.where(empty, pt, lo)
+            hi = np.where(empty, pt, hi)
+        out[k] = {"lo": [round(float(x), 3) for x in lo],
+                  "hi": [round(float(x), 3) for x in hi]}
+    return out

@@ -23,7 +23,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from .. import config, logging_setup, paths, secrets
-from ..analysis import analyze_lap, corner_geometry, geometry_clause
+from ..analysis import analyze_lap, corner_geometry, geometry_clause, input_traces
 from ..car_lookup import resolve_car
 from ..car_notes import load_car_notes, load_setup_concepts
 from ..coach_tools import CoachContext
@@ -660,6 +660,39 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                  "track_name": _track_file_data(track).get("name") or track}
         return m
 
+    @app.get("/track/inputs")
+    def track_inputs():
+        # Driver-input traces (throttle/brake/steering) for the Pit Wall graphs (#21):
+        # the LAST completed lap and the current track/car BEST, both resampled onto
+        # the same uniform lap_distance grid so they overlay directly.
+        #
+        # UI-ONLY. This is raw ~50 Hz telemetry, downsampled here in the sidecar (not
+        # in the Svelte component) and returned to the chart. It never enters a coach
+        # prompt -- the model only ever sees the per-corner summary.
+        #
+        # Keyed on the LIVE track like /track/map: a practice session has no completed
+        # lap_id to route through /laps/{id}/..., and `status()` already owns the
+        # "latest capture still matches the live session" staleness check.
+        st = status()
+        if not st["track"]:
+            return {"last": None, "best": None}
+        latest = app.state.latest if st["lap_id"] is not None else None
+
+        def _trace(rec, lap_id):
+            tr = input_traces(rec)
+            if not tr:
+                return None  # imported/result-log lap: no channels to draw
+            return {**tr, "lap_id": lap_id, "lap_time": rec.lap_time}
+
+        last = _trace(latest["record"], st["lap_id"]) if latest else None
+        best_rec = store.best_lap(st["track"], st["car"])
+        # `best_lap` returns a record, not its id, so identity is by capture timestamp
+        # (unique per lap). Same lap -> don't draw the identical trace twice.
+        same = (latest is not None and best_rec is not None
+                and best_rec.timestamp == latest["record"].timestamp)
+        best = None if (best_rec is None or same) else _trace(best_rec, None)
+        return {"last": last, "best": best}
+
     @app.get("/tracks/{slug}/map")
     def track_map_by_slug(slug: str):
         # The track's canonical map keyed on its slug -- for the Tracks screen, which
@@ -1099,11 +1132,12 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         keys = ("number", "label", "name", "direction", "start_dist", "apex_dist",
                 "end_dist", "apexes")
         corners = [{k: c[k] for k in keys if k in c} for c in rib["corners"]]
+        existing = _track_file_data(track)
         out = {
             "track": track_slug(track),
             # Display name from the session (the live track), unless a custom name was
             # already set — so a saved layout carries its track name.
-            "name": _track_file_data(track).get("name") or track,
+            "name": existing.get("name") or track,
             "corners": corners,
             "ribbon": {k: world[k] for k in ("left", "right", "center", "width", "bank")},
             "path": world["center"],
@@ -1113,6 +1147,22 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             "length": world["dist"][-1] if world["dist"] else 0.0,
             "rotation": _track_rotation(track),  # preserve any existing rotation
         }
+        # _write_track_json REPLACES the file, so the authored notes overlay has to be
+        # carried forward here too -- same owner, same rule, as the editor's save.
+        #
+        # EXCEPT on a corner-less rebuild. A thin capture can yield zero solver corners
+        # and this route still has a job to do (it exists to persist the reconstructed
+        # SURFACE; corners are a first-pass bonus -- see
+        # test_mapcapture_save_writes_track_json). Zero new corners cannot rebind a note
+        # to the wrong corner, so the count-change rule has nothing to protect against
+        # and dropping every per-corner note would be pure loss. Carry the overlay
+        # verbatim instead. _persist_map never reaches this -- it 422s on an empty list.
+        carried = (guard_corner_notes(track_slug(track), existing.get("notes"),
+                                     len(existing.get("corners") or []),
+                                     [str(c.get("label") or c.get("number")) for c in corners])
+                   if corners else existing.get("notes"))
+        if carried:
+            out["notes"] = carried
         _write_track_json(track, out)
         # Persist the raw point cloud (app-data, not the repo tracks dir) so the
         # ribbon can be rebuilt after algorithm changes with no re-drive.

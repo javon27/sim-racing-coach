@@ -4,14 +4,18 @@
   import TrackMap from "./TrackMap.svelte";
   import LiveTower from "./LiveTower.svelte";
   import SectorDeltas from "./SectorDeltas.svelte";
+  import InputTraces from "./InputTraces.svelte";
   import { liveField } from "./live";
-  import { getCurrentMap, type TrackMap as TrackMapData } from "./api";
+  import { getCurrentMap, getInputTraces, type InputTraces as InputTraceData,
+           type TrackMap as TrackMapData } from "./api";
 
   // Shared app-lifetime feed (started in App); we only subscribe — never start/stop
   // it — so it keeps streaming while other views are open.
   let snapshot = $state(liveField.snapshot);
   let trackMap: TrackMapData | null = $state(null);
+  let traces: InputTraceData | null = $state(null);
   let mapTimer: ReturnType<typeof setInterval> | undefined;
+  let tracedLap: number | null | undefined; // undefined = not fetched yet
 
   const unsub = liveField.subscribe((v) => { snapshot = v.snapshot; });
 
@@ -24,6 +28,23 @@
       if ((next?.track_name ?? null) !== (trackMap?.track_name ?? null)) trackMap = next;
     } catch { /* keep last */ }
   }
+
+  async function loadTraces() {
+    try { traces = await getInputTraces(); } catch { /* keep last */ }
+  }
+
+  // The input graphs only change when a lap COMPLETES, so refetch on the lap
+  // counter rather than on the 2 s map timer — the traces are ~40 KB and redrawing
+  // them every 2 s would be pure churn.
+  // ponytail: the capture can commit a moment after the counter ticks, so a trace
+  // may be one lap behind until the next lap. Poll /status's lap_id if that ever
+  // shows at the rig.
+  $effect(() => {
+    const lap = snapshot?.session.current_lap ?? null;
+    if (lap === tracedLap) return;
+    tracedLap = lap;
+    loadTraces();
+  });
 
   onMount(() => {
     pollMap();
@@ -82,6 +103,10 @@
     {:else}
       <div class="waiting">Waiting for LMU — get on track to see the field.</div>
     {/if}
+    <div class="inputs">
+      <h2>Driver inputs</h2>
+      <InputTraces {traces} />
+    </div>
   </div>
   <LiveTower snapshot={snapshot ?? null} />
 </div>
@@ -89,13 +114,18 @@
 <style>
   /* Left: lap/sector strip (sized to content) over the map. Right: live timing. */
   .pit { height: 100%; min-height: 0; display: grid; grid-template-columns: 1fr 380px; }
-  .trackview { min-height: 0; display: grid; grid-template-rows: auto 1fr; }
+  .trackview { min-height: 0; display: grid; grid-template-rows: auto 1fr auto; }
   .laplist { padding: 12px 20px; display: flex; flex-direction: column; gap: 10px; }
   .tv-h { display: flex; align-items: center; gap: 12px; }
   .live-dot { font-size: 10px; letter-spacing: .1em; font-weight: 700; color: var(--faint); }
   .live-dot.on { color: var(--bad); }
   .lapc { margin-left: auto; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .map { min-height: 0; }
+  .inputs { padding: 8px 20px 12px; border-top: 1px solid var(--line); }
+  .inputs h2 {
+    margin: 0 0 6px; font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--faint); font-weight: 700;
+  }
   .waiting { display: grid; place-items: center; color: var(--faint); font-size: 13px; text-align: center; }
   @media (max-width: 820px) { .pit { grid-template-columns: 1fr; } }
 </style>

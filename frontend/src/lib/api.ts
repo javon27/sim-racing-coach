@@ -374,6 +374,38 @@ export interface RibbonPreview {
   track_name?: string; // session track name, shown in the header + saved with the layout
 }
 
+// Driver-input traces for the Pit Wall graphs (#21). Already resampled onto a
+// uniform lap_distance grid and reduced to 500 bins by the sidecar — this client
+// only fetches, the component only draws.
+//
+// Each channel is a per-bin min/max ENVELOPE, not a point sample: one bin spans
+// 180-400 ms, at or coarser than the game's 200 ms scoring tick, so a point
+// sample would drop a stab or a lift depending on where it fell. `dist` holds
+// the bin centres.
+export interface InputBand {
+  lo: number[];
+  hi: number[];
+}
+
+export interface InputTrace {
+  lap_id: number | null;
+  lap_time: number;
+  length: number;
+  dist: number[];
+  throttle: InputBand;
+  brake: InputBand;
+  steering: InputBand;
+}
+
+export interface InputTraces {
+  last: InputTrace | null;
+  best: InputTrace | null; // null when the last lap IS the best (nothing to compare)
+}
+
+export function getInputTraces(): Promise<InputTraces> {
+  return request<InputTraces>("/track/inputs");
+}
+
 export function startMapCapture(): Promise<{ active: boolean }> {
   // Body required so the browser preflights (CSRF guard on the mutating route).
   return request<{ active: boolean }>("/mapcapture/start", {
@@ -406,12 +438,17 @@ export function buildRibbon(): Promise<RibbonPreview> {
 }
 
 // Re-reconstruct from the track's SAVED raw capture (no active capture / re-drive).
-// Pass the edited lap so the SELECTED session's track is rebuilt, not the live sim's.
-export function rebuildFromCapture(lapId?: number | null): Promise<RibbonPreview> {
+// Bind the target explicitly: the edited lap (Sessions) or the track slug (Tracks
+// screen, which has no driven lap). With NEITHER, the sidecar falls back to the
+// live sim or the newest saved capture — i.e. it would rebuild a different track's
+// geometry over the one on screen (#26). Slug wins server-side, same priority.
+export function rebuildFromCapture(lapId?: number | null,
+                                   slug?: string | null): Promise<RibbonPreview> {
+  const target = slug ? { slug } : lapId != null ? { lap_id: lapId } : {};
   return request<RibbonPreview>("/mapcapture/rebuild", {
     method: "POST",
     headers: JSON_HEADERS,
-    body: JSON.stringify(lapId != null ? { lap_id: lapId } : {}),
+    body: JSON.stringify(target),
   });
 }
 
