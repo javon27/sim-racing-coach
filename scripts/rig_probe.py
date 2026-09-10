@@ -4,8 +4,11 @@ Run this at the rig instead of guessing from a captured .npz. It answers six
 open questions in a single lap, all of which are currently unresolvable offline
 because the conflict is between LMU's header and our own code:
 
-  #43  mGripFract  -- is 1.0 full grip or full slip? Our "min grip" line may be
-                     INVERTED. Fails silently: both readings look plausible.
+  #43  mGripFract  -- SETTLED at the rig (2026-09-09): never populated by LMU.
+                     Flat 0.0 across 4479 frames (hard braking + a deliberate
+                     slide) and 173/173 stored laps, 5 cars. Not inverted --
+                     dead. The "min grip" output line is removed; don't go
+                     looking for a grip signal here, there isn't one.
   #46  mWear       -- the header says fraction WORN, our code says remaining.
                      Also fails silently.
   #44  mBrakeTemp  -- Kelvin or Celsius? mTemperature is documented Kelvin and
@@ -188,16 +191,19 @@ def main(argv: list[str] | None = None) -> int:
     for k, val in garage.items():
         print(f"  {k:<14} {val}")
 
-    print("\n--- #43  mGripFract: which end is grip? ---")
+    print("\n--- #43  mGripFract: SETTLED -- LMU never populates it (flat 0.0 ---")
+    print("--- across 173/173 stored laps, 5 cars); no 'min grip' output exists anymore ---")
     for w in WHEELS:
         print(f"  grip_{w:<3} {seen[f'grip_{w}']}")
     g = [seen[f"grip_{w}"] for w in WHEELS if seen[f"grip_{w}"].n]
     if g:
         lo, hi = min(x.lo for x in g), max(x.hi for x in g)
         print(f"  range across all wheels: {lo:.4f} .. {hi:.4f}")
-        print("  READ: if this sits near 1.0 and DIPS when you slid, 1.0 = full grip")
-        print("        and our 'min grip' line is correct. If it sits near 0.0 and")
-        print("        RISES when you slid, it is a slip fraction and we are INVERTED.")
+        if hi == 0.0 and lo == 0.0:
+            print("  confirms the settled finding: still flat 0.0, nothing to read.")
+        else:
+            print("  UNEXPECTED: non-zero after the #43 finding -- a future LMU build")
+            print("  may have started populating this. Worth re-opening #43 if so.")
 
     print("\n--- #46  mWear: worn, or remaining? ---")
     for w in WHEELS:

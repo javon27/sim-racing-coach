@@ -7,6 +7,30 @@ import pytest
 from simcoach.model_types import LapRecord
 
 
+def test_corner_metrics_persist_a_missing_brake_and_throttle_point_as_null(
+    tmp_path, synthetic_lap
+):
+    """brake_point/throttle_point are None for a corner taken flat. That has to reach
+    SQLite as NULL -- a write that rejected it would lose the whole lap at the rig."""
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap
+    from simcoach.store import LapStore
+
+    ch = dict(synthetic_lap.channels)
+    ch["brake"] = np.zeros_like(ch["lap_distance"])
+    ch["throttle"] = np.full_like(ch["lap_distance"], 0.6)
+    flat = LapRecord(**{**synthetic_lap.__dict__, "channels": ch})
+    metrics = analyze_lap(flat, CornerMap.load("simcoach/tracks/test_track.json")).corners
+    assert metrics[0].brake_point is None and metrics[0].throttle_point is None
+
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    lid = s.save(flat, metrics=metrics)
+    rows = s.conn.execute(
+        "SELECT brake_point, throttle_point FROM corner_metrics WHERE lap_id = ?", (lid,)
+    ).fetchall()
+    assert rows and all(r[0] is None and r[1] is None for r in rows)
+
+
 def test_save_load_and_best(tmp_path, synthetic_lap):
     from simcoach.store import LapStore
     s = LapStore(str(tmp_path/"c.sqlite"), str(tmp_path/"data"))

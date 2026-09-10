@@ -55,12 +55,11 @@ export interface CornerMetrics {
   apex_spd: number;
   min_spd: number;
   exit_spd: number;
-  brake_point: number;
-  throttle_point: number;
+  brake_point: number | null;      // null = never braked in this corner (may be < 0: see #7)
+  throttle_point: number | null;   // null = never past the throttle gate in this corner
   trailbrake_overlap: number;
   peak_brake: number;
   peak_lat_g: number;
-  min_grip: number | null;
   peak_brake_g: number | null;
   peak_accel_g: number | null;
   peak_steer: number | null;

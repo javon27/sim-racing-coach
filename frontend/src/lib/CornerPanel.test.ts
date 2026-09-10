@@ -22,7 +22,12 @@ const cornerFixture = {
   trailbrake_overlap: 0.12,
   peak_brake: 0.9,
   peak_lat_g: 1.4,
-  min_grip: null,
+  peak_brake_g: null,
+  peak_accel_g: null,
+  peak_steer: null,
+  abs_pct: null,
+  tc_pct: null,
+  track_edge_min: null,
   min_spd_delta: 0.9,
 };
 
@@ -58,6 +63,22 @@ describe("CornerPanel", () => {
     // not the raw distance from start/finish (1980m).
     expect(screen.getByText("10m")).toBeTruthy();
     expect(screen.queryByText("1980m")).toBeNull();
+  });
+
+  it("renders an em dash, not a number, when there is no brake point", async () => {
+    // brake_point null = the driver never braked here. `apex_dist - null` is
+    // apex_dist in JS, so a guard on the SUBTRACTION being positive would print the
+    // apex distance as if it were a brake figure.
+    vi.mocked(getLapAnalysis).mockResolvedValue({
+      lap_time: 216.0,
+      corners: [{ ...cornerFixture, brake_point: null }],
+    });
+
+    render(CornerPanel, { props: { lapId: 9 } });
+
+    expect(await screen.findByText(/T4 Mulsanne Corner/)).toBeTruthy();
+    expect(screen.getByText("—")).toBeTruthy();
+    expect(screen.queryByText("1990m")).toBeNull();
   });
 
   it("renders a left-turn arrow and a red delta for a negative (slower) min_spd_delta", async () => {
