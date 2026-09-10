@@ -45,7 +45,7 @@ def _session_base(sid: str) -> str:
     """The (track, car, mode) base of a session id, dropping any ~<instance> suffix."""
     return sid.split(_SESSION_SEP, 1)[0]
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
@@ -296,8 +296,8 @@ class LapStore:
                             _add_column(self.conn, "coach_chat", f"{col} INTEGER")
                     if "model" not in cols:
                         _add_column(self.conn, "coach_chat", "model TEXT")
-            if current_version < 13:
-                # v12 -> v13: give race_sessions the GRID position the race started from
+            if current_version < 14:
+                # v12 -> v14: give race_sessions the GRID position the race started from
                 # (parsed from the result log but previously dropped -- without it the
                 # coach read its first captured lap as the start, issue #67) AND its own
                 # session identity. The identity columns matter because the row is keyed
@@ -305,6 +305,12 @@ class LapStore:
                 # only way to find it from a live session was to join through `laps`,
                 # which result-lap dedupe and clear_all both empty. Guard the ADD COLUMNs
                 # on the table existing, like the v6/v9 steps.
+                #
+                # This step is numbered 14, not 13, because an interim unreleased build
+                # stamped 13 after adding only the two grid columns. A `< 13` gate would
+                # skip such a db entirely and then crash on every read of race_sessions
+                # ("no such column: track") rather than degrade. The ADD COLUMN loop is
+                # idempotent, so re-running it over the grid columns costs nothing.
                 cols = [r[1] for r in self.conn.execute("PRAGMA table_info(race_sessions)")]
                 if cols:
                     for c, t in (("grid_position", "INTEGER"), ("class_grid_position", "INTEGER"),
@@ -913,7 +919,15 @@ class LapStore:
         sitting, so a plain (track, car, phase, window) scope let session 2's laps
         dedupe against session 1's rows and silently dropped real laps (379 of 7066 on
         a fresh import of 1402 real logs). Only live rows and this same file's rows can
-        legitimately already hold a lap this file lists."""
+        legitimately already hold a lap this file lists.
+
+        Known limit: the `source = 'live'` half is still scoped to the WINDOW, not to one
+        live session, so a live lap from a neighbouring stint can absorb this file's lap.
+        Unreachable today -- a timed match needs a sub-millisecond coincidence across
+        stints, and an untimed one needs a live lap with a NULL lap_time, which capture
+        cannot produce (LapRecord.lap_time is a float; 0 of 173 live rows are NULL). It
+        goes live the day capture records an unfinished lap, and the fix then is to scope
+        this half to the live session the result's window actually overlaps."""
         query = ("SELECT lap_time FROM laps WHERE track IS ? AND car IS ? AND phase IS ? "
                  "AND (source = 'live' OR session_id = ?)")
         params: list = [rs.track, rs.car, rs.session_type, session_id]
@@ -995,12 +1009,18 @@ class LapStore:
         Scope rules, each guarding a way to attach the wrong race:
         - Only a live session with RACE laps resolves; a practice-only session must not
           inherit the sitting's race result.
-        - NEAREST result to the first captured race lap, not the newest -- a live stint
-          that is race 1 must not be handed race 2's outcome.
+        - NEAREST result to the LAST captured race lap. Anchoring on the first would
+          always answer with race 1 of a sitting: a session instance deliberately spans
+          a 6 h gap, so both races share one session_id and `ABS(ts - first)` can never
+          reach race 2. The coach's session is always the current one, so the most
+          recent race is the right default -- and `race_ts`/`next_race_ts` then bound
+          the arc to that race rather than to the sitting.
         - Mode must match. One online race in the window would otherwise answer for both
           `t--c--online` and `t--c--offline`, so an offline session would report a grid
           slot and a finish it never drove. Rows ingested before mode existed carry NULL
-          and are still allowed, but always lose to an exact-mode match."""
+          and are still allowed, but always lose to an exact-mode match.
+        - Ties are broken by newest ts, then session_id, so two equidistant results
+          resolve by contract instead of by scan order."""
         row = self.conn.execute(
             "SELECT track, car, MIN(ts), MAX(ts) FROM laps "
             "WHERE session_id = ? AND source = 'live' AND phase = 'race'",
@@ -1015,12 +1035,12 @@ class LapStore:
         query = ("SELECT session_id FROM race_sessions WHERE phase = 'race' "
                  "AND track IS ? AND car IS ? AND ts IS NOT NULL AND ts BETWEEN ? AND ?")
         params: list = [track, car, first - _SESSION_GAP_S, last + _SESSION_GAP_S]
-        order = "ORDER BY ABS(ts - ?) LIMIT 1"
+        order = "ORDER BY ABS(ts - ?), ts DESC, session_id LIMIT 1"
         if mode is not None:
             query += " AND (mode IS NULL OR mode = ?)"
             params.append(mode)
-            order = "ORDER BY (mode IS NULL), ABS(ts - ?) LIMIT 1"
-        hit = self.conn.execute(f"{query} {order}", params + [first]).fetchone()
+            order = "ORDER BY (mode IS NULL), ABS(ts - ?), ts DESC, session_id LIMIT 1"
+        hit = self.conn.execute(f"{query} {order}", params + [last]).fetchone()
         return hit[0] if hit is not None else None
 
     def race_session(self, session_id: str) -> dict | None:

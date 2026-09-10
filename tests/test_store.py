@@ -774,6 +774,30 @@ def test_v12_schema_migrates_grid_and_identity_columns_to_v13(tmp_path):
     LapStore(db, str(tmp_path / "telem"))   # dup-safe on a 2nd open
 
 
+def test_a_db_stamped_13_still_gets_the_identity_columns(tmp_path):
+    """An interim unreleased build stamped user_version 13 after adding only the two
+    grid columns. Such a db must still pick up track/car/phase/ts/mode -- a `< 13` gate
+    would skip it and then crash on every race_sessions read, not degrade."""
+    from simcoach.store import LapStore
+    db = str(tmp_path / "c.sqlite")
+    s = LapStore(db, str(tmp_path / "telem"))
+    s.conn.execute("DROP TABLE race_sessions")
+    s.conn.execute(                       # the interim v13 shape: grid columns only
+        "CREATE TABLE race_sessions (session_id TEXT PRIMARY KEY, position INTEGER, "
+        "class_position INTEGER, finish_status TEXT, incidents TEXT, penalties TEXT, "
+        "grid_position INTEGER, class_grid_position INTEGER)")
+    s.conn.execute(
+        "INSERT INTO race_sessions VALUES ('mid', 18, 18, 'Finished', '[]', '[]', 9, 9)")
+    s.conn.execute("PRAGMA user_version = 13")
+    s.conn.commit(); s.conn.close()
+
+    s2 = LapStore(db, str(tmp_path / "telem"))
+    assert {"track", "car", "phase", "ts", "mode"} <= {
+        r[1] for r in s2.conn.execute("PRAGMA table_info(race_sessions)")}
+    rr = s2.race_session("mid")           # would raise "no such column: track" unfixed
+    assert (rr["grid_position"], rr["position"]) == (9, 18)
+
+
 def test_race_session_none_when_absent(tmp_path):
     from simcoach.store import LapStore
     s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
@@ -986,6 +1010,59 @@ def test_race_session_link_picks_the_nearest_race_not_the_newest(tmp_path, synth
     assert (rr["grid_position"], rr["position"]) == (9, 18)
     assert rr["race_ts"] == _RACE_TS
     assert rr["next_race_ts"] == _RACE_TS + 7200   # bounds the arc to race 1
+
+
+def test_race_session_link_answers_with_the_race_just_finished(tmp_path, synthetic_lap):
+    """Both races of a sitting share ONE session_id -- that is what a session instance
+    is, a 6 h window. So anchoring the nearest-match on the first captured race lap can
+    never reach race 2, and the coach would report race 1's grid and finish after
+    race 2. Reproduced on the real db: a Monza session holding 11 race laps across two
+    races resolved to race 1 (P23 -> P34) with the arc bounded to 5 of its 11 laps.
+
+    The coach's session is always the current one, so the most recent race wins."""
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    _capture_live_race(s, synthetic_lap)                                   # race 1: P18s
+    _capture_live_race(s, synthetic_lap, times=[59.5, 59.6], places=[1, 3],
+                       t0=_RACE_TS + 7200 + 167.0)                         # race 2: P1->P3
+    assert len(s.session_lap_ids(_LIVE_SID)) == 11, "one session id spans both races"
+
+    s.save_result_session(_silverstone_result(times=_RESULT_TIMES_ALL_TIMED),
+                          session_id=_RESULT_SID)
+    s.save_result_session(
+        _silverstone_result(times=[59.5, 59.6], date_ts=_RACE_TS + 7200,
+                            position=3, class_position=3, grid_position=1,
+                            class_grid_position=1, incidents=[]),
+        session_id="2026_09_10_02_39_07-16R2")
+
+    rr = s.race_session(_LIVE_SID)
+    assert (rr["grid_position"], rr["position"]) == (1, 3), "race 2, not race 1"
+    assert rr["race_ts"] == _RACE_TS + 7200
+    assert rr["next_race_ts"] is None
+    # and the arc that window bounds covers race 2's two laps only
+    arc = s.session_position_arc(_LIVE_SID, phase="race", since=rr["race_ts"],
+                                 until=rr["next_race_ts"])
+    assert arc == {"start": 1, "best": 1, "worst": 3, "last": 3, "laps": 2}
+
+
+def test_race_session_link_breaks_an_exact_tie_by_newest(tmp_path, synthetic_lap):
+    """Two results equidistant from the last captured lap resolve by contract (newest
+    ts, then session_id) rather than by scan order. NOTE: this pins the intended
+    behaviour, but removing the tiebreaker does not reliably red it -- SQLite's order
+    for a tie is unspecified, so it may still return the same row by luck."""
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    _capture_live_race(s, synthetic_lap, times=_LIVE_TIMES[:1], places=[18],
+                       t0=_RACE_TS + 3600.0)
+    for offset, sid, pos in ((-3600, "older-R1", 34), (+3600, "newer-R2", 12)):
+        s.save_result_session(
+            _silverstone_result(times=[70.0 + offset / 1e6], date_ts=_RACE_TS + 3600 + offset,
+                                position=pos, class_position=pos, grid_position=5,
+                                class_grid_position=5, incidents=[]),
+            session_id=sid)
+
+    assert s._linked_result_session(_LIVE_SID) == "newer-R2"
+    assert s.race_session(_LIVE_SID)["position"] == 12
 
 
 def test_race_session_link_refuses_a_practice_only_session(tmp_path, synthetic_lap):
