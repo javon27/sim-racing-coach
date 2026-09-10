@@ -993,6 +993,79 @@ def test_mapcapture_rebuild_corrupt_capture_is_422(tmp_path):
     assert c.post("/mapcapture/rebuild", json={}).status_code == 422  # clean 422, not 500
 
 
+# --- rebuild falls back to a track's own live laps (#69) --------------------------------
+# captures/<slug>.npz is written only by a mapping capture, so a track driven normally --
+# 27 live laps of Silverstone National, point clouds on disk -- had no rebuildable cloud
+# and 422'd with nothing to do but re-drive boundary passes. The per-lap .npz always
+# carried pos_x/pos_z/lap_distance; only this path never read them.
+
+def test_mapcapture_rebuild_falls_back_to_live_laps_of_that_track(tmp_path):
+    app, store = _map_app(tmp_path)
+    c = _tc(app)
+    assert not (tmp_path / "data" / "captures").exists()      # no mapping capture at all
+    for zsign in (1, -1, 1):
+        store.save(_edge("Silverstone National Circuit", zsign, 100.0))
+    r = c.post("/mapcapture/rebuild", json={"slug": "silverstone_national_circuit"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["center"]) > 1                            # a real reconstructed line
+    assert body["lap_count"] == 3                             # and it says what backs it
+    # The built ribbon is staged for the EXISTING save route -- no second writer.
+    assert app.state.last_ribbon["track"] == "silverstone_national_circuit"
+    assert c.post("/mapcapture/save", json={}).json()["saved"] is True
+    assert (tmp_path / "tracks" / "silverstone_national_circuit.json").exists()
+
+
+def test_mapcapture_rebuild_fallback_ignores_result_log_laps(tmp_path):
+    # Spa: ~991 imported laps, zero clouds. telemetry_path is NULL on every one, so
+    # there is nothing to reconstruct and the refusal must stand.
+    app, store = _map_app(tmp_path)
+    c = _tc(app)
+    for n in range(3):
+        _result_log_lap(store, track="Circuit de Spa-Francorchamps", session_id=f"race-{n}")
+    # Control: a DIFFERENT track's live laps exist, so a fallback that ignored the slug
+    # would happily rebuild Spa out of them.
+    for zsign in (1, -1):
+        store.save(_edge("Silverstone National Circuit", zsign, 100.0))
+    r = c.post("/mapcapture/rebuild", json={"slug": "circuit_de_spa_francorchamps"})
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"] == "no saved capture available"
+    assert not (tmp_path / "tracks" / "circuit_de_spa_francorchamps.json").exists()
+
+
+def test_mapcapture_rebuild_prefers_the_real_capture_over_live_laps(tmp_path):
+    # A mapping capture's boundary passes cover the full WIDTH; racing laps only trace
+    # the line driven. When both exist the purpose-built artifact has to win.
+    app, store = _map_app(tmp_path)
+    app.state.latest = {"record": _edge("MapTrack", 1, 100.0), "lap_id": 0}
+    app.state.map_buffer = [_edge("MapTrack", 1, 100.0), _edge("MapTrack", -1, 100.0)]
+    c = _tc(app)
+    c.post("/mapcapture/build", json={})
+    c.post("/mapcapture/save", json={})              # writes captures/maptrack.npz (2 laps)
+    app.state.last_ribbon = None
+    for zsign in (1, -1, 1, -1, 1):                  # 5 live laps, a different count
+        store.save(_edge("MapTrack", zsign, 100.0))
+    r = c.post("/mapcapture/rebuild", json={"slug": "maptrack"})
+    assert r.status_code == 200, r.text
+    assert r.json()["lap_count"] == 2                # the capture's 2, not the store's 5
+
+
+def test_mapcapture_rebuild_fallback_skips_unreadable_laps(tmp_path):
+    # A laps row can outlive its file, and a file can be truncated by a crash mid-write.
+    # Skip that lap, don't fail the whole rebuild -- and don't 500 either.
+    app, store = _map_app(tmp_path)
+    c = _tc(app)
+    ids = [store.save(_edge("Silverstone National Circuit", z, 100.0))
+           for z in (1, -1, 1, -1)]
+    gone = Path(store.data_dir) / f"{ids[0]}.npz"
+    assert gone.exists()
+    gone.unlink()                                            # OSError on np.load
+    (Path(store.data_dir) / f"{ids[1]}.npz").write_bytes(b"PK\x03\x04 truncated")  # BadZipFile
+    r = c.post("/mapcapture/rebuild", json={"slug": "silverstone_national_circuit"})
+    assert r.status_code == 200, r.text
+    assert r.json()["lap_count"] == 2          # 4 rows, 2 readable -- and it says 2
+
+
 def test_mapping_laps_persisted_tagged_and_excluded_from_best(tmp_path):
     import types
     from simcoach.server.app import _capture_loop

@@ -13,6 +13,7 @@ import sys
 import tempfile
 import threading
 import time
+import zipfile
 from dataclasses import asdict
 from pathlib import Path
 
@@ -315,6 +316,42 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         d = Path(store.data_dir) / "captures"
         files = list(d.glob("*.npz")) if d.exists() else []
         return max(files, key=lambda p: p.stat().st_mtime) if files else None
+
+    def _lap_clouds(track: str) -> list[dict]:
+        # Fallback cloud for a track that never got a dedicated mapping capture: the
+        # position channels off its own LIVE laps' .npz files, in the same shape
+        # _load_cloud returns, so reconstruct_surface can't tell the two apart.
+        #
+        # The per-lap .npz always carried pos_x/y/z + lap_distance -- it was the REBUILD
+        # PATH that never looked at them, only at captures/<slug>.npz. That makes #66's
+        # "drive 3-4 laps and the track is permanently re-processable" true of the data
+        # all along but, until this, false of the code.
+        #
+        # telemetry_path IS NOT NULL is the whole distinction (same as list_tracks):
+        # save_result_session rows are summary-only with no file, so a track with ~991
+        # imported laps and no capture stays correctly unbuildable.
+        slug = track_slug(track)
+        if not slug:
+            return []
+        with store._lock:   # store.py shares one connection with the capture thread
+            rows = store.conn.execute(
+                "SELECT track, telemetry_path FROM laps "
+                "WHERE telemetry_path IS NOT NULL AND track IS NOT NULL "
+                "ORDER BY id").fetchall()
+        laps = []
+        for name, p in rows:
+            if track_slug(name) != slug:
+                continue          # laps store the raw live name; the map is keyed by slug
+            try:
+                with np.load(p) as z:
+                    ch = {c: z[c] for c in _POS_CHANNELS if c in z.files}
+            except (OSError, ValueError, KeyError, zipfile.BadZipFile):
+                continue          # a row outlives its file: skip the lap, not the rebuild
+            # The triple reconstruct_surface actually requires; pos_y is optional there
+            # (it only fits bank), so demanding it would drop usable laps.
+            if all(c in ch for c in ("pos_x", "pos_z", "lap_distance")):
+                laps.append(ch)
+        return laps
 
     def _track_file_data(track: str) -> dict:
         # Merged map dict: authoritative shipped geometry + the user's annotation
@@ -1037,6 +1074,12 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # backfills summary-only rows with no .npz, so Spa's ~991 imported laps are NOT
         # re-processable and must not read as buildable (#66). Counted per SLUG, not per
         # raw name: "Paul Ricard" and "Paul Ricard - ELMS" share one map file.
+        #
+        # ponytail: a DB count, so it counts laps that HAVE a file, not laps whose file
+        # still carries position channels -- Silverstone's first 10 laps predate pos_x/
+        # pos_z capture, so the row says 27 where a rebuild finds 17. Opening 164 .npz
+        # files per request to be exact is the wrong trade for a coverage badge; the
+        # rebuild preview reports the real number before anything is saved.
         captures: dict[str, int] = {}
         names: dict[str, str] = {}
         with store._lock:   # store.py shares one connection with the capture thread
@@ -1316,11 +1359,19 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         if not track:
             track = _live_track() or (app.state.last_ribbon or {}).get("track")
         path = _capture_path(track) if track else _newest_capture()
-        if path is None or not path.exists():
-            raise HTTPException(422, "no saved capture available")
-        laps = _load_cloud(path)
-        if not laps:
-            raise HTTPException(422, "saved capture is unreadable")
+        if path is not None and path.exists():
+            # A purpose-built mapping capture WINS whenever there is one -- its boundary
+            # passes cover the full width; racing laps only trace the line driven.
+            laps = _load_cloud(path)
+            if not laps:
+                raise HTTPException(422, "saved capture is unreadable")
+        else:
+            # No capture file for this track: rebuild from its own live laps (#69). The
+            # reported case -- 27 live laps, no captures/<slug>.npz -- used to 422 here
+            # with no way forward but re-driving boundary passes.
+            laps = _lap_clouds(track) if track else []
+            if not laps:
+                raise HTTPException(422, "no saved capture available")
         track = track or path.stem  # offline: take the track (slug) from the file name
         ribbon = reconstruct_surface(laps)
         if not ribbon:
@@ -1334,6 +1385,9 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         res = _clean(ribbon_to_screen(ribbon, corners, sectors,
                                       rotation=_track_rotation(track), sections=sections))
         res["track_name"] = _track_file_data(track).get("name") or track
+        # How many laps back this geometry, so the driver knows before committing it:
+        # a map off 1-3 clouds is thin (#41's Imola sector splits rest on a single lap).
+        res["lap_count"] = len(laps)
         return res
 
     @app.get("/setup")

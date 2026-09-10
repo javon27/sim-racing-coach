@@ -1078,6 +1078,11 @@
         {#if genPhase !== "off"}
           <button type="button" onclick={cancelGen}>Cancel capture</button>
           {#if genPhase === "preview"}
+            {#if ribbon?.lap_count}
+              <!-- Say what backs the geometry before it is committed: a map off 1-3
+                   laps is thin (#41's Imola sector splits rest on a single lap). -->
+              <span class="lapcount">from {ribbon.lap_count} lap{ribbon.lap_count === 1 ? "" : "s"}</span>
+            {/if}
             <button type="button" class="primary" disabled={saving} onclick={saveGen}>
               {saving ? "Saving…" : "Save ribbon"}
             </button>
@@ -1130,6 +1135,11 @@
     border-bottom: none;
     border-top: 1px solid var(--muted);
     justify-content: flex-end;
+  }
+  .lapcount {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--faint);
   }
   header h2 {
     margin: 0;
