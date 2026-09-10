@@ -387,6 +387,11 @@ def test_save_track_map_survives_an_overlong_note_key_on_disk(tmp_path):
     # existed -- which is how this got reported -- still has to be survivable.
     data = _written(tracks_dir)
     data["notes"]["corners"][poison] = "nonsense"
+    # Same class, same line of defence: a note VALUE that isn't a str. `PUT /notes`
+    # coerces with str(v), so these only arrive from a legacy, hand-edited or promoted
+    # file -- and the drop-path log's `v[:200]` made one a 500 on every later map save.
+    data["notes"]["corners"]["88"] = 7
+    data["notes"]["corners"]["89"] = ["x" * 10_000] * 1000
     (tracks_dir / "algarve_international_circuit.json").write_text(json.dumps(data))
     r = client.put("/tracks/algarve_international_circuit/map", json={"corners": four})
     assert r.status_code == 200, r.text

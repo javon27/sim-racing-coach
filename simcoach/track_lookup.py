@@ -229,7 +229,16 @@ def guard_corner_notes(slug: str, old_notes: dict | None, old_corner_count: int,
         # in the endpoint that found it, because the promote script shares this function
         # and reads `notes` straight out of an arbitrary user JSON file -- a more exposed
         # sink than a localhost PUT with per-field caps in front of it.
-        sample = {k: v[:200] for k, v in sorted(dropped.items())[:20]}
+        #
+        # `str(v)`, because that exposure is exactly why the value is not known to BE a
+        # str: `PUT /notes` coerces, the promote path does not, and this function keeps
+        # values as-is (only keys are stringified). `v[:200]` then raised on an int/float/
+        # bool/None note and a KeyError on a dict -- a 500 on the map-save path for any
+        # legacy or hand-edited file -- and on a LIST it sliced 200 ELEMENTS, turning the
+        # bound into an amplifier: 25 keys of 1000x10k-char lists logged 40 MB in one
+        # call, 8.7x the 4.6 MB this is here to prevent. Sorting keys only, never
+        # `.items()`, for the same reason: tuple comparison would reach the values.
+        sample = {k: str(dropped[k])[:200] for k in sorted(dropped)[:20]}
         logging.getLogger(__name__).warning(
             "track %s: dropped %d authored per-corner note(s) on map save (%s); "
             "re-author them against the new layout. Dropped (%d shown): %s",

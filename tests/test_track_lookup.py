@@ -2,11 +2,13 @@
 slug of the (series-suffix-stripped, accent-normalized) full name — distinct layouts
 get distinct files, and an unknown layout resolves to None so the caller auto-builds."""
 import json
+import logging
 from pathlib import Path
 
 import pytest
 
 from simcoach.track_lookup import (
+    guard_corner_notes,
     load_track_knowledge,
     note_key_binds,
     resolve_track_map,
@@ -360,3 +362,34 @@ def test_shipped_note_keys_all_bind_to_their_own_map():
             assert note_key_binds(str(key), labels), f"{p.name}: {key!r} names no corner"
             seen += 1
     assert seen > 100, "expected the shipped maps to carry authored per-corner notes"
+
+
+def test_dropped_note_log_survives_and_bounds_non_str_note_values(caplog):
+    # A note VALUE is not known to be a str here. `PUT /notes` coerces with str(v); the
+    # promote script does not, and this function stringifies only keys -- which is the
+    # flip side of the bound living here to cover the promote path: less sanitised input,
+    # so the bound must assume less about it. A map save also re-reads `notes` off disk,
+    # so a legacy or hand-edited file reaches the same line.
+    #
+    # `v[:200]` raised on int/float/bool/None (a 500 on the map-save path) and KeyError on
+    # a dict, and on a LIST it sliced 200 ELEMENTS, inverting the bound into an amplifier:
+    # 25 keys of 1000 x 10,000-char lists logged 40 MB in ONE warning() call, 8.7x the
+    # 4.6 MB the bound exists to prevent.
+    values = {
+        "1": ["x" * 10_000] * 1000,     # the amplifier: 200 ELEMENTS, not 200 chars
+        "2": 7,                         # the crash: 'int' object is not subscriptable
+        "3": 1.5,
+        "4": True,
+        "5": None,
+        "6": {"nested": "y" * 10_000},  # KeyError: slice(None, 200, None)
+        "7": "z" * 10_000,              # the str case, which always worked
+    }
+    with caplog.at_level(logging.WARNING, logger="simcoach.track_lookup"):
+        # Corner count unchanged and no label matches -> every note is dropped and logged.
+        kept = guard_corner_notes("algarve", {"corners": values}, len(values), ["99"] * len(values))
+    assert kept is None          # every note dropped, nothing else authored -> hollow
+    (rec,) = [r for r in caplog.records if "dropped" in r.getMessage()]
+    msg = rec.getMessage()
+    assert "dropped 7 authored" in msg                    # exact count, every type survived
+    assert len(msg) < 2_000, f"log is {len(msg)} chars"   # 20 x 200 + preamble is the ceiling
+    assert "x" * 201 not in msg and "z" * 201 not in msg  # no value contributes over 200
