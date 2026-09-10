@@ -270,6 +270,97 @@ def test_a_non_finite_refuses_instead_of_raising(tmp_path, field):
                  "--tracks-dir", str(tracks)]) == 1   # `refused:`, not a traceback
 
 
+def test_an_interrupted_write_leaves_the_shipped_map_intact(tmp_path, monkeypatch):
+    """write_bytes truncates before it writes, so an abort mid-write left a SHIPPED map
+    empty -- the worst outcome here. The write goes to a sibling tmp and renames, so a
+    failure lands on the tmp and the map is untouched (and no .tmp is left behind)."""
+    tracks = _tracks(tmp_path)
+    promote(_src(tmp_path, _map()), tracks)
+    target = tracks / "user_built_circuit.json"
+    before = target.read_bytes()
+
+    real = Path.write_bytes
+    def interrupted(self, data):          # truncated, as a real aborted write leaves it
+        real(self, b"")
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(Path, "write_bytes", interrupted)
+
+    with pytest.raises(PromoteError, match="could not write|unchanged"):
+        promote(_src(tmp_path, _map(name="Replacement")), tracks, force=True)
+    monkeypatch.undo()
+    assert target.read_bytes() == before                       # not truncated
+    assert list(tracks.iterdir()) == [target]                  # no .tmp left behind
+
+
+def test_refuses_a_symlinked_target(tmp_path):
+    """A DANGLING symlink is invisible to exists(), which gates both --force and the
+    byte-fidelity check -- so a planted link to ../OUTSIDE.json was followed and written
+    through, outside the tracks dir, with neither gate firing."""
+    tracks = _tracks(tmp_path)
+    outside = tmp_path / "OUTSIDE.json"
+    link = tracks / "user_built_circuit.json"
+    try:
+        link.symlink_to(Path("..") / "OUTSIDE.json")
+    except OSError as e:                  # Windows needs privileges/developer mode
+        pytest.skip(f"cannot create symlinks here: {e}")
+    assert link.is_symlink() and not link.exists()        # the hole the gate fell through
+    with pytest.raises(PromoteError, match="symlink"):
+        promote(_src(tmp_path, _map()), tracks)           # note: no force=True
+    assert not outside.exists()
+    assert link.is_symlink()                              # left alone, not written through
+
+
+def _unreadable_target(tracks, kind):
+    """A shipped-map path that read_bytes/json.loads/decode can't get through."""
+    t = tracks / "user_built_circuit.json"
+    if kind == "directory":
+        t.mkdir()
+    elif kind == "truncated":             # what an interrupted promote used to leave
+        t.write_bytes(b'{\r\n  "track": "user_built_circ')
+    elif kind == "not-utf8":
+        t.write_bytes(b"\xff\xfe{}")
+    return t
+
+
+@pytest.mark.parametrize("kind", ["directory", "truncated", "not-utf8"])
+def test_an_unreadable_target_refuses_instead_of_raising(tmp_path, kind, capsys):
+    """`promote()` had no try around exists()/read_bytes()/json.loads(), so every OS- and
+    decode-level failure escaped as a raw traceback instead of main()'s `refused:`. The
+    truncated case is the recovery path after an interrupted write, so it matters most:
+    the curator has to be told what's wrong, not handed a JSONDecodeError."""
+    tracks = _tracks(tmp_path)
+    target = _unreadable_target(tracks, kind)
+    before = None if kind == "directory" else target.read_bytes()
+    src = _src(tmp_path, _map())
+    with pytest.raises(PromoteError, match="can't read the shipped map"):
+        promote(src, tracks, force=True)
+    assert main(["user_built_circuit", "--from", str(src),
+                 "--tracks-dir", str(tracks), "--force"]) == 1
+    assert capsys.readouterr().err.startswith("refused: ")
+    assert target.is_dir() if kind == "directory" else target.read_bytes() == before
+
+
+def test_a_read_only_target_refuses_instead_of_raising(tmp_path, capsys):
+    """The write-side twin: os.replace over a read-only map raises PermissionError, which
+    escaped promote() as a traceback. The map must also still be intact afterwards."""
+    tracks = _tracks(tmp_path)
+    promote(_src(tmp_path, _map()), tracks)
+    target = tracks / "user_built_circuit.json"
+    before = target.read_bytes()
+    target.chmod(0o444)
+    try:
+        src = _src(tmp_path, _map(name="Replacement"))
+        with pytest.raises(PromoteError, match="could not write"):
+            promote(src, tracks, force=True)
+        assert main(["user_built_circuit", "--from", str(src),
+                     "--tracks-dir", str(tracks), "--force"]) == 1
+        assert capsys.readouterr().err.startswith("refused: ")
+        assert target.read_bytes() == before
+        assert list(tracks.iterdir()) == [target]        # no .tmp left behind
+    finally:
+        target.chmod(0o644)
+
+
 def test_refuses_a_source_whose_stem_is_not_a_slug(tmp_path):
     with pytest.raises(PromoteError, match="not a valid track slug"):
         promote(_src(tmp_path, _map(), name="Not A Slug.json"), _tracks(tmp_path))

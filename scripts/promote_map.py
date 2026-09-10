@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 from pathlib import Path
 
@@ -184,6 +185,12 @@ def promote(src: Path | str, tracks_dir: Path | str = TRACKS_DIR, *,
         raise PromoteError(str(e)) from None
 
     target = tracks_dir / f"{slug}.json"
+    # A shipped map is never a symlink, and a DANGLING one is invisible to exists() --
+    # which gates both the --force check and the byte-fidelity check below, so a planted
+    # link to ../OUTSIDE.json got written through, outside the tracks dir, with neither.
+    # Refuse rather than resolve: there is no legitimate case to follow.
+    if target.is_symlink():
+        raise PromoteError(f"{target} is a symlink; a shipped map must be a real file")
     if target.exists() and not force:
         raise PromoteError(
             f"{target} already ships. Shipped geometry is authoritative and the user's "
@@ -194,8 +201,16 @@ def promote(src: Path | str, tracks_dir: Path | str = TRACKS_DIR, *,
         # Byte-fidelity proof: this writer must reproduce the shipped file it is
         # about to replace, byte for byte, or the whole shipped set's format is
         # about to drift. Abort rather than reformat 10k lines under a map edit.
-        old = target.read_bytes()
-        shipped = json.loads(old.decode("utf-8"))
+        try:
+            old = target.read_bytes()
+            shipped = json.loads(old.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError) as e:
+            # A directory, a no-read file, a bad encoding, or a HALF-WRITTEN map. The
+            # last is the recovery path after an interrupted promote, so it has to say
+            # what to do rather than traceback out of the drift check.
+            raise PromoteError(
+                f"{target}: can't read the shipped map it would replace ({e}); "
+                f"if a promote was interrupted, `git checkout -- {target}` first") from None
         if _serialize(shipped) != old:
             raise PromoteError(
                 f"{target}: shipped format has drifted from this writer's output; "
@@ -237,9 +252,20 @@ def promote(src: Path | str, tracks_dir: Path | str = TRACKS_DIR, *,
 
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = _serialize(out)
-    target.write_bytes(payload)
-    if json.loads(target.read_bytes().decode("utf-8")) != out:
-        raise PromoteError(f"{target}: written file did not read back as written")
+    # Atomic, the same way scripts/backfill_sectors.py writes these files: a sibling
+    # tmp then rename over the map. write_bytes truncates first, so an abort between
+    # truncate and write left a SHIPPED map empty -- the worst thing this script can
+    # do. `finally` guarantees no .tmp is left behind on either path.
+    tmp = target.with_suffix(".json.tmp")
+    try:
+        tmp.write_bytes(payload)
+        os.replace(tmp, target)
+        if json.loads(target.read_bytes().decode("utf-8")) != out:
+            raise PromoteError(f"{target}: written file did not read back as written")
+    except OSError as e:
+        raise PromoteError(f"{target}: could not write ({e}); the map is unchanged") from None
+    finally:
+        tmp.unlink(missing_ok=True)
     return target
 
 
