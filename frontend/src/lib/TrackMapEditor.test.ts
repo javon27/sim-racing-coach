@@ -11,6 +11,7 @@ import {
   rebuildFromCapture,
   saveRibbon,
   saveMapCloud,
+  getTrackMap,
 } from "./api";
 import TrackMapEditor, { nearestPathIndex, nearestDistIndex, layoutLabels, wrapLabel, localOutward, type LabelItem } from "./TrackMapEditor.svelte";
 
@@ -28,6 +29,7 @@ vi.mock("./api", async () => {
     rebuildFromCapture: vi.fn(),
     saveRibbon: vi.fn(),
     saveMapCloud: vi.fn(),
+    getTrackMap: vi.fn(),
   };
 });
 
@@ -466,6 +468,25 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     cap.laps = [{ idx: 0, samples: 500, length: 5000 }];
     await waitFor(() => expect(screen.getByText(/1 lap\(s\) buffered/i)).toBeTruthy());
     expect(cancelMapCapture).not.toHaveBeenCalled(); // still alive while buffering
+  });
+});
+
+describe("TrackMapEditor — Tracks-screen (by-slug) binding", () => {
+  beforeEach(() => {
+    vi.mocked(getTrackMap).mockReset().mockResolvedValue({});
+    vi.mocked(rebuildFromCapture).mockReset().mockResolvedValue(ribbonFix);
+  });
+  afterEach(cleanup);
+
+  it("rebuilds the SELECTED track, not the live one (#26)", async () => {
+    // Editing from the Tracks screen: a slug, no lap. Sending neither lets the
+    // sidecar fall back to the live sim / newest capture and write a different
+    // track's geometry over this one.
+    render(TrackMapEditor, { props: { lapId: null, slug: "autodromo_nazionale_monza", open: true } });
+
+    await fireEvent.click(await screen.findByText("Rebuild from saved capture"));
+
+    expect(rebuildFromCapture).toHaveBeenCalledWith(null, "autodromo_nazionale_monza");
   });
 });
 

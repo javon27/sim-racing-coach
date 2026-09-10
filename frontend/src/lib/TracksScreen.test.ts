@@ -1,9 +1,16 @@
-import { render, screen, fireEvent, cleanup } from "@testing-library/svelte";
+import { render, screen, fireEvent, cleanup, within } from "@testing-library/svelte";
 import { test, expect, vi, afterEach } from "vitest";
 import TracksScreen from "./TracksScreen.svelte";
 import * as api from "./api";
 
 afterEach(cleanup);
+
+// What actually goes over the wire. saveNotes is handed the live $state proxy, and that
+// proxy answers Object.hasOwn from the RAW TARGET -- so it still claims a key the user
+// deleted, while ownKeys (and therefore api.ts's JSON.stringify) correctly drops it.
+// Assert on the serialised body, never on the proxy, or the assertion passes for a note
+// that was never really removed.
+const wire = (o: unknown) => JSON.parse(JSON.stringify(o)) as Record<string, string>;
 
 vi.spyOn(api, "listTracks").mockResolvedValue([
   { slug: "algarve_international_circuit", name: "Algarve", has_map: true, has_notes: false, user_edited: false },
@@ -138,6 +145,148 @@ test("a label Number() would coerce does not collapse under a range", async () =
   await fireEvent.click(await screen.findByText("Algarve"));
   expect(await screen.findByLabelText("corner note 07")).toBeTruthy();   // its own row
   expect(screen.getByText(/match no corner/i)).toBeTruthy();   // '5-9' flagged, not bound
+});
+
+test("a corner labelled toString or valueOf does not break the screen", async () => {
+  // Both names resolve through Object.prototype, so `'toString' in notes.corners` was
+  // true without the key existing: the blank-note seed never ran, the row then read
+  // Object.prototype.toString -- a function, which `?? ""` keeps, so wordCount() threw
+  // "s.trim is not a function" and the whole screen went blank. A corner label is free
+  // text in the map editor and `PUT /map` stores both verbatim (its 8-char label cap
+  // happens to admit exactly these two), so this is reachable by typing.
+  const map = fourCornerMap();
+  const labels = map.corners as unknown as { label: string }[];
+  labels[0].label = "toString";
+  labels[1].label = "valueOf";
+  vi.spyOn(api, "getTrackNotes").mockResolvedValue({
+    overview: "", corners: {}, reference_times: {}, source: "",
+  });
+  vi.spyOn(api, "getTrackMap").mockResolvedValue(map);
+  render(TracksScreen);
+  await fireEvent.click(await screen.findByText("Algarve"));
+  for (const key of ["toString", "valueOf"]) {
+    const box = (await screen.findByLabelText(`corner note ${key}`)) as HTMLTextAreaElement;
+    expect(box.value).toBe("");            // a blank note, never a function's source
+  }
+  expect(screen.getByLabelText("corner note 3")).toBeTruthy();   // rest of the map intact
+  expect(screen.queryByText(/match no corner/i)).toBeNull();
+
+  // ...and the note is still editable and still reaches the save payload under its own
+  // key. `Object.hasOwn` on the serialised body, not expect.objectContaining: that
+  // matcher walks the prototype chain, so it would report a 'toString' key on any object.
+  const saveSpy = vi.spyOn(api, "saveNotes").mockResolvedValue({ ok: true });
+  await fireEvent.input(screen.getByLabelText("corner note toString"),
+                        { target: { value: "brake here" } });
+  await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  const sent = wire(saveSpy.mock.lastCall![2].corners);
+  expect(Object.hasOwn(sent, "toString")).toBe(true);
+  expect(sent["toString"]).toBe("brake here");
+});
+
+test("a deleted corner note is gone from the list, the wire body and the object", async () => {
+  vi.spyOn(api, "getTrackNotes").mockResolvedValue({
+    overview: "", corners: { "1": "brake late", "13": "late apex" },
+    reference_times: {}, source: "",
+  });
+  vi.spyOn(api, "getTrackMap").mockResolvedValue(fourCornerMap());
+  const saveSpy = vi.spyOn(api, "saveNotes").mockResolvedValue({ ok: true });
+  render(TracksScreen);
+  await fireEvent.click(await screen.findByText("Algarve"));
+  await fireEvent.click(await screen.findByRole("button", { name: "remove corner note 13" }));
+  expect(screen.queryByLabelText("corner note 13")).toBeNull();
+
+  await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  const notes = saveSpy.mock.lastCall![2];
+  expect(Object.hasOwn(wire(notes.corners), "13")).toBe(false);   // absent on the wire
+  expect(wire(notes.corners)["1"]).toBe("brake late");            // the kept note survives
+  // And the key is really gone from the OBJECT, not just filtered out of its own keys.
+  // An in-place `delete` leaves it on the proxy's target, where Object.hasOwn still finds
+  // it -- which is what makes noteOf return undefined and the seed skip re-seeding.
+  expect(Object.hasOwn(notes.corners, "13")).toBe(false);
+});
+
+test("a deleted note whose corner reappears on the map re-seeds instead of throwing", async () => {
+  // The consequence of that dishonest target, end to end. Delete the orphan note "13",
+  // then save a layout that HAS a corner 13: onSaved -> reloadMap refetches only the map,
+  // so the notes state (with its stale target key) is carried into a render that now has
+  // a row keyed "13". Object.hasOwn said true, the seed skipped it, noteOf returned
+  // undefined, and wordCount threw "Cannot read properties of undefined (reading 'trim')"
+  // -- the same crash this component was fixed for, reintroduced by the delete path.
+  const twoCorners = fourCornerMap();
+  twoCorners.corners = twoCorners.corners.slice(0, 2);
+  const withThirteen = fourCornerMap();
+  const thirteen = { ...withThirteen.corners[2], number: 13, label: "13" };
+  withThirteen.corners = [...twoCorners.corners, thirteen];
+  vi.spyOn(api, "getTrackNotes").mockResolvedValue({
+    overview: "", corners: { "13": "late apex" }, reference_times: {}, source: "",
+  });
+  vi.spyOn(api, "getTrackMap")
+    .mockResolvedValue(withThirteen)        // the post-save reload, and anything after
+    .mockResolvedValueOnce(twoCorners)      // this screen's first load
+    .mockResolvedValueOnce(twoCorners);     // the editor's own load when it opens
+  vi.spyOn(api, "saveTrackMap").mockResolvedValue(withThirteen);
+
+  render(TracksScreen);
+  await fireEvent.click(await screen.findByText("Algarve"));
+  await fireEvent.click(await screen.findByRole("button", { name: "remove corner note 13" }));
+  await fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+  const dialog = within(await screen.findByRole("dialog"));
+  await fireEvent.click(await dialog.findByText("Save"));
+
+  const box = (await screen.findByLabelText("corner note 13")) as HTMLTextAreaElement;
+  expect(box.value).toBe("");              // re-seeded blank, not undefined
+});
+
+test("removing a reference time leaves the rest addable", async () => {
+  // Guards the same conversion on reference_times, which has no visible symptom today.
+  vi.spyOn(api, "getTrackNotes").mockResolvedValue({
+    overview: "", corners: {}, reference_times: { LMP2: "1:30.000" }, source: "",
+  });
+  vi.spyOn(api, "getTrackMap").mockResolvedValue({});
+  const saveSpy = vi.spyOn(api, "saveNotes").mockResolvedValue({ ok: true });
+  render(TracksScreen);
+  await fireEvent.click(await screen.findByText("Algarve"));
+  await fireEvent.click(await screen.findByRole("button", { name: "remove reference time LMP2" }));
+  expect(screen.queryByLabelText("reference time LMP2")).toBeNull();
+
+  await fireEvent.input(screen.getByLabelText("New reference-time class"),
+                        { target: { value: "LMP2" } });
+  await fireEvent.input(screen.getByLabelText("New reference time"),
+                        { target: { value: "1:29.000" } });
+  await fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
+  expect(((await screen.findByLabelText("reference time LMP2")) as HTMLInputElement).value)
+    .toBe("1:29.000");
+  await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  expect(wire(saveSpy.mock.lastCall![2].reference_times)).toEqual({ LMP2: "1:29.000" });
+});
+
+test("a reference-time class named toString is actually stored", async () => {
+  // The SAME prototype hole, on the wider input: the class box is free text with no cap
+  // at all (a corner label is narrowed to {toString, valueOf} by PUT /map's 8-char cap).
+  // `notes.reference_times[cls] = v` was silently discarded by the $state proxy for any
+  // prototype-shadowed name -- you typed a class and a time, clicked Add, nothing
+  // happened. 'toString' stands in for constructor/hasOwnProperty/__proto__/valueOf/
+  // toLocaleString, which all failed the same way.
+  vi.spyOn(api, "getTrackNotes").mockResolvedValue({
+    overview: "", corners: {}, reference_times: {}, source: "",
+  });
+  const saveSpy = vi.spyOn(api, "saveNotes").mockResolvedValue({ ok: true });
+  render(TracksScreen);
+  await fireEvent.click(await screen.findByText("Algarve"));
+  await fireEvent.input(screen.getByLabelText("New reference-time class"),
+                        { target: { value: "toString" } });
+  await fireEvent.input(screen.getByLabelText("New reference time"),
+                        { target: { value: "1:32.500" } });
+  await fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
+
+  const row = (await screen.findByLabelText("reference time toString")) as HTMLInputElement;
+  expect(row.value).toBe("1:32.500");                 // the row renders at all
+  await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  // lastCall, not calls[0]: vi.spyOn returns the mock already installed by an earlier
+  // test in this file, calls and all, so calls[0] reads someone else's payload.
+  const sent = saveSpy.mock.lastCall![2].reference_times;
+  expect(Object.hasOwn(sent, "toString")).toBe(true);  // an own property, not the method
+  expect(sent["toString"]).toBe("1:32.500");
 });
 
 test("save sends the edited notes for the selected track", async () => {

@@ -23,7 +23,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from .. import config, logging_setup, paths, secrets
-from ..analysis import analyze_lap, corner_geometry, geometry_clause
+from ..analysis import analyze_lap, corner_geometry, geometry_clause, input_traces
 from ..car_lookup import resolve_car
 from ..car_notes import load_car_notes, load_setup_concepts
 from ..coach_tools import CoachContext
@@ -41,6 +41,45 @@ from ..trackmap import average_racing_line, build_track_map, direction_from_path
 # Shipped corner-map dir, resolved off the package (not cwd) so it's correct
 # wherever the sidecar is launched from. simcoach/server/app.py -> simcoach/tracks.
 _DEFAULT_TRACKS_DIR = Path(__file__).resolve().parent.parent / "tracks"
+
+# Bounds for `PUT /tracks/{slug}/notes`, the one endpoint on the notes path that had
+# none: every field there is free text that gets persisted verbatim into the track file
+# and carried across every later map save. The numbers are the ones this path already
+# uses rather than a new scheme -- 100 is the corner cap in `_persist_map`, 80 is its
+# corner-name cap. _MAX_NOTE_CHARS is ~300 words: 2.5x the 120-word overview budget and
+# 6x the 50-word per-corner budget the drafting prompt states, so it cannot clip prose
+# authored to spec. Over-limit input is REJECTED, never truncated -- silently shortening
+# authored notes is the class of bug this path just got fixed for.
+_MAX_NOTE_KEYS = 100
+_MAX_NOTE_KEY_CHARS = 80
+_MAX_NOTE_CHARS = 2000
+
+# DOCUMENT cap, on top of the per-field ones, because 200 fields that each pass their own
+# cap still landed a 5 MB body on disk -- 2.5x the single-field abuse the caps above were
+# added to stop, just spread across 100 corner keys + 100 reference times -- and every
+# later map save re-read and re-wrote it. The per-field caps stay: they name the offending
+# field, which one document cap cannot.
+#
+# BYTES of `json.dumps(notes)` -- the same serializer, with the same ensure_ascii=True,
+# that _write_track_json uses, so the quantity enforced here is the quantity that lands on
+# disk. Measuring the unescaped string instead would bound CODE POINTS, and an astral char
+# escapes to 12 bytes: an all-emoji payload measured 62,367 code points, passed, and wrote
+# 744,367 bytes. Escaped JSON is pure ASCII, so one char is one byte and the cap holds
+# whatever the encoding -- at the limit the notes block on disk is ~64.5 KB of ASCII prose
+# and ~64.2 KB of emoji (the extra over the cap is indent=2 whitespace).
+#
+# The number is the intended ceiling MEASURED, not rounded: the largest shipped map has 30
+# corners, so 30 notes at the full 2000-char per-note cap plus overview and source at
+# theirs serialises to exactly 64,357 bytes. (The raw content is 64,000 -- quoting, keys,
+# colons and commas are the other 357, which is why the constant is not a round number.
+# Stating 64,000 would have refused the very document the derivation is built from.)
+# For scale, the biggest `notes` block in simcoach/tracks/*.json today is 4,412 bytes
+# (longest single note 289, longest overview 706, most corner keys 24; shipped notes are
+# pure ASCII, so escaping does not move that number), making this ~14.6x the real worst
+# case. The per-FIELD caps still count code points, which is what the editor shows the
+# author -- on astral text the UI's UTF-16 count and those caps disagree, accepted, and
+# this cap is what bounds the consequence.
+_MAX_NOTES_DOC_BYTES = 64_357
 
 
 def _usage_view(agg: dict) -> dict:
@@ -660,6 +699,39 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                  "track_name": _track_file_data(track).get("name") or track}
         return m
 
+    @app.get("/track/inputs")
+    def track_inputs():
+        # Driver-input traces (throttle/brake/steering) for the Pit Wall graphs (#21):
+        # the LAST completed lap and the current track/car BEST, both resampled onto
+        # the same uniform lap_distance grid so they overlay directly.
+        #
+        # UI-ONLY. This is raw ~50 Hz telemetry, downsampled here in the sidecar (not
+        # in the Svelte component) and returned to the chart. It never enters a coach
+        # prompt -- the model only ever sees the per-corner summary.
+        #
+        # Keyed on the LIVE track like /track/map: a practice session has no completed
+        # lap_id to route through /laps/{id}/..., and `status()` already owns the
+        # "latest capture still matches the live session" staleness check.
+        st = status()
+        if not st["track"]:
+            return {"last": None, "best": None}
+        latest = app.state.latest if st["lap_id"] is not None else None
+
+        def _trace(rec, lap_id):
+            tr = input_traces(rec)
+            if not tr:
+                return None  # imported/result-log lap: no channels to draw
+            return {**tr, "lap_id": lap_id, "lap_time": rec.lap_time}
+
+        last = _trace(latest["record"], st["lap_id"]) if latest else None
+        best_rec = store.best_lap(st["track"], st["car"])
+        # `best_lap` returns a record, not its id, so identity is by capture timestamp
+        # (unique per lap). Same lap -> don't draw the identical trace twice.
+        same = (latest is not None and best_rec is not None
+                and best_rec.timestamp == latest["record"].timestamp)
+        best = None if (best_rec is None or same) else _trace(best_rec, None)
+        return {"last": last, "best": best}
+
     @app.get("/tracks/{slug}/map")
     def track_map_by_slug(slug: str):
         # The track's canonical map keyed on its slug -- for the Tracks screen, which
@@ -888,10 +960,43 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         if track_slug(track) != slug:
             raise HTTPException(400, "slug/track mismatch")
         raw = body.get("notes") or {}
-        notes = {"overview": str(raw.get("overview", "")),
-                 "corners": {str(k): str(v) for k, v in (raw.get("corners") or {}).items()},
-                 "reference_times": {str(k): str(v) for k, v in (raw.get("reference_times") or {}).items()},
-                 "source": str(raw.get("source", ""))}
+
+        def _text(value: object, field: str) -> str:
+            s = str(value)
+            if len(s) > _MAX_NOTE_CHARS:
+                raise HTTPException(422, f"{field} exceeds {_MAX_NOTE_CHARS} characters")
+            return s
+
+        def _text_map(value: object, field: str) -> dict[str, str]:
+            # A non-dict REFUSES, never coerces to empty: this write REPLACES the notes
+            # already on disk, so accepting `corners: [["1", "brake late"]]` as {} would
+            # return 200 and wipe authored prose. (The same shape on the map-promotion
+            # path is correctly coerced -- there a malformed `corners` never held notes,
+            # so nothing is lost. The question is always what is on the other side.)
+            if value is not None and not isinstance(value, dict):
+                raise HTTPException(422, f"{field} must be an object")
+            items = list(value.items()) if isinstance(value, dict) else []
+            if len(items) > _MAX_NOTE_KEYS:
+                raise HTTPException(422, f"too many {field} (max {_MAX_NOTE_KEYS})")
+            out = {}
+            for k, v in items:
+                k = str(k)
+                if len(k) > _MAX_NOTE_KEY_CHARS:
+                    raise HTTPException(
+                        422, f"{field} key exceeds {_MAX_NOTE_KEY_CHARS} characters")
+                out[k] = _text(v, f"{field} note")
+            return out
+
+        notes = {"overview": _text(raw.get("overview", ""), "overview"),
+                 "corners": _text_map(raw.get("corners"), "corner notes"),
+                 "reference_times": _text_map(raw.get("reference_times"), "reference times"),
+                 "source": _text(raw.get("source", ""), "source")}
+        # Serialised exactly as _write_track_json will serialise it, so this measures the
+        # bytes that land on disk. Checked after the per-field caps so an over-limit field
+        # still gets its own named error.
+        if len(json.dumps(notes)) > _MAX_NOTES_DOC_BYTES:
+            raise HTTPException(
+                422, f"notes document exceeds {_MAX_NOTES_DOC_BYTES} bytes")
         data = dict(_track_file_data(track))       # merged shipped+overlay
         if not data:
             raise HTTPException(404, "no track file to annotate")
@@ -1099,11 +1204,12 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         keys = ("number", "label", "name", "direction", "start_dist", "apex_dist",
                 "end_dist", "apexes")
         corners = [{k: c[k] for k in keys if k in c} for c in rib["corners"]]
+        existing = _track_file_data(track)
         out = {
             "track": track_slug(track),
             # Display name from the session (the live track), unless a custom name was
             # already set — so a saved layout carries its track name.
-            "name": _track_file_data(track).get("name") or track,
+            "name": existing.get("name") or track,
             "corners": corners,
             "ribbon": {k: world[k] for k in ("left", "right", "center", "width", "bank")},
             "path": world["center"],
@@ -1113,6 +1219,22 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             "length": world["dist"][-1] if world["dist"] else 0.0,
             "rotation": _track_rotation(track),  # preserve any existing rotation
         }
+        # _write_track_json REPLACES the file, so the authored notes overlay has to be
+        # carried forward here too -- same owner, same rule, as the editor's save.
+        #
+        # EXCEPT on a corner-less rebuild. A thin capture can yield zero solver corners
+        # and this route still has a job to do (it exists to persist the reconstructed
+        # SURFACE; corners are a first-pass bonus -- see
+        # test_mapcapture_save_writes_track_json). Zero new corners cannot rebind a note
+        # to the wrong corner, so the count-change rule has nothing to protect against
+        # and dropping every per-corner note would be pure loss. Carry the overlay
+        # verbatim instead. _persist_map never reaches this -- it 422s on an empty list.
+        carried = (guard_corner_notes(track_slug(track), existing.get("notes"),
+                                     len(existing.get("corners") or []),
+                                     [str(c.get("label") or c.get("number")) for c in corners])
+                   if corners else existing.get("notes"))
+        if carried:
+            out["notes"] = carried
         _write_track_json(track, out)
         # Persist the raw point cloud (app-data, not the repo tracks dir) so the
         # ribbon can be rebuilt after algorithm changes with no re-drive.

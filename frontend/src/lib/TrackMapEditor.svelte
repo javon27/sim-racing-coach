@@ -316,7 +316,9 @@
     genErr = null;
     ribbon = null;
     try {
-      ribbon = await rebuildFromCapture(lapId);
+      // Bind by slug when editing from the Tracks screen (no lap): otherwise the
+      // sidecar rebuilds the LIVE track over the one on screen (#26).
+      ribbon = await rebuildFromCapture(lapId, slug);
       trackName = ribbon.track_name ?? "";
       genPhase = "preview";
     } catch (e) {
