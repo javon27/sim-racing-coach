@@ -774,6 +774,42 @@ def test_v12_schema_migrates_grid_and_identity_columns_to_v13(tmp_path):
     LapStore(db, str(tmp_path / "telem"))   # dup-safe on a 2nd open
 
 
+def test_a_db_with_tables_but_no_version_header_still_migrates(tmp_path):
+    """`sqlite3 .dump` + restore loses `PRAGMA user_version`, leaving a populated db at
+    version 0. Treating that as FRESH runs _SCHEMA, whose statements are all CREATE TABLE
+    IF NOT EXISTS and so no-op, skips every migration, and stamps it current -- after
+    which each read of race_sessions raises 'no such column'. It must migrate instead."""
+    from simcoach.store import SCHEMA_VERSION, LapStore
+    db = str(tmp_path / "c.sqlite")
+    s = LapStore(db, str(tmp_path / "telem"))
+    s.conn.execute("DROP TABLE race_sessions")
+    s.conn.execute(                       # a pre-v13 shape, as v8 created it
+        "CREATE TABLE race_sessions (session_id TEXT PRIMARY KEY, position INTEGER, "
+        "class_position INTEGER, finish_status TEXT, incidents TEXT, penalties TEXT)")
+    s.conn.execute("INSERT INTO race_sessions VALUES ('kept', 4, 2, 'Finished', '[]', '[]')")
+    s.conn.execute("PRAGMA user_version = 0")   # the header a dump/restore drops
+    s.conn.commit(); s.conn.close()
+
+    s2 = LapStore(db, str(tmp_path / "telem"))
+    assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    assert s2.race_session("kept")["position"] == 4   # would raise unfixed
+    assert s2.conn.execute("SELECT COUNT(*) FROM race_sessions").fetchone()[0] == 1
+
+
+def test_clear_all_tolerates_a_missing_table(tmp_path, synthetic_lap):
+    """Reset must not raise on a db lacking one of these tables, matching the `if cols`
+    guard the migration uses on the same table."""
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    s.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1"}))
+    s.conn.execute("DROP TABLE race_sessions")
+    s.conn.commit()
+
+    s.clear_all()
+
+    assert s.conn.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 0
+
+
 def test_a_db_stamped_13_still_gets_the_identity_columns(tmp_path):
     """An interim unreleased build stamped user_version 13 after adding only the two
     grid columns. Such a db must still pick up track/car/phase/ts/mode -- a `< 13` gate
@@ -1045,24 +1081,82 @@ def test_race_session_link_answers_with_the_race_just_finished(tmp_path, synthet
     assert arc == {"start": 1, "best": 1, "worst": 3, "last": 3, "laps": 2}
 
 
-def test_race_session_link_breaks_an_exact_tie_by_newest(tmp_path, synthetic_lap):
-    """Two results equidistant from the last captured lap resolve by contract (newest
-    ts, then session_id) rather than by scan order. NOTE: this pins the intended
-    behaviour, but removing the tiebreaker does not reliably red it -- SQLite's order
-    for a tie is unspecified, so it may still return the same row by luck."""
+def test_race_session_link_breaks_an_equidistant_tie_by_newest(tmp_path, synthetic_lap):
+    """Two results equidistant from the last captured lap resolve to the NEWER one.
+
+    The ids are named so alphabetical order DISAGREES with newest-first: the earlier
+    race sorts first by session_id, so a resolver that fell through to the session_id
+    tiebreaker would answer 'a-older'. Naming them the other way round (as this test
+    first did) let the session_id fallback agree with `ts DESC` by accident, and the
+    mutation that deletes `ts DESC` stayed green."""
     from simcoach.store import LapStore
     s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     _capture_live_race(s, synthetic_lap, times=_LIVE_TIMES[:1], places=[18],
                        t0=_RACE_TS + 3600.0)
-    for offset, sid, pos in ((-3600, "older-R1", 34), (+3600, "newer-R2", 12)):
+    for offset, sid, pos in ((-3600, "a-older", 34), (+3600, "z-later", 12)):
         s.save_result_session(
             _silverstone_result(times=[70.0 + offset / 1e6], date_ts=_RACE_TS + 3600 + offset,
                                 position=pos, class_position=pos, grid_position=5,
                                 class_grid_position=5, incidents=[]),
             session_id=sid)
 
-    assert s._linked_result_session(_LIVE_SID) == "newer-R2"
+    assert s._linked_result_session(_LIVE_SID)[0] == "z-later"
     assert s.race_session(_LIVE_SID)["position"] == 12
+
+
+def test_race_session_link_breaks_an_identical_ts_tie_deterministically(tmp_path, synthetic_lap):
+    """`ts DESC` cannot separate results stamped at the SAME ts, so the ORDER BY has to
+    terminate in session_id -- race_sessions' primary key, hence unique. Without it the
+    answer varies with insert order, which is how a coach could report a different race
+    for the same question."""
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    _capture_live_race(s, synthetic_lap, times=_LIVE_TIMES[:1], places=[18],
+                       t0=_RACE_TS + 3600.0)
+    # Inserted worst-first so scan order would answer 'zebra' if nothing broke the tie.
+    for sid, pos in (("zebra", 30), ("mango", 20), ("alpha", 10)):
+        s.save_result_session(
+            _silverstone_result(times=[70.0 + len(sid) / 1e6], date_ts=_RACE_TS + 3600,
+                                position=pos, class_position=pos, grid_position=5,
+                                class_grid_position=5, incidents=[]),
+            session_id=sid)
+
+    assert s._linked_result_session(_LIVE_SID)[0] == "alpha"
+    assert s.race_session(_LIVE_SID)["position"] == 10
+
+
+def test_race_session_link_refuses_a_stale_row_while_a_race_is_running(tmp_path, synthetic_lap):
+    """A race's own result log does not exist while it is being driven -- LMU writes it
+    a few minutes after the finish. So mid-race-2 the newest log on disk is race 1's, and
+    using it asserted a grid slot and a 'Finished' status for a race still in progress.
+    32% of the real sittings hold 2+ race rows within 6 h at the same track/car/mode."""
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    _capture_live_race(s, synthetic_lap)                                    # race 1
+    logged = _RACE_TS + 1000.0                                              # its log's mtime
+    s.save_result_session(_silverstone_result(times=_RESULT_TIMES_ALL_TIMED),
+                          session_id=_RESULT_SID, logged_ts=logged)
+    assert s.race_session(_LIVE_SID)["grid_position"] == 9, "race 1 alone still resolves"
+
+    # Race 2 starts two hours later. No log for it yet -- it is still being driven.
+    _capture_live_race(s, synthetic_lap, times=[64.1, 64.2, 64.3], places=[18, 17, 16],
+                       t0=_RACE_TS + 7200.0)
+
+    assert s.race_session(_LIVE_SID) is None, "must not report race 1's outcome"
+    # The floor it hands back keeps the per-lap arc on race 2 only, rather than
+    # spanning all 12 laps and reporting race 1's worst position as this race's.
+    since = s.unlogged_race_since(_LIVE_SID)
+    assert since == logged
+    assert s.session_position_arc(_LIVE_SID, phase="race", since=since) == {
+        "start": 18, "best": 16, "worst": 18, "last": 16, "laps": 3}
+    # Once race 2's own log lands, the answer comes back -- and it is race 2's.
+    s.save_result_session(
+        _silverstone_result(times=[64.1, 64.2, 64.3], date_ts=_RACE_TS + 7200,
+                            position=4, class_position=4, grid_position=7,
+                            class_grid_position=7, incidents=[]),
+        session_id="2026_09_10_02_39_07-16R2", logged_ts=_RACE_TS + 8200.0)
+    rr = s.race_session(_LIVE_SID)
+    assert (rr["grid_position"], rr["position"]) == (7, 4)
 
 
 def test_race_session_link_refuses_a_practice_only_session(tmp_path, synthetic_lap):

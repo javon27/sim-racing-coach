@@ -69,7 +69,9 @@ def ingest_all(store, userdata_dir=None, player_names=None, limit=None) -> dict:
             summary["unmatched"] += 1
             continue
         try:
-            store.save_result_session(rs, session_id=f.stem)
+            # mtime = when LMU WROTE this log, which is after the race it describes was
+            # driven. The store uses it to refuse a stale row for a race still running.
+            store.save_result_session(rs, session_id=f.stem, logged_ts=mtime)
             store.mark_ingested(str(f), mtime)
             summary["imported"] += 1
         except Exception:

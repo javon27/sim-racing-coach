@@ -637,12 +637,16 @@ class CoachContext:
         # would read the start/worst from an earlier phase (wrong start position).
         # Bound the arc to the race the result row actually describes: phase='race'
         # alone spans every race in the sitting, so a second race's grid would be
-        # reported next to the first race's lap positions.
-        arc = self.store.session_position_arc(
-            self.session_id, phase="race",
-            since=rr.get("race_ts") if rr else None,
-            until=rr.get("next_race_ts") if rr else None,
-        ) if self.session_id else None
+        # reported next to the first race's lap positions. With no result row (a race
+        # still being driven, whose log does not exist yet) there is no race_ts, so fall
+        # back to the floor the store derives from the last logged race.
+        arc = None
+        if self.session_id:
+            since = (rr.get("race_ts") if rr
+                     else self.store.unlogged_race_since(self.session_id))
+            arc = self.store.session_position_arc(
+                self.session_id, phase="race", since=since,
+                until=rr.get("next_race_ts") if rr else None)
         if not rr and not arc:
             return ("No race result recorded for this session (practice/qualy, or not a "
                     "completed race).")
