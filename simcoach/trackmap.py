@@ -86,13 +86,33 @@ def average_racing_line(laps, bins: int = 500):
     return path, dist
 
 
+def turn_sign_along(path_world, k: int = 3) -> np.ndarray:
+    """Per-station turn direction along a closed path: **+1 turning RIGHT, -1
+    turning LEFT**, 0 dead straight. Shape (N,).
+
+    The SINGLE owner of the handedness rule: signs the 2D cross product of the
+    incoming x outgoing segment vectors (k stations either side for stability)
+    against the calibrated ``_LEFT_TURN_IS_CROSS_POSITIVE``. ``direction_from_path``
+    is this sampled at one apex, so a caller that needs direction station-by-station
+    (``raceline.speed_profile``, re-signing bank against the turn -- #63) reuses this
+    rather than re-deriving a second copy of the rule.
+
+    Closed loop: indices wrap, so station 0 still gets neighbours either side.
+    """
+    pts = np.asarray(path_world, dtype=float)
+    kk = min(k, len(pts) - 1)
+    vin = pts - np.roll(pts, kk, axis=0)
+    vout = np.roll(pts, -kk, axis=0) - pts
+    cross = vin[:, 0] * vout[:, 1] - vin[:, 1] * vout[:, 0]
+    is_left = (cross > 0) == _LEFT_TURN_IS_CROSS_POSITIVE
+    return np.where(cross == 0.0, 0.0, np.where(is_left, -1.0, 1.0))
+
+
 def direction_from_path(path_world, dist, apex_dist, k: int = 3) -> str:
     """Infer a corner's turn direction ("left"/"right") from path curvature at
     the apex -- pure position geometry, honoring the CLAUDE.md invariant (never
-    LLM-guessed, never client-supplied). Finds the path point nearest apex_dist,
-    then signs the 2D cross product of the incoming and outgoing segment vectors
-    (k points either side for stability). Sign -> direction via the calibrated
-    _LEFT_TURN_IS_CROSS_POSITIVE constant.
+    LLM-guessed, never client-supplied). Finds the path point nearest apex_dist
+    and reads ``turn_sign_along`` there.
 
     Raises ValueError if the path is too short to sample around the apex.
     """
@@ -100,17 +120,8 @@ def direction_from_path(path_world, dist, apex_dist, k: int = 3) -> str:
     d = np.asarray(dist, dtype=float)
     if pts.ndim != 2 or pts.shape[0] < 3 or pts.shape[1] != 2 or len(d) != len(pts):
         raise ValueError("path too short or malformed for direction inference")
-    n = len(pts)
     idx = int(np.argmin(np.abs(d - apex_dist)))
-    # The path is a closed loop, so wrap the window with modulo indexing -- an
-    # apex in the first/last bin still gets neighbours either side (a plain clamp
-    # would collapse the window to zero and IndexError / misclassify there).
-    kk = min(k, n - 1)
-    vin = pts[idx] - pts[(idx - kk) % n]
-    vout = pts[(idx + kk) % n] - pts[idx]
-    cross = float(vin[0] * vout[1] - vin[1] * vout[0])
-    is_left = (cross > 0) == _LEFT_TURN_IS_CROSS_POSITIVE
-    return "left" if is_left else "right"
+    return "left" if turn_sign_along(pts, k)[idx] < 0.0 else "right"
 
 
 def _finite_xz(channels: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:

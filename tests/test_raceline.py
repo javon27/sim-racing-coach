@@ -34,10 +34,20 @@ def _straight(n=40, length=400.0, halfwidth=5.0):
 
 
 def _annulus(n=180, r_in=90.0, r_out=110.0):
+    """One constant-radius LEFT-hander: stations run counter-clockwise, which
+    _LEFT_TURN_IS_CROSS_POSITIVE calls a left turn, so the driver's left is the
+    INSIDE of the turn."""
     th = np.linspace(0.0, 2 * np.pi, n, endpoint=False)
     inner = np.column_stack([r_in * np.cos(th), r_in * np.sin(th)])
     outer = np.column_stack([r_out * np.cos(th), r_out * np.sin(th)])
     return inner, outer  # left = inner edge, right = outer edge
+
+
+def _annulus_cw(n=180, r_in=90.0, r_out=110.0):
+    """The same corridor driven the other way -- a constant-radius RIGHT-hander,
+    so now the driver's left is the OUTSIDE."""
+    inner, outer = _annulus(n, r_in, r_out)
+    return outer[::-1], inner[::-1]  # left = outer edge, right = inner edge
 
 
 def _stadium_edges(L=200.0, R=50.0, half_w=6.0, nb=40, na=40):
@@ -138,16 +148,71 @@ def test_solve_corners_min_speed_is_kmh_not_ms():
     assert all("min_speed" not in c for c in solve_corners(left, right))
 
 
-def test_banking_raises_corner_speed():
-    left, right = _annulus()  # constant-radius corner
+def test_bank_favours_the_turn_it_is_cambered_for_not_the_positive_sign():
+    """#63: ``bank`` is signed by which side is HIGHER (+ = the driver's LEFT is
+    higher, #58), NOT by whether the camber helps. A corner cambered for cornering
+    has its OUTER edge higher, and the outside of a LEFT-hander is the driver's
+    right -- so a properly cambered left-hander reads NEGATIVE.
+
+    Both handednesses are driven here deliberately: the same corridor, same bank
+    MAGNITUDE, opposite travel direction. The favourable sign differs by direction,
+    so one direction alone cannot distinguish "bank relative to the turn" from
+    "raw positive = faster". Under the raw-sign reading the right-hander still
+    passes and the left-hander fails -- which is exactly why the bug shipped.
+
+    Asserted through ``solve_corners`` (the shipped entry point) so the
+    centerline turn_sign threading is covered, not just ``speed_profile``.
+    """
+    theta = np.radians(15.0)
+    for turn, edges, favourable in (("left", _annulus(), -theta),
+                                    ("right", _annulus_cw(), +theta)):
+        left, right = edges
+        flat = solve_corners(left, right)
+        fav = solve_corners(left, right, bank=np.full(len(left), favourable))
+        adv = solve_corners(left, right, bank=np.full(len(left), -favourable))
+        assert len(flat) == len(fav) == len(adv) == 1, turn
+        v_flat = flat[0]["min_speed_kmh"]
+        assert fav[0]["min_speed_kmh"] > v_flat, f"{turn}: camber for the turn must help"
+        assert adv[0]["min_speed_kmh"] < v_flat, f"{turn}: camber against it must hurt"
+
+
+def test_adverse_camber_stays_a_penalty_so_the_fix_is_not_abs():
+    """The other half of #63: abs(bank) would also un-break left-handers, and be
+    just as wrong -- genuine adverse camber (INSIDE edge higher) has to stay a
+    penalty. Pinned on MAGNITUDE against the closed form, not just ordering, so
+    the two cases have to straddle flat by the right amount rather than merely
+    differ: favourable is ~1.40x flat here and adverse ~0.77x, and abs() would
+    report 1.40x for both.
+    """
+    left, right = _annulus()                       # a LEFT-hander
+    _, line = min_curvature_line(left, right, iterations=2000)
+    theta = np.radians(15.0)
+    v_flat, kappa = speed_profile(line, 1.5, 9.81, 14.0, 9.0)
+    # +theta on a left-hander = the driver's left (the INSIDE) is higher = adverse.
+    v_adv, _ = speed_profile(line, 1.5, 9.81, 14.0, 9.0,
+                             bank=np.full(len(line), theta))
+    v_fav, _ = speed_profile(line, 1.5, 9.81, 14.0, 9.0,
+                             bank=np.full(len(line), -theta))
+
+    mu, g, t = 1.5, 9.81, np.tan(theta)
+    r_line = 1.0 / np.mean(kappa)                  # the solved line's own radius
+    expect_fav = np.sqrt(g * r_line * (mu + t) / (1.0 - mu * t))
+    expect_adv = np.sqrt(g * r_line * (mu - t) / (1.0 + mu * t))
+    assert expect_adv < np.mean(v_flat) < expect_fav        # the fixture separates them
+    assert abs(np.mean(v_fav) - expect_fav) < 0.05 * expect_fav
+    assert abs(np.mean(v_adv) - expect_adv) < 0.05 * expect_adv
+
+
+def test_flat_and_near_flat_banking_leave_the_profile_alone():
+    left, right = _annulus()
     _, line = min_curvature_line(left, right, iterations=2000)
     v_flat, _ = speed_profile(line, 1.5, 9.81, 14.0, 9.0)
-    bank = np.full(len(line), np.radians(20.0))  # 20 deg positive bank
-    v_banked, _ = speed_profile(line, 1.5, 9.81, 14.0, 9.0, bank=bank)
-    assert v_banked.mean() > v_flat.mean()
-    # bank=None and bank=zeros must match the flat case exactly
+    # bank=None, bank=zeros and a 0.01 deg cross-slope all read as flat
     v_zero, _ = speed_profile(line, 1.5, 9.81, 14.0, 9.0, bank=np.zeros(len(line)))
     assert np.allclose(v_zero, v_flat)
+    v_tiny, _ = speed_profile(line, 1.5, 9.81, 14.0, 9.0,
+                              bank=np.full(len(line), np.radians(0.01)))
+    assert np.allclose(v_tiny, v_flat, rtol=1e-3)
 
 
 def test_telem_calibration_raises_corner_speed_cap():
