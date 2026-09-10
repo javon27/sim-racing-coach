@@ -213,9 +213,13 @@ def test_self_promoting_a_shipped_map_is_a_byte_identical_no_op(tmp_path):
     guard wrongly classifies stale all show up as a byte diff here.
 
     Copies into tmp_path; simcoach/tracks/ is read-only to this test."""
+    # Only the FULL maps: a promotable map carries reconstructed path geometry, which is
+    # what lets corner direction be re-derived. Two shipped files are deliberately not
+    # that and promote refuses both -- test_track.json (a fixture, no length) and
+    # circuit_de_spa_francorchamps.json (hand-authored corners, `length_m`, no path).
     maps = [p for p in sorted(SHIPPED_DIR.glob("*.json"))
-            if json.loads(p.read_text(encoding="utf-8")).get("length")]
-    assert len(maps) >= 11, "expected the shipped corner maps"   # test_track.json has no length
+            if (d := json.loads(p.read_text(encoding="utf-8"))).get("length") and d.get("path")]
+    assert len(maps) >= 11, "expected the shipped corner maps"
     src_dir, tracks = tmp_path / "src", _tracks(tmp_path)
     src_dir.mkdir()
     for p in maps:
