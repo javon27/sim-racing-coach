@@ -6,6 +6,7 @@ import pytest
 
 from simcoach.analysis import analyze_lap
 from simcoach.corners import Corner, CornerMap, compute_direction, in_window
+from simcoach.format import format_corner_line
 from simcoach.model_types import LapRecord
 
 # A corner sitting on the S/F line: window wraps 4800 -> 100, apex just before S/F.
@@ -40,6 +41,71 @@ def test_analyze_lap_metrics_for_seam_corner():
     assert cm.min_spd == 30.0            # min taken across BOTH sides of the seam
     assert not np.isnan(cm.entry_spd)    # window wasn't empty (would be nan on a bad mask)
     assert cm.direction == "left"
+
+
+def test_brake_point_reaches_back_across_the_seam():
+    """Issue #7: apex just AFTER S/F, braking just BEFORE it. The approach look-back
+    has to wrap, and the brake point has to come back on the apex's side of the seam
+    so every consumer's `apex_dist - brake_point` stays a positive metres-before-apex."""
+    corner = Corner(1, "Seam", "right", start_dist=4900.0, apex_dist=60.0, end_dist=200.0)
+    dist = np.arange(0.0, 5000.0, 10.0)
+    brake = np.where((dist >= 4750.0) & (dist <= 4950.0), 1.0, 0.0)  # released before S/F
+    speed = np.where(brake > 0, 80.0, 200.0)
+    rec = LapRecord("lmu", "T", "C", 90.0, True, 0.0, {
+        "lap_distance": dist, "speed": speed, "brake": brake,
+        "throttle": 1.0 - brake, "steering": np.full(dist.size, 0.4),
+    })
+    cm = analyze_lap(rec, CornerMap([corner], length=5000.0)).corners[0]
+    assert cm.brake_point == 4750.0 - 5000.0        # unwrapped onto the apex's side
+    assert cm.apex_dist - cm.brake_point == 310.0   # a real "310m before apex" figure
+    assert "brake 310m before apex" in format_corner_line(cm)
+
+
+def test_approach_look_back_crosses_the_seam_for_a_corner_starting_at_zero():
+    """The same defect's live half: a window that does NOT wrap but starts at S/F
+    (Imola's T1 is [0.0, 200.9]). Its braking happens before the line, so the 250 m
+    approach look-back has to wrap too instead of clamping at lap_distance 0."""
+    corner = Corner(1, "Tamburello", "right", start_dist=0.0, apex_dist=60.0, end_dist=200.0)
+    dist = np.arange(0.0, 5000.0, 10.0)
+    brake = np.where((dist >= 4800.0) & (dist <= 4950.0), 1.0, 0.0)  # all before S/F
+    speed = np.where(brake > 0, 80.0, 200.0)
+    rec = LapRecord("lmu", "T", "C", 90.0, True, 0.0, {
+        "lap_distance": dist, "speed": speed, "brake": brake,
+        "throttle": 1.0 - brake, "steering": np.full(dist.size, 0.4),
+    })
+    cm = analyze_lap(rec, CornerMap([corner], length=5000.0)).corners[0]
+    assert cm.brake_point == 4800.0 - 5000.0
+    assert cm.apex_dist - cm.brake_point == 260.0
+
+
+def _throttle_lap(on_lo, on_hi, length=5000.0, step=10.0):
+    """A lap at a steady speed with the throttle above the 0.8 gate only in
+    [on_lo, on_hi], and braking everywhere else so the corner has a min-speed point."""
+    dist = np.arange(0.0, length, step)
+    on = (dist >= on_lo) & (dist <= on_hi)
+    return LapRecord("lmu", "T", "C", 90.0, True, 0.0, {
+        "lap_distance": dist, "speed": np.where(on, 200.0, 80.0),
+        "brake": np.where(on, 0.0, 1.0), "throttle": np.where(on, 1.0, 0.0),
+        "steering": np.full(dist.size, -0.4),
+    })
+
+
+def test_throttle_point_on_a_wrap_corner_whose_apex_precedes_the_seam():
+    """start 4800 -> apex 4950 -> seam -> end 100. A throttle-on sample BEFORE the
+    apex is not a throttle point at all (the clause stays silent); one after the
+    apex reports its real distance, seam or no seam -- never apex + a whole lap."""
+    corner = Corner(1, "Seam", "left", start_dist=4800.0, apex_dist=4950.0, end_dist=100.0)
+    cmap = CornerMap([corner], length=5000.0)
+
+    early = analyze_lap(_throttle_lap(4810.0, 4820.0), cmap).corners[0]
+    assert early.throttle_point is None                       # before the apex: no point
+    assert "back to throttle" not in format_corner_line(early)
+
+    late = analyze_lap(_throttle_lap(4990.0, 5000.0), cmap).corners[0]
+    assert late.throttle_point - late.apex_dist == 40.0       # 4990, still pre-seam
+
+    across = analyze_lap(_throttle_lap(0.0, 60.0), cmap).corners[0]
+    assert across.throttle_point - across.apex_dist == 50.0   # 0.0, one lap on
 
 
 def _write(tmp_path, corners):

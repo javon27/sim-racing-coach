@@ -341,7 +341,7 @@ def test_note_key_binds_distributes_over_labels():
     # could disagree the guard would delete notes the coach still serves.
     keys = ["7", "11-13", "13-11", "1-100", "1-101", "2A-2B", "1-999999999", "0", ""]
     label_sets = [set(), {"7"}, {"12"}, {"11", "12", "13"}, {"8A", "12"},
-                  {"²", "7"}, {"100", "101"}, {"0"}, {""}]
+                  {"²", "7"}, {"²", "3A"}, {"100", "101"}, {"0"}, {""}]
     for key in keys:
         for labs in label_sets:
             assert note_key_binds(key, labs) == any(note_key_binds(key, {lab}) for lab in labs), \
