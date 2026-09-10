@@ -35,6 +35,7 @@ import json
 import math
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 from simcoach.corners import Corner, clamp_corner_windows, in_window, validated_sectors
@@ -204,7 +205,7 @@ def promote(src: Path | str, tracks_dir: Path | str = TRACKS_DIR, *,
         try:
             old = target.read_bytes()
             shipped = json.loads(old.decode("utf-8"))
-        except (OSError, UnicodeDecodeError, ValueError) as e:
+        except (OSError, ValueError) as e:        # UnicodeDecodeError is a ValueError
             # A directory, a no-read file, a bad encoding, or a HALF-WRITTEN map. The
             # last is the recovery path after an interrupted promote, so it has to say
             # what to do rather than traceback out of the drift check.
@@ -252,18 +253,36 @@ def promote(src: Path | str, tracks_dir: Path | str = TRACKS_DIR, *,
 
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = _serialize(out)
-    # Atomic, the same way scripts/backfill_sectors.py writes these files: a sibling
-    # tmp then rename over the map. write_bytes truncates first, so an abort between
-    # truncate and write left a SHIPPED map empty -- the worst thing this script can
-    # do. `finally` guarantees no .tmp is left behind on either path.
-    tmp = target.with_suffix(".json.tmp")
+    # Atomic: write a sibling tmp, then rename over the map. write_bytes truncates
+    # first, so an abort between truncate and write left a SHIPPED map empty -- the
+    # worst thing this script can do.
+    #
+    # mkstemp, not a fixed `<slug>.json.tmp`: it opens O_CREAT|O_EXCL, so a planted
+    # tmp SYMLINK can't be followed out of the tracks dir (the target's is_symlink
+    # check above doesn't cover the tmp path), the name is unique so two concurrent
+    # promotes neither collide nor unlink each other's tmp in `finally`, and a tmp
+    # orphaned by SIGKILL can't block a later promote. Same directory as the target,
+    # which is what keeps os.replace atomic.
+    #
+    # A SIGKILL still leaves that tmp behind -- `finally` cannot run -- and that is
+    # accepted: the app only ever looks up `<slug>.json` and globs `*.json`.
+    fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=f"{slug}.", suffix=".json.tmp")
+    tmp, replaced = Path(tmp_name), False
     try:
-        tmp.write_bytes(payload)
+        with os.fdopen(fd, "wb") as f:
+            f.write(payload)
         os.replace(tmp, target)
+        replaced = True
         if json.loads(target.read_bytes().decode("utf-8")) != out:
             raise PromoteError(f"{target}: written file did not read back as written")
-    except OSError as e:
-        raise PromoteError(f"{target}: could not write ({e}); the map is unchanged") from None
+    except (OSError, ValueError) as e:
+        # Word it from `replaced`: after the rename the file IS the new one, and saying
+        # "unchanged" there contradicts the `git checkout --` advice it exists for.
+        # ValueError covers the read-back's json.loads, which is not an OSError.
+        raise PromoteError(
+            f"{target}: {'replaced, but could not verify' if replaced else 'could not write'} "
+            f"({e}); {'restore it with `git checkout --`' if replaced else 'the map is unchanged'}"
+        ) from None
     finally:
         tmp.unlink(missing_ok=True)
     return target

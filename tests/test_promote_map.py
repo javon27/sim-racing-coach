@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts import promote_map
 from scripts.promote_map import PromoteError, main, promote
 
 SHIPPED_DIR = Path(__file__).resolve().parents[1] / "simcoach" / "tracks"
@@ -283,17 +284,19 @@ def test_an_interrupted_write_leaves_the_shipped_map_intact(tmp_path, monkeypatc
     target = tracks / "user_built_circuit.json"
     before = target.read_bytes()
 
-    real = Path.write_bytes
-    def interrupted(self, data):          # truncated, as a real aborted write leaves it
-        real(self, b"")
+    # Inject at the rename, not at the write call: that pins "the payload is written
+    # somewhere else and renamed into place" without naming the write API. A direct
+    # target.write_bytes() never reaches os.replace, so this does not raise at all --
+    # which is how the pre-fix code fails here.
+    def no_replace(src, dst):
         raise OSError(28, "No space left on device")
-    monkeypatch.setattr(Path, "write_bytes", interrupted)
+    monkeypatch.setattr(promote_map.os, "replace", no_replace)
 
-    with pytest.raises(PromoteError, match="could not write|unchanged"):
+    with pytest.raises(PromoteError, match="could not write.*the map is unchanged"):
         promote(_src(tmp_path, _map(name="Replacement")), tracks, force=True)
     monkeypatch.undo()
     assert target.read_bytes() == before                       # not truncated
-    assert list(tracks.iterdir()) == [target]                  # no .tmp left behind
+    assert list(tracks.iterdir()) == [target]                  # no tmp left behind
 
 
 def test_refuses_a_symlinked_target(tmp_path):
@@ -312,6 +315,70 @@ def test_refuses_a_symlinked_target(tmp_path):
         promote(_src(tmp_path, _map()), tracks)           # note: no force=True
     assert not outside.exists()
     assert link.is_symlink()                              # left alone, not written through
+
+
+def test_a_planted_tmp_symlink_cannot_escape_the_tracks_dir(tmp_path):
+    """The target's is_symlink gate doesn't cover the TMP path, so a planted
+    `<slug>.json.tmp` -> ../OUTSIDE.json was written through. mkstemp opens
+    O_CREAT|O_EXCL with a unique name, so the planted link is never opened at all."""
+    tracks = _tracks(tmp_path)
+    outside = tmp_path / "OUTSIDE.json"
+    planted = tracks / "user_built_circuit.json.tmp"
+    try:
+        planted.symlink_to(Path("..") / "OUTSIDE.json")
+    except OSError as e:
+        pytest.skip(f"cannot create symlinks here: {e}")
+    promote(_src(tmp_path, _map()), tracks)
+    assert not outside.exists(), "wrote outside the tracks dir through the tmp symlink"
+    assert planted.is_symlink()                   # untouched, not followed or replaced
+    assert json.loads((tracks / "user_built_circuit.json").read_text("utf-8"))["track"] \
+        == "user_built_circuit"
+
+
+def _fail_target_readback(monkeypatch, target, outcome):
+    """Break only the POST-replace read-back. `target` is read exactly twice: the
+    byte-fidelity drift check, then the read-back -- so the 2nd read is the one. If that
+    ever stops holding, the injection never fires and the test fails loudly."""
+    reads = {"n": 0}
+    real = Path.read_bytes
+    def counting(self):
+        if self == target:
+            reads["n"] += 1
+            if reads["n"] == 2:
+                if outcome == "oserror":
+                    raise OSError(5, "Input/output error")
+                return b"not json at all"          # -> json.loads ValueError
+        return real(self)
+    monkeypatch.setattr(Path, "read_bytes", counting)
+
+
+@pytest.mark.parametrize("outcome", ["oserror", "unparseable"])
+def test_a_failure_after_the_replace_says_the_map_was_replaced(tmp_path, monkeypatch,
+                                                               capsys, outcome):
+    """Pre- and post-replace failures shared one message, "the map is unchanged" -- a lie
+    after the rename, and it contradicts the `git checkout --` advice it exists for. The
+    unparseable case also pins that the read-back's json.loads raises ValueError, not
+    OSError, so the block has to catch both or it tracebacks."""
+    tracks = _tracks(tmp_path)
+    promote(_src(tmp_path, _map()), tracks)
+    target = tracks / "user_built_circuit.json"
+    before = target.read_bytes()
+
+    src = _src(tmp_path, _map(name="REPLACEMENT"))
+    _fail_target_readback(monkeypatch, target, outcome)
+    with pytest.raises(PromoteError, match="replaced, but could not verify"):
+        promote(src, tracks, force=True)
+    monkeypatch.undo()
+    assert target.read_bytes() != before                      # it really was swapped
+    assert json.loads(target.read_text("utf-8"))["name"] == "REPLACEMENT"
+    assert list(tracks.iterdir()) == [target]                 # no tmp left behind
+
+    _fail_target_readback(monkeypatch, target, outcome)
+    assert main(["user_built_circuit", "--from", str(src),
+                 "--tracks-dir", str(tracks), "--force"]) == 1
+    monkeypatch.undo()
+    err = capsys.readouterr().err
+    assert err.startswith("refused: ") and "git checkout --" in err
 
 
 def _unreadable_target(tracks, kind):
