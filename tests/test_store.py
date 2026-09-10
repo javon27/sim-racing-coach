@@ -1212,6 +1212,162 @@ def test_save_result_session_does_not_raid_a_sibling_session(tmp_path):
     assert len(s.session_lap_ids("P2")) == 2
 
 
+# --- v15 -> v16: clean the duplicates already in the db (issue #71) ------------
+# The rows the pre-#68 ingest left behind. These tests build that state the way the
+# old code did -- a raw INSERT per XML lap, no dedupe -- then stamp the db v15 and
+# reopen it, so they exercise the MIGRATION and not save_result_session's skip.
+
+
+def _insert_result_laps_unconditionally(s, times, session_id, track=_TRACK, car=_CAR,
+                                        phase="race", ts=_RACE_TS):
+    """Pre-#68 ingest: every XML lap inserted, duplicate or not."""
+    s.conn.executemany(
+        "INSERT INTO laps (ts, sim, track, car, lap_time, valid, telemetry_path, "
+        "phase, session_id, source) VALUES (?, 'lmu', ?, ?, ?, 1, NULL, ?, ?, 'result')",
+        [(ts, track, car, t, phase, session_id) for t in times])
+    s.conn.commit()
+
+
+def _stamp_v15_and_reopen(s, db, data_dir):
+    s.conn.execute("PRAGMA user_version = 15")
+    s.conn.commit()
+    s.conn.close()
+    from simcoach.store import LapStore
+    return LapStore(db, data_dir)
+
+
+def test_v16_migration_deletes_result_rows_of_a_fully_captured_race(tmp_path, synthetic_lap):
+    """Live capture got EVERY lap, so every result row is a duplicate and the race ends
+    at 9 rows, not 18. This shape is the one a fixture with an untimed lap hides: there
+    the leftover row makes a broken matcher look like it worked."""
+    from simcoach.store import SCHEMA_VERSION, LapStore
+    db, data = str(tmp_path / "c.sqlite"), str(tmp_path / "telem")
+    s = LapStore(db, data)
+    _capture_live_race(s, synthetic_lap)
+    live_ids = s.session_lap_ids(_LIVE_SID)
+    _insert_result_laps_unconditionally(s, _RESULT_TIMES_ALL_TIMED, _RESULT_SID)
+    assert s.conn.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 18
+
+    s2 = _stamp_v15_and_reopen(s, db, data)
+
+    assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    assert s2.conn.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 9
+    assert s2.session_lap_ids(_RESULT_SID) == []
+    # The survivors are the LIVE rows, by id -- not a same-count coincidence.
+    assert s2.session_lap_ids(_LIVE_SID) == live_ids
+    kept = s2.conn.execute(
+        "SELECT lap_time, position, telemetry_path IS NOT NULL FROM laps ORDER BY ts"
+    ).fetchall()
+    assert [r[0] for r in kept] == _LIVE_TIMES
+    assert [r[1] for r in kept] == _LIVE_PLACES
+    assert all(r[2] for r in kept)
+
+
+def test_v16_migration_keeps_the_lap_live_capture_missed(tmp_path, synthetic_lap):
+    """Live capture got only SOME of the race. The 9 duplicated rows go; the XML's
+    untimed lap -- the one lap no live row holds -- stays, so 19 rows become 10."""
+    from simcoach.store import LapStore
+    db, data = str(tmp_path / "c.sqlite"), str(tmp_path / "telem")
+    s = LapStore(db, data)
+    _capture_live_race(s, synthetic_lap)
+    _insert_result_laps_unconditionally(s, _RESULT_TIMES, _RESULT_SID)
+    assert s.conn.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 19
+
+    s2 = _stamp_v15_and_reopen(s, db, data)
+
+    assert s2.conn.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 10
+    assert s2.conn.execute(
+        "SELECT lap_time, source FROM laps WHERE session_id = ?", (_RESULT_SID,)
+    ).fetchall() == [(None, "result")]
+    assert sorted(r[0] for r in s2.conn.execute(
+        "SELECT lap_time FROM laps WHERE source = 'live'")) == sorted(_LIVE_TIMES)
+
+
+def test_v16_migration_is_idempotent(tmp_path, synthetic_lap):
+    """Second run is a no-op: the matcher itself must find nothing, not merely be
+    gated off by the version stamp."""
+    from simcoach.store import LapStore, _duplicate_result_lap_ids
+    db, data = str(tmp_path / "c.sqlite"), str(tmp_path / "telem")
+    s = LapStore(db, data)
+    _capture_live_race(s, synthetic_lap)
+    _insert_result_laps_unconditionally(s, _RESULT_TIMES, _RESULT_SID)
+
+    s2 = _stamp_v15_and_reopen(s, db, data)
+    after = s2.conn.execute("SELECT id, lap_time, source FROM laps ORDER BY id").fetchall()
+    assert _duplicate_result_lap_ids(s2.conn) == []   # re-running the matcher finds nothing
+
+    s3 = _stamp_v15_and_reopen(s2, db, data)          # and re-running the migration too
+    assert s3.conn.execute("SELECT id, lap_time, source FROM laps ORDER BY id").fetchall() == after
+
+
+def test_v16_migration_keeps_result_rows_with_no_live_twin(tmp_path, synthetic_lap):
+    """Same lap times, but a different phase, a different car, or a week away are
+    different laps. Nothing here may be deleted -- a window-only matcher would eat them."""
+    from simcoach.store import LapStore
+    db, data = str(tmp_path / "c.sqlite"), str(tmp_path / "telem")
+    s = LapStore(db, data)
+    _capture_live_race(s, synthetic_lap)
+    _insert_result_laps_unconditionally(s, _RESULT_TIMES_ALL_TIMED, "q", phase="qualify")
+    _insert_result_laps_unconditionally(s, _RESULT_TIMES_ALL_TIMED, "other-car",
+                                        car="Other Team #5:WEC")
+    _insert_result_laps_unconditionally(s, _RESULT_TIMES_ALL_TIMED, "next-week",
+                                        ts=_RACE_TS + 7 * 86400)
+
+    s2 = _stamp_v15_and_reopen(s, db, data)
+
+    for sid in ("q", "other-car", "next-week"):
+        assert len(s2.session_lap_ids(sid)) == 9, sid
+    assert s2.conn.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 9 + 3 * 9
+
+
+def test_v16_migration_does_not_let_two_result_sessions_share_one_live_lap(tmp_path,
+                                                                          synthetic_lap):
+    """Two races in one sitting share a track/car/phase window and a session window,
+    and LMU writes them as separate files. Live capture holds race 1 only, so race 2's
+    rows are the only copy of race 2 and must all survive: one live row may absorb one
+    result row in total, not one per file."""
+    from simcoach.store import LapStore
+    db, data = str(tmp_path / "c.sqlite"), str(tmp_path / "telem")
+    s = LapStore(db, data)
+    _capture_live_race(s, synthetic_lap)
+    # Identical times in both files -- the adversarial case for a per-file match.
+    _insert_result_laps_unconditionally(s, _RESULT_TIMES_ALL_TIMED, "race-1")
+    _insert_result_laps_unconditionally(s, _RESULT_TIMES_ALL_TIMED, "race-2",
+                                        ts=_RACE_TS + 1800)
+
+    s2 = _stamp_v15_and_reopen(s, db, data)
+
+    # Exactly one file's worth of result rows goes -- the deletions are bounded by the
+    # 9 live laps, not by 9 per file -- and every live lap survives.
+    assert s2.conn.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 18
+    assert len(s2.session_lap_ids(_LIVE_SID)) == 9
+    assert len(s2.session_lap_ids("race-2")) == 9   # race 2's only copy
+    assert s2.session_lap_ids("race-1") == []       # the earlier file claims them
+
+
+def test_v16_migration_never_deletes_a_row_holding_telemetry(tmp_path, synthetic_lap):
+    """Belt and braces (#66): an `.npz` cannot be regenerated without re-driving, so a
+    row with a telemetry_path is spared even when the matcher says it is a duplicate.
+    Result rows carry NULL, so this only fires on a matching bug."""
+    from simcoach.store import LapStore
+    db, data = str(tmp_path / "c.sqlite"), str(tmp_path / "telem")
+    s = LapStore(db, data)
+    _capture_live_race(s, synthetic_lap)
+    _insert_result_laps_unconditionally(s, _RESULT_TIMES_ALL_TIMED, _RESULT_SID)
+    s.conn.execute(
+        "UPDATE laps SET telemetry_path = ? WHERE source = 'result' AND lap_time = ?",
+        (str(tmp_path / "telem" / "rogue.npz"), _RESULT_TIMES_ALL_TIMED[0]))
+    s.conn.commit()
+
+    s2 = _stamp_v15_and_reopen(s, db, data)
+
+    assert s2.conn.execute(
+        "SELECT lap_time FROM laps WHERE source = 'result'"
+    ).fetchall() == [(_RESULT_TIMES_ALL_TIMED[0],)]
+    # And the live lap it would have matched is untouched, not consumed by the spared row.
+    assert len(s2.session_lap_ids(_LIVE_SID)) == 9
+
+
 def test_lap_time_tolerance_does_not_merge_distinct_laps(tmp_path, synthetic_lap):
     """Pins _LAP_TIME_TOL_S from ABOVE as well as below. A lap 2 ms off a stored one is a
     DIFFERENT lap and must survive; only the rounding drift (<=5e-5 s) may be absorbed.

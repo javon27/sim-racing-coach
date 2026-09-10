@@ -74,7 +74,7 @@ def _session_base(sid: str) -> str:
     """The (track, car, mode) base of a session id, dropping any ~<instance> suffix."""
     return sid.split(_SESSION_SEP, 1)[0]
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
@@ -212,6 +212,69 @@ def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
     except sqlite3.OperationalError as e:
         if "duplicate column" not in str(e).lower():
             raise
+
+
+def _duplicate_result_lap_ids(conn: sqlite3.Connection) -> list[int]:
+    """The `source='result'` lap rows that duplicate a lap live capture already holds.
+
+    Read-only: it identifies rows, it does not delete them, so the v16 migration and a
+    dry-run against a copy of the real store run the SAME matcher. Issue #71 -- the
+    ingest-side skip (#68) stops NEW duplicates; these are the rows written before it.
+
+    The matcher is save_result_session's, run backwards. Each result row is matched
+    against the live rows of the same stint -- same track, car and phase, within the
+    session window of the result row's own ts -- by lap time within _LAP_TIME_TOL_S
+    (not `==`: the XML rounds to 4 decimals, e.g. 70.4068 vs 70.40680694580078), with
+    an untimed row matching only an untimed one. A live row absorbs at most one result
+    row, GLOBALLY (`claimed`), so two result files sharing a window cannot both delete
+    against the same live lap -- the count of rows this can remove is bounded by the
+    count of live laps. Groups run in `ts` order so which of two such files claims a
+    live lap is deterministic (the earlier one) rather than left to SQLite's grouping.
+
+    Two deliberate narrowings versus the ingest predicate, both so a lap that exists
+    only once is never in the delete set:
+
+    - Only `source = 'live'` rows are candidates, not the shipped predicate's
+      `source = 'live' OR session_id = ?`. That second half exists so a RE-import of a
+      file dedupes against its own earlier rows; here it would mean one result row
+      deleting another with no live twin at all. The session scoping it protects is
+      kept a different way: result rows are grouped BY session_id, so one result
+      session never matches against a sibling session's rows -- the scoping whose
+      absence ate 379 laps of 7,066 on a fresh import.
+    - A row with a telemetry_path is never returned, however it matched. The `.npz` is
+      the artifact that cannot be regenerated without re-driving (#66); result rows are
+      inserted with telemetry_path NULL, so this only ever fires on a matching bug.
+      It also means no deletion here can orphan or break a point-cloud file.
+    """
+    doomed: list[int] = []
+    claimed: set[int] = set()
+    groups = conn.execute(
+        "SELECT session_id, track, car, phase, ts FROM laps WHERE source = 'result' "
+        "GROUP BY session_id, track, car, phase, ts ORDER BY ts").fetchall()
+    for sid, track, car, phase, ts in groups:
+        query = ("SELECT id, lap_time FROM laps WHERE source = 'live' "
+                 "AND track IS ? AND car IS ? AND phase IS ?")
+        params: list = [track, car, phase]
+        if ts is not None:
+            query += " AND ts BETWEEN ? AND ?"
+            params += [ts - _SESSION_GAP_S, ts + _SESSION_GAP_S]
+        unclaimed = [r for r in conn.execute(query, params).fetchall() if r[0] not in claimed]
+        rows = conn.execute(
+            "SELECT id, lap_time FROM laps WHERE source = 'result' AND session_id IS ? "
+            "AND track IS ? AND car IS ? AND phase IS ? AND ts IS ? "
+            "AND telemetry_path IS NULL ORDER BY id",
+            (sid, track, car, phase, ts)).fetchall()
+        for rid, lap_time in rows:
+            if lap_time is None:
+                at = next((k for k, (_, t) in enumerate(unclaimed) if t is None), None)
+            else:
+                at = next((k for k, (_, t) in enumerate(unclaimed)
+                           if t is not None and abs(t - lap_time) <= _LAP_TIME_TOL_S), None)
+            if at is None:
+                continue
+            claimed.add(unclaimed.pop(at)[0])
+            doomed.append(rid)
+    return doomed
 
 
 def _decode(tc):
@@ -367,6 +430,29 @@ class LapStore:
                     "CREATE TABLE IF NOT EXISTS ingested_files (path TEXT PRIMARY KEY, mtime REAL)"
                 )
                 self.conn.execute("DELETE FROM ingested_files")
+            if current_version < 16:
+                # v15 -> v16: delete the result-log lap rows that duplicate a lap live
+                # capture already holds (issue #71). v15's fix stops NEW duplicates on
+                # ingest; the rows written before it are still there -- 19 rows for a
+                # 10-lap race, with the result copy carrying no telemetry, no per-lap
+                # position and no sector bounds, so anything that COUNTS is wrong while
+                # anything that averages still looks right.
+                #
+                # _duplicate_result_lap_ids only ever returns a result row whose lap a
+                # live row also holds, and never one with a telemetry_path, so this can
+                # neither delete a uniquely-held lap nor orphan an `.npz`. Idempotent:
+                # a second run finds those rows gone and matches nothing.
+                #
+                # Guarded on every column the matcher READS, not just on the table
+                # existing like the v6/v9 steps: a db that has never held a result lap
+                # can be missing any of them (some tests build a bare `laps` of two
+                # columns), and there is nothing to clean in one anyway.
+                cols = {r[1] for r in self.conn.execute("PRAGMA table_info(laps)")}
+                if {"id", "source", "telemetry_path", "track", "car", "phase", "ts",
+                        "lap_time", "session_id"} <= cols:
+                    self.conn.executemany(
+                        "DELETE FROM laps WHERE id = ?",
+                        [(i,) for i in _duplicate_result_lap_ids(self.conn)])
         if current_version != SCHEMA_VERSION:
             self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self.conn.commit()
