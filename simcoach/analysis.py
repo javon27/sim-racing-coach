@@ -352,6 +352,22 @@ def analyze_lap(
     )
 
 
+# The per-corner geometry metrics `corner_geometry` can emit, in the order they are
+# baked. One owner because three writers touch them -- the backfill script that bakes
+# them, the editor's save path that carries them forward, and this function -- and a
+# key missing from one of those lists is a metric silently dropped on save (#62).
+CORNER_GEOMETRY_KEYS = ("radius_m", "width_m", "banking_deg", "elev_delta_m")
+
+# Which of those are SIGNED measurements rather than lengths. A signed one is
+# legitimately zero or negative (a flat corner, a downhill one); a length cannot be, so
+# a stored radius/width <= 0 did not come from a measurement and a save recomputes it
+# instead of preserving it. Kept HERE, beside the key list, rather than inline at the
+# one use site: a metric added to one list and not the other silently inherits the wrong
+# rule, and "one writer's list missing a key" is exactly what deleted Laguna's
+# width/banking (#62). Add a fifth metric -> classify it here in the same edit.
+SIGNED_GEOMETRY_KEYS = frozenset({"banking_deg", "elev_delta_m"})
+
+
 def corner_geometry(path, dist, corners, *, width=None, bank=None, elev=None):
     """Per-corner physical geometry for coach grounding (pure, deterministic).
 
