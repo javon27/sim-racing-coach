@@ -17,8 +17,16 @@ class CornerMetrics:
     apex_spd: float
     min_spd: float
     exit_spd: float
-    brake_point: float
-    throttle_point: float
+    # None = no such point exists in this corner: the driver never braked / never got
+    # past the throttle gate. A distance sentinel can't express that -- any value here
+    # reads as a real point to anything computing `apex_dist - brake_point`, and stays
+    # silent only while it happens to sit on the correct side of apex_dist.
+    # brake_point may legitimately be NEGATIVE: a corner braking across the S/F seam
+    # reports a distance before the line, so `apex_dist - brake_point` stays a positive
+    # metres-before-apex (#7). Not-None + negative is a valid state; only "not found"
+    # is None.
+    brake_point: float | None
+    throttle_point: float | None
     trailbrake_overlap: float
     peak_brake: float = 0.0          # max brake input in the corner (0..1)
     peak_lat_g: float = 0.0          # max |lateral g| — how hard the car was loaded
@@ -91,7 +99,9 @@ def _tire_summary(record: LapRecord):
     return means, (early, late)
 
 
-def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
+def _metrics_for_corner(
+    record: LapRecord, corner: Corner, length: float | None = None
+) -> CornerMetrics:
     dist = record.channels["lap_distance"]
     speed = record.channels["speed"]
     brake = record.channels["brake"]
@@ -101,8 +111,20 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
     label = corner.label or str(corner.number)
     apexes = list(corner.apexes) if corner.apexes else [corner.apex_dist]
 
+    # Lap length: the modulus everything that reasons across the S/F seam needs.
+    # Fall back to the lap's own furthest distance for maps that declare no length
+    # (within a sample of the truth, which is well under coaching resolution).
+    lap_len = float(length) if length else float(np.nanmax(dist))
+
     mask = in_window(dist, corner.start_dist, corner.end_dist)  # wrap-aware (S/F seam)
     idx = np.where(mask)[0]
+    wrap = corner.start_dist > corner.end_dist
+    if wrap and idx.size:
+        # Sample ORDER is not along-track order once a window straddles S/F: the
+        # post-seam samples (lap_distance ~0) sort first. Re-order along the window
+        # so entry/exit/throttle -- all of which read the window front-to-back --
+        # mean what they say (issue #7). Non-wrapping windows are left untouched.
+        idx = idx[np.argsort((dist[idx] - corner.start_dist) % lap_len)]
 
     if idx.size == 0:
         # Degenerate window: no telemetry samples fall inside this corner.
@@ -115,8 +137,8 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
             apex_spd=float("nan"),
             min_spd=float("nan"),
             exit_spd=float("nan"),
-            brake_point=corner.end_dist,
-            throttle_point=corner.end_dist,
+            brake_point=None,
+            throttle_point=None,
             trailbrake_overlap=0.0,
             label=label, apexes=apexes,
         )
@@ -138,8 +160,8 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
             apex_spd=float("nan"),
             min_spd=float("nan"),
             exit_spd=float("nan"),
-            brake_point=corner.end_dist,
-            throttle_point=corner.end_dist,
+            brake_point=None,
+            throttle_point=None,
             trailbrake_overlap=0.0,
             label=label, apexes=apexes,
         )
@@ -161,24 +183,47 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
     # corner's braking doesn't bleed in.
     # ponytail: fixed 250 m look-back; the contiguous-run isolation guards the common
     # case, but two heavy-braking corners <250 m apart could still confuse it.
-    appr = np.where(in_window(dist, corner.start_dist - 250.0, corner.apex_dist))[0]
-    brake_point = corner.end_dist
-    if appr.size:
-        ad, on = dist[appr], brake[appr] > 0.1
-        aj = int(np.argmin(np.abs(ad - corner.apex_dist)))
-        j = aj
-        while j >= 0 and not on[j]:  # nearest braking sample at/before the apex
-            j -= 1
-        if j >= 0:
+    #
+    # Both the look-back and the walk are done on a wrap-aware "metres BEFORE the
+    # apex" axis (issue #7). A raw distance window loses the approach whenever it
+    # crosses S/F -- `start_dist - 250` goes negative and clamps at the line -- and
+    # even a wrap-aware mask can't be walked by array index, because the samples
+    # either side of the seam are not in distance order.
+    back = (corner.apex_dist - dist) % lap_len       # 0 at the apex, grows backwards
+    sel = np.where(back <= (corner.apex_dist - corner.start_dist + 250.0) % lap_len)[0]
+    brake_point = None   # no braking found; never a distance standing in for that
+    if sel.size:
+        order = sel[np.argsort(back[sel], kind="stable")]  # apex first, then backwards
+        on = brake[order] > 0.1
+        j = 0
+        while j < on.size and not on[j]:  # nearest braking sample at/before the apex
+            j += 1
+        if j < on.size:
             k = j
-            while k > 0 and on[k - 1]:  # walk back through its contiguous run
-                k -= 1
-            brake_point = float(ad[k])
+            while k + 1 < on.size and on[k + 1]:  # walk back through its contiguous run
+                k += 1
+            d0 = float(dist[order[k]])
+            # Selected samples sit at/before the apex on the wrapped axis, so a raw
+            # distance ABOVE the apex is one that crossed S/F -- shift it a lap back
+            # rather than report a "brake point" the apex appears to precede.
+            brake_point = d0 - lap_len if d0 > corner.apex_dist else d0
 
+    # Throttle point: first sample past the 0.8 gate at/after the min-speed point, and
+    # None when there isn't one. Explicitly None rather than a distance sentinel -- the
+    # old `corner.end_dist` sits AFTER the apex by construction, so format_corner_line
+    # rendered (end_dist - apex_dist) as "back to throttle Nm after apex" for every
+    # corner the driver never took past 80% throttle: track geometry stated to the
+    # coach as a driver input.
     after_min = np.where(win_throttle[min_i:] > 0.8)[0]
-    throttle_point = (
-        float(win_dist[min_i + after_min[0]]) if after_min.size else corner.end_dist
-    )
+    throttle_point = None
+    if after_min.size:
+        d1 = float(win_dist[min_i + after_min[0]])
+        # Is d1 at/after the apex? Not "d1 >= apex_dist" -- across the seam the later
+        # distance is the SMALLER number. Measure forward from the apex, wrap-aware,
+        # and accept only what still lands inside the corner's post-apex extent.
+        fwd = (d1 - corner.apex_dist) % lap_len
+        if fwd <= (corner.end_dist - corner.apex_dist) % lap_len:
+            throttle_point = d1 if d1 >= corner.apex_dist else d1 + lap_len
 
     trailbrake_overlap = float(np.mean((win_brake > 0.1) & (np.abs(win_steering) > 0.1)))
     peak_brake = float(np.nanmax(win_brake)) if win_brake.size else 0.0
@@ -288,7 +333,8 @@ def analyze_lap(
     if reference is not None and reference.track != record.track:
         raise ValueError(f"reference lap track {reference.track!r} != {record.track!r}")
 
-    corners = [_metrics_for_corner(record, corner) for corner in cmap.corners]
+    length = cmap.length
+    corners = [_metrics_for_corner(record, corner, length) for corner in cmap.corners]
 
     # Tag each corner with the named section its apex falls in (e.g. "The Corkscrew").
     for cm in corners:
@@ -299,7 +345,7 @@ def analyze_lap(
 
     has_reference = reference is not None
     if has_reference:
-        ref_metrics = {c.number: _metrics_for_corner(reference, c) for c in cmap.corners}
+        ref_metrics = {c.number: _metrics_for_corner(reference, c, length) for c in cmap.corners}
         for cm in corners:
             ref = ref_metrics.get(cm.corner_no)
             if ref is not None and not np.isnan(cm.min_spd) and not np.isnan(ref.min_spd):
