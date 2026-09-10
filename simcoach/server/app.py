@@ -668,6 +668,50 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                  "track_name": _track_file_data(slug).get("name") or slug}
         return m
 
+    def _carry_notes(existing: dict, corners: list, track: str) -> dict | None:
+        # Carry the authored notes overlay across a map write instead of wiping it
+        # (#37) -- but per-corner notes are keyed by corner LABEL, and a rebuild
+        # can re-split a chicane or relabel '2' as '2A'/'2B'. A stale key then
+        # rebinds a note to a DIFFERENT corner, which get_corner states as owned
+        # fact ("Authored note: ...") -- worse than losing it. So keep a per-corner
+        # note only when the corner count is unchanged AND its label still exists;
+        # overview/reference_times/source are not corner-keyed, always keep those.
+        #
+        # SINGLE OWNER of this rule. Every writer of a track file's corner map --
+        # _persist_map (editor save) and mapcapture_save (capture -> ribbon save) --
+        # routes through here and never re-derives it. mapcapture_save used to build
+        # its payload from scratch with no notes key at all, so "Save ribbon" silently
+        # deleted every authored note for that track; a SECOND copy of this rule,
+        # rather than a second owner, is how the same data was lost elsewhere.
+        old_notes = existing.get("notes") or {}
+        if not old_notes:
+            return None
+        old_corners = {str(k): v for k, v in (old_notes.get("corners") or {}).items()}
+        same_count = len(existing.get("corners") or []) == len(corners)
+        # str(...): the predicate below probes this set by STRING key, so build it as
+        # strings unconditionally rather than trusting every writer's label type.
+        labels = {str(c.get("label") or c.get("number")) for c in corners}
+        # MERGE NOTE -- this branch forked before `note_key_binds` landed on main, and
+        # extracting this block out of _persist_map WILL conflict with it. Resolve by
+        # keeping this helper (one owner) and replacing the predicate below with
+        # `note_key_binds(k, labels)` from ..track_lookup, which is the authoritative
+        # rule: a key may name a RANGE ('2-4', '11-13' -- 16 of the 135 shipped keys),
+        # and testing the raw key against the labels deletes every range-keyed note.
+        # Do NOT resolve by restoring the inline copy, and do NOT drop note_key_binds.
+        kept = {k: v for k, v in old_corners.items() if k in labels} if same_count else {}
+        notes = {**old_notes, "corners": kept}
+        dropped = {k: v for k, v in old_corners.items() if k not in kept}
+        if dropped:
+            # Loud, and with the text, so the author can recover it from the log.
+            logging.getLogger(__name__).warning(
+                "track %s: dropped %d authored per-corner note(s) on map save (%s); "
+                "re-author them against the new layout. Dropped: %s",
+                track_slug(track), len(dropped),
+                "corner count changed" if not same_count
+                else "the corners they name no longer exist",
+                json.dumps(dropped, ensure_ascii=False))
+        return notes if any(notes.values()) else None  # all-empty -> don't write a hollow block
+
     def _persist_map(track: str, car: str, body: dict) -> dict:
         # SAVE the editor's corner map + sectors as shipped owned data. Direction
         # is ALWAYS re-derived from the averaged path geometry here (never trusted
@@ -800,31 +844,9 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             out["name"] = name
         if keep_ribbon:
             out["ribbon"] = keep_ribbon  # keep the reconstructed surface across edits
-        old_notes = existing.get("notes") or {}
-        if old_notes:
-            # Carry the authored notes overlay across a rebuild instead of wiping it
-            # (#37) -- but per-corner notes are keyed by corner LABEL, and a rebuild
-            # can re-split a chicane or relabel '2' as '2A'/'2B'. A stale key then
-            # rebinds a note to a DIFFERENT corner, which get_corner states as owned
-            # fact ("Authored note: ...") -- worse than losing it. So keep a per-corner
-            # note only when the corner count is unchanged AND its label still exists;
-            # overview/reference_times/source are not corner-keyed, always keep those.
-            old_corners = {str(k): v for k, v in (old_notes.get("corners") or {}).items()}
-            same_count = len(existing.get("corners") or []) == len(corners)
-            labels = {c["label"] for c in corners}
-            kept = {k: v for k, v in old_corners.items() if k in labels} if same_count else {}
-            notes = {**old_notes, "corners": kept}
-            if any(notes.values()):   # all-empty -> don't write a hollow notes block
-                out["notes"] = notes
-            dropped = {k: v for k, v in old_corners.items() if k not in kept}
-            if dropped:
-                # Loud, and with the text, so the author can recover it from the log.
-                logging.getLogger(__name__).warning(
-                    "track %s: dropped %d authored per-corner note(s) on map save (%s); "
-                    "re-author them against the new layout. Dropped: %s",
-                    track_slug(track), len(dropped),
-                    "corner count changed" if not same_count else "labels no longer exist",
-                    json.dumps(dropped, ensure_ascii=False))
+        carried = _carry_notes(existing, corners, track)
+        if carried:
+            out["notes"] = carried
         _write_track_json(track, out)
         # Invalidate cmap + canonical caches so the next GET returns the new
         # canonical map (now frozen into the file).
@@ -1113,11 +1135,12 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         keys = ("number", "label", "name", "direction", "start_dist", "apex_dist",
                 "end_dist", "apexes")
         corners = [{k: c[k] for k in keys if k in c} for c in rib["corners"]]
+        existing = _track_file_data(track)
         out = {
             "track": track_slug(track),
             # Display name from the session (the live track), unless a custom name was
             # already set — so a saved layout carries its track name.
-            "name": _track_file_data(track).get("name") or track,
+            "name": existing.get("name") or track,
             "corners": corners,
             "ribbon": {k: world[k] for k in ("left", "right", "center", "width", "bank")},
             "path": world["center"],
@@ -1127,6 +1150,11 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             "length": world["dist"][-1] if world["dist"] else 0.0,
             "rotation": _track_rotation(track),  # preserve any existing rotation
         }
+        # _write_track_json REPLACES the file, so the authored notes overlay has to be
+        # carried forward here too -- same owner, same rule, as the editor's save.
+        carried = _carry_notes(existing, corners, track)
+        if carried:
+            out["notes"] = carried
         _write_track_json(track, out)
         # Persist the raw point cloud (app-data, not the repo tracks dir) so the
         # ribbon can be rebuilt after algorithm changes with no re-drive.
