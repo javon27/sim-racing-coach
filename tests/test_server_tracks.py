@@ -605,17 +605,21 @@ def test_dropped_note_log_is_bounded(tmp_path, caplog):
     four = _four_corners()
     assert client.put("/tracks/algarve_international_circuit/map",
                       json={"corners": four}).status_code == 200
-    # Near the most PUT /notes now accepts: 28 maxed notes, ~56 KB, just under the 64,000
-    # document cap. That is the ceiling on how much this one log call can be asked to write.
+    # THE most PUT /notes accepts at ~2000 chars a note: 31 of them, ~62 KB, just inside the
+    # 64,357-byte document cap (32 is refused). That is the ceiling on how much this one log
+    # call can ever be asked to write from this path -- and the bound is structural anyway,
+    # a fixed 20 keys x 200 chars, so no accepted payload of any size or encoding moves it.
     assert _put_notes(client, {str(n): f"note {n} " + "x" * 1980
-                               for n in range(1, 29)}).status_code == 200
-    with caplog.at_level(logging.WARNING, logger="simcoach.server.app"):
+                               for n in range(1, 32)}).status_code == 200
+    # The warning now comes from simcoach.track_lookup: the bound lives in
+    # `guard_corner_notes`, which the promote script shares with this save path.
+    with caplog.at_level(logging.WARNING, logger="simcoach.track_lookup"):
         r = client.put("/tracks/algarve_international_circuit/map",
                        json={"corners": four[:3]})      # count change -> drop them all
     assert r.status_code == 200, r.text
     assert _written(tracks_dir)["notes"]["corners"] == {}
     (rec,) = [x for x in caplog.records if "dropped" in x.getMessage()]
     msg = rec.getMessage()
-    assert len(msg) < 10_000, f"warning record is {len(msg)} chars"   # was the whole ~56 KB
-    assert "dropped 28 authored" in msg           # the exact count still reported
+    assert len(msg) < 10_000, f"warning record is {len(msg)} chars"   # was the whole ~62 KB
+    assert "dropped 31 authored" in msg           # the exact count still reported
     assert '"1": "note 1 ' in msg                 # and a sample is still recoverable

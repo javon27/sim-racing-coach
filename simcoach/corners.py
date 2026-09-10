@@ -1,4 +1,6 @@
+import itertools
 import json
+import math
 from dataclasses import dataclass, fields
 
 import numpy as np
@@ -28,6 +30,28 @@ class Corner:
     end_dist: float
     label: str = ""                       # displayed designation ("8A"); defaults to str(number)
     apexes: list[float] | None = None  # lap_distances; defaults to [apex_dist] (double-apex -> 2)
+
+
+def validated_sectors(sectors, length: float) -> list[float]:
+    """Sector splits as floats, or TypeError/ValueError naming what's wrong.
+
+    Sector splits are committed shipped data (#41 baked captured splits into all 11
+    maps), so the same rule has to hold wherever one is written: the editor's
+    `PUT .../map` and the promote-to-shipped script. Owned here rather than inline in
+    the endpoint so the two can't drift -- each caller catches (TypeError, ValueError)
+    and translates the message into its own refusal (HTTP 422 / `refused:`). Refuses;
+    never clamps or repairs."""
+    if not isinstance(sectors, list):
+        raise TypeError("sectors must be a list")
+    try:
+        out = [float(s) for s in sectors]
+    except (TypeError, ValueError):
+        raise ValueError("sectors must be numbers") from None
+    if any(not math.isfinite(s) or not (0.0 < s < length) for s in out):
+        raise ValueError("sector splits must be within (0, length)")
+    if any(a >= b for a, b in itertools.pairwise(out)):
+        raise ValueError("sector splits must be strictly increasing")
+    return out
 
 
 def clamp_corner_windows(corners: list[Corner], length: float | None) -> None:
@@ -96,8 +120,12 @@ class CornerMap:
     """Loads and queries corner data from a track map JSON file."""
 
     def __init__(self, corners: list[Corner], sections: list[dict] | None = None,
-                 notes: dict | None = None, geometry: dict | None = None):
+                 notes: dict | None = None, geometry: dict | None = None,
+                 length: float | None = None):
         self.corners = corners
+        # Lap length (m) when the map declares one. Kept because anything reasoning
+        # ACROSS the S/F seam (see analysis._metrics_for_corner) needs the modulus.
+        self.length = float(length) if length else None
         self.sections = sections or []
         self.notes = notes or {}
         # Baked per-corner geometry (radius_m/width_m/banking_deg/elev_delta_m),
@@ -148,8 +176,9 @@ class CornerMap:
             extra = {k: v for k, v in raw.items() if k not in _cf}
             if extra:
                 geometry[c.label] = extra
-        clamp_corner_windows(corners, data.get("length") or data.get("length_m"))
-        return cls(corners, _load_sections(data), data.get("notes") or {}, geometry)
+        length = data.get("length") or data.get("length_m")
+        clamp_corner_windows(corners, length)
+        return cls(corners, _load_sections(data), data.get("notes") or {}, geometry, length)
 
     def corner_at(self, dist: float) -> Corner | None:
         """Return the first corner whose window contains dist (inclusive; wrap-aware)."""

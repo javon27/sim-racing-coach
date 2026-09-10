@@ -28,9 +28,31 @@ def test_brake_point_found_when_braking_is_in_the_approach(synthetic_lap):
     brake[(dist >= c.start_dist - 120) & (dist < c.start_dist)] = 0.8  # approach only
     lap = LapRecord(**{**synthetic_lap.__dict__, "channels": {**ch, "brake": brake}})
     c1 = analyze_lap(lap, cmap).corners[0]
+    assert c1.brake_point is not None              # a point was actually found
     assert c1.brake_point < c.start_dist           # captured in the approach
     assert c1.brake_point < c1.apex_dist           # sane "before apex" readout
-    assert c1.brake_point != c.end_dist            # not the no-brake sentinel
+
+
+def test_no_brake_clause_when_the_driver_never_brakes(synthetic_lap):
+    """A corner taken flat has no brake point. The old sentinel was a distance at/after
+    the apex, which only stayed silent while it landed on that side -- the same shape
+    that made throttle_point render track geometry as a driver input. None cannot."""
+    import dataclasses
+
+    import numpy as np
+
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap
+    from simcoach.format import format_corner_line
+
+    ch = dict(synthetic_lap.channels)
+    ch["brake"] = np.zeros_like(ch["lap_distance"])   # flat all lap
+    lap = dataclasses.replace(synthetic_lap, channels=ch)
+    c1 = analyze_lap(lap, CornerMap.load("simcoach/tracks/test_track.json")).corners[0]
+
+    assert c1.brake_point is None
+    line = format_corner_line(c1, "metric")
+    assert "before apex" not in line and "no heavy braking" in line
 
 
 def test_tire_summary_and_prompt(synthetic_lap):
@@ -49,22 +71,152 @@ def test_tire_summary_and_prompt(synthetic_lap):
     assert "Tire temps" in user and "FL" in user and "warm-up" in user.lower()
 
 
-def test_wheel_report_and_min_grip(synthetic_lap):
+def test_wheel_report(synthetic_lap):
     from simcoach.analysis import analyze_lap
-    from simcoach.coach import Coach
     from simcoach.corners import CornerMap
     from simcoach.format import format_wheel_report
-    from simcoach.model.fake import FakeModel
     cmap = CornerMap.load("simcoach/tracks/test_track.json")
     a = analyze_lap(synthetic_lap, cmap)
-    # min grip dips to 0.9 in the braking corners
-    assert abs(a.corners[0].min_grip - 0.9) < 1e-9
     # lap-level wheel report: brake temps, pressures, wear
     rep = format_wheel_report(a, "metric")
     assert "Brake temps" in rep and "wear" in rep.lower()
-    # surfaced in the prompt corner line
-    _, user = Coach(FakeModel()).build_prompt(a, "car", "grip?")
-    assert "min grip" in user
+
+
+def test_min_grip_is_not_a_field_or_output(synthetic_lap):
+    # Issue #43: mGripFract is never populated by LMU (rig-confirmed flat 0.0
+    # always, 157/157 stored laps), so "min grip" was a fabricated reading on
+    # every corner ever analysed. There is no grip signal to recover -- the
+    # field and its output line must both be gone, not re-derived.
+    from simcoach.analysis import CornerMetrics, analyze_lap
+    from simcoach.corners import CornerMap
+    from simcoach.format import format_lap_facts
+    assert not hasattr(CornerMetrics, "min_grip")
+    assert "min_grip" not in CornerMetrics.__dataclass_fields__
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    a = analyze_lap(synthetic_lap, cmap)
+    assert "grip" not in format_lap_facts(a).lower()
+
+
+def test_corner_metrics_fields_vary_or_are_allowlisted():
+    # #43's min_grip reached coach output as a real per-corner measurement
+    # because the only guard was isnan, and LMU's channel (always flat 0.0)
+    # is non-nan. This test catches the general SHAPE of that: a per-corner
+    # derivation whose result doesn't actually depend on its per-corner input.
+    # It does NOT prove a source channel is live or dead at the game level --
+    # that needs real capture (scripts/dead_channel_sweep.py reads what LMU
+    # actually wrote). This test only walks every numeric CornerMetrics field
+    # by reflection and demands two corners driven with distinctly different
+    # inputs produce distinctly different values. A field that comes back
+    # identical either ignores its input (the bug) or this fixture doesn't
+    # exercise it differently (yet) -- fix the fixture, or allowlist it with
+    # a reason. It can't pass silently either way.
+    import dataclasses
+    import math
+
+    import numpy as np
+
+    from simcoach.analysis import CornerMetrics, analyze_lap
+    from simcoach.corners import CornerMap
+    from simcoach.model_types import LapRecord
+
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")  # corner1 800-1200, corner2 2000-2400
+    n = 1000
+    dist = np.linspace(0, 3000, n)
+    in1 = (dist > 800) & (dist < 1200)
+    in2 = (dist > 2000) & (dist < 2400)
+    # Corner1: a REAL coast -- brake released at 1000, throttle not applied
+    # until 1080, nothing in between. Corner2: brake stays on right up to (and
+    # through) the throttle application at 2200 -- full overlap, zero coast.
+    # This contrast is deliberate, not incidental: a flat/mirrored fixture here
+    # previously made trailbrake_overlap AND a future coast-distance field tie
+    # between the two corners even though neither was a dead channel -- they
+    # just weren't being driven differently. See the plan at
+    # docs/superpowers/plans/2026-09-08-engineer-grade-analysis.md for the
+    # coast_dist / apex_gear fields this sets up for (not added here -- #38).
+    brake_zone1 = (dist > 800) & (dist < 1000)
+    # 1000 <= dist < 1080 is the gap itself -- neither pedal touched, left as
+    # the default 0.0 below rather than given its own mask.
+    throttle_zone1 = (dist >= 1080) & (dist < 1200)
+    after2 = (dist > 2200) & (dist < 2400)         # corner2's throttle-on phase
+
+    speed = np.full(n, 80.0)
+    speed[in1], speed[in2] = 30.0, 50.0                    # different apex speeds
+    brake = np.zeros(n)
+    brake[brake_zone1] = 0.8                               # corner1: released before the apex
+    brake[in2] = 0.5                                       # corner2: held the whole window
+    throttle = np.zeros(n)
+    throttle[throttle_zone1] = 1.0
+    throttle[after2] = 1.0
+    steer = np.zeros(n)
+    steer[in1] = -0.5                                      # corner1: steering held all the way through
+    steer[in2] = 0.8                                       # corner2: steering held all the way through
+    lat_g = np.where(in1, -1.0, np.where(in2, 1.6, 0.1))   # independent, different peak per corner
+    long_g = np.zeros(n)
+    long_g[brake_zone1] = -1.4
+    long_g[throttle_zone1] = 0.3
+    long_g[in2 & ~after2] = -0.9
+    long_g[after2] = 0.6
+    abs_active = np.zeros(n)
+    abs_active[brake_zone1] = 1.0                          # ABS only in corner1's braking phase
+    tc_active = np.zeros(n)
+    tc_active[after2] = 1.0                                # TC only in corner2's exit
+    track_edge = np.where(in1, 4.0, np.where(in2, 5.0, 10.0))
+    path_lateral = np.where(in1, 3.8, np.where(in2, 4.0, 0.0))
+    # Different gears per corner (3rd vs 4th) -- realistic, and ready for a
+    # future apex_gear field (#38) so it won't tie the way coast_dist would
+    # have. No CornerMetrics field reads "gear" yet; this channel is unused
+    # today and costs nothing to have ready.
+    gear = np.full(n, 5.0)
+    gear[in1], gear[in2] = 3.0, 4.0
+    # A raw channel shaped like LMU's real mGripFract: flat 0.0 everywhere,
+    # never responding to the very different braking/steering above. Captured
+    # (real capture keeps sampling it, see smm.py), but must never surface as
+    # a measurement -- this is the regression for #43 specifically, not what
+    # the loop below is generally checking for (see the assertion message).
+    dead = np.zeros(n)
+
+    ch = {
+        "lap_distance": dist, "speed": speed, "brake": brake, "throttle": throttle,
+        "steering": steer, "lat_g": lat_g, "long_g": long_g,
+        "abs_active": abs_active, "tc_active": tc_active,
+        "track_edge": track_edge, "path_lateral": path_lateral, "gear": gear,
+    }
+    for w in ("fl", "fr", "rl", "rr"):
+        ch[f"grip_{w}"] = dead
+    lap = LapRecord("lmu", "test_track", "test_car", 92.5, True, 0.0, ch)
+
+    corners = analyze_lap(lap, cmap).corners
+    assert len(corners) == 2
+
+    # Fields that are legitimately the same regardless of driving belong here,
+    # WITH A REASON, instead of being silently skipped. min_spd_delta is None
+    # unless a reference lap is supplied (not exercised here) and is already
+    # filtered out below as non-numeric, so nothing needs listing today --
+    # this set exists for the next field that's a genuine tie, not a bug.
+    ALLOWLISTED: set[str] = set()
+
+    checked = 0
+    for f in dataclasses.fields(CornerMetrics):
+        v1, v2 = getattr(corners[0], f.name), getattr(corners[1], f.name)
+        if isinstance(v1, bool) or not isinstance(v1, (int, float)):
+            continue  # identity/label/list fields, not numeric measurements
+        if f.name in ALLOWLISTED:
+            continue
+        checked += 1
+        same = v1 == v2 or (isinstance(v1, float) and isinstance(v2, float)
+                             and math.isnan(v1) and math.isnan(v2))
+        assert not same, (
+            f"CornerMetrics.{f.name} is identical ({v1!r}) across two corners "
+            "driven with deliberately different inputs. Two explanations, not "
+            "one: either its derivation ignores its per-corner input (the bug "
+            "this test hunts for), or this fixture just doesn't exercise it "
+            "differently yet. This test does NOT prove the source channel "
+            "itself is live -- for that see scripts/dead_channel_sweep.py, "
+            "which reads what the game actually wrote. Fix the fixture to "
+            "exercise the field if it should vary, or add it to ALLOWLISTED "
+            "with a reason if it's genuinely corner-invariant."
+        )
+    assert checked >= 10  # sanity: this actually exercised most numeric fields
 
 
 def test_extended_corner_inputs(synthetic_lap):
@@ -206,6 +358,29 @@ def test_tire_summary_absent_without_channels(synthetic_lap):
     assert a.tire_means is None and a.tire_warmup is None
 
 
+def test_no_throttle_clause_when_the_driver_never_gets_past_the_gate(synthetic_lap):
+    """A corner the driver never takes past 80% throttle has NO throttle point. The
+    old sentinel was corner.end_dist -- after the apex by construction -- so
+    format_corner_line rendered (end_dist - apex_dist) as a driver input: track
+    geometry stated to the coach as fact. Wet running, traffic, a fuel-save stint
+    or a short-shifted slow corner all reach this."""
+    import dataclasses
+
+    import numpy as np
+
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap
+    from simcoach.format import format_corner_line
+
+    ch = dict(synthetic_lap.channels)
+    ch["throttle"] = np.full(len(ch["lap_distance"]), 0.6)   # never above the 0.8 gate
+    lap = dataclasses.replace(synthetic_lap, channels=ch)
+    c1 = analyze_lap(lap, CornerMap.load("simcoach/tracks/test_track.json")).corners[0]
+
+    assert c1.throttle_point is None
+    assert "back to throttle" not in format_corner_line(c1, "metric")
+
+
 def test_analyze_lap_delta(synthetic_lap):
     from simcoach.analysis import analyze_lap
     from simcoach.corners import CornerMap
@@ -239,7 +414,11 @@ def test_analyze_lap_metrics_tolerates_partial_nan_speed(synthetic_lap):
     c1 = a.corners[0]
 
     assert abs(c1.min_spd - 30.0) < 1e-6
-    assert 800 <= c1.throttle_point <= 1200
+    # The fixture holds 0.1 throttle across the whole of corner 1's window, so there
+    # is no throttle point. This used to read `800 <= throttle_point <= 1200` and
+    # passed on the old end_dist sentinel -- i.e. on the corner's geometry, never on
+    # a throttle reading.
+    assert c1.throttle_point is None
 
 
 def test_analyze_lap_metrics_all_nan_speed_window_is_degenerate(synthetic_lap):
@@ -259,8 +438,10 @@ def test_analyze_lap_metrics_all_nan_speed_window_is_degenerate(synthetic_lap):
     c1 = a.corners[0]
 
     assert np.isnan(c1.min_spd)
-    assert c1.brake_point == 1200.0
-    assert c1.throttle_point == 1200.0
+    # Both used to be corner 1's end_dist (1200.0) -- the corner's own geometry, not a
+    # reading. No usable samples means no point was found, in either channel.
+    assert c1.brake_point is None
+    assert c1.throttle_point is None
 
 
 def test_analyze_lap_delta_is_none_when_min_spd_is_nan(synthetic_lap):
