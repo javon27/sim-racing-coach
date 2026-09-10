@@ -23,6 +23,13 @@ _CLASS_ORDER = ["Hyper", "LMP2", "LMP2_ELMS", "LMP3", "GT3", "GTE"]
 # current weekend (survives a sidecar restart), beyond it starts a new instance.
 _SESSION_GAP_S = 6 * 3600  # 6 hours
 
+# Lap-time match tolerance when deciding whether a result-log lap is one already
+# stored. NOT exact equality: LMU's result XML rounds lap times to 4 decimals
+# ('70.4068') while live capture keeps the sim's full float ('70.40680694580078'),
+# so the same lap differs by up to 5e-5 s. 1 ms is far above that rounding and far
+# below any real gap between two different laps.
+_LAP_TIME_TOL_S = 0.001
+
 
 def _is_deterministic_sid(sid: str) -> bool:
     return sid.endswith("--online") or sid.endswith("--offline")
@@ -38,7 +45,7 @@ def _session_base(sid: str) -> str:
     """The (track, car, mode) base of a session id, dropping any ~<instance> suffix."""
     return sid.split(_SESSION_SEP, 1)[0]
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
@@ -155,7 +162,9 @@ CREATE TABLE IF NOT EXISTS race_sessions (
     class_position INTEGER,
     finish_status TEXT,
     incidents TEXT,
-    penalties TEXT
+    penalties TEXT,
+    grid_position INTEGER,
+    class_grid_position INTEGER
 );
 """ + _COACH_CHAT_SCHEMA + _PROFILE_SCHEMA
 
@@ -282,6 +291,25 @@ class LapStore:
                             _add_column(self.conn, "coach_chat", f"{col} INTEGER")
                     if "model" not in cols:
                         _add_column(self.conn, "coach_chat", "model TEXT")
+            if current_version < 13:
+                # v12 -> v13: the GRID position the race started from, parsed from the
+                # result log but previously dropped. Without it the coach read its first
+                # captured lap as the start (issue #67). Guard the ADD COLUMNs on the
+                # table existing, like the v6/v9 steps.
+                cols = [r[1] for r in self.conn.execute("PRAGMA table_info(race_sessions)")]
+                if cols:
+                    for c in ("grid_position", "class_grid_position"):
+                        if c not in cols:
+                            _add_column(self.conn, "race_sessions", f"{c} INTEGER")
+                # Forget which result files are imported, so the next ingest re-reads them
+                # and backfills the grid positions the old rows never stored. Ingest is
+                # idempotent on (path, mtime), so without this those races stay blank
+                # forever. Safe to re-read now that save_result_session skips laps it
+                # already has -- before that, this would have duplicated every lap.
+                self.conn.execute(
+                    "CREATE TABLE IF NOT EXISTS ingested_files (path TEXT PRIMARY KEY, mtime REAL)"
+                )
+                self.conn.execute("DELETE FROM ingested_files")
         if current_version != SCHEMA_VERSION:
             self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self.conn.commit()
@@ -846,44 +874,112 @@ class LapStore:
         for f in Path(self.data_dir).glob("*.npz"):
             f.unlink(missing_ok=True)
 
+    def _already_stored_lap_times(self, rs) -> list[float | None]:
+        """Lap times already stored for the same stint as this result session --
+        same track/car/phase, timestamped inside the weekend window around the
+        result's own timestamp. Includes NULL times (a result lap with no time) so
+        those dedupe too. Must be called under self._lock."""
+        query = "SELECT lap_time FROM laps WHERE track IS ? AND car IS ? AND phase IS ?"
+        params: list = [rs.track, rs.car, rs.session_type]
+        if rs.date_ts is not None:
+            query += " AND ts BETWEEN ? AND ?"
+            params += [rs.date_ts - _SESSION_GAP_S, rs.date_ts + _SESSION_GAP_S]
+        return [r[0] for r in self.conn.execute(query, params).fetchall()]
+
     def save_result_session(self, rs, session_id: str) -> None:
         """Backfill a parsed LMU result-log session's laps into the laps
-        table (source='result', no telemetry -- summary only)."""
+        table (source='result', no telemetry -- summary only).
+
+        Laps already stored for this stint are SKIPPED. A session driven with the
+        sidecar running is both captured live and written to a result log, so every
+        lap arrived twice (issue #68: 19 rows for a 10-lap race). The already-stored
+        row wins because a live one is strictly richer -- telemetry `.npz`, per-lap
+        position, sector bounds -- while the result copy has none of those; skipping
+        also makes a re-import of the same file a no-op. Matching is a lap-time match
+        within _LAP_TIME_TOL_S (not `==`: see that constant) and each stored lap
+        absorbs at most one result lap, so two genuinely identical times still keep
+        two rows. A result lap with no time ('--.----') -- the lap live capture tends to
+        miss -- is kept on a first import and matched against an equally timeless stored
+        lap after that, so re-importing it does not pile up copies."""
         def _sec(sectors, i):
             return sectors[i] if sectors is not None and len(sectors) > i else None
 
         with self._lock, self.conn:
+            unclaimed = self._already_stored_lap_times(rs)
+            rows = []
+            for lap in rs.laps:
+                if lap.lap_time is None:
+                    at = next((i for i, t in enumerate(unclaimed) if t is None), None)
+                else:
+                    at = next((i for i, t in enumerate(unclaimed) if t is not None
+                               and abs(t - lap.lap_time) <= _LAP_TIME_TOL_S), None)
+                if at is not None:
+                    unclaimed.pop(at)   # one stored lap absorbs one result lap
+                    continue
+                rows.append(
+                    (rs.date_ts, rs.sim, rs.track, rs.car, lap.lap_time, int(lap.valid),
+                     None, rs.session_type, session_id,
+                     _sec(lap.sectors, 0), _sec(lap.sectors, 1), _sec(lap.sectors, 2)))
             self.conn.executemany(
                 "INSERT INTO laps (ts, sim, track, car, lap_time, valid, telemetry_path, "
                 "phase, session_id, source, s1, s2, s3) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'result', ?, ?, ?)",
-                [
-                    (rs.date_ts, rs.sim, rs.track, rs.car, lap.lap_time, int(lap.valid),
-                     None, rs.session_type, session_id,
-                     _sec(lap.sectors, 0), _sec(lap.sectors, 1), _sec(lap.sectors, 2))
-                    for lap in rs.laps
-                ],
+                rows,
             )
             self.conn.execute(
                 "INSERT OR REPLACE INTO race_sessions "
-                "(session_id, position, class_position, finish_status, incidents, penalties) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "(session_id, position, class_position, finish_status, incidents, penalties, "
+                "grid_position, class_grid_position) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (session_id, rs.position, rs.class_position, rs.finish_status,
-                 json.dumps(rs.incidents or []), json.dumps(rs.penalties or [])),
+                 json.dumps(rs.incidents or []), json.dumps(rs.penalties or []),
+                 rs.grid_position, rs.class_grid_position),
             )
 
+    def _linked_result_session(self, session_id: str) -> str | None:
+        """The result-log session id (XML filename stem) holding the race outcome for
+        a LIVE session id, or None.
+
+        Live capture keys laps by `track--car--online|offline`; result ingest keys them
+        by the XML stem, so `race_sessions` rows can never be found from a live id by
+        session_id alone -- that join failure is why the coach reported a race backwards
+        (issue #67). Match instead on what both sides do share: the same track and car
+        (live capture and the result log agree on both strings), a race phase, and a
+        timestamp inside the live session's own window. Newest match wins, so a second
+        race in the same sitting supersedes the first."""
+        row = self.conn.execute(
+            "SELECT track, car, MIN(ts), MAX(ts) FROM laps "
+            "WHERE session_id = ? AND source = 'live'",
+            (session_id,),
+        ).fetchone()
+        if row is None or row[2] is None:
+            return None
+        track, car, first, last = row
+        hit = self.conn.execute(
+            "SELECT l.session_id FROM laps l JOIN race_sessions r ON r.session_id = l.session_id "
+            "WHERE l.source = 'result' AND l.phase = 'race' AND l.track IS ? AND l.car IS ? "
+            "AND l.ts BETWEEN ? AND ? ORDER BY l.ts DESC LIMIT 1",
+            (track, car, first - _SESSION_GAP_S, last + _SESSION_GAP_S),
+        ).fetchone()
+        return hit[0] if hit is not None else None
+
     def race_session(self, session_id: str) -> dict | None:
-        """The persisted race outcome (position, incidents, penalties) for a
-        session, or None if no race row exists (practice/qualy, or not imported)."""
+        """The persisted race outcome (grid/finish position, incidents, penalties) for
+        a session, or None if no race row exists (practice/qualy, or not imported).
+
+        Falls back to the result-log row linked to a LIVE session id (see
+        _linked_result_session) -- the row is keyed by the XML stem, so a live session
+        has no row of its own."""
+        cols = ("SELECT position, class_position, finish_status, incidents, penalties, "
+                "grid_position, class_grid_position FROM race_sessions WHERE session_id = ?")
         with self._lock:
-            row = self.conn.execute(
-                "SELECT position, class_position, finish_status, incidents, penalties "
-                "FROM race_sessions WHERE session_id = ?",
-                (session_id,),
-            ).fetchone()
+            row = self.conn.execute(cols, (session_id,)).fetchone()
+            if row is None:
+                linked = self._linked_result_session(session_id)
+                row = self.conn.execute(cols, (linked,)).fetchone() if linked else None
         if row is None:
             return None
-        pos, cls_pos, finish, incidents, penalties = row
+        pos, cls_pos, finish, incidents, penalties, grid, cls_grid = row
 
         def _load(s):
             try:
@@ -897,6 +993,8 @@ class LapStore:
             "finish_status": finish,
             "incidents": _load(incidents),
             "penalties": _load(penalties),
+            "grid_position": grid,
+            "class_grid_position": cls_grid,
         }
 
     def is_ingested(self, path: str, mtime: float) -> bool:

@@ -58,7 +58,8 @@ def test_session_race_endpoint(tmp_path, synthetic_lap):
     c = _tc(create_app(store, coach))
     body = c.get("/sessions/race-1/race").json()
     assert body == {"position": 3, "class_position": 2, "finish_status": "Finished",
-                    "incidents": ["Off track T7"], "penalties": []}
+                    "incidents": ["Off track T7"], "penalties": [],
+                    "grid_position": None, "class_grid_position": None}
     # No race row -> empty object per contract.
     assert c.get("/sessions/absent/race").json() == {}
 

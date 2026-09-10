@@ -62,6 +62,12 @@ class ResultSession:
     laps: list[ResultLap]
     incidents: list[str]
     penalties: list[dict]
+    # The grid slot the race was STARTED from. Live capture never samples it (the
+    # first lap it records is already underway), so the result log is the only
+    # source -- without it the coach reads its first captured lap as the start and
+    # can report a race backwards (issue #67).
+    grid_position: int | None = None
+    class_grid_position: int | None = None
 
 
 _SESSION_TAG_RE = re.compile(r"^(Practice|Qualify|Warmup|Race)\d*$")
@@ -177,6 +183,8 @@ def parse_result(path, player_names: str | Iterable[str]) -> ResultSession | Non
             session_type=re.sub(r"\d+$", "", session_elem.tag).lower(),
             position=_to_int(driver.findtext("Position")),
             class_position=_to_int(driver.findtext("ClassPosition")),
+            grid_position=_to_int(driver.findtext("GridPos")),
+            class_grid_position=_to_int(driver.findtext("ClassGridPos")),
             best_lap=_to_float(driver.findtext("BestLapTime")),
             finish_status=driver.findtext("FinishStatus"),
             laps=_player_laps(driver),

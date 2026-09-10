@@ -73,6 +73,11 @@ def test_parse_result_extracts_player_session():
     assert session.session_type == "race"
     assert session.position == 17
     assert session.class_position == 8
+    # The GRID slot the race started from -- deliberately different from the finish
+    # (9 -> 17, 4 -> 8) so reading the wrong field can't pass. Live capture never
+    # samples it; without it the coach reports a race backwards (issue #67).
+    assert session.grid_position == 9
+    assert session.class_grid_position == 4
     assert session.best_lap == 120.9103
     assert session.finish_status == "Finished Normally"
 

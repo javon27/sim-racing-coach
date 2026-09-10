@@ -545,7 +545,7 @@ def test_v11_schema_migrates_usage_columns_to_v12(tmp_path):
     s.conn.commit(); s.conn.close()
 
     s2 = LapStore(db, str(tmp_path / "telem"))
-    assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 12
+    assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     cols = [r[1] for r in s2.conn.execute("PRAGMA table_info(coach_chat)")]
     assert {"input_tokens", "output_tokens", "cache_read_tokens",
             "cache_write_tokens", "model"} <= set(cols)
@@ -703,7 +703,8 @@ def test_save_result_session_persists_race_row(tmp_path):
 
     race = s.race_session("result-abc")
     assert race == {"position": 3, "class_position": 2, "finish_status": "Finished",
-                    "incidents": [], "penalties": []}
+                    "incidents": [], "penalties": [],
+                    "grid_position": None, "class_grid_position": None}
 
 
 def test_race_session_round_trips_incidents_and_penalties(tmp_path):
@@ -720,10 +721,190 @@ def test_race_session_round_trips_incidents_and_penalties(tmp_path):
     assert race["penalties"] == [{"text": "Drive-through: track limits", "et": "123.4"}]
 
 
+def test_v12_schema_migrates_grid_columns_to_v13(tmp_path):
+    """An existing db (the shipped one) gains the grid columns in place, keeping its
+    already-ingested race rows."""
+    from simcoach.store import SCHEMA_VERSION, LapStore
+    db = str(tmp_path / "c.sqlite")
+    s = LapStore(db, str(tmp_path / "telem"))
+    s.conn.execute("DROP TABLE race_sessions")
+    s.conn.execute(                       # the pre-v13 shape, as v8 created it
+        "CREATE TABLE race_sessions (session_id TEXT PRIMARY KEY, position INTEGER, "
+        "class_position INTEGER, finish_status TEXT, incidents TEXT, penalties TEXT)")
+    s.conn.execute("INSERT INTO race_sessions VALUES ('old', 4, 2, 'Finished', '[]', '[]')")
+    s.conn.execute("PRAGMA user_version = 12")
+    s.conn.commit(); s.conn.close()
+
+    s2 = LapStore(db, str(tmp_path / "telem"))
+    assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    assert s2.race_session("old") == {
+        "position": 4, "class_position": 2, "finish_status": "Finished",
+        "incidents": [], "penalties": [], "grid_position": None,
+        "class_grid_position": None}
+    LapStore(db, str(tmp_path / "telem"))   # dup-safe on a 2nd open
+
+
 def test_race_session_none_when_absent(tmp_path):
     from simcoach.store import LapStore
     s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     assert s.race_session("nope") is None
+
+
+# --- the 2026-09-10 Silverstone race (issues #67/#68) --------------------------
+# Real measured values. The live times are the sim's full floats as capture stored
+# them; the result times are the same laps as the XML lists them, rounded to 4
+# decimals -- so `==` does NOT match them (that is the point of _LAP_TIME_TOL_S).
+# The XML's 2nd lap has no time ('--.----'), and is the lap live capture missed.
+_TRACK = "Silverstone National Circuit"
+_CAR = "Team WRT 2026 #32:WEC"
+_RACE_TS = 1789017807.0                                   # result log's DateTime
+_LIVE_SID = "silverstone-national-circuit--team-wrt-2026-32-wec--offline"
+_RESULT_SID = "2026_09_10_00_39_07-16R1"                  # the XML filename stem
+_LIVE_TIMES = [70.40680694580078, 88.20706176757812, 92.79763793945312,
+               66.87100219726562, 62.2532958984375, 60.8125, 62.413330078125,
+               63.27410888671875, 76.2119140625]
+_LIVE_PLACES = [18, 2, 18, 18, 18, 18, 18, 18, 18]
+_RESULT_TIMES = [70.4068, None, 88.2071, 92.7976, 66.8710, 62.2533, 60.8125,
+                 62.4133, 63.2741, 76.2119]
+_CONTACT = "Jayson G(0) reported contact (948.15) with another vehicle Francois Heriau(2)"
+
+
+def _capture_live_race(s, synthetic_lap, session_id=_LIVE_SID, track=_TRACK, car=_CAR,
+                       times=None, places=None, t0=_RACE_TS + 167.0):
+    """Live capture of the race stint: 9 timed laps with per-lap position, each with
+    its own telemetry .npz -- the rows a result-log import must not duplicate."""
+    times = _LIVE_TIMES if times is None else times
+    places = _LIVE_PLACES if places is None else places
+    for i, (lt, place) in enumerate(zip(times, places)):
+        s.save(LapRecord(**{**synthetic_lap.__dict__, "track": track, "car": car,
+                            "lap_time": lt, "timestamp": t0 + 63.0 * i, "phase": "race",
+                            "session_id": session_id, "position": place}))
+
+
+def _silverstone_result(**overrides):
+    from simcoach.lmu.results import ResultLap
+    return _fake_result_session(**{
+        "track": _TRACK, "car": _CAR, "car_class": "GT3", "date_ts": _RACE_TS,
+        "session_type": "race", "position": 18, "class_position": 18,
+        "grid_position": 9, "class_grid_position": 9, "best_lap": 60.8125,
+        "finish_status": "Finished Normally", "incidents": [_CONTACT],
+        "laps": [ResultLap(lap_no=i + 1, lap_time=t, sectors=[], valid=t is not None)
+                 for i, t in enumerate(_RESULT_TIMES)],
+        **overrides})
+
+
+def test_result_times_are_not_float_equal_to_live_times():
+    """Guards the fixture itself: if the two sides ever matched exactly, the dedupe
+    test below would pass without the tolerance doing any work."""
+    assert _RESULT_TIMES[0] != _LIVE_TIMES[0]
+    assert 0 < abs(_RESULT_TIMES[0] - _LIVE_TIMES[0]) < 0.001
+
+
+def test_save_result_session_skips_laps_already_captured_live(tmp_path, synthetic_lap):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    _capture_live_race(s, synthetic_lap)
+    live_ids = s.session_lap_ids(_LIVE_SID)
+    assert len(live_ids) == 9
+
+    s.save_result_session(_silverstone_result(), session_id=_RESULT_SID)
+
+    # 10 rows for a 10-lap race, not 19: the 9 already-captured laps are skipped and
+    # only the XML lap with no time (which live capture missed) is added.
+    assert s.conn.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 10
+    assert s.conn.execute(
+        "SELECT lap_time, source FROM laps WHERE session_id = ?", (_RESULT_SID,)
+    ).fetchall() == [(None, "result")]
+    # The LIVE rows are the ones that survived -- they carry the telemetry and the
+    # per-lap position the result copy does not.
+    assert s.session_lap_ids(_LIVE_SID) == live_ids
+    kept = s.conn.execute(
+        "SELECT lap_time, position, telemetry_path IS NOT NULL FROM laps "
+        "WHERE session_id = ? ORDER BY ts", (_LIVE_SID,)).fetchall()
+    assert [r[0] for r in kept] == _LIVE_TIMES
+    assert [r[1] for r in kept] == _LIVE_PLACES
+    assert all(r[2] for r in kept)
+
+    # Re-importing the same result (a re-saved XML gets a fresh mtime, so ingest will)
+    # adds nothing -- including no second copy of the untimed lap.
+    s.save_result_session(_silverstone_result(), session_id=_RESULT_SID)
+    assert s.conn.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 10
+
+
+def test_save_result_session_twice_leaves_lap_count_unchanged(tmp_path):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    rs = _fake_result_session()   # two timed laps, no live capture
+
+    s.save_result_session(rs, session_id="result-abc")
+    assert s.conn.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 2
+
+    s.save_result_session(rs, session_id="result-abc")
+    # and again under a fresh id, as a re-saved XML (new mtime) would arrive
+    s.save_result_session(rs, session_id="result-abc-2")
+    assert s.conn.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 2
+
+
+def test_save_result_session_keeps_laps_from_an_unrelated_stint(tmp_path, synthetic_lap):
+    """The dedupe must not swallow a real lap: same times, different track/car/phase
+    or outside the session window are all distinct laps."""
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    _capture_live_race(s, synthetic_lap)
+
+    # Same lap times, but a qualifying stint, a different car, and a session a week later.
+    s.save_result_session(_silverstone_result(session_type="qualify"), session_id="q")
+    s.save_result_session(_silverstone_result(car="Other Team #5:WEC"), session_id="other-car")
+    s.save_result_session(_silverstone_result(date_ts=_RACE_TS + 7 * 86400), session_id="next-week")
+
+    for sid in ("q", "other-car", "next-week"):
+        assert len(s.session_lap_ids(sid)) == 10, sid
+
+
+def test_race_session_resolves_the_result_row_from_a_live_session_id(tmp_path, synthetic_lap):
+    """The live session id and the result-log id are different strings, so the
+    race_sessions row can only be reached by linking them (issue #67)."""
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    _capture_live_race(s, synthetic_lap)
+    assert _LIVE_SID != _RESULT_SID
+    assert s.race_session(_LIVE_SID) is None   # nothing ingested yet
+
+    s.save_result_session(_silverstone_result(), session_id=_RESULT_SID)
+    # The row is keyed by the XML stem -- the live session has none of its own.
+    assert s.conn.execute(
+        "SELECT COUNT(*) FROM race_sessions WHERE session_id = ?", (_LIVE_SID,)
+    ).fetchone()[0] == 0
+
+    rr = s.race_session(_LIVE_SID)
+    assert rr is not None
+    assert (rr["grid_position"], rr["position"]) == (9, 18)
+    assert rr["class_grid_position"] == 9 and rr["class_position"] == 18
+    assert rr["finish_status"] == "Finished Normally"
+    assert rr["incidents"] == [_CONTACT]
+
+
+def test_race_session_link_is_scoped_to_the_right_session(tmp_path, synthetic_lap):
+    """Not 'any result row will do': a different track, and a non-race result for the
+    same track/car/window, must both be excluded."""
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    _capture_live_race(s, synthetic_lap)
+    s.save_result_session(_silverstone_result(), session_id=_RESULT_SID)
+    # A practice result for the same track/car, stamped LATER than the race, must not
+    # win: practice is not a race outcome (its P1 is not where the race finished).
+    s.save_result_session(
+        _silverstone_result(session_type="practice", position=1, class_position=1,
+                            grid_position=None, class_grid_position=None, incidents=[]),
+        session_id="2026_09_10_00_20_54-18P1")
+
+    rr = s.race_session(_LIVE_SID)
+    assert (rr["grid_position"], rr["position"]) == (9, 18)
+
+    # A live session at another track resolves to nothing at all.
+    _capture_live_race(s, synthetic_lap, session_id="imola--team-wrt-2026-32-wec--offline",
+                       track="Imola")
+    assert s.race_session("imola--team-wrt-2026-32-wec--offline") is None
 
 
 def test_load_result_lap_raises_filenotfounderror(tmp_path):

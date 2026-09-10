@@ -641,6 +641,12 @@ class CoachContext:
                     "completed race).")
         lines = []
         if rr:
+            if rr["grid_position"] is not None:
+                grid = f"Started P{rr['grid_position']} on the grid"
+                if (rr["class_grid_position"] is not None
+                        and rr["class_grid_position"] != rr["grid_position"]):
+                    grid += f" (P{rr['class_grid_position']} in class)"
+                lines.append(grid + ".")
             parts = []
             if rr["position"] is not None:
                 parts.append(f"Finished P{rr['position']} overall")
@@ -659,10 +665,16 @@ class CoachContext:
                 texts = [str(p.get("text") or p) for p in penalties[:3]]
                 lines.append(f"Penalties ({len(penalties)}): {'; '.join(texts)}")
         if arc:
-            lines.append(
-                f"In-race: started P{arc['start']}, as low as P{arc['worst']}, "
-                f"currently/finished P{arc['last']}."
-            )
+            # NEVER call arc['start'] a starting position: it is the first lap capture
+            # happened to record, which is already underway (issue #67 reported a P9
+            # start as P18 this way). The grid slot only ever comes from the result log.
+            line = (f"Live per-lap positions over {arc['laps']} captured lap(s): "
+                    f"P{arc['start']} on the first captured lap, as low as "
+                    f"P{arc['worst']}, P{arc['last']} on the most recent.")
+            if not (rr and rr["grid_position"] is not None):
+                line += (" The grid position was not captured, so the first captured lap "
+                         "is NOT the starting position -- do not report a start.")
+            lines.append(line)
         return "\n".join(lines)
 
     def get_setup(self):
