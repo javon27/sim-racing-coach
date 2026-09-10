@@ -88,7 +88,7 @@ def average_racing_line(laps, bins: int = 500):
 
 def turn_sign_along(path_world, k: int = 3) -> np.ndarray:
     """Per-station turn direction along a closed path: **+1 turning RIGHT, -1
-    turning LEFT**, 0 dead straight. Shape (N,).
+    turning LEFT**. Shape (N,).
 
     The SINGLE owner of the handedness rule: signs the 2D cross product of the
     incoming x outgoing segment vectors (k stations either side for stability)
@@ -96,6 +96,13 @@ def turn_sign_along(path_world, k: int = 3) -> np.ndarray:
     is this sampled at one apex, so a caller that needs direction station-by-station
     (``raceline.speed_profile``, re-signing bank against the turn -- #63) reuses this
     rather than re-deriving a second copy of the rule.
+
+    There is deliberately no third "straight" value for ``cross == 0`` (reachable:
+    Bahrain Outer has 2 such stations). Every station resolves through the SAME
+    ``(cross > 0) == _LEFT_TURN_IS_CROSS_POSITIVE`` comparison, so flipping that
+    constant -- which its own note at the top of this module expects, pending real
+    positional telemetry -- inverts every station uniformly. A zero branch would
+    have stayed put under the flip and diverged silently from the signed ones.
 
     Closed loop: indices wrap, so station 0 still gets neighbours either side.
     """
@@ -105,7 +112,7 @@ def turn_sign_along(path_world, k: int = 3) -> np.ndarray:
     vout = np.roll(pts, -kk, axis=0) - pts
     cross = vin[:, 0] * vout[:, 1] - vin[:, 1] * vout[:, 0]
     is_left = (cross > 0) == _LEFT_TURN_IS_CROSS_POSITIVE
-    return np.where(cross == 0.0, 0.0, np.where(is_left, -1.0, 1.0))
+    return np.where(is_left, -1.0, 1.0)
 
 
 def direction_from_path(path_world, dist, apex_dist, k: int = 3) -> str:

@@ -1,6 +1,5 @@
 import numpy as np
-
-import numpy as np
+import pytest
 
 from simcoach.raceline import (
     CarParams,
@@ -187,12 +186,13 @@ def test_adverse_camber_stays_a_penalty_so_the_fix_is_not_abs():
     left, right = _annulus()                       # a LEFT-hander
     _, line = min_curvature_line(left, right, iterations=2000)
     theta = np.radians(15.0)
+    turning_left = np.full(len(line), -1.0)        # spelled out, not derived here
     v_flat, kappa = speed_profile(line, 1.5, 9.81, 14.0, 9.0)
     # +theta on a left-hander = the driver's left (the INSIDE) is higher = adverse.
     v_adv, _ = speed_profile(line, 1.5, 9.81, 14.0, 9.0,
-                             bank=np.full(len(line), theta))
+                             bank=np.full(len(line), theta), turn_sign=turning_left)
     v_fav, _ = speed_profile(line, 1.5, 9.81, 14.0, 9.0,
-                             bank=np.full(len(line), -theta))
+                             bank=np.full(len(line), -theta), turn_sign=turning_left)
 
     mu, g, t = 1.5, 9.81, np.tan(theta)
     r_line = 1.0 / np.mean(kappa)                  # the solved line's own radius
@@ -206,13 +206,26 @@ def test_adverse_camber_stays_a_penalty_so_the_fix_is_not_abs():
 def test_flat_and_near_flat_banking_leave_the_profile_alone():
     left, right = _annulus()
     _, line = min_curvature_line(left, right, iterations=2000)
+    sign = np.full(len(line), -1.0)
     v_flat, _ = speed_profile(line, 1.5, 9.81, 14.0, 9.0)
     # bank=None, bank=zeros and a 0.01 deg cross-slope all read as flat
-    v_zero, _ = speed_profile(line, 1.5, 9.81, 14.0, 9.0, bank=np.zeros(len(line)))
+    v_zero, _ = speed_profile(line, 1.5, 9.81, 14.0, 9.0,
+                              bank=np.zeros(len(line)), turn_sign=sign)
     assert np.allclose(v_zero, v_flat)
     v_tiny, _ = speed_profile(line, 1.5, 9.81, 14.0, 9.0,
-                              bank=np.full(len(line), np.radians(0.01)))
+                              bank=np.full(len(line), np.radians(0.01)), turn_sign=sign)
     assert np.allclose(v_tiny, v_flat, rtol=1e-3)
+
+
+def test_bank_without_turn_sign_is_refused_not_guessed():
+    """#63's root cause was a bank whose sign nobody had resolved against the turn.
+    There is no default: a caller that forgets turn_sign must fail loudly rather
+    than silently get one of the two readings (raw, or line-derived instead of the
+    centerline policy solve_corners applies)."""
+    left, right = _annulus()
+    _, line = min_curvature_line(left, right, iterations=2000)
+    with pytest.raises(ValueError, match="turn_sign"):
+        speed_profile(line, 1.5, 9.81, 14.0, 9.0, bank=np.full(len(line), 0.1))
 
 
 def test_telem_calibration_raises_corner_speed_cap():

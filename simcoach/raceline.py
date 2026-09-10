@@ -95,13 +95,18 @@ def speed_profile(line, mu, g, a_brake, a_accel, bank=None, turn_sign=None):
     θ is the bank RELATIVE TO THE TURN, which is NOT the stored sign. ``bank`` is
     signed by which side is higher (+ = the driver's left is higher, #58), i.e.
     + = banked for a RIGHT-hander. So it is multiplied by ``turn_sign``
-    (+1 right / -1 left, from the owner ``trackmap.turn_sign_along``; derived from
-    ``line`` when not supplied, and ``solve_corners`` passes the CENTERLINE's so it
-    is the same geometry the corner map's direction comes from). Without that
+    (+1 right / -1 left, from the owner ``trackmap.turn_sign_along``). Without that
     re-signing every cambered LEFT-hander applied its camber as a penalty and read
     min speed low -- Laguna's Rainey T10 at -7 deg worst (#63). It is deliberately
     not ``abs(bank)``: genuine adverse camber (inside edge higher) must stay a
     penalty, which is a sign flip away from favourable, not the same number.
+
+    ``turn_sign`` is REQUIRED whenever ``bank`` is given, and has no default on
+    purpose. Only ``line`` is in scope here, but the policy is that the sign comes
+    from the CENTERLINE -- the same geometry the corner map's owned direction is
+    read off (``solve_corners`` passes that). A ``line``-derived default would
+    therefore be a SECOND policy decided by omission, and the unsigned raw bank is
+    the #63 bug itself; both are worse than an explicit failure.
 
     Returns (v, curvature), both shape (N,). v in m/s, curvature in 1/m.
     # ponytail: simple longitudinal caps, not a true traction-budget friction
@@ -115,10 +120,15 @@ def speed_profile(line, mu, g, a_brake, a_accel, bank=None, turn_sign=None):
     r = 1.0 / np.maximum(kappa, _EPS)
     if bank is None:
         tan_t = np.zeros(n)
+    elif turn_sign is None:
+        raise ValueError(
+            "speed_profile needs turn_sign whenever bank is given: bank is signed by "
+            "which side is HIGHER (#58), so it says nothing about grip until it is "
+            "re-signed against the turn. Pass trackmap.turn_sign_along(centerline)."
+        )
     else:
-        sign = turn_sign_along(line) if turn_sign is None \
-            else np.asarray(turn_sign, dtype=float)
-        tan_t = np.tan(np.asarray(bank, dtype=float)) * sign
+        tan_t = (np.tan(np.asarray(bank, dtype=float))
+                 * np.asarray(turn_sign, dtype=float))
     # banked friction-circle cap; clamp denominator when mu*tanθ -> 1 (grip
     # dominated by banking, cap would blow up) to a large but finite value.
     denom = np.maximum(1.0 - mu * tan_t, 1e-3)
