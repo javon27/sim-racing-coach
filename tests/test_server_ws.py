@@ -271,6 +271,62 @@ def test_ws_coach_threads_prior_chat_history(tmp_path):
     assert contents.index("first question") < contents.index("second question")
 
 
+def test_ws_coach_retracts_a_fabricated_grip_claim_in_resumed_history(tmp_path):
+    # #72: four answers already in the driver's store assert "min grip reading 0.00"
+    # as established fact. mGripFract is never populated by the game (flat 0.0 across
+    # 173/173 captured laps, 5 cars), so the claim is false -- and resuming the chat
+    # re-feeds it to the model as its OWN prior reasoning, which is harder to discount
+    # than a raw number would be.
+    #
+    # Filtered on read, never on disk: the stored row and the UI keep what the coach
+    # actually said. Only the model's copy carries the retraction.
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    fake = FakeModel(reply="Second answer.")
+    app = create_app(store, Coach(fake))
+    poisoned = ("That's a lockup -- min grip reading 0.00 there confirms the tires "
+                "weren't gripping at all through that phase.")
+    store.save_chat("c1", "s1", "trk", "car", None, "why did I lock up?", poisoned, None)
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "second question", "chat_id": "c1"})
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"):
+                break
+
+    sent = [m["content"] for m in fake.last_messages]
+    carried = [m for m in sent if "min grip" in m]
+    assert carried, "the prior answer should still be threaded, not dropped"
+    assert all("fabricated" in m and "Disregard it" in m for m in carried), \
+        f"the grip claim reached the model unretracted: {carried}"
+    # ...and the stored record is untouched: rewriting the driver's own conversation
+    # history would be a worse wrong than leaving a bad number in it.
+    assert store.chat_messages("c1")[0]["answer"] == poisoned
+
+
+def test_ws_coach_leaves_ordinary_grip_prose_alone(tmp_path):
+    # GUARD against over-matching. The authored driving prose in simcoach/knowledge/*.md
+    # and simcoach/cars/*.json is full of legitimate uses of "grip", and it reaches the
+    # model through other tools; a blanket filter on the word would gut it. Only the
+    # specific fabricated metric is matched.
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    fake = FakeModel(reply="Second answer.")
+    app = create_app(store, Coach(fake))
+    legit = "You ran out of front grip on entry; the mechanical grip balance is rearward."
+    store.save_chat("c1", "s1", "trk", "car", None, "why understeer?", legit, None)
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "second question", "chat_id": "c1"})
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"):
+                break
+
+    assert legit in [m["content"] for m in fake.last_messages]
+
+
 def test_ws_coach_no_history_for_new_chat(tmp_path):
     # A brand-new chat (no chat_id) threads no history -> just the question.
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))

@@ -9,6 +9,7 @@ current session (track/car/lap), which the live-session re-resolution keeps fres
 """
 from __future__ import annotations
 
+import re
 import time
 
 from simcoach.analysis import analyze_lap, geometry_clause
@@ -235,6 +236,104 @@ TOOLS = [
         },
     },
 ]
+
+
+_FABRICATED_GRIP = re.compile(r"min[ _]grip", re.IGNORECASE)
+
+_GRIP_RETRACTION = (
+    "\n\n[Correction, added on read and not part of what was said: the answer above "
+    "cites a \"min grip\" reading. That channel (mGripFract) is never populated by the "
+    "game -- it reads 0.00 on every captured lap of every car -- so the figure was "
+    "fabricated and any conclusion drawn from it is void. Disregard it and do not "
+    "repeat it.]"
+)
+
+
+def scrub_stored_answer(answer: str) -> str:
+    """Annotate a stored coach answer before it re-enters the model's context.
+
+    Filter on READ, never on disk: the coach did say those things, and rewriting the
+    driver's own conversation history is a worse wrong than leaving a bad number in it
+    (issue #72). The stored row and the UI display stay untouched; only the copy that
+    becomes the model's prior reasoning carries the retraction.
+
+    Deliberately narrow. A blanket filter on "grip" would strip the legitimate authored
+    driving prose that `simcoach/knowledge/*.md` and `simcoach/cars/*.json` are full of,
+    and that prose reaches the model through other tools. Only the specific fabricated
+    metric is matched -- it was removed from `analysis.py` and `format.py`, so no new
+    answer can contain it and this only ever fires on rows written before that.
+    """
+    if not answer or not _FABRICATED_GRIP.search(answer):
+        return answer
+    return answer + _GRIP_RETRACTION
+
+
+def race_result_text(store, session_id) -> str:
+    """The session's race outcome as prompt text: grid slot, finish, incidents, and
+    the live per-lap position arc.
+
+    The single owner of that wording. Every surface that describes a race to the model
+    calls this -- the coach tool AND the profile digest. The digest used to phrase its
+    own copy ("Race arc: started P{start} ... finished P{last}") off an unscoped arc,
+    which is exactly the #67 defect: `start` is the first lap capture happened to
+    record, mid-race, and an unscoped arc reads it from whatever phase came first.
+    Two copies meant fixing one left the other asserting the opposite as fact.
+    """
+    rr = store.race_session(session_id) if session_id else None
+    # Race stint only — a session_id spans practice/qualy/race, so an all-phase arc
+    # would read the start/worst from an earlier phase (wrong start position).
+    # Bound the arc to the race the result row actually describes: phase='race'
+    # alone spans every race in the sitting, so a second race's grid would be
+    # reported next to the first race's lap positions. With no result row (a race
+    # still being driven, whose log does not exist yet) there is no race_ts, so fall
+    # back to the floor the store derives from the last logged race.
+    arc = None
+    if session_id:
+        since = (rr.get("race_ts") if rr
+                 else store.unlogged_race_since(session_id))
+        arc = store.session_position_arc(
+            session_id, phase="race", since=since,
+            until=rr.get("next_race_ts") if rr else None)
+    if not rr and not arc:
+        return ("No race result recorded for this session (practice/qualy, or not a "
+                "completed race).")
+    lines = []
+    if rr:
+        if rr["grid_position"] is not None:
+            grid = f"Started P{rr['grid_position']} on the grid"
+            if (rr["class_grid_position"] is not None
+                    and rr["class_grid_position"] != rr["grid_position"]):
+                grid += f" (P{rr['class_grid_position']} in class)"
+            lines.append(grid + ".")
+        parts = []
+        if rr["position"] is not None:
+            parts.append(f"Finished P{rr['position']} overall")
+        if rr["class_position"] is not None:
+            parts.append(f"P{rr['class_position']} in class")
+        if rr["finish_status"]:
+            parts.append(f"status: {rr['finish_status']}")
+        lines.append("; ".join(parts) + "." if parts else "Race result recorded.")
+        incidents = rr["incidents"]
+        if incidents:
+            head = "; ".join(incidents[:3])
+            more = f" (+{len(incidents) - 3} more)" if len(incidents) > 3 else ""
+            lines.append(f"Incidents ({len(incidents)}): {head}{more}")
+        penalties = rr["penalties"]
+        if penalties:
+            texts = [str(p.get("text") or p) for p in penalties[:3]]
+            lines.append(f"Penalties ({len(penalties)}): {'; '.join(texts)}")
+    if arc:
+        # NEVER call arc['start'] a starting position: it is the first lap capture
+        # happened to record, which is already underway (issue #67 reported a P9
+        # start as P18 this way). The grid slot only ever comes from the result log.
+        line = (f"Live per-lap positions over {arc['laps']} captured lap(s): "
+                f"P{arc['start']} on the first captured lap, as low as "
+                f"P{arc['worst']}, P{arc['last']} on the most recent.")
+        if not (rr and rr["grid_position"] is not None):
+            line += (" The grid position was not captured, so the first captured lap "
+                     "is NOT the starting position -- do not report a start.")
+        lines.append(line)
+    return "\n".join(lines)
 
 
 class CoachContext:
@@ -632,61 +731,7 @@ class CoachContext:
         return "\n".join(lines) if lines else "No fuel/energy data captured for this lap."
 
     def get_race_result(self):
-        rr = self.store.race_session(self.session_id) if self.session_id else None
-        # Race stint only — a session_id spans practice/qualy/race, so an all-phase arc
-        # would read the start/worst from an earlier phase (wrong start position).
-        # Bound the arc to the race the result row actually describes: phase='race'
-        # alone spans every race in the sitting, so a second race's grid would be
-        # reported next to the first race's lap positions. With no result row (a race
-        # still being driven, whose log does not exist yet) there is no race_ts, so fall
-        # back to the floor the store derives from the last logged race.
-        arc = None
-        if self.session_id:
-            since = (rr.get("race_ts") if rr
-                     else self.store.unlogged_race_since(self.session_id))
-            arc = self.store.session_position_arc(
-                self.session_id, phase="race", since=since,
-                until=rr.get("next_race_ts") if rr else None)
-        if not rr and not arc:
-            return ("No race result recorded for this session (practice/qualy, or not a "
-                    "completed race).")
-        lines = []
-        if rr:
-            if rr["grid_position"] is not None:
-                grid = f"Started P{rr['grid_position']} on the grid"
-                if (rr["class_grid_position"] is not None
-                        and rr["class_grid_position"] != rr["grid_position"]):
-                    grid += f" (P{rr['class_grid_position']} in class)"
-                lines.append(grid + ".")
-            parts = []
-            if rr["position"] is not None:
-                parts.append(f"Finished P{rr['position']} overall")
-            if rr["class_position"] is not None:
-                parts.append(f"P{rr['class_position']} in class")
-            if rr["finish_status"]:
-                parts.append(f"status: {rr['finish_status']}")
-            lines.append("; ".join(parts) + "." if parts else "Race result recorded.")
-            incidents = rr["incidents"]
-            if incidents:
-                head = "; ".join(incidents[:3])
-                more = f" (+{len(incidents) - 3} more)" if len(incidents) > 3 else ""
-                lines.append(f"Incidents ({len(incidents)}): {head}{more}")
-            penalties = rr["penalties"]
-            if penalties:
-                texts = [str(p.get("text") or p) for p in penalties[:3]]
-                lines.append(f"Penalties ({len(penalties)}): {'; '.join(texts)}")
-        if arc:
-            # NEVER call arc['start'] a starting position: it is the first lap capture
-            # happened to record, which is already underway (issue #67 reported a P9
-            # start as P18 this way). The grid slot only ever comes from the result log.
-            line = (f"Live per-lap positions over {arc['laps']} captured lap(s): "
-                    f"P{arc['start']} on the first captured lap, as low as "
-                    f"P{arc['worst']}, P{arc['last']} on the most recent.")
-            if not (rr and rr["grid_position"] is not None):
-                line += (" The grid position was not captured, so the first captured lap "
-                         "is NOT the starting position -- do not report a start.")
-            lines.append(line)
-        return "\n".join(lines)
+        return race_result_text(self.store, self.session_id)
 
     def get_setup(self):
         if not self.setup:
