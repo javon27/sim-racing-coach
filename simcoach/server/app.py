@@ -896,12 +896,12 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         #  - radius_m. The shipped radii were baked in 1559297 against the PRE-CLAMP
         #    corner windows, which were WIDER than today's and reached into the
         #    neighbouring corner. 35254d5 (#30) narrowed them and did not re-bake, so a
-        #    stored radius is the tightest point of a window that no longer exists --
-        #    and corner_geometry reports the tightest point, so what it captured is the
-        #    NEIGHBOUR's. Recomputing here therefore CHANGES the value: 18 corners
+        #    stored radius was the tightest point of a window that no longer existed --
+        #    and corner_geometry reports the tightest point, so what it captured was the
+        #    NEIGHBOUR's. Recomputing here therefore CHANGED the value: 18 corners
         #    across 7 shipped maps moved, Imola T13 67.7 -> 322.1 m (4.8x) on a save
         #    whose only intended change was a corner NAME. radius_m reaches the driver
-        #    as owned fact through geometry_clause (#35), so that is a 2nd-gear corner
+        #    as owned fact through geometry_clause (#35), so that was a 2nd-gear corner
         #    described as a sweeper.
         #      Where those wide windows came from: on 13 of the 18 they are exactly
         #    THIS function's own `pad = max(20.0, length * 0.025)` default a few dozen
@@ -915,11 +915,13 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         #
         # Re-baking is a deliberate curator commit with a reviewable diff (that is what
         # backfill_corner_geometry.py is for), never a side effect of clicking Save.
-        # NOTE this only stops the save path CHANGING the values. All 18 stored radii
-        # are still wrong and still reach the driver, and the error is one-directional
-        # -- a superset window's max curvature is >= the subset's, so shipped <=
-        # recomputed on every one of them, i.e. the coach calls a fast corner a slow
-        # one. Worst: Bahrain Endurance T13 40.8 vs 340.7 (8.3x). Fixing THAT is #73.
+        # NOTE this only stopped the save path CHANGING the values; the 18 stale radii
+        # themselves were re-baked under #73 (`--only=radius_m`), so stored and
+        # recomputed now agree on every shipped corner and this is a no-op for radius_m
+        # today. It stays because it is what makes the NEXT window edit safe -- #30
+        # narrowed 69 windows across 11 maps without re-baking and nothing noticed for
+        # months. The guard that would notice now is
+        # test_every_shipped_radius_is_measured_on_its_own_corner_window.
         #
         # Matched on APEX DISTANCE -- not label, not number. Both of those are things
         # the editor rewrites out from under the curator: `label` is the free-text box
