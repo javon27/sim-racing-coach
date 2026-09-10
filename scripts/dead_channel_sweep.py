@@ -18,11 +18,15 @@ Usage, from the repo root -- no rig, no sim, nothing written:
 
     .venv/Scripts/python.exe scripts/dead_channel_sweep.py
 
-TWO WAYS TO BE WRONG, AND WHAT GUARDS EACH
+THREE WAYS TO BE WRONG, AND WHAT GUARDS EACH
   Constant in only SOME laps is normal, so it is never a finding: a non-hybrid
   car leaves soc at 0.0, and abs_active is flat on a lap where ABS never fired.
 
-  Constant in EVERY lap but across only ONE car is also not evidence. The aid
+  Constant within every lap but holding a DIFFERENT value per lap or per car is
+  alive -- a garage setting nobody moved mid-lap looks exactly like that. So a
+  finding needs one single value everywhere, not just per-lap constancy.
+
+  One value in EVERY lap but across only ONE car is still not evidence. The aid
   and adjustment indices (motor_map, front_antisway, every *_max ceiling) are
   car properties or garage settings -- flat across one car's laps is exactly
   what a working channel looks like. Those are reported INCONCLUSIVE, not dead,
@@ -81,8 +85,19 @@ class ChannelStat:
 
     @property
     def flat_everywhere(self) -> bool:
-        """Constant in every single lap it appears in -- the suspicious shape."""
-        return self.laps > 0 and self.constant_laps == self.laps
+        """Pinned to ONE value in every lap it appears in -- the suspicious shape.
+
+        Constant within each lap is not enough. A channel holding 3.0 on one car
+        and 5.0 on another is constant in both laps across two cars, yet it is
+        plainly alive -- that is a garage setting nobody touched mid-lap. Taking
+        a second value anywhere is proof the game fills it, so the distinct-value
+        count is what decides, not the per-lap constancy alone.
+        """
+        return (
+            self.laps > 0
+            and self.constant_laps == self.laps
+            and len(self.constant_values) <= 1
+        )
 
     @property
     def inconclusive(self) -> bool:
@@ -197,9 +212,10 @@ def report(stats: dict[str, ChannelStat], read: int, missing: int) -> int:
     print("\n" + "=" * 78)
     print("VERDICT BLOCK")
     print("=" * 78)
-    print("\nConstant in only SOME laps is normal and never a finding. Constant in")
-    print("EVERY lap but across ONE car is not evidence either -- nothing could have")
-    print("disagreed. A finding needs flat in every lap across two or more cars.")
+    print("\nA finding needs ONE value in EVERY lap across two or more cars. Constant")
+    print("in only some laps is normal. Holding a different value per car is alive --")
+    print("that is a garage setting nobody moved mid-lap. And flat across a single car")
+    print("is not evidence either, because nothing could have disagreed yet.")
 
     if expected:
         print("\nEXPECTED-CONSTANT -- flat, and we know why. Not dead by surprise:")

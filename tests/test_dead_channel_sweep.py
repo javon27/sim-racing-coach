@@ -91,6 +91,73 @@ def test_one_car_only_is_inconclusive_not_a_finding(tmp_path):
     assert st.inconclusive, "but only one car, so it must not be reported as dead"
 
 
+def test_different_constant_per_car_is_alive_not_dead(tmp_path):
+    """A garage setting nobody moved mid-lap: constant in every lap, two cars, two
+    values. Constancy alone would call this DEAD and exit 2 on a live channel --
+    and it is the shape every INCONCLUSIVE channel turns into the moment a second
+    car is captured, so the false finding would fire exactly when the driver does
+    the thing that was meant to resolve the list."""
+    laps = []
+    for name, car, val in (("a", "Car A", 3.0), ("b", "Car B", 5.0)):
+        p = tmp_path / f"{name}.npz"
+        np.savez_compressed(p, speed=np.linspace(1.0, 9.0, 50), motor_map=np.full(50, val))
+        laps.append((car, str(p)))
+    stats, read, missing = sweep_mod.sweep(laps)
+    st = stats["motor_map"]
+
+    assert (st.constant_laps, st.laps, len(st.cars)) == (2, 2, 2)
+    assert not st.flat_everywhere, "two distinct values is proof the game fills it"
+    assert not st.inconclusive
+    assert sweep_mod.report(stats, read, missing) == 0
+
+
+def test_value_str_distinguishes_one_constant_from_several(tmp_path):
+    """The only thing that lets a human spot a multi-valued channel in the table."""
+    one, several = sweep_mod.ChannelStat(), sweep_mod.ChannelStat()
+    one.constant_values.add(3.0)
+    several.constant_values.update({3.0, 5.0})
+
+    assert one.value_str() == "3"
+    assert several.value_str() != one.value_str()
+    assert "2 distinct" in several.value_str() and "3" in several.value_str()
+
+
+def _one_car_flat(tmp_path) -> tuple[dict, int, int]:
+    """Two laps, ONE car, a channel flat in both -- the deferred case."""
+    laps = []
+    for name in ("a", "b"):
+        p = tmp_path / f"{name}.npz"
+        np.savez_compressed(p, speed=np.linspace(1.0, 9.0, 50), motor_map_max=np.full(50, 11.0))
+        laps.append(("Car A", str(p)))
+    return sweep_mod.sweep(laps)
+
+
+def test_inconclusive_block_is_printed_with_the_deferred_channel(tmp_path, capsys):
+    """The bucket carrying the sweep's honest open question must actually print."""
+    stats, read, missing = _one_car_flat(tmp_path)
+    assert stats["motor_map_max"].inconclusive
+    code = sweep_mod.report(stats, read, missing)
+    out = capsys.readouterr().out
+
+    assert code == 0, "a deferral is not a finding"
+    assert "INCONCLUSIVE" in out
+    assert "motor_map_max" in out.split("INCONCLUSIVE", 1)[1], "named in its own block"
+    assert "second car" in out, "says what would resolve it"
+    assert "NEW FINDING" not in out
+
+
+def test_table_flags_a_deferred_channel_as_one_car_only(tmp_path, capsys):
+    """The table's flag column must not go silent on a deferred channel."""
+    stats, read, missing = _one_car_flat(tmp_path)
+    sweep_mod.report(stats, read, missing)
+    out = capsys.readouterr().out
+
+    row = next(ln for ln in out.splitlines() if ln.startswith("motor_map_max"))
+    assert "1 car only" in row, f"flag column blank on a deferred channel: {row!r}"
+    speed_row = next(ln for ln in out.splitlines() if ln.startswith("speed"))
+    assert "1 car only" not in speed_row, "a varying channel must carry no flag"
+
+
 def test_missing_telemetry_files_are_skipped_not_fatal(tmp_path):
     laps = [
         ("Car A", _lap(tmp_path / "a", varying=True)),
