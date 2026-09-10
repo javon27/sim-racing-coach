@@ -22,7 +22,6 @@ const cornerFixture = {
   trailbrake_overlap: 0.12,
   peak_brake: 0.9,
   peak_lat_g: 1.4,
-  min_grip: null,
   min_spd_delta: 0.9,
 };
 

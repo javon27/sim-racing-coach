@@ -22,7 +22,6 @@ class CornerMetrics:
     trailbrake_overlap: float
     peak_brake: float = 0.0          # max brake input in the corner (0..1)
     peak_lat_g: float = 0.0          # max |lateral g| — how hard the car was loaded
-    min_grip: float = float("nan")   # lowest grip fraction any tire saw (near 0 = sliding)
     # Extended inputs/loads — nan when the source channel is absent (older laps).
     peak_brake_g: float = float("nan")   # max deceleration g while braking
     peak_accel_g: float = float("nan")   # max acceleration g while on throttle
@@ -186,12 +185,6 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
     peak_lat_g = (
         float(np.nanmax(np.abs(win_lat_g[idx]))) if win_lat_g is not None and idx.size else 0.0
     )
-    # Lowest grip fraction any tire saw through the corner (near 0 = at/over the
-    # limit — sliding or locking). nan when the extended capture isn't present.
-    grip_ch = [record.channels[f"grip_{w}"][idx] for w in ("fl", "fr", "rl", "rr")
-               if f"grip_{w}" in record.channels]
-    min_grip = float(np.nanmin(np.vstack(grip_ch))) if grip_ch else float("nan")
-
     # Longitudinal g split by pedal (sign-convention agnostic: magnitude while the
     # brake / throttle is actually applied). nan when long_g wasn't captured.
     long_g = record.channels.get("long_g")
@@ -271,7 +264,6 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
         trailbrake_overlap=trailbrake_overlap,
         peak_brake=peak_brake,
         peak_lat_g=peak_lat_g,
-        min_grip=min_grip,
         peak_brake_g=peak_brake_g,
         peak_accel_g=peak_accel_g,
         peak_steer=peak_steer,

@@ -49,22 +49,123 @@ def test_tire_summary_and_prompt(synthetic_lap):
     assert "Tire temps" in user and "FL" in user and "warm-up" in user.lower()
 
 
-def test_wheel_report_and_min_grip(synthetic_lap):
+def test_wheel_report(synthetic_lap):
     from simcoach.analysis import analyze_lap
-    from simcoach.coach import Coach
     from simcoach.corners import CornerMap
     from simcoach.format import format_wheel_report
-    from simcoach.model.fake import FakeModel
     cmap = CornerMap.load("simcoach/tracks/test_track.json")
     a = analyze_lap(synthetic_lap, cmap)
-    # min grip dips to 0.9 in the braking corners
-    assert abs(a.corners[0].min_grip - 0.9) < 1e-9
     # lap-level wheel report: brake temps, pressures, wear
     rep = format_wheel_report(a, "metric")
     assert "Brake temps" in rep and "wear" in rep.lower()
-    # surfaced in the prompt corner line
-    _, user = Coach(FakeModel()).build_prompt(a, "car", "grip?")
-    assert "min grip" in user
+
+
+def test_min_grip_is_not_a_field_or_output(synthetic_lap):
+    # Issue #43: mGripFract is never populated by LMU (rig-confirmed flat 0.0
+    # always, 157/157 stored laps), so "min grip" was a fabricated reading on
+    # every corner ever analysed. There is no grip signal to recover -- the
+    # field and its output line must both be gone, not re-derived.
+    from simcoach.analysis import CornerMetrics, analyze_lap
+    from simcoach.corners import CornerMap
+    from simcoach.format import format_lap_facts
+    assert not hasattr(CornerMetrics, "min_grip")
+    assert "min_grip" not in CornerMetrics.__dataclass_fields__
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    a = analyze_lap(synthetic_lap, cmap)
+    assert "grip" not in format_lap_facts(a).lower()
+
+
+def test_corner_metrics_fields_vary_or_are_allowlisted():
+    # General regression for #43's bug CLASS, not just the one field: a raw
+    # channel that never varies (LMU's mGripFract, always flat 0.0) reached
+    # coach output as a real per-corner measurement because the only guard was
+    # isnan, and a dead-but-valid 0.0 sails through that guard. This test
+    # doesn't know the name "grip" -- it walks every numeric CornerMetrics
+    # field by reflection and demands that two corners driven with distinctly
+    # different inputs produce distinctly different values for it. A future
+    # field that comes back identical across both either isn't really wired to
+    # per-corner telemetry (the #43 shape) or is legitimately corner-invariant
+    # and belongs on ALLOWLISTED with a reason -- it can't pass silently.
+    import dataclasses
+    import math
+
+    import numpy as np
+
+    from simcoach.analysis import CornerMetrics, analyze_lap
+    from simcoach.corners import CornerMap
+    from simcoach.model_types import LapRecord
+
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")  # corner1 800-1200, corner2 2000-2400
+    n = 1000
+    dist = np.linspace(0, 3000, n)
+    in1 = (dist > 800) & (dist < 1200)
+    in2 = (dist > 2000) & (dist < 2400)
+    after1 = (dist > 1000) & (dist < 1200)   # back-on-throttle half of corner1
+    after2 = (dist > 2200) & (dist < 2400)   # back-on-throttle half of corner2
+
+    speed = np.full(n, 80.0)
+    speed[in1], speed[in2] = 30.0, 50.0                    # different apex speeds
+    brake = np.zeros(n)
+    brake[in1], brake[in2] = 0.8, 0.5                      # different peak brake
+    throttle = np.zeros(n) + 1.0
+    throttle[in1 | in2] = 0.0
+    throttle[after1 | after2] = 1.0                        # both corners exit on throttle
+    steer = np.zeros(n)
+    steer[in1] = -0.5                                      # corner1: steering held all the way through
+    steer[in2 & ~after2] = 0.8                             # corner2: steering only the first half
+    lat_g = np.where(in1, -1.0, np.where(in2, 1.6, 0.1))   # independent, different peak per corner
+    long_g = np.zeros(n)
+    long_g[in1] = -1.4
+    long_g[after1] = 0.3                                   # overwrites part of corner1 -> accel phase
+    long_g[in2] = -0.9
+    long_g[after2] = 0.6                                   # overwrites part of corner2 -> accel phase
+    abs_active = np.zeros(n)
+    abs_active[in1] = 1.0                                  # ABS only in corner1
+    tc_active = np.zeros(n)
+    tc_active[after2] = 1.0                                # TC only in corner2's exit
+    track_edge = np.where(in1, 4.0, np.where(in2, 5.0, 10.0))
+    path_lateral = np.where(in1, 3.8, np.where(in2, 4.0, 0.0))
+    # A raw channel shaped exactly like the real #43 bug: flat 0.0 everywhere,
+    # never responding to the very different braking/steering above. Captured
+    # (real capture keeps sampling it), but must never surface as a measurement.
+    dead = np.zeros(n)
+
+    ch = {
+        "lap_distance": dist, "speed": speed, "brake": brake, "throttle": throttle,
+        "steering": steer, "lat_g": lat_g, "long_g": long_g,
+        "abs_active": abs_active, "tc_active": tc_active,
+        "track_edge": track_edge, "path_lateral": path_lateral,
+    }
+    for w in ("fl", "fr", "rl", "rr"):
+        ch[f"grip_{w}"] = dead
+    lap = LapRecord("lmu", "test_track", "test_car", 92.5, True, 0.0, ch)
+
+    corners = analyze_lap(lap, cmap).corners
+    assert len(corners) == 2
+
+    # Bookkeeping fields that are legitimately the same shape regardless of
+    # driving: min_spd_delta is None unless a reference lap is supplied (not
+    # exercised here), so it's filtered out below as non-numeric already --
+    # listed for documentation, not because the filter needs it.
+    ALLOWLISTED: set[str] = set()
+
+    checked = 0
+    for f in dataclasses.fields(CornerMetrics):
+        v1, v2 = getattr(corners[0], f.name), getattr(corners[1], f.name)
+        if isinstance(v1, bool) or not isinstance(v1, (int, float)):
+            continue  # identity/label/list fields, not numeric measurements
+        if f.name in ALLOWLISTED:
+            continue
+        checked += 1
+        same = v1 == v2 or (isinstance(v1, float) and isinstance(v2, float)
+                             and math.isnan(v1) and math.isnan(v2))
+        assert not same, (
+            f"CornerMetrics.{f.name} is identical ({v1!r}) across two corners "
+            "driven with deliberately different inputs -- looks like a "
+            "dead/unwired channel reaching coach output as a fake measurement "
+            "(the #43 bug shape), or it belongs on ALLOWLISTED with a reason."
+        )
+    assert checked >= 10  # sanity: this actually exercised most numeric fields
 
 
 def test_extended_corner_inputs(synthetic_lap):
