@@ -13,7 +13,7 @@
         459.9
       ],
       "radius_m": 31.2,
-      "elev_delta_m": -5.8,
+      "elev_delta_m": -5.1,
       "width_m": 10.3,
       "banking_deg": -2.2
     },
@@ -29,7 +29,7 @@
         531.8
       ],
       "radius_m": 34.8,
-      "elev_delta_m": -2.9,
+      "elev_delta_m": -0.8,
       "width_m": 10.3,
       "banking_deg": -2.2
     },
@@ -109,7 +109,7 @@
         2357.3
       ],
       "radius_m": 285.6,
-      "elev_delta_m": 6.8,
+      "elev_delta_m": 7.2,
       "width_m": 8.1,
       "banking_deg": -0.2
     },
@@ -125,7 +125,7 @@
         2443.5
       ],
       "radius_m": 23.0,
-      "elev_delta_m": -10.5,
+      "elev_delta_m": -3.3,
       "width_m": 9.3,
       "banking_deg": -3.9
     },
@@ -141,7 +141,7 @@
         2515.4
       ],
       "radius_m": 37.2,
-      "elev_delta_m": -19.7,
+      "elev_delta_m": -16.7,
       "width_m": 9.4,
       "banking_deg": 4.1
     },
