@@ -220,11 +220,21 @@ _MIN_SPREAD_M = 6.0
 # closed-loop run of such bins at least this long. Per bin, peak-to-peak lets ONE lap
 # running wide lend its bins a spread: on 17 real Fuji racing laps (no edge laps) it let
 # 26% of bins through and baked "width 26m, 2 deg banked" into two corners, off a single
-# qualifying lap 24.8 m off the pack. Measured run lengths -- racing-line clouds are
-# local: Fuji 17 laps longest 236 m, Laguna 45 165 m, Algarve 19 148 m (Silverstone
-# National 17 has one 632 m run off two slow race laps); spanning clouds hold for the
-# whole lap: Spa 1 left + 1 right edge lap 6990 m, Laguna capture 3595 m, Algarve
-# capture 4362 m (+ a 260 m fragment). 1000 m sits in the widest gap between the two.
+# qualifying lap 24.8 m off the pack.
+#   There is no clean gap, so this is a trade, set on the ASYMMETRY: a fabricated width
+# or camber reaches the coach as owned fact, an unknown one just goes unsaid. Measured
+# (% of bins with width known, at 500 m -> 1000 m):
+#   - racing-line clouds: Fuji 17, Laguna 45, Algarve 19 and every first-4 are 0 at both
+#     (longest local run 236 m). Silverstone National 17 is 24 -> 0: its one 632 m run
+#     straddles start/finish with a 30 s-slow race lap sitting ~16 m off the pack and
+#     reads 18-23 m "wide" -- consistent with the pit lane, not the track.
+#   - spanning clouds: Spa 1 left + 1 right edge lap, Laguna, Imola, Bahrain Endurance,
+#     Le Mans, Monza, Algarve captures 93-100 at both; but Bahrain International 84 -> 74,
+#     Interlagos 79 -> 45, Bahrain Outer 55 -> 30, Monza Curva Grande 66 -> 21, Bahrain
+#     Paddock 47 -> 0. A rebuild or re-bake from THOSE captures says less than it could;
+#     the maps already shipped keep their baked values.
+# ponytail: a length cannot reject a pit lane by design -- Silverstone's is only shorter
+# than this. Excluding in/out laps from a rebuild is the real fix for pit laps.
 _MIN_SPREAD_RUN_M = 1000.0
 
 
