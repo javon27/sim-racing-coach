@@ -1046,6 +1046,11 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             out["name"] = name
         if keep_ribbon:
             out["ribbon"] = keep_ribbon  # keep the reconstructed surface across edits
+        if existing.get("built_from"):
+            # An editor save (names, apexes, sections) keeps a map this app BUILT
+            # re-buildable from later laps. Dropping the mark here would make naming one
+            # corner on a lap-built map lock it against every future live-lap rebuild.
+            out["built_from"] = existing["built_from"]
         # Carry the authored notes overlay across a rebuild instead of wiping it (#37),
         # dropping only the per-corner notes whose keys no longer name a corner that
         # exists. `guard_corner_notes` owns that rule (and asks `note_key_binds` which
@@ -1388,7 +1393,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # save, and save persists the raw cloud for later rebuilds.
         raw = [{c: r.channels[c] for c in _POS_CHANNELS if c in r.channels} for r in buf]
         app.state.last_ribbon = {"world": ribbon, "corners": corners, "sectors": sectors,
-                                 "sections": sections, "track": track, "laps": raw}
+                                 "sections": sections, "track": track, "laps": raw,
+                                 "built_from": "capture"}
         res = _clean(ribbon_to_screen(ribbon, corners, sectors,
                                       rotation=_track_rotation(track), sections=sections))
         res["track_name"] = _track_file_data(track).get("name") or track
@@ -1423,6 +1429,11 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             "length": world["dist"][-1] if world["dist"] else 0.0,
             "rotation": _track_rotation(track),  # preserve any existing rotation
         }
+        # Mark maps this app BUILT (from a capture or from driven laps). A live-lap rebuild
+        # may replace only a marked map's corners -- an unmarked map with corners is a
+        # curated layout (see mapcapture_rebuild).
+        if rib.get("built_from"):
+            out["built_from"] = rib["built_from"]
         # _write_track_json REPLACES the file, so the authored notes overlay has to be
         # carried forward here too -- same owner, same rule, as the editor's save.
         #
@@ -1501,6 +1512,19 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # No capture file -> the track's own live laps (#69): the reported case, 27 live
         # laps and no captures/<slug>.npz, used to 422 here with no way forward.
         laps, from_capture = _rebuild_clouds(track, rows)
+        existing_map = _track_file_data(track)
+        if (not from_capture and existing_map.get("corners")
+                and not existing_map.get("built_from")):
+            # Never rebuild a CURATED corner map from driven laps. Its corners are owned
+            # data (GP numbering, the names the knowledge notes key on); a solver rebuild
+            # saves "Turn 1..N" over them -- the repo file in dev, the coach's corner map in
+            # an installed build. Shipped Spa (no stored outline, #82) reached this through
+            # "Add map" -> "Rebuild from saved capture". Maps THIS route or a capture build
+            # produced carry `built_from`, so driving more laps still improves them; only a
+            # map with corners and no such mark (every shipped layout) is refused. A real
+            # mapping capture stays the explicit way to regenerate a curated layout.
+            raise HTTPException(422, "this track has a curated corner map; rebuilding it "
+                                     "from driven laps would replace its corners")
         if not laps:
             raise HTTPException(422, "saved capture is unreadable" if from_capture
                                 else "no saved capture available")
@@ -1521,7 +1545,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # Freezing live laps into a capture made the capture WIN every later rebuild, so
         # laps driven afterwards never reached the map while the badge counted them.
         app.state.last_ribbon = {"world": ribbon, "corners": corners, "sectors": sectors,
-                                 "sections": sections, "track": track, "laps": None}
+                                 "sections": sections, "track": track, "laps": None,
+                                 "built_from": "capture" if from_capture else "live_laps"}
         res = _clean(ribbon_to_screen(ribbon, corners, sectors,
                                       rotation=_track_rotation(track), sections=sections))
         res["track_name"] = _track_file_data(track).get("name") or track

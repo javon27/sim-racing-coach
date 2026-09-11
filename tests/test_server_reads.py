@@ -1030,6 +1030,58 @@ def test_mapcapture_rebuild_falls_back_to_live_laps_of_that_track(tmp_path):
     assert c.post("/mapcapture/save", json={}).json()["saved"] is True
     saved = tmp_path / "tracks" / "silverstone_national_circuit.json"
     assert json.loads(saved.read_text())["name"] == "Silverstone National Circuit"  # not the slug
+    # Marked as built from driven laps, so driving more laps can rebuild it again.
+    assert json.loads(saved.read_text())["built_from"] == "live_laps"
+
+
+def test_a_lap_built_map_stays_rebuildable_after_an_editor_save(tmp_path):
+    # The driver builds a map from driven laps, names a corner in the editor, drives more
+    # laps and rebuilds. The editor save must keep the built_from mark -- without it, the
+    # named corner would make the map look curated and every later rebuild would 422.
+    app, store = _map_app(tmp_path)
+    c = _tc(app)
+    slug = "silverstone_national_circuit"
+    for zsign in (1, -1, 1):
+        store.save(_edge("Silverstone National Circuit", zsign, 100.0))
+    assert c.post("/mapcapture/rebuild", json={"slug": slug}).status_code == 200
+    assert c.post("/mapcapture/save", json={}).json()["saved"] is True
+    f = tmp_path / "tracks" / f"{slug}.json"
+    length = json.loads(f.read_text())["length"]
+    r = c.put(f"/tracks/{slug}/map", json={"corners": [
+        {"number": 1, "name": "Copse", "apex_dist": length / 2,
+         "start_dist": length * 0.3, "end_dist": length * 0.7}]})
+    assert r.status_code == 200, r.text
+    saved = json.loads(f.read_text())
+    assert saved["corners"] and saved.get("built_from") == "live_laps"
+    for zsign in (-1, 1):
+        store.save(_edge("Silverstone National Circuit", zsign, 100.0))
+    r2 = c.post("/mapcapture/rebuild", json={"slug": slug})
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["lap_count"] == 5
+
+
+def test_mapcapture_rebuild_never_replaces_a_curated_corner_map_from_live_laps(tmp_path):
+    # Shipped Spa has 18 curated, named corners in GP numbering but no stored outline
+    # (#82), so the Tracks screen offered "Add map" -> "Rebuild from saved capture". The
+    # live-lap fallback then rebuilt it from 6 driven laps and Save wrote 22 "Turn N"
+    # solver corners over it -- in dev the repo file itself. A map with corners and no
+    # `built_from` mark is curated: refuse, and leave the file exactly as it was.
+    app, store = _map_app(tmp_path)
+    c = _tc(app)
+    tracks = tmp_path / "tracks"
+    tracks.mkdir(parents=True, exist_ok=True)
+    curated = tracks / "silverstone_national_circuit.json"
+    curated.write_text(json.dumps({"track": "silverstone_national_circuit", "corners": [
+        {"number": 1, "name": "Copse", "direction": "right",
+         "start_dist": 100.0, "apex_dist": 150.0, "end_dist": 200.0}]}), encoding="utf-8")
+    before = curated.read_bytes()
+    for zsign in (1, -1, 1):
+        store.save(_edge("Silverstone National Circuit", zsign, 100.0))
+    r = c.post("/mapcapture/rebuild", json={"slug": "silverstone_national_circuit"})
+    assert r.status_code == 422, r.text
+    assert "curated corner map" in r.json()["detail"]
+    assert app.state.last_ribbon is None                 # nothing staged for a Save to write
+    assert curated.read_bytes() == before
 
 
 def test_mapcapture_rebuild_fallback_ignores_result_log_laps(tmp_path):
