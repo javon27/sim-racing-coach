@@ -126,7 +126,7 @@ def test_distill_never_calls_a_captured_lap_a_starting_position(tmp_path, monkey
     # because no result row exists here to supply one.
     c, store = _client(tmp_path, monkeypatch, mem_keyring, model_reply=json.dumps(
         {"memories": [], "summary": ""}))
-    store.save(dataclasses.replace(synthetic_lap, session_id="sess-1", phase="qualify",
+    store.save(dataclasses.replace(synthetic_lap, session_id="sess-1", phase="qualifying",
                                     timestamp=1.0, position=2))
     store.save(dataclasses.replace(synthetic_lap, session_id="sess-1", phase="race",
                                     timestamp=2.0, position=9))

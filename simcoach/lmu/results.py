@@ -75,7 +75,8 @@ class ResultSession:
 
 _SESSION_TAG_RE = re.compile(r"^(Practice|Qualify|Warmup|Race)\d*$")
 
-# Result-log session elements are "Practice1", "Qualify1", "Warmup", "Race1"; live capture
+# Result-log session elements carry an OPTIONAL trailing number: the real logs use
+# "Practice1" (719), "Qualify" (340) and "Race" (347), plus "Warmup". Live capture
 # (smm.session_phase) names the same phases "practice", "qualifying", "warmup", "race". The
 # live/result lap dedupe matches phase exactly, so the bare tag's "qualify" inserted every
 # qualifying result lap as a duplicate of its live twin (#88). Map to live capture's names.

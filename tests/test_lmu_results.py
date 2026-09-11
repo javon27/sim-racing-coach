@@ -124,8 +124,11 @@ def test_parse_result_reads_offline_from_a_lone_isplayer(tmp_path):
     assert session.grid_position == 9 and session.position == 18
 
 
-@pytest.mark.parametrize("tag, m_session", [("Practice1", 1), ("Qualify1", 5),
-                                            ("Warmup", 9), ("Race1", 10)])
+# The tags real logs use -- "Practice1" (719), "Qualify" (340), "Race" (347) -- and the
+# numbered/unnumbered other forms the tag grammar also accepts.
+@pytest.mark.parametrize("tag, m_session", [
+    ("Practice1", 1), ("Qualify", 5), ("Qualify1", 5), ("Warmup", 9), ("Race", 10),
+    ("Race1", 10)])
 def test_result_log_phase_matches_live_capture_phase(tmp_path, tag, m_session):
     """Live capture and result-log import must name a session phase identically. The
     live/result dedupe matches phase exactly, and "qualify" vs live's "qualifying" inserted
@@ -144,6 +147,27 @@ def test_result_log_phase_matches_live_capture_phase(tmp_path, tag, m_session):
     session = results.parse_result(xml, "Jayson G")
     assert session is not None
     assert session.session_type == session_phase(m_session)
+
+
+@pytest.mark.parametrize("tag", ["Qualify", "Qualify1"])
+def test_a_qualifying_log_parses_exactly_like_the_same_race_log(tmp_path, tag):
+    """Every other test parses a <Race> or <Practice*> log, so a change that broke ONLY
+    qualifying -- the tag grammar, the element lookup, anything reading that session --
+    passed the whole suite. The same log under a <Qualify> element must yield the same
+    session field for field: laps, sectors, positions, incidents, penalties, mode.
+    Only the phase differs."""
+    import dataclasses
+    text = _FIXTURE.read_text(encoding="utf-8")
+    assert text.count("<Race>") == text.count("</Race>") == 1   # the premise
+    xml = tmp_path / "q.xml"
+    xml.write_text(text.replace("<Race>", f"<{tag}>").replace("</Race>", f"</{tag}>"),
+                   encoding="utf-8")
+
+    race = results.parse_result(_FIXTURE, "Jayson G")
+    qualifying = results.parse_result(xml, "Jayson G")
+
+    assert race is not None and race.laps and race.incidents   # a non-trivial session
+    assert qualifying == dataclasses.replace(race, session_type="qualifying")
 
 
 def test_parse_result_returns_none_when_player_absent():
