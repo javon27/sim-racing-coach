@@ -122,9 +122,13 @@ def test_reconstruct_surface_stitches_sparse_seam():
 
     r = reconstruct_surface([edge(1), edge(-1)], bins=50)
     assert abs(r["width"][25] - 10.0) < 1.0   # mid-lap full width
-    sep = _sep(r)                             # the stitch is of the EDGES; the seam's
-    assert sep[0] > 5.0                       # samples really converge, so its width is
-    assert sep[-1] > 5.0                      # gated to unknown (asserted separately)
+    # The stitch is of the EDGES (the seam's samples really converge, so its width is
+    # gated to unknown). Smoothing alone already lifts the pinch to ~6.5 m on this
+    # fixture, so the bound has to sit above that: stitched 8.3, unstitched 6.48. The old
+    # "> 5.0" held either way and never tested the stitch.
+    sep = _sep(r)
+    assert sep[0] > 7.5
+    assert sep[-1] > 7.5
 
 
 def test_reconstruct_surface_keeps_narrow_midlap_corner():
@@ -137,10 +141,11 @@ def test_reconstruct_surface_keeps_narrow_midlap_corner():
         return {"pos_x": x, "pos_z": z, "lap_distance": x.copy()}
 
     r = reconstruct_surface([pass_(o) for o in (-4.0, -1.0, 2.0, 5.0)], bins=50)
-    # Stitch stays seam-only: the mid narrow bin is NOT widened to the ~9 median
-    # (smoothing softens the sharp dip, but it's still clearly narrower).
+    # Stitch stays seam-only: the mid narrow bin is NOT widened to the ~9 median.
+    # Measured: 0.06x the straight here, 0.70x if the stitch runs everywhere -- so the
+    # old "< 0.75x" held either way; 0.25x separates them.
     sep = _sep(r)
-    assert sep[25] < 0.75 * sep[10]
+    assert sep[25] < 0.25 * sep[10]
     assert r["width"][10] > 5.0   # a straight bin keeps the full weave spread
     assert r["width"][25] is None  # ...and one line through the corner measures no width
 
