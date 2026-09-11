@@ -69,6 +69,21 @@ test("shows the map pane empty state when the track has no layout", async () => 
   expect(await screen.findByText(/no layout for this track yet/i)).toBeTruthy();
 });
 
+test("a track whose map comes back drawn shows it with its corners, and offers Edit, not Add map", async () => {
+  // #82: shipped Spa has corners but no stored outline, so GET /tracks/{slug}/map used to
+  // return {} and this pane said "no layout" + "Add map". The sidecar now borrows the
+  // outline its driven laps draw; the payload is the ordinary map shape, marked shipped.
+  const spa = { ...fourCornerMap(), shipped: true, curating: false, track_name: "Circuit de Spa-Francorchamps" };
+  vi.spyOn(api, "getTrackMap").mockResolvedValue(spa as unknown as api.TrackMap);
+  const { container } = render(TracksScreen);
+  await fireEvent.click(await screen.findByText("Algarve"));
+  expect(await screen.findByRole("button", { name: "Edit" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Add map" })).toBeNull();
+  expect(screen.queryByText(/no layout for this track yet/i)).toBeNull();
+  const pane = within(container.querySelector(".mappane") as HTMLElement);
+  for (const n of [1, 2, 3, 4]) expect(pane.getByText(`Turn ${n}`)).toBeTruthy();
+});
+
 function fourCornerMap() {
   const mk = (n: number) => ({
     number: n, label: String(n), name: `Turn ${n}`, direction: "right",
