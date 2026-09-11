@@ -50,7 +50,34 @@ def _baked_maps() -> list[str]:
     return out
 
 
-BAKED_MAPS = _baked_maps()
+# PINNED, not derived. Every per-map test below parametrizes over this, and a list
+# derived from the data itself means a map that loses its path or all of its geometry
+# silently drops out of the parametrization -- its tests stop being collected instead of
+# failing, which is the regression they exist to catch. Derived vs pinned is compared in
+# test_the_pinned_baked_map_list_is_what_ships, which also forces a newly baked map to be
+# added here rather than shipping unguarded.
+BAKED_MAPS = [
+    "algarve_international_circuit",
+    "autodromo_enzo_e_dino_ferrari",
+    "autodromo_jose_carlos_pace",
+    "autodromo_nazionale_monza",
+    "bahrain_endurance_circuit",
+    "bahrain_international_circuit",
+    "bahrain_outer_circuit",
+    "bahrain_paddock_circuit",
+    "circuit_de_la_sarthe",
+    "monza_curva_grande_circuit",
+    "weathertech_raceway_laguna_seca",
+]
+
+
+def test_the_pinned_baked_map_list_is_what_ships():
+    """Both directions. A pinned map missing from the data lost its path or its whole bake;
+    a baked map missing from the pin ships with none of the per-map guards run on it."""
+    derived = _baked_maps()
+    assert derived == BAKED_MAPS, (
+        f"lost path/geometry: {sorted(set(BAKED_MAPS) - set(derived))}; "
+        f"baked but not pinned: {sorted(set(derived) - set(BAKED_MAPS))}")
 
 
 def _self_save(tmp_path: Path, slug: str) -> tuple[dict, dict]:

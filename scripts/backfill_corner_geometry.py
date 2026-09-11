@@ -121,10 +121,29 @@ def _store_samples(slug, store, conn, limit=12):
     return out
 
 
-def backfill(slugs=None, keys=_METRIC_KEYS):
+def _usage_error(slugs, keys):
+    """Why this invocation would bake nothing, or the wrong thing -- or None.
+
+    Every failure here is SILENT if let through: an unknown metric matches nothing and
+    the files are written back unchanged; an unknown slug matches no map and nothing is
+    baked; no metrics at all bakes nothing. Each prints a normal-looking run, and the
+    curator commits a re-bake that did not happen. So refuse, before anything is opened.
+    """
+    if not keys:
+        return "no metrics to bake"
     unknown = set(keys) - set(_METRIC_KEYS)
     if unknown:
-        raise ValueError(f"not corner geometry metrics: {sorted(unknown)}")
+        return f"not corner geometry metrics: {sorted(unknown)} (known: {list(_METRIC_KEYS)})"
+    missing = set(slugs or ()) - {f.stem for f in TRACKS_DIR.glob("*.json")}
+    if missing:
+        return f"no shipped map named: {sorted(missing)} (in {TRACKS_DIR})"
+    return None
+
+
+def backfill(slugs=None, keys=_METRIC_KEYS):
+    err = _usage_error(slugs, keys)
+    if err:
+        raise ValueError(err)
     cap_dir = Path(telemetry_dir()) / "captures"
     store = LapStore(str(db_path()), str(telemetry_dir()))
     conn = sqlite3.connect(str(db_path()))
@@ -165,8 +184,31 @@ def backfill(slugs=None, keys=_METRIC_KEYS):
     conn.close()
 
 
+def main(argv):
+    """CLI entry point. Exits non-zero, before anything is opened or written, on any
+    argument it cannot act on exactly as typed.
+
+    The argv parse used to be the unguarded half: `--onyl=radius_m` or an empty
+    `--only=` fell back to baking EVERY metric (on the curator's machine, a radius-only
+    re-bake that also rewrites 59 elev_delta_m values; anywhere else, one that deletes
+    elev_delta_m from all 169 corners), and `--only radius_m` read `radius_m` as a slug
+    and did nothing without saying so."""
+    slugs, keys = [], []
+    for a in argv:
+        if not a.startswith("-"):
+            slugs.append(a)
+            continue
+        names = a[len("--only="):].split(",") if a.startswith("--only=") else []
+        if not names or "" in names:
+            raise SystemExit(f"unrecognised argument {a!r}: the only option is "
+                             f"--only=metric[,metric...], with no empty names")
+        keys += names
+    keys = tuple(keys) or _METRIC_KEYS
+    err = _usage_error(slugs, keys)
+    if err:
+        raise SystemExit(err)
+    backfill(set(slugs) or None, keys)
+
+
 if __name__ == "__main__":
-    args = sys.argv[1:]
-    only = [m for a in args if a.startswith("--only=") for m in a[7:].split(",") if m]
-    backfill({a for a in args if not a.startswith("--")} or None,
-             tuple(only) or _METRIC_KEYS)
+    main(sys.argv[1:])
