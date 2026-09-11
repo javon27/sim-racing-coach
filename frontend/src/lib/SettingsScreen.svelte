@@ -541,7 +541,10 @@
         {:else}
           <div>
             <span class="lbl">Reset all data</span>
-            <p class="sub">Erases every lap, chat, and telemetry file. Can't be undone.</p>
+            <p class="sub">
+              Erases every lap, chat, and telemetry file. Can't be undone. Sessions from LMU's
+              result logs are re-imported automatically within about a minute.
+            </p>
           </div>
           <button type="button" class="danger" onclick={() => (confirmingReset = true)}>
             Reset / clear data

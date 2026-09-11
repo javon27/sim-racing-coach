@@ -149,9 +149,17 @@ class _Stop(Exception):
     pass
 
 
+class _Runaway(BaseException):
+    """Deliberately not an Exception: poll_results catches those and would keep looping."""
+
+
 def _poll(store, userdata, *between):
-    """Run poll_results for len(between) + 1 polls, calling between[i] after poll i."""
+    """Run poll_results for len(between) + 1 polls, calling between[i] after poll i. A loop
+    that stops calling sleep FAILS here instead of hanging: the poll after the last expected
+    one raises _Runaway (pytest-timeout is not a dependency)."""
     steps = list(between)
+    polls = []
+    real_ingest_all = ingest.ingest_all
 
     def sleep(seconds):
         assert seconds == POLL_INTERVAL_S
@@ -159,8 +167,18 @@ def _poll(store, userdata, *between):
             raise _Stop
         steps.pop(0)()
 
-    with pytest.raises(_Stop):
-        poll_results(store, sleep=sleep, userdata_dir=userdata)
+    def capped_ingest_all(*args, **kwargs):
+        polls.append(None)
+        if len(polls) > len(between) + 1:
+            raise _Runaway(f"poll {len(polls)} started without the loop sleeping in between")
+        return real_ingest_all(*args, **kwargs)
+
+    ingest.ingest_all = capped_ingest_all
+    try:
+        with pytest.raises(_Stop):
+            poll_results(store, sleep=sleep, userdata_dir=userdata)
+    finally:
+        ingest.ingest_all = real_ingest_all
 
 
 @pytest.fixture
@@ -220,6 +238,50 @@ def test_poller_reimports_a_file_rewritten_with_a_new_mtime(tmp_path, parses):
 
     assert parses.count("race1.xml") == 2
     assert store.race_session("race1")["position"] == 4
+
+
+def test_poller_rereads_a_no_player_log_that_lmu_rewrites_with_a_new_mtime(tmp_path, parses):
+    # The unmatched memo is keyed on mtime: a rewritten log is new content and must be read
+    # again, not answered from what its old content said.
+    userdata = _make_userdata(tmp_path)   # race2.xml is someone else's session
+    store = _store(tmp_path)
+    race2 = userdata / "Log" / "Results" / "race2.xml"
+    before = []
+
+    def lmu_rewrites_it_as_the_drivers_session():
+        before.append(store.race_session("race2"))
+        st = race2.stat()
+        race2.write_text(_XML.format(name="Jayson G"))
+        os.utime(race2, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
+
+    _poll(store, userdata, lmu_rewrites_it_as_the_drivers_session)
+
+    assert before == [None]
+    assert store.race_session("race2") is not None
+
+
+def test_poller_rereads_a_logs_profile_when_lmu_rewrites_it_with_a_new_mtime(tmp_path, parses):
+    # The <PlayerFile> memo is keyed on mtime too: a log rewritten to name a different
+    # profile must be looked up again, not answered from the memo.
+    userdata = _make_userdata(tmp_path)
+    results = userdata / "Log" / "Results"
+    (results / "race2.xml").unlink()
+    race1 = results / "race1.xml"
+    race1.write_text(_XML.format(name="Jayson G").replace(
+        "<PlayerFile>Settings</PlayerFile>", "<PlayerFile>Friend</PlayerFile>"))   # no JSON
+    store = _store(tmp_path)
+    before = []
+
+    def lmu_rewrites_it_naming_the_drivers_profile():
+        before.append(store.race_session("race1"))
+        st = race1.stat()
+        race1.write_text(_XML.format(name="Jayson G"))
+        os.utime(race1, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
+
+    _poll(store, userdata, lmu_rewrites_it_naming_the_drivers_profile)
+
+    assert before == [None]   # no name resolved from the Friend profile
+    assert store.race_session("race1") is not None
 
 
 def test_poller_retries_a_truncated_file_until_lmu_finishes_writing_it(tmp_path, parses):
