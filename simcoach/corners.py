@@ -43,14 +43,51 @@ def validated_sectors(sectors, length: float) -> list[float]:
     never clamps or repairs."""
     if not isinstance(sectors, list):
         raise TypeError("sectors must be a list")
+    # A bool is refused, not read as 1.0/0.0: `true` in a sectors list is a corrupt
+    # file, and float(True) would ship it as a split at 1 m. OverflowError too: float()
+    # RAISES it on an integer too large for a double, which JSON happily parses.
+    if any(isinstance(s, bool) for s in sectors):
+        raise ValueError("sectors must be numbers")
     try:
         out = [float(s) for s in sectors]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raise ValueError("sectors must be numbers") from None
     if any(not math.isfinite(s) or not (0.0 < s < length) for s in out):
         raise ValueError("sector splits must be within (0, length)")
     if any(a >= b for a, b in itertools.pairwise(out)):
         raise ValueError("sector splits must be strictly increasing")
+    return out
+
+
+def validated_sections(sections, length: float) -> list[dict]:
+    """Named track sections in the normalised shape `CornerMap.from_data` loads, or
+    TypeError/ValueError naming what's wrong. `None` is no sections.
+
+    Same contract and same reason as `validated_sectors` above (#65): `from_data`
+    RAISES on a bad span, so one unvalidated section commits a map no client can open.
+    This lived inline in the editor's save endpoint, and the promote script and the
+    server's other three writers wrote `sections` verbatim. Refuses bad input; the only
+    change to good input is the normalisation the endpoint always applied (names capped,
+    distances to 1 dp), which every shipped section already satisfies."""
+    if sections is None:
+        return []
+    if not isinstance(sections, list):
+        raise TypeError("sections must be a list")
+    out = []
+    for s in sections:
+        if not isinstance(s, dict):
+            raise TypeError("each section must be an object")
+        try:
+            if isinstance(s["start_dist"], bool) or isinstance(s["end_dist"], bool):
+                raise TypeError
+            sd, ed = float(s["start_dist"]), float(s["end_dist"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            raise ValueError("section requires numeric start_dist/end_dist") from None
+        if not (math.isfinite(sd) and math.isfinite(ed) and 0.0 <= sd < ed <= length):
+            raise ValueError("section span must satisfy 0 <= start < end <= length")
+        out.append({"name": str(s.get("name", ""))[:60],
+                    "kind": str(s.get("kind", "section"))[:16],
+                    "start_dist": round(sd, 1), "end_dist": round(ed, 1)})
     return out
 
 

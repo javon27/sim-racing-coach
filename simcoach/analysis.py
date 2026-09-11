@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass
 from typing import Optional
 import numpy as np
@@ -366,6 +367,31 @@ CORNER_GEOMETRY_KEYS = ("radius_m", "width_m", "banking_deg", "elev_delta_m")
 # rule, and "one writer's list missing a key" is exactly what deleted Laguna's
 # width/banking (#62). Add a fifth metric -> classify it here in the same edit.
 SIGNED_GEOMETRY_KEYS = frozenset({"banking_deg", "elev_delta_m"})
+
+
+def measurable_geometry(key: str, value) -> bool:
+    """Is a stored geometry value one that could have been MEASURED -- a finite number,
+    and for a length also > 0?
+
+    One owner for two questions that must not disagree: whether the editor's save
+    carries a baked metric forward rather than recomputing it (#62), and whether any
+    writer may put it in a track file at all (#65). These come off disk, including
+    hand-edited and third-party maps, so `null`, a string, a dict, a non-finite float
+    and a zero/negative LENGTH are not data. A string is the sharp one: it loads, and
+    then `geometry_clause` raises `Unknown format code 'f'` on the coach's next answer.
+
+    The bool check is load-bearing, not defensive noise: bool IS an int in Python, so
+    `True > 0` would carry a stored `true` through as a measurement. OverflowError is
+    too: `math.isfinite` RAISES on an int too large for a double, which JSON parses.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        if not math.isfinite(value):
+            return False
+    except OverflowError:
+        return False
+    return value > 0 or key in SIGNED_GEOMETRY_KEYS
 
 
 def corner_geometry(path, dist, corners, *, width=None, bank=None, elev=None):

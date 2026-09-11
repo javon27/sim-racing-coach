@@ -3,14 +3,17 @@ slug of the (series-suffix-stripped, accent-normalized) full name — distinct l
 get distinct files, and an unknown layout resolves to None so the caller auto-builds."""
 import json
 import logging
+import random
 from pathlib import Path
 
 import pytest
 
 from simcoach.track_lookup import (
+    corner_identity_map,
     guard_corner_notes,
     load_track_knowledge,
     note_key_binds,
+    note_key_labels,
     resolve_track_map,
     track_slug,
 )
@@ -364,6 +367,218 @@ def test_shipped_note_keys_all_bind_to_their_own_map():
     assert seen > 100, "expected the shipped maps to carry authored per-corner notes"
 
 
+def _corners(*labels, apex=10.0, step=10.0):
+    """Corner dicts as a track JSON carries them: a label and an apex distance, the
+    apex being what identifies a corner across a save."""
+    return [{"number": i, "label": lab, "name": f"Turn {lab}",
+             "apex_dist": apex + step * i}
+            for i, lab in enumerate(labels)]
+
+
+def _kept(old_notes_corners, old_labels, new_labels, **kw):
+    notes = guard_corner_notes("algarve", {"corners": old_notes_corners},
+                               _corners(*old_labels), _corners(*new_labels, **kw))
+    return (notes or {}).get("corners", {})
+
+
+def test_a_relabel_moves_a_note_onto_the_corner_it_was_written_about():
+    # #64, the reported repro: shift every label by two (1,2,3,4 -> 3,4,5,6), which the
+    # editor's free-text label box does in four keystrokes and which leaves the CORNER
+    # COUNT unchanged. Keying on the count kept '3-4' verbatim, so a note about the last
+    # chicane was then served as `Authored note:` -- owned fact, full confidence -- about
+    # the first two corners of the lap. The corners did not move, so each is identified
+    # by its apex and the key follows it.
+    assert _kept({"3-4": "THE LAST CHICANE"}, "1234", "3456") == {"5-6": "THE LAST CHICANE"}
+    assert _kept({"4": "THE LAST CORNER"}, "1234", "3456") == {"6": "THE LAST CORNER"}
+    # The blanket key from the same report. It was authored about every corner on the
+    # track, so naming them all is not a misbind and it is kept verbatim -- but it is now
+    # kept because every corner it names is one it was written about, not because the
+    # count happened to match. '1-999' is over the span cap and so names only itself,
+    # which is why the reachable blanket key is this one.
+    assert _kept({"1-99": "ALWAYS LIFT HERE"}, "1234", "3456") == {"1-99": "ALWAYS LIFT HERE"}
+    assert _kept({"1-999": "ALWAYS LIFT HERE"}, "1234", "3456") == {}
+
+
+def test_a_gp_style_relabel_keeps_the_note_instead_of_deleting_it():
+    # The other half of #64: the old rule ALSO deleted. '2' -> '2A' made the key name no
+    # corner, so hand-authored prose went in the log and out of the file. The corner is
+    # the same corner; the note moves onto its new designation.
+    assert _kept({"1": "brake late", "2": "middle of the chicane"},
+                 ["1", "2"], ["1", "2A"]) == {"1": "brake late", "2A": "middle of the chicane"}
+    # A range whose corners are all renamed cannot be expressed as one key, so it narrows
+    # onto its first corner rather than being deleted.
+    assert _kept({"2-3": "the chicane"},
+                 ["1", "2", "3"], ["1A", "2A", "3A"]) == {"2A": "the chicane"}
+
+
+def _at(*pairs):
+    """Corners at explicit (label, apex) -- an insert or a delete moves the LABELS of
+    the corners around it while leaving their apexes exactly where they were, which a
+    positional fixture cannot express."""
+    return [{"number": i, "label": lab, "name": f"Turn {lab}", "apex_dist": apex}
+            for i, (lab, apex) in enumerate(pairs, 1)]
+
+
+def test_an_insert_renumbers_the_lap_and_the_notes_follow_their_corners():
+    # Corner count was the old test for "are these the same corners", so adding a corner
+    # ANYWHERE deleted every per-corner note on the track -- which is how 135 authored
+    # notes came within one save of being wiped. Here a new corner is inserted at 25 m
+    # and takes the designation '3'; the corners at 30 m and 40 m become '4' and '5'.
+    notes = guard_corner_notes(
+        "algarve", {"corners": {"1": "hairpin", "3-4": "the esses"}},
+        _at(("1", 10.0), ("2", 20.0), ("3", 30.0), ("4", 40.0)),
+        _at(("1", 10.0), ("2", 20.0), ("3", 25.0), ("4", 30.0), ("5", 40.0)))
+    assert notes["corners"] == {"1": "hairpin", "4-5": "the esses"}
+    # The inserted corner inherits NOTHING -- the note that used to be keyed '3' is now
+    # keyed '4', and '3' is the new corner nobody has written about yet.
+    assert "3" not in notes["corners"]
+
+
+def test_a_deleted_corner_drops_its_own_note_and_only_its_own():
+    # The corner at 20 m is gone and the lap renumbers; its note cannot be bound to
+    # anything and is dropped (with its text, in the log). '3-4' is KEPT as authored:
+    # everything it still names -- corner '3', which is the 40 m corner it was written
+    # about -- is a corner it was written about, so rewriting it would churn the author's
+    # key for nothing. What it must never do is name the 20 m corner's replacement.
+    notes = guard_corner_notes(
+        "algarve", {"corners": {"2": "gone", "3-4": "the esses"}},
+        _at(("1", 10.0), ("2", 20.0), ("3", 30.0), ("4", 40.0)),
+        _at(("1", 10.0), ("2", 30.0), ("3", 40.0)))
+    assert notes["corners"] == {"3-4": "the esses"}
+    # '2' is a LIVE label after the delete (the 30 m corner), so a key-survives rule would
+    # have kept "gone" and served it about the wrong corner. Nothing is bound to it.
+    assert "2" not in notes["corners"]
+
+
+def test_dragging_an_apex_keeps_the_note_on_that_corner():
+    # The curator nudges every apex a little. No apex matches exactly any more, so each
+    # corner is identified by its nearest counterpart within the tolerance -- an authored
+    # note must not evaporate because someone moved a marker a few metres.
+    notes = guard_corner_notes(
+        "algarve", {"corners": {"2": "late apex"}},
+        _at(("1", 100.0), ("2", 200.0), ("3", 300.0)),
+        _at(("1", 102.0), ("2", 204.0), ("3", 306.0)))
+    assert notes["corners"] == {"2": "late apex"}
+    # And at chicane spacing, corners 10 m apart. Every corner now has other free
+    # candidates within 50 m, but none is a near-tie (T2's own apex is 2 m away, the next
+    # 9 m), so each note stays put. 7ea972a refused ANY second candidate and dropped this.
+    notes = guard_corner_notes(
+        "algarve", {"corners": {"2": "late apex"}},
+        _at(("1", 10.0), ("2", 20.0), ("3", 30.0)),
+        _at(("1", 11.0), ("2", 22.0), ("3", 33.0)))
+    assert notes["corners"] == {"2": "late apex"}
+    # The 1 dp rounding boundary: 100.04 and 100.06 round apart, and are one corner.
+    notes = guard_corner_notes("algarve", {"corners": {"7": "x"}},
+                               _at(("7", 100.04)), _at(("7A", 100.06)))
+    assert notes["corners"] == {"7A": "x"}
+
+
+def test_two_neighbours_drifting_together_never_swap_notes():
+    # Red-team, on Bahrain Endurance: T7 (a left, apex 2043.0) and T8 (a right, 2093.2) sit
+    # 50.2 m apart. A rebuild moves the same physical corner 25-49 m in lap distance, so
+    # shift both by +30/+35 m: T8's old apex is then 20 m from T7's NEW one. The rule on
+    # d53ae40 skipped T7 as ambiguous but let T8 claim T7's corner, so the left-hander was
+    # served "Right, tight infield..." as authored fact and T8 got nothing. Whatever the
+    # rule does with a contested corner, no note may land on a corner it was not written
+    # about -- with the labels kept, and with the lap renumbered around an added corner.
+    def corner(label, apex, direction):
+        return {"label": label, "apex_dist": apex, "direction": direction}
+
+    old = [corner("6", 1900.0, "right"), corner("7", 2043.0, "left"), corner("8", 2093.2, "right")]
+    notes = {"7": "T7: left", "8": "T8: right, tight infield. Brake early and straight"}
+    physical = {1900.0: "T6", 2073.0: "T7", 2128.2: "T8"}       # where each corner is NOW
+    layouts = {
+        "labels kept": [corner("6", 1900.0, "right"), corner("7", 2073.0, "left"),
+                        corner("8", 2128.2, "right")],
+        "positional relabel": [corner("6", 1500.0, "left"), corner("7", 1900.0, "right"),
+                               corner("8", 2073.0, "left"), corner("9", 2128.2, "right")],
+    }
+    for name, new in layouts.items():
+        got = (guard_corner_notes("bahrain_endurance_circuit", {"corners": dict(notes)},
+                                  old, new) or {}).get("corners", {})
+        for key, text in got.items():
+            served_on = {physical.get(c["apex_dist"]) for c in new
+                         if c["label"] in note_key_labels(key)}
+            assert served_on == {text[:2]}, (name, key, text, served_on)
+
+
+def test_matching_does_not_depend_on_the_order_corners_are_listed_in():
+    # Review of 9f3d3e0. Rule 2 makes every nomination before accepting any, so its answer
+    # cannot depend on list order -- but nothing pinned that. A revert to claim-as-you-go
+    # (accept each match inside the loop, so later corners see what earlier ones took) is
+    # order-DEPENDENT on 43 of 3,000 random layouts and still passed every other notes test.
+    #   The second layout is the shape where it shows: two lefts drifting together. When A
+    # is looked at first it claims 115, which takes 115 out of B's near-tie check, so B then
+    # binds 170. When B is looked at first, 115 is still free and a near-tie for B (35 m
+    # against 20 m), so B is dropped. The same save, two answers.
+    def corner(label, apex, direction):
+        return {"label": label, "apex_dist": apex, "direction": direction}
+
+    layouts = {
+        "Endurance T7/T8 drifting +30 m": (
+            [corner("6", 1900.0, "right"), corner("7", 2043.0, "left"), corner("8", 2093.2, "right")],
+            [corner("6", 1900.0, "right"), corner("7", 2073.0, "left"), corner("8", 2128.2, "right")]),
+        "same-direction pair drifting together": (
+            [corner("1", 50.0, "right"), corner("A", 100.0, "left"), corner("B", 150.0, "left")],
+            [corner("1", 50.0, "right"), corner("2", 115.0, "left"), corner("3", 170.0, "left")]),
+    }
+    for name, (old, new) in layouts.items():
+        notes = {c["label"]: f"note about {c['label']}" for c in old}
+        want_map = corner_identity_map(old, new)
+        want_notes = guard_corner_notes("t", {"corners": dict(notes)}, old, new)
+        rnd = random.Random(name)
+        for _ in range(12):
+            o, n = old[:], new[:]
+            rnd.shuffle(o)
+            rnd.shuffle(n)
+            assert corner_identity_map(o, n) == want_map, (name, o, n)
+            assert guard_corner_notes("t", {"corners": dict(notes)}, o, n) == want_notes, (name, o, n)
+
+
+def test_a_corner_re_split_into_two_pieces():
+    # Chicane-split coverage, lost when the count-changes fixture had to move its corners
+    # apart. T3 (a left at 60 m) comes back from a rebuild as two pieces, both within 50 m.
+    # The contract: direction is the map's own computed geometry, so the piece that turns
+    # the same way gets the note -- even when the other piece is nearer. When both pieces
+    # turn the same way, the clearly nearer one gets it; a near-tie (the second within
+    # _NEAR_TIE_RATIO of the first) says nothing about which is the corner, so the note is
+    # dropped rather than guessed.
+    old = [{"label": "3", "apex_dist": 60.0, "direction": "left"}]
+    notes = {"corners": {"3": "the chicane"}}
+    left_and_right = [{"label": "3", "apex_dist": 55.0, "direction": "right"},
+                      {"label": "4", "apex_dist": 70.0, "direction": "left"}]
+    assert guard_corner_notes("t", notes, old, left_and_right)["corners"] == {"4": "the chicane"}
+    clearly_nearer = [{"label": "3", "apex_dist": 57.0, "direction": "left"},     # 3 m
+                      {"label": "4", "apex_dist": 75.0, "direction": "left"}]     # 15 m
+    assert guard_corner_notes("t", notes, old, clearly_nearer)["corners"] == {"3": "the chicane"}
+    near_tie = [{"label": "3", "apex_dist": 57.0, "direction": "left"},           # 3 m
+                {"label": "4", "apex_dist": 64.0, "direction": "left"}]           # 4 m
+    assert guard_corner_notes("t", notes, old, near_tie) is None
+
+
+def test_a_deleted_corner_and_an_added_one_never_bind_even_at_the_same_count():
+    # Review blocker 2, unit shape: T4 at 40 m deleted, a corner added at 200 m, labels
+    # otherwise untouched -- the corner count does not change. The position rule this
+    # replaced handed T4's note to a live corner. T4's nearest counterpart is T3, which
+    # its own exact match already holds, so T4 has none and its note is dropped.
+    notes = guard_corner_notes(
+        "algarve", {"corners": {"4": "T4 at 40 m, deleted"}},
+        _at(("1", 10.0), ("2", 20.0), ("3", 30.0), ("4", 40.0)),
+        _at(("0", 200.0), ("1", 10.0), ("2", 20.0), ("3", 30.0)))
+    assert notes is None
+
+
+def test_notes_are_carried_verbatim_when_either_side_has_no_corners():
+    # Zero NEW corners cannot rebind anything, and a corner-less ribbon save is a real
+    # flow (it persists the reconstructed surface). Zero OLD corners means there is
+    # nothing to identify the notes against. Both used to delete every per-corner note --
+    # the first even when the count matched, because an empty label set binds nothing.
+    prior = {"1": "brake late", "2-4": "the esses"}
+    assert _kept(prior, "1234", []) == prior
+    assert _kept(prior, [], "1234") == prior
+    assert _kept(prior, [], []) == prior
+
+
 def test_dropped_note_log_survives_and_bounds_non_str_note_values(caplog):
     # A note VALUE is not known to be a str here. `PUT /notes` coerces with str(v); the
     # promote script does not, and this function stringifies only keys -- which is the
@@ -385,8 +600,10 @@ def test_dropped_note_log_survives_and_bounds_non_str_note_values(caplog):
         "7": "z" * 10_000,              # the str case, which always worked
     }
     with caplog.at_level(logging.WARNING, logger="simcoach.track_lookup"):
-        # Corner count unchanged and no label matches -> every note is dropped and logged.
-        kept = guard_corner_notes("algarve", {"corners": values}, len(values), ["99"] * len(values))
+        # Every corner the notes were written for is gone (different count, no shared
+        # apex), so none of them can be rebound -> every note is dropped and logged.
+        kept = guard_corner_notes("algarve", {"corners": values},
+                                  _corners(*values), _corners("99", apex=999.0))
     assert kept is None          # every note dropped, nothing else authored -> hollow
     (rec,) = [r for r in caplog.records if "dropped" in r.getMessage()]
     msg = rec.getMessage()
@@ -406,7 +623,8 @@ def test_dropped_note_log_bounds_a_list_note_value(caplog):
     # in this file -- this is the one that catches it.
     values = {"1": "brake late", "2": ["x" * 10_000] * 200, "3": "flat in 6th"}
     with caplog.at_level(logging.WARNING, logger="simcoach.track_lookup"):
-        guard_corner_notes("algarve", {"corners": values}, len(values), ["99"] * len(values))
+        guard_corner_notes("algarve", {"corners": values},
+                           _corners(*values), _corners("99", apex=999.0))
     (rec,) = [r for r in caplog.records if "dropped" in r.getMessage()]
     msg = rec.getMessage()
     assert len(msg) < 1_000, f"log is {len(msg)} chars"   # ~384 bounded, 2,000,982 was not

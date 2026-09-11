@@ -1,11 +1,20 @@
 import glob
 import json
+from pathlib import Path
 
 import numpy as np
+import pytest
 
-from simcoach.analysis import analyze_lap
-from simcoach.corners import Corner, CornerMap
+from simcoach.analysis import (
+    CORNER_GEOMETRY_KEYS,
+    analyze_lap,
+    geometry_clause,
+    measurable_geometry,
+)
+from simcoach.corners import Corner, CornerMap, validated_sections, validated_sectors
 from simcoach.model_types import LapRecord
+
+SHIPPED = sorted(Path(__file__).resolve().parents[1].glob("simcoach/tracks/*.json"))
 
 
 def _write(tmp_path, data):
@@ -59,6 +68,54 @@ def test_all_shipped_track_files_still_load():
     # user-owned data cleared/rebuilt in the editor, so don't pin a count.
     for f in glob.glob("simcoach/tracks/*.json"):
         CornerMap.load(f)  # must not raise
+
+
+def test_every_shipped_corner_geometry_is_measurable_and_renders():
+    # #65's CI gap. CornerMap.load files unknown per-corner keys away unexamined, so a
+    # string radius_m LOADS -- the test above passes -- and then geometry_clause raises
+    # `Unknown format code 'f'` on the coach's answer. Nothing called it over the
+    # shipped set. Checks the value against the one owner, and renders every corner.
+    seen = 0
+    for p in SHIPPED:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        for c in data.get("corners") or []:
+            for k in CORNER_GEOMETRY_KEYS:
+                if k in c:
+                    assert measurable_geometry(k, c[k]), f"{p.name} {c.get('label')}: {k}={c[k]!r}"
+                    seen += 1
+            geometry_clause(c, c.get("direction"))   # must not raise
+    assert seen > 50, "expected the shipped maps to carry baked geometry"
+
+
+def test_every_shipped_sector_split_is_what_the_validator_would_write():
+    # #65's other CI gap: nothing asserted shipped `sectors` element TYPES, and promote
+    # used to ship the source's raw value ("300" as a string, `true`). Equality with the
+    # validator's output is the check: it returns floats and refuses bools.
+    seen = 0
+    for p in SHIPPED:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        if "sectors" in data:
+            length = data.get("length") or data.get("length_m")
+            assert validated_sectors(data["sectors"], length) == data["sectors"], p.name
+            assert all(type(s) in (int, float) for s in data["sectors"]), p.name
+            seen += 1
+    assert seen >= 11, "expected the shipped maps to carry sector splits"
+
+
+def test_sector_and_section_validators_refuse_bools_and_overlarge_ints():
+    # float(True) == 1.0, so a `true` read as a 1 m split. And float()/isfinite() RAISE
+    # OverflowError on an int too large for a double -- which json.loads parses happily --
+    # so a validator catching only (TypeError, ValueError) turned one into a 500. That
+    # hole has shipped twice in this repo; these validators now sit on every writer.
+    for bad in ([True], [10**400]):
+        with pytest.raises(ValueError):
+            validated_sectors(bad, 1000.0)
+    for bad in ({"start_dist": True, "end_dist": 5.0}, {"start_dist": 0.0, "end_dist": 10**400}):
+        with pytest.raises(ValueError):
+            validated_sections([bad], 1000.0)
+    assert not measurable_geometry("radius_m", 10**400)
+    assert not measurable_geometry("banking_deg", True)
+    assert measurable_geometry("banking_deg", -3.0) and measurable_geometry("radius_m", 40)
 
 
 def test_analysis_multi_apex_per_apex_min_speeds():

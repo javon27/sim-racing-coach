@@ -39,7 +39,14 @@ import sys
 import tempfile
 from pathlib import Path
 
-from simcoach.corners import Corner, clamp_corner_windows, in_window, validated_sectors
+from simcoach.analysis import CORNER_GEOMETRY_KEYS, measurable_geometry
+from simcoach.corners import (
+    Corner,
+    clamp_corner_windows,
+    in_window,
+    validated_sections,
+    validated_sectors,
+)
 from simcoach.track_lookup import guard_corner_notes, track_slug
 from simcoach.trackmap import direction_from_path
 
@@ -116,6 +123,13 @@ def _validated_corners(data: dict, length: float) -> list[dict]:
         apexes = sorted(round(float(a), 1) for a in (c.get("apexes") or [])
                         if isinstance(a, (int, float)) and math.isfinite(a)
                         and in_window(float(a), start, end)) or [round(apex, 1)]
+        # `{**c, ...}` below carries every per-corner key through, so baked geometry is
+        # checked here or not at all (#65): a string radius_m shipped, loaded, and then
+        # crashed geometry_clause on the coach's answer -- and no test caught it.
+        bad = [k for k in CORNER_GEOMETRY_KEYS if k in c and not measurable_geometry(k, c[k])]
+        if bad:
+            raise PromoteError(f"corner {number}: unusable baked geometry {bad}; each must "
+                               f"be a finite number (a length also > 0)")
         out.append({**c,
                     "number": number,
                     "label": str(c.get("label") or number)[:8],
@@ -181,8 +195,13 @@ def promote(src: Path | str, tracks_dir: Path | str = TRACKS_DIR, *,
     # Sector splits are committed shipped data since #41 baked the captured ones into
     # all 11 maps, and this is the one path that can put an unvalidated set back. Same
     # check the editor's PUT runs, from the same owner, so the two can't drift.
+    # The validated value is what gets WRITTEN, not just what gets checked: this used to
+    # validate and then discard the result, and `out = {**data, ...}` shipped the source's
+    # raw value -- so `["300", "700"]` passed the check as numbers and landed in a shipped
+    # map as strings, which reach the client as strings (#65).
     try:
-        validated_sectors(data.get("sectors") or [], length)
+        sectors = validated_sectors(data.get("sectors") or [], length)
+        sections = validated_sections(data.get("sections"), length)
     except (TypeError, ValueError) as e:
         raise PromoteError(str(e)) from None
 
@@ -233,19 +252,21 @@ def promote(src: Path | str, tracks_dir: Path | str = TRACKS_DIR, *,
         raise PromoteError("corner windows still overlap after clamping: " + "; ".join(bad))
 
     out = {**data, "track": slug, "corners": corners}
+    if "sectors" in data:
+        out["sectors"] = sectors
+    if "sections" in data:
+        out["sections"] = sections
     # Authored notes from BOTH maps survive, each guarded against the corners it was
-    # written for: #37's rule is "keep the ones whose label still binds", not "always
+    # written for: #37's rule is "keep the notes whose corners still exist", not "always
     # keep" (that bound a hairpin's note to a renumbered corner) and not "drop the
     # target's" (that made --force a data-loss footgun in the operation a curator
     # thinks is safest -- promoting a shipped map from its own file has to be a no-op).
-    # Two calls rather than one merged bag, because the count arm needs each origin's
-    # own corner count: a 12-corner shipped map replaced by a 15-corner rebuild must
-    # drop the old per-corner notes wholesale while the source keeps its own.
-    labels = [c["label"] for c in corners]
+    # Two calls rather than one merged bag, because each origin's notes have to be
+    # identified against THAT origin's own corners: the shipped map and the replacement
+    # can label the same physical corner differently, which is the whole of #64.
     notes = _merge_notes(
-        guard_corner_notes(slug, shipped.get("notes"), len(shipped.get("corners") or []),
-                           labels),
-        guard_corner_notes(slug, data.get("notes"), len(data.get("corners") or []), labels),
+        guard_corner_notes(slug, shipped.get("notes"), shipped.get("corners"), corners),
+        guard_corner_notes(slug, data.get("notes"), data.get("corners"), corners),
     )
     if notes:
         out["notes"] = notes

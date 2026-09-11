@@ -12,6 +12,11 @@
   let saving = $state(false);
   let saveStatus: string | null = $state(null);
   let mapOpen = $state(false);
+  // Revision of the notes as loaded. Saving sends it back and the server refuses a stale
+  // one: the map editor (a modal on this screen) can re-key the notes on disk, and saving
+  // the copy held here would put every old key back onto corners it no longer names.
+  let notesRev: string | null = $state(null);
+  let notesStale = $state(false);
 
   let newRefClass = $state("");
   let newRefTime = $state("");
@@ -114,20 +119,34 @@
     saveStatus = null;
     map = null;
     reloadMap();
-    // Pre-fill from the track's existing (migrated) notes so Save can't clobber
-    // them with blanks -- fall back to empty fields if the fetch fails.
+    await loadNotes(t.slug);
+  }
+
+  // Pre-fill from the track's existing (migrated) notes so Save can't clobber
+  // them with blanks -- fall back to empty fields if the fetch fails.
+  async function loadNotes(slug: string) {
+    notesStale = false;
     try {
-      const loaded = await getTrackNotes(t.slug);
+      const loaded = await getTrackNotes(slug);
       notes.overview = loaded.overview ?? "";
       notes.corners = { ...(loaded.corners ?? {}) };
       notes.reference_times = { ...(loaded.reference_times ?? {}) };
       notes.source = loaded.source ?? "";
+      notesRev = loaded.rev ?? null;
     } catch {
       notes.overview = "";
       notes.corners = {};
       notes.reference_times = {};
       notes.source = "";
+      notesRev = null;
     }
+  }
+
+  // Only ever the driver's click: it replaces what they typed with what is on disk.
+  function reloadNotes() {
+    if (!selected) return;
+    saveStatus = null;
+    loadNotes(selected.slug);
   }
 
   // Read-only layout for the map pane. {} (no map yet) -> null so the pane shows
@@ -204,10 +223,23 @@
     saving = true;
     saveStatus = null;
     try {
-      await saveNotes(selected.slug, selected.name, notes);
+      const res = await saveNotes(selected.slug, selected.name, notes, notesRev);
+      notesRev = res.rev ?? null;
       saveStatus = "Saved.";
-    } catch {
-      saveStatus = "Save failed.";
+    } catch (e) {
+      // 409 stale / 428 no rev. Say which, and leave the driver's edits exactly where they
+      // are; reloading replaces what they typed, so it is their click, never automatic.
+      const msg = String((e as Error)?.message ?? "");
+      if (/-> 409\b/.test(msg)) {
+        notesStale = true;
+        saveStatus = "Not saved: these notes changed since you opened them (a map save can move or drop notes). Your edits are still below; copy anything you need, then reload.";
+      } else if (/-> 428\b/.test(msg)) {
+        // No rev means the notes never loaded (notesRev is null) -- nothing changed on disk.
+        notesStale = true;
+        saveStatus = "Not saved: this track's notes didn't load, so the save can't be checked against what's on disk. Your edits are still below; copy anything you need, then reload.";
+      } else {
+        saveStatus = "Save failed.";
+      }
     } finally {
       saving = false;
     }
@@ -320,6 +352,9 @@
           {saving ? "Saving…" : "Save"}
         </button>
         {#if saveStatus}<span class="status">{saveStatus}</span>{/if}
+        {#if notesStale}
+          <button type="button" onclick={reloadNotes}>Reload notes (discards unsaved edits)</button>
+        {/if}
       </div>
     </div>
 

@@ -598,16 +598,25 @@ export function draftNotes(slug: string, track: string, guides: string): Promise
   });
 }
 
-export function saveNotes(slug: string, track: string, notes: TrackNotes): Promise<{ ok: boolean }> {
-  return request<{ ok: boolean }>(`/tracks/${slug}/notes`, {
+export interface SaveNotesResult {
+  ok: boolean;
+  rev: string;                              // send this with the next save
+  dropped_notes: Record<string, string>;
+}
+
+// `rev` is the one getTrackNotes (or the previous save) returned. The server refuses a
+// missing one (428) and a stale one (409): a map save can re-key the notes underneath a
+// screen that is holding a copy, and writing that copy back puts every old key back.
+export function saveNotes(slug: string, track: string, notes: TrackNotes, rev: string | null): Promise<SaveNotesResult> {
+  return request<SaveNotesResult>(`/tracks/${slug}/notes`, {
     method: "PUT",
     headers: JSON_HEADERS,
-    body: JSON.stringify({ track, notes }),
+    body: JSON.stringify({ track, notes, rev }),
   });
 }
 
-export function getTrackNotes(slug: string): Promise<TrackNotes> {
-  return request<TrackNotes>(`/tracks/${slug}/notes`);
+export function getTrackNotes(slug: string): Promise<TrackNotes & { rev?: string }> {
+  return request<TrackNotes & { rev?: string }>(`/tracks/${slug}/notes`);
 }
 
 // --- Driver Profile & Memories
