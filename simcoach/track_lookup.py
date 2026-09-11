@@ -195,6 +195,8 @@ def load_map_data(
         measurement wins; the overlay keeps only metrics the shipped one lacks.
       - no shipped corner at that apex (the driver added it, or moved its apex): the
         overlay's own geometry, which the editor measured at that apex when it saved.
+        A future SHIPPED re-map that moves an apex off its 1 dp value (a move of ~0.05 m
+        or more) likewise stops reaching existing copies: they keep their own geometry.
       - a shipped corner the overlay deleted stays deleted: the overlay owns the SET.
     """
     slug = track_slug(track_name)

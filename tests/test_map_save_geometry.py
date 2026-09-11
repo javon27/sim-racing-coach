@@ -530,19 +530,28 @@ def test_a_legitimately_zero_banking_is_still_carried(tmp_path):
 # radius 67.7 pre-#73, elevation 14.1 pre-#74) against the re-baked build's (322.1, 9.4).
 # The re-baked elevation is set explicitly, so this does not depend on #74 having landed.
 
-STALE_T13 = {"radius_m": 67.7, "elev_delta_m": 14.1}
-REBAKED_T13 = {"radius_m": 322.1, "elev_delta_m": 9.4}
+STALE_T13 = {"radius_m": 67.7, "elev_delta_m": 14.1, "banking_deg": -1.8, "width_m": 6.1}
+# All four metrics differ from the copy's. banking_deg is exactly 0.0: shipped maps hold
+# level corners at 0.0, a real measurement that a falsy check would hand to the copy.
+REBAKED_T13 = {"radius_m": 322.1, "elev_delta_m": 9.4, "banking_deg": 0.0, "width_m": 8.0}
+# Rule (c) with the key PRESENT: shipped Tosa (T7) holds an unusable radius and the copy a
+# real one, so the copy's is used -- "shipped has the key" is not "shipped measured it".
+# NOT 26.5: that is what the editor save re-measures for T7, so a save that dropped the
+# copy's value and re-derived it would pass by coincidence.
+T7_SHIPPED_RADIUS, T7_COPY_RADIUS = 0, 31.0
 T13_NOTE = "lift, don't brake"
 
 
 def _installed(tmp_path, monkeypatch):
     """A frozen build with the re-baked Imola in its bundle, and the driver's app-data copy
-    from an older build: T5 renamed, a note on T13, and T13 still holding the stale bake.
-    Returns (client, bundled_dir, user_dir)."""
+    from an older build: T5 renamed, a note on T13, T13 still holding the stale bake, and
+    T7 holding a real radius where the bundle's is unusable. Returns
+    (client, bundled_dir, user_dir)."""
     monkeypatch.setattr(app_module.sys, "frozen", True, raising=False)
     shipped = _shipped(IMOLA)
-    shipped["corners"] = [dict(c, **REBAKED_T13) if str(c["label"]) == "13" else c
-                          for c in shipped["corners"]]
+    shipped["corners"] = [dict(c, **REBAKED_T13) if str(c["label"]) == "13"
+                          else dict(c, radius_m=T7_SHIPPED_RADIUS) if str(c["label"]) == "7"
+                          else c for c in shipped["corners"]]
     bundled = tmp_path / "bundled"
     bundled.mkdir()
     (bundled / f"{IMOLA}.json").write_text(json.dumps(shipped), encoding="utf-8")
@@ -550,6 +559,7 @@ def _installed(tmp_path, monkeypatch):
     user = Path(store.data_dir) / "tracks"
     user.mkdir(parents=True)
     corners = [dict(c, **STALE_T13) if str(c["label"]) == "13"
+               else dict(c, radius_m=T7_COPY_RADIUS) if str(c["label"]) == "7"
                else dict(c, name="Driver's Five") if str(c["label"]) == "5"
                else c for c in shipped["corners"]]
     notes = {**shipped["notes"], "corners": {**shipped["notes"]["corners"], "13": T13_NOTE}}
@@ -572,6 +582,7 @@ def test_installed_read_takes_geometry_from_shipped_and_annotations_from_the_cop
     merged = load_map_data(IMOLA, str(bundled), str(user))
     by = {str(c["label"]): c for c in merged["corners"]}
     assert {k: by["13"][k] for k in REBAKED_T13} == REBAKED_T13
+    assert by["7"]["radius_m"] == T7_COPY_RADIUS          # shipped 0 is no measurement
     assert by["5"]["name"] == "Driver's Five"
     assert merged["notes"]["corners"]["13"] == T13_NOTE
     # What the coach is told, through the CornerMap the sidecar's resolver builds.
@@ -598,6 +609,7 @@ def test_an_installed_save_does_not_write_the_stale_bake_back(tmp_path, monkeypa
     copy = json.loads((user / f"{IMOLA}.json").read_text(encoding="utf-8"))
     by = {str(c["label"]): c for c in copy["corners"]}
     assert {k: by["13"][k] for k in REBAKED_T13} == REBAKED_T13, "stale bake written back"
+    assert by["7"]["radius_m"] == T7_COPY_RADIUS, "shipped's unusable 0 written over it"
     assert by["5"]["name"] == "Driver's Five"
     assert copy["notes"]["corners"]["13"] == T13_NOTE
 
