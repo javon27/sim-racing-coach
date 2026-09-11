@@ -1580,6 +1580,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # to swallow every exception (including the result-log lap's missing
         # telemetry, #28) and then rebuild the live/newest track instead -- writing
         # one track's geometry over another's.
+        # Every 422 detail below reaches the driver VERBATIM (TrackMapEditor's rebuildGen),
+        # so each one says what to do next, not only what went wrong (#84).
         slug = body.get("slug")
         lap_id = body.get("lap_id")
         track = slug
@@ -1596,7 +1598,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         if not track:
             newest = _newest_capture()
             if newest is None:
-                raise HTTPException(422, "no saved capture available")
+                raise HTTPException(422, "no saved capture available; use Generate map "
+                                         "layout to record one")
             track = newest.stem  # offline: take the track (slug) from the file name
         rows = _live_lap_paths()
         # No capture file -> the track's own live laps (#69): the reported case, 27 live
@@ -1614,9 +1617,11 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             # map with corners and no such mark (every shipped layout) is refused. A real
             # mapping capture stays the explicit way to regenerate a curated layout.
             raise HTTPException(422, "this track has a curated corner map; rebuilding it "
-                                     "from driven laps would replace its corners")
+                                     "from driven laps would replace its corners; use "
+                                     "Generate map layout to record a mapping capture instead")
         if not laps and not from_capture:
-            raise HTTPException(422, "no saved capture available")
+            raise HTTPException(422, "no saved capture for this track; use Generate map "
+                                     "layout to record one")
         if not laps:
             # The capture exists and yields nothing. Still refused (#69), but name the file
             # and the way out (#84). "Delete it" only where deleting it WOULD build: some
@@ -1633,7 +1638,10 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         track = next((n for s, n, _p in rows if s == slug), track)
         ribbon = reconstruct_surface(laps)
         if not ribbon:
-            raise HTTPException(422, "saved capture lacks position telemetry")
+            # Not "saved capture ...": the laps may be the track's live laps, not a capture.
+            raise HTTPException(422, "couldn't rebuild the track from its position "
+                                     "telemetry; use Generate map layout to record a new "
+                                     "capture")
         corners = _place_corners(ribbon, laps[0])
         extras = _track_file_data(track)
         sectors = extras.get("sectors") or []

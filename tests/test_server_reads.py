@@ -1080,6 +1080,8 @@ def test_mapcapture_rebuild_never_replaces_a_curated_corner_map_from_live_laps(t
     r = c.post("/mapcapture/rebuild", json={"slug": "silverstone_national_circuit"})
     assert r.status_code == 422, r.text
     assert "curated corner map" in r.json()["detail"]
+    # ...and, shown verbatim in the editor (#84), what to do instead.
+    assert r.json()["detail"].endswith("use Generate map layout to record a mapping capture instead")
     assert app.state.last_ribbon is None                 # nothing staged for a Save to write
     assert curated.read_bytes() == before
 
@@ -1097,7 +1099,9 @@ def test_mapcapture_rebuild_fallback_ignores_result_log_laps(tmp_path):
         store.save(_edge("Silverstone National Circuit", zsign, 100.0))
     r = c.post("/mapcapture/rebuild", json={"slug": "circuit_de_spa_francorchamps"})
     assert r.status_code == 422, r.text
-    assert r.json()["detail"] == "no saved capture available"
+    # The editor shows this verbatim (#84), so it must carry the way forward.
+    assert r.json()["detail"] == ("no saved capture for this track; use Generate map layout "
+                                  "to record one")
     assert not (tmp_path / "tracks" / "circuit_de_spa_francorchamps.json").exists()
 
 
