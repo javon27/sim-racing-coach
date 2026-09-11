@@ -226,6 +226,8 @@ describe("SettingsScreen", () => {
 
     render(SettingsScreen);
 
+    // The sidecar's poller re-imports LMU result logs after a reset (#81); say so up front.
+    expect(await screen.findByText(/result logs are re-imported automatically/i)).toBeTruthy();
     await fireEvent.click(await screen.findByRole("button", { name: /reset \/ clear data/i }));
     expect(clearData).not.toHaveBeenCalled();
 
