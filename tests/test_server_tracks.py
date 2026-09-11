@@ -1105,3 +1105,141 @@ def test_edge_laps_save_and_bake_a_real_width_and_bank(tmp_path):
     assert None not in ribbon["width"][20:-20] and None not in ribbon["bank"][20:-20]
     assert abs(c1["width_m"] - 10.0) < 1.0
     assert abs(c1["banking_deg"] - np.degrees(np.arctan(0.05))) < 0.3
+
+
+# --- #82: a track file with corners and no stored outline (shipped Spa) -----------------
+#
+# The Tracks screen draws a map by slug, and used to draw ONLY a stored outline, so Spa's
+# shipped file (curated corners, no path) showed nothing there while the chat screen drew
+# it from the laps. Fixtures mirror the real file: named corners, `length_m`, a provenance
+# note, no path/path_dist/ribbon/name; laps stored under the LIVE name + car, as captured.
+
+_SPA = "circuit_de_spa_francorchamps"
+_SPA_NAME = "Circuit de Spa-Francorchamps"
+
+
+def _spa_client(tmp_path):
+    tracks = tmp_path / "tracks"
+    tracks.mkdir(parents=True, exist_ok=True)
+    f = tracks / f"{_SPA}.json"
+    # T1 is "right" on laps that circle counter-clockwise (pure LEFT geometry), so a
+    # direction taken from the laps instead of the file cannot pass for the file's.
+    f.write_text(json.dumps({
+        "track": _SPA,
+        "_config_note": "curated from the track guide; T2 driver-confirmed",
+        "length_m": 400,
+        "corners": [
+            {"number": 1, "name": "La Source", "direction": "right",
+             "start_dist": 40, "apex_dist": 60.0, "end_dist": 80},
+            {"number": 2, "name": "Eau Rouge", "direction": "left",
+             "start_dist": 240, "apex_dist": 260.0, "end_dist": 280},
+        ],
+    }, indent=2), encoding="utf-8")
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    client = TestClient(create_app(store, Coach(FakeModel("{}")), tracks_dir=str(tracks)),
+                        base_url="http://127.0.0.1")
+    return client, store, f
+
+
+def _circuit_lap(store, car, track=_SPA_NAME, lap_time=90.0, rz=60.0, position=True):
+    # One counter-clockwise lap of a 60 m x `rz` m ellipse. position=False is a lap
+    # recorded before position capture landed: telemetry, but no pos_* to draw from.
+    t = np.linspace(0.0, 2 * np.pi, 200)
+    ch = ({"pos_x": 60.0 * np.cos(t), "pos_z": rz * np.sin(t)} if position
+          else {"speed": np.full(200, 50.0)})
+    ch["lap_distance"] = np.linspace(0.0, 400.0, 200)
+    return store.save(LapRecord("lmu", track, car, lap_time, True, 0.0, ch))
+
+
+def test_track_map_by_slug_borrows_the_driven_outline_when_the_file_has_none(tmp_path):
+    client, store, f = _spa_client(tmp_path)
+    before = f.read_bytes()
+    lap = _circuit_lap(store, "Manthey #91")
+    _circuit_lap(store, "Manthey #91")
+    # The NEWEST lap is an edge lap (a slow pass hugging the boundary, wider line). The
+    # clean-lap rule (lap_time > 1.07x the car's best) is what keeps it off the outline.
+    _circuit_lap(store, "Manthey #91", lap_time=260.0, rz=90.0)
+    r = client.get(f"/tracks/{_SPA}/map")
+    assert r.status_code == 200, r.text
+    m = r.json()
+    assert m.get("path")
+    # The file's corners exactly -- numbers, names AND the curated directions.
+    assert [(c["number"], c["name"], c["direction"]) for c in m["corners"]] == [
+        (1, "La Source", "right"), (2, "Eau Rouge", "left")]
+    assert m["track_name"] == _SPA_NAME                  # the live name, not the slug
+    # A circle (screen rounding aside): averaging the 90 m edge lap in would give ~889 x 1000.
+    assert abs(m["width"] - m["height"]) < 1.0
+    # The very payload the chat screen gets for that track -- one construction, not two.
+    assert m == client.get(f"/laps/{lap}/map").json()
+    # A GET writes nothing: not the track file, not an app-data overlay.
+    assert f.read_bytes() == before
+    assert not (tmp_path / "data" / "tracks").exists()
+
+
+def test_track_map_by_slug_borrows_the_most_recently_driven_cars_outline(tmp_path):
+    client, store, _f = _spa_client(tmp_path)
+    older = _circuit_lap(store, "Car A", rz=30.0)        # a different outline (ellipse)
+    newer = _circuit_lap(store, "Car B")
+    got = client.get(f"/tracks/{_SPA}/map").json()
+    assert got == client.get(f"/laps/{newer}/map").json()
+    assert got != client.get(f"/laps/{older}/map").json()
+
+
+def test_track_map_by_slug_skips_a_newer_car_with_no_position_laps(tmp_path):
+    client, store, _f = _spa_client(tmp_path)
+    older = _circuit_lap(store, "Car A")
+    _circuit_lap(store, "Car B", position=False)
+    got = client.get(f"/tracks/{_SPA}/map").json()
+    assert got.get("path") and got == client.get(f"/laps/{older}/map").json()
+
+
+def test_track_map_by_slug_without_usable_laps_stays_empty(tmp_path):
+    client, store, _f = _spa_client(tmp_path)
+    r = client.get(f"/tracks/{_SPA}/map")                # fresh install: no laps at all
+    assert r.status_code == 200 and r.json() == {}
+    _circuit_lap(store, "Car A", position=False)         # a Spa lap with nothing to draw
+    _circuit_lap(store, "Car A", track="Silverstone National Circuit")  # another track's
+    r = client.get(f"/tracks/{_SPA}/map")
+    assert r.status_code == 200 and r.json() == {}
+
+
+def test_track_map_by_slug_borrows_nothing_for_a_track_with_no_corners(tmp_path):
+    # Driven, never mapped (#69): there are no owned corners to draw, and a bare outline
+    # would turn the pane's "Add map" -> build flow into an "Edit" of an empty layout.
+    client, store, _f = _spa_client(tmp_path)
+    _circuit_lap(store, "Car A", track="Silverstone National Circuit")
+    r = client.get("/tracks/silverstone_national_circuit/map")
+    assert r.status_code == 200 and r.json() == {}
+
+
+def test_saving_a_borrowed_outline_by_slug_is_refused_and_writes_nothing(tmp_path):
+    # Saving would store the laps' average as Spa's outline and re-derive every curated
+    # direction from it (on the real laps: T19 Bus Stop right -> left). Refuse, say why,
+    # write nothing -- and the #69 curated-map guard on rebuild still stands after it.
+    client, store, f = _spa_client(tmp_path)
+    before = f.read_bytes()
+    for _ in range(3):
+        _circuit_lap(store, "Car A")
+    shown = client.get(f"/tracks/{_SPA}/map").json()
+    assert shown.get("path")
+    body = {"corners": [{k: c[k] for k in ("number", "name", "apex_dist", "start_dist", "end_dist")}
+                        for c in shown["corners"]], "sectors": [], "sections": []}
+    r = client.put(f"/tracks/{_SPA}/map", json=body)
+    assert r.status_code == 422, r.text
+    assert "no stored outline" in r.json()["detail"]
+    assert f.read_bytes() == before
+    assert not (tmp_path / "data" / "tracks").exists()
+    r = client.post("/mapcapture/rebuild", json={"slug": _SPA})
+    assert r.status_code == 422 and "curated corner map" in r.json()["detail"]
+    assert f.read_bytes() == before
+
+
+def test_a_slug_write_refreshes_the_borrowed_outline(tmp_path):
+    # The borrowed map is cached under the LIVE name + car; the Tracks screen writes by
+    # slug. A slug-only cache clear left it stale until the sidecar restarted.
+    client, store, _f = _spa_client(tmp_path)
+    lap = _circuit_lap(store, "Car A", rz=30.0)
+    assert client.get(f"/tracks/{_SPA}/map").json()["rotation"] == 0.0
+    assert client.post(f"/tracks/{_SPA}/rotation", json={"degrees": 90}).status_code == 200
+    assert client.get(f"/tracks/{_SPA}/map").json()["rotation"] == 90.0
+    assert client.get(f"/laps/{lap}/map").json()["rotation"] == 90.0

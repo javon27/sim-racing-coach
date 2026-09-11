@@ -577,18 +577,20 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 return True
         return False
 
+    def _frozen_outline(track: str):
+        # The outline stored in the track file as (path, path_dist), else ([], []).
+        data = _track_file_data(track)
+        p, pd = data.get("path"), data.get("path_dist")
+        if isinstance(p, list) and isinstance(pd, list) and p and len(p) == len(pd):
+            return p, pd
+        return [], []
+
     def _canonical_outline(track: str, car: str, force_avg: bool):
         # The track's canonical (path_world, dist): frozen file path first (unless
         # forcing a re-average), else averaged over the track+car's own pos laps,
         # else ([], []). The map is per-track owned data, NOT the selected lap.
-        def frozen():
-            data = _track_file_data(track)
-            p, pd = data.get("path"), data.get("path_dist")
-            if isinstance(p, list) and isinstance(pd, list) and p and len(p) == len(pd):
-                return p, pd
-            return [], []
         if not force_avg:
-            p, pd = frozen()
+            p, pd = _frozen_outline(track)
             if p:
                 return p, pd
         laps = _clean_lap_channels(track, car)
@@ -597,7 +599,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # Nothing to re-average (a result-log session has no telemetry at all, #28):
         # fall back to the frozen layout rather than returning {}, which the UI
         # reports as "no saved layout" for a track that demonstrably has one.
-        return frozen()
+        return _frozen_outline(track)
 
     def _has_canonical(track: str, car: str) -> bool:
         if not track:
@@ -633,9 +635,52 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             app.state.canon[(track, car)] = payload
         return payload
 
+    def _map_payload(track: str, car: str, force: bool = False) -> dict:
+        # What every map GET returns: the canonical map plus what the editor needs around
+        # it. {} stays {} (the pane's "no map yet").
+        m = _canonical_map(track, car, force)
+        if m:
+            # The game's real S1/S2 boundaries (if any lap captured them) so the
+            # editor can seed sector splits at the true positions, not thirds.
+            # `shipped`: the geometry is a built-in the user may annotate but not rebuild.
+            # `curating`: dev (source) build — layout tools + the track name are editable.
+            # `track_name`: stored display-name override, else the live/canonical name.
+            m = {**m, "detected_sectors": store.sector_bounds(track, car) or [],
+                 "shipped": _is_shipped(track), "curating": _curating(),
+                 "track_name": _track_file_data(track).get("name") or track}
+        return m
+
+    def _slug_map_key(slug: str) -> tuple[str, str]:
+        # The (track, car) a slug's map is drawn from. Normally (slug, ""): a stored outline
+        # needs no car. A track file with corners and NO stored outline (shipped Spa
+        # predates them, #82) has nothing to draw by slug -- laps are stored under the live
+        # name + car -- so borrow exactly what /laps/{id}/map draws for that track: the
+        # clean laps of the car driven there MOST RECENTLY (highest lap id), or of the next
+        # most recent car if that one has no clean position lap. Corners still come from
+        # the file, and nothing is written.
+        # No corners, no fallback: a driven-but-unmapped track keeps {} so the Tracks
+        # screen still offers "Build map" (#69) rather than a corner-less outline.
+        if _frozen_outline(slug)[0] or not _track_file_data(slug).get("corners"):
+            return slug, ""
+        with store._lock:   # store.py shares one connection with the capture thread
+            rows = store.conn.execute(
+                "SELECT track, car FROM laps WHERE telemetry_path IS NOT NULL "
+                "AND track IS NOT NULL AND car IS NOT NULL "
+                "GROUP BY track, car ORDER BY MAX(id) DESC").fetchall()
+        for track, car in rows:
+            if track_slug(track) == slug and _canonical_map(track, car, force=False):
+                return track, car
+        return slug, ""
+
     def _invalidate_canon(track: str) -> None:
-        app.state.cmaps.pop(track, None)
-        for key in [k for k in app.state.canon if k[0] == track]:
+        # By SLUG, not by the string the caller holds: one track is cached under its live
+        # name (lap routes, the coach) AND under its slug (Tracks screen), and a write
+        # through either route has to clear both -- the slug route's map can now be the
+        # live-name-keyed entry (#82), which a slug-only pop left stale until restart.
+        slug = track_slug(track)
+        for key in [k for k in app.state.cmaps if track_slug(k) == slug]:
+            app.state.cmaps.pop(key, None)
+        for key in [k for k in app.state.canon if track_slug(k[0]) == slug]:
             app.state.canon.pop(key, None)
 
     def _ensure_rest():
@@ -817,17 +862,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         if tc is None:
             raise HTTPException(404, "lap not found")
         track, car = tc
-        m = _canonical_map(track, car, force=bool(avg))
-        if m:
-            # The game's real S1/S2 boundaries (if any lap captured them) so the
-            # editor can seed sector splits at the true positions, not thirds.
-            # `shipped`: the geometry is a built-in the user may annotate but not rebuild.
-            # `curating`: dev (source) build — layout tools + the track name are editable.
-            # `track_name`: stored display-name override, else the live/canonical name.
-            m = {**m, "detected_sectors": store.sector_bounds(track, car) or [],
-                 "shipped": _is_shipped(track), "curating": _curating(),
-                 "track_name": _track_file_data(track).get("name") or track}
-        return m
+        return _map_payload(track, car, force=bool(avg))
 
     @app.get("/track/map")
     def track_map():
@@ -841,13 +876,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             live = None
         if not live or not live.get("track"):
             return {}
-        track, car = live["track"], live["car"]
-        m = _canonical_map(track, car, force=False)
-        if m:
-            m = {**m, "detected_sectors": store.sector_bounds(track, car) or [],
-                 "shipped": _is_shipped(track), "curating": _curating(),
-                 "track_name": _track_file_data(track).get("name") or track}
-        return m
+        return _map_payload(live["track"], live["car"])
 
     @app.get("/track/inputs")
     def track_inputs():
@@ -887,16 +916,12 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # The track's canonical map keyed on its slug -- for the Tracks screen, which
         # selects a track without any completed lap_id to route through /laps/{id}/map.
         # Track files are slug-keyed (same as the notes endpoints), and a shipped
-        # layout carries a frozen path, so no car is needed to build it. {} -> the
+        # layout carries a frozen path, so no car is needed to build it -- and one without
+        # (shipped Spa) borrows its driven laps' outline, see _slug_map_key. {} -> the
         # pane shows "no map yet" (a user track with no driven lap).
         if track_slug(slug) != slug:
             raise HTTPException(400, "invalid slug")
-        m = _canonical_map(slug, "", force=False)
-        if m:
-            m = {**m, "detected_sectors": store.sector_bounds(slug, "") or [],
-                 "shipped": _is_shipped(slug), "curating": _curating(),
-                 "track_name": _track_file_data(slug).get("name") or slug}
-        return m
+        return _map_payload(*_slug_map_key(slug))
 
     def _persist_map(track: str, car: str, body: dict) -> dict:
         # SAVE the editor's corner map + sectors as shipped owned data. Direction
@@ -1106,6 +1131,19 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # lap required (a shipped track edits its frozen ribbon path directly).
         if track_slug(slug) != slug:
             raise HTTPException(400, "invalid slug")
+        if not _frozen_outline(slug)[0] and _track_file_data(slug).get("corners"):
+            # Corners with no stored outline (shipped Spa, #82): any outline this screen
+            # shows is BORROWED from driven laps. Saving would store their average and
+            # re-derive every curated corner's direction from it -- on shipped Spa that
+            # flips T19 Bus Stop right -> left and drops the file's provenance notes.
+            # Baking an outline into owned data is a reviewed commit, not a side effect of
+            # renaming a corner. (Without this the save still wrote nothing -- laps are
+            # keyed by live name + car, not slug -- but 422'd "no clean laps" under a map
+            # drawn from clean laps.) Decided from the FILE, never by building its map: a
+            # file the map can't be built from must stay saveable (the editor fixes it).
+            raise HTTPException(422, "this track's map file has no stored outline (any "
+                                     "outline shown is drawn from your laps), so its map "
+                                     "can't be saved from here yet")
         return _persist_map(slug, "", body)
 
     @app.post("/tracks/{slug}/draft-notes")
