@@ -1,7 +1,9 @@
 """Agentic tool layer: the tools return the right on-demand summaries, and the
 Coach agentic loop dispatches the model's tool calls (via FakeModel scripting)."""
+import pytest
+
 from simcoach.coach import Coach
-from simcoach.coach_tools import TOOLS, CoachContext
+from simcoach.coach_tools import TOOLS, CoachContext, scrub_stored_answer
 from simcoach.corners import CornerMap
 from simcoach.model.fake import FakeModel
 from simcoach.store import LapStore
@@ -799,3 +801,85 @@ def test_current_lap_resolved_from_store_when_not_pinned(tmp_path, synthetic_lap
     assert "Corner facts" in summary and "T1 " in summary
     assert ctx.get_corner("1").startswith("T1 ")
     assert "Current lap: yes" in ctx.get_session_status()
+
+
+# Either side of the #67 fix merging (56aa319). BEFORE is the stored timestamp of the
+# answer that told a P9 -> P18 driver "you started P18 ... No incidents".
+_BEFORE_67_FIX = 1789018942.56
+_AFTER_67_FIX = 1789057327.0
+
+
+@pytest.mark.parametrize("excerpt", [
+    # Every grip shape among the driver's stored answers (#72)...
+    "with min grip reading zero you're asking for more than the rear can give",
+    "min grip reading 0.00 there confirms the tires weren't gripping at all",
+    "- **Min grip 0.00** logged mid-corner",
+    "**TC hammers in at 48%** and grip drops to **0.00** -- the rear letting go completely",
+    # ...and a capital that only a case-insensitive match catches.
+    "Min Grip reading zero mid-corner",
+])
+def test_scrub_retracts_a_fabricated_grip_reading_whenever_written(excerpt):
+    # The channel never carried data, so there is no cutoff: a row from any time is void.
+    for ts in (_BEFORE_67_FIX, _AFTER_67_FIX):
+        out = scrub_stored_answer(excerpt, ts)
+        assert out.startswith(excerpt + "\n\n[Correction") and "mGripFract" in out
+        assert "never the grid slot" not in out
+
+
+@pytest.mark.parametrize("excerpt", [
+    # Every start / incident shape among the pre-fix stored answers (#67)...
+    "you started P3, had a rough patch that dropped you as low as P15",
+    "you started **P18** and crossed the line **P18**",
+    "I shouldn't have assumed that P1 starting spot",
+    "that P1→P34 overall swing is almost certainly the prototypes",
+    "**P14 to P9** is a solid haul through the field",
+    "it explains the drop from P4 down toward P11",
+    # ...where only a case-insensitive match catches the capital.
+    "No incidents or penalties logged.",
+])
+def test_scrub_retracts_a_race_start_claim_only_before_the_fix(excerpt):
+    out = scrub_stored_answer(excerpt, _BEFORE_67_FIX)
+    assert out.startswith(excerpt + "\n\n[Correction") and "never the grid slot" in out
+    # After the fix the same words are the coach reading a real result log.
+    assert scrub_stored_answer(excerpt, _AFTER_67_FIX) == excerpt
+
+
+def test_race_retraction_lets_get_race_result_speak_only_for_the_same_race():
+    # Resuming from the Sessions screen re-opens a chat in its OWN session, where
+    # get_race_result is the true result for that race; continuing an old chat while a
+    # different session is selected is where it is not. The retraction must allow the
+    # first and refuse the second -- not blanket-forbid the tool (which discards the
+    # correct result on the common path) nor blanket-direct the model to it.
+    claim = "you started **P18** and crossed the line **P18**"
+    out = scrub_stored_answer(claim, _BEFORE_67_FIX, "Silverstone National Circuit")
+    assert "only if the track it names is Silverstone National Circuit" in out
+    assert "do not attach its figures" not in out
+    # A row with no stored track still gets the condition, just without a name to match.
+    assert "only if it is that same race" in scrub_stored_answer(claim, _BEFORE_67_FIX)
+
+
+def test_get_race_result_names_the_track_of_the_session_it_reports(tmp_path, synthetic_lap):
+    # The label must come from the session the figures describe, not ctx.track: that
+    # follows the live game or the last capture, so reviewing one session while the game
+    # sits at another track labelled one track's result with the other's name -- a false
+    # fact stated as fact, the #67 class.
+    from simcoach.model_types import LapRecord
+    ctx, store, _ = _ctx(tmp_path, synthetic_lap)
+    store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "sel-1", "phase": "race",
+                            "timestamp": 5.0, "position": 4}))
+    ctx.session_id = "sel-1"
+    ctx.track = "Fuji Speedway"   # the live game, at a different track entirely
+    out = ctx.get_race_result()
+    assert out.startswith(f"Session track: {synthetic_lap.track}.")
+    assert "Fuji" not in out
+
+
+@pytest.mark.parametrize("excerpt", [
+    # Authored-style grip prose: a blanket "grip" filter would gut knowledge/ and cars/.
+    "You ran out of front grip on entry; the mechanical grip balance is rearward.",
+    # Pre-fix stored answers that name a position without claiming a start.
+    "that P1 driver was almost **1.7 seconds** faster than you",
+    "your last outing dipped to 1:28.602 (P32)",
+])
+def test_scrub_leaves_every_other_answer_untouched(excerpt):
+    assert scrub_stored_answer(excerpt, _BEFORE_67_FIX) == excerpt

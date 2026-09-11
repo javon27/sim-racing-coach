@@ -9,6 +9,7 @@ current session (track/car/lap), which the live-session re-resolution keeps fres
 """
 from __future__ import annotations
 
+import re
 import time
 
 from simcoach.analysis import analyze_lap, geometry_clause
@@ -235,6 +236,140 @@ TOOLS = [
         },
     },
 ]
+
+
+# Claims a stored answer makes that the code now knows were never true, as
+# (pattern, cutoff, retraction): an answer written before `cutoff` (epoch seconds) that
+# matches `pattern` re-enters the model's context with `retraction` appended. Each
+# pattern was measured against every answer in the driver's store and against the
+# authored knowledge/*.md and cars/*.json prose, and matches exactly the poisoned rows.
+_STORED_ANSWER_RETRACTIONS = (
+    # #72: mGripFract is never populated by LMU, so every grip reading was fabricated --
+    # no cutoff. Shapes in the store: "min grip reading zero", "**Min grip 0.00**",
+    # "grip drops to **0.00**".
+    (re.compile(r"min[ _]grip|grip[^.\n]{0,40}\b0\.00\b", re.IGNORECASE),
+     float("inf"),
+     ("\n\n[Correction, added on read and not part of what was said: the answer above "
+      "cites a grip reading (a \"min grip\" figure, or grip falling to zero). That "
+      "channel (mGripFract) is never populated by the game -- it reads zero on every "
+      "captured lap of every car -- so the figure was fabricated and any conclusion "
+      "drawn from it is void. Disregard it and do not repeat it.]")),
+    # #67: until the fix merged (56aa319, 2026-09-10 10:22:07 -05:00) get_race_result
+    # could not reach a live session's result log and never had the grid slot. Shapes:
+    # "started **P18**", "P1 starting spot", "P14 to P9", "P1→P34", "from P4 down",
+    # "No incidents". After the fix the coach legitimately says "Started P9 on the grid",
+    # which this pattern also matches -- the cutoff, not the pattern, spares it.
+    # ponytail: a sidecar still running pre-fix code past the cutoff writes rows this
+    # treats as post-fix; none exist in the store, key on the code version if one does.
+    (re.compile(r"\bstart\w*\W{1,4}P\d+|\bP\d+\W{1,4}start|\bP\d+\W{0,4}(?:→|->|to)"
+                r"\W{0,4}P\d+|\bfrom\W{1,4}P\d+\W{1,4}(?:up|down)\b|\bno incidents\b",
+                re.IGNORECASE),
+     1789053727.0,
+     ("\n\n[Correction, added on read and not part of what was said: the answer above "
+      "states a starting position, or that no incidents were logged. It was written "
+      "before the coach could read the race's result log: its \"start\" was only the "
+      "first lap capture happened to record, already underway and never the grid slot, "
+      "and \"no incidents\" meant none were visible to it, not that none happened. Treat "
+      "both as unverified and do not repeat the earlier figures. get_race_result "
+      "names the track of the session it reports: use its figures for the race this "
+      "answer was about only if {same_race}.]")),
+)
+
+
+def scrub_stored_answer(answer: str, ts: float, track: str | None = None) -> str:
+    """Annotate a stored coach answer, written at `ts`, before it re-enters the model's
+    context.
+
+    Filter on READ, never on disk: the coach did say those things, and rewriting the
+    driver's own conversation history is a worse wrong than leaving a bad number in it
+    (issue #72). The stored row and the UI display stay untouched; only the copy that
+    becomes the model's prior reasoning carries the retraction.
+
+    Deliberately narrow. A blanket filter on "grip" would strip the legitimate authored
+    driving prose that `simcoach/knowledge/*.md` and `simcoach/cars/*.json` are full of,
+    and that prose reaches the model through other tools.
+
+    New answers CAN still match: each retraction names the claim it retracts, so a model
+    that echoes a correction writes a row that matches again. For grip that row is just
+    retracted again; for the race start it falls after the cutoff and is left alone.
+    """
+    if not answer:
+        return answer
+    # `track` is the track the stored answer was about. The race retraction can only be
+    # checked against get_race_result if it names one: the resumed history itself usually
+    # never does, so without it "the same race" is a condition the model cannot test.
+    same_race = f"the track it names is {track}" if track else "it is that same race"
+    return answer + "".join(retraction.replace("{same_race}", same_race)
+                            for pattern, cutoff, retraction in _STORED_ANSWER_RETRACTIONS
+                            if ts < cutoff and pattern.search(answer))
+
+
+def race_result_text(store, session_id) -> str:
+    """The session's race outcome as prompt text: grid slot, finish, incidents, and
+    the live per-lap position arc.
+
+    The single owner of that wording. Every surface that describes a race to the model
+    calls this -- the coach tool AND the profile digest. The digest used to phrase its
+    own copy ("Race arc: started P{start} ... finished P{last}") off an unscoped arc,
+    which is exactly the #67 defect: `start` is the first lap capture happened to
+    record, mid-race, and an unscoped arc reads it from whatever phase came first.
+    Two copies meant fixing one left the other asserting the opposite as fact.
+    """
+    rr = store.race_session(session_id) if session_id else None
+    # Race stint only — a session_id spans practice/qualy/race, so an all-phase arc
+    # would read the start/worst from an earlier phase (wrong start position).
+    # Bound the arc to the race the result row actually describes: phase='race'
+    # alone spans every race in the sitting, so a second race's grid would be
+    # reported next to the first race's lap positions. With no result row (a race
+    # still being driven, whose log does not exist yet) there is no race_ts, so fall
+    # back to the floor the store derives from the last logged race.
+    arc = None
+    if session_id:
+        since = (rr.get("race_ts") if rr
+                 else store.unlogged_race_since(session_id))
+        arc = store.session_position_arc(
+            session_id, phase="race", since=since,
+            until=rr.get("next_race_ts") if rr else None)
+    if not rr and not arc:
+        return ("No race result recorded for this session (practice/qualy, or not a "
+                "completed race).")
+    lines = []
+    if rr:
+        if rr["grid_position"] is not None:
+            grid = f"Started P{rr['grid_position']} on the grid"
+            if (rr["class_grid_position"] is not None
+                    and rr["class_grid_position"] != rr["grid_position"]):
+                grid += f" (P{rr['class_grid_position']} in class)"
+            lines.append(grid + ".")
+        parts = []
+        if rr["position"] is not None:
+            parts.append(f"Finished P{rr['position']} overall")
+        if rr["class_position"] is not None:
+            parts.append(f"P{rr['class_position']} in class")
+        if rr["finish_status"]:
+            parts.append(f"status: {rr['finish_status']}")
+        lines.append("; ".join(parts) + "." if parts else "Race result recorded.")
+        incidents = rr["incidents"]
+        if incidents:
+            head = "; ".join(incidents[:3])
+            more = f" (+{len(incidents) - 3} more)" if len(incidents) > 3 else ""
+            lines.append(f"Incidents ({len(incidents)}): {head}{more}")
+        penalties = rr["penalties"]
+        if penalties:
+            texts = [str(p.get("text") or p) for p in penalties[:3]]
+            lines.append(f"Penalties ({len(penalties)}): {'; '.join(texts)}")
+    if arc:
+        # NEVER call arc['start'] a starting position: it is the first lap capture
+        # happened to record, which is already underway (issue #67 reported a P9
+        # start as P18 this way). The grid slot only ever comes from the result log.
+        line = (f"Live per-lap positions over {arc['laps']} captured lap(s): "
+                f"P{arc['start']} on the first captured lap, as low as "
+                f"P{arc['worst']}, P{arc['last']} on the most recent.")
+        if not (rr and rr["grid_position"] is not None):
+            line += (" The grid position was not captured, so the first captured lap "
+                     "is NOT the starting position -- do not report a start.")
+        lines.append(line)
+    return "\n".join(lines)
 
 
 class CoachContext:
@@ -632,61 +767,16 @@ class CoachContext:
         return "\n".join(lines) if lines else "No fuel/energy data captured for this lap."
 
     def get_race_result(self):
-        rr = self.store.race_session(self.session_id) if self.session_id else None
-        # Race stint only — a session_id spans practice/qualy/race, so an all-phase arc
-        # would read the start/worst from an earlier phase (wrong start position).
-        # Bound the arc to the race the result row actually describes: phase='race'
-        # alone spans every race in the sitting, so a second race's grid would be
-        # reported next to the first race's lap positions. With no result row (a race
-        # still being driven, whose log does not exist yet) there is no race_ts, so fall
-        # back to the floor the store derives from the last logged race.
-        arc = None
-        if self.session_id:
-            since = (rr.get("race_ts") if rr
-                     else self.store.unlogged_race_since(self.session_id))
-            arc = self.store.session_position_arc(
-                self.session_id, phase="race", since=since,
-                until=rr.get("next_race_ts") if rr else None)
-        if not rr and not arc:
-            return ("No race result recorded for this session (practice/qualy, or not a "
-                    "completed race).")
-        lines = []
-        if rr:
-            if rr["grid_position"] is not None:
-                grid = f"Started P{rr['grid_position']} on the grid"
-                if (rr["class_grid_position"] is not None
-                        and rr["class_grid_position"] != rr["grid_position"]):
-                    grid += f" (P{rr['class_grid_position']} in class)"
-                lines.append(grid + ".")
-            parts = []
-            if rr["position"] is not None:
-                parts.append(f"Finished P{rr['position']} overall")
-            if rr["class_position"] is not None:
-                parts.append(f"P{rr['class_position']} in class")
-            if rr["finish_status"]:
-                parts.append(f"status: {rr['finish_status']}")
-            lines.append("; ".join(parts) + "." if parts else "Race result recorded.")
-            incidents = rr["incidents"]
-            if incidents:
-                head = "; ".join(incidents[:3])
-                more = f" (+{len(incidents) - 3} more)" if len(incidents) > 3 else ""
-                lines.append(f"Incidents ({len(incidents)}): {head}{more}")
-            penalties = rr["penalties"]
-            if penalties:
-                texts = [str(p.get("text") or p) for p in penalties[:3]]
-                lines.append(f"Penalties ({len(penalties)}): {'; '.join(texts)}")
-        if arc:
-            # NEVER call arc['start'] a starting position: it is the first lap capture
-            # happened to record, which is already underway (issue #67 reported a P9
-            # start as P18 this way). The grid slot only ever comes from the result log.
-            line = (f"Live per-lap positions over {arc['laps']} captured lap(s): "
-                    f"P{arc['start']} on the first captured lap, as low as "
-                    f"P{arc['worst']}, P{arc['last']} on the most recent.")
-            if not (rr and rr["grid_position"] is not None):
-                line += (" The grid position was not captured, so the first captured lap "
-                         "is NOT the starting position -- do not report a start.")
-            lines.append(line)
-        return "\n".join(lines)
+        # Name the track of the session these figures DESCRIBE, taken from that session's
+        # own laps -- never self.track, which follows the live game or the last capture
+        # and can be another track entirely (reviewing Silverstone while the game sat at
+        # Fuji labelled Silverstone's result "Fuji"). A resumed chat's race retraction lets
+        # the model use these figures only for the same race, so a wrong label is worse
+        # than none.
+        text = race_result_text(self.store, self.session_id)
+        laps = self.store.session_laps(self.session_id) if self.session_id else []
+        track = laps[0].get("track") if laps else None
+        return f"Session track: {track}.\n{text}" if track else text
 
     def get_setup(self):
         if not self.setup:

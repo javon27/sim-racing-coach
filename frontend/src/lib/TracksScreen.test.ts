@@ -13,7 +13,7 @@ afterEach(cleanup);
 const wire = (o: unknown) => JSON.parse(JSON.stringify(o)) as Record<string, string>;
 
 vi.spyOn(api, "listTracks").mockResolvedValue([
-  { slug: "algarve_international_circuit", name: "Algarve", has_map: true, has_notes: false, user_edited: false },
+  { slug: "algarve_international_circuit", name: "Algarve", has_map: true, has_notes: false, user_edited: false, captures: 0, live_laps: 0 },
 ]);
 vi.spyOn(api, "getTrackNotes").mockResolvedValue({ overview: "", corners: {}, reference_times: {}, source: "" });
 vi.spyOn(api, "getTrackMap").mockResolvedValue({});
@@ -303,4 +303,96 @@ test("save sends the edited notes for the selected track", async () => {
     "Algarve",
     expect.objectContaining({ overview: "fast flowing circuit" }),
   );
+});
+
+// --- driven-but-unmapped tracks (#69) + visible capture coverage (#66) -----------------
+// These override the module-level listTracks spy, so they live LAST in the file: the
+// override persists (afterEach only cleans the DOM), and an earlier placement would hand
+// every following test a track list it never asked for.
+
+test("a driven-but-unmapped track shows its lap count and a build action", async () => {
+  vi.spyOn(api, "listTracks").mockResolvedValue([
+    {
+      slug: "silverstone_national_circuit", name: "Silverstone National Circuit",
+      has_map: false, has_notes: false, user_edited: false, captures: 27, live_laps: 27,
+    },
+  ]);
+  render(TracksScreen);
+  const row = (await screen.findByText("Silverstone National Circuit")).closest("li")!;
+  expect(within(row).getByText("no map")).toBeTruthy();
+  expect(within(row).getByText("27 laps")).toBeTruthy();   // #66: 3 clouds != 48 clouds
+  // The count is ON the action too -- the driver has to see what backs the map (#41).
+  const build = within(row).getByRole("button", { name: "Build map from 27 laps" });
+  await fireEvent.click(build);
+  // And it routes through the map editor's EXISTING rebuild-from-saved-capture path
+  // (POST /mapcapture/rebuild -> /mapcapture/save), not a second track-file writer.
+  expect(await screen.findByRole("button", { name: /rebuild from saved capture/i })).toBeTruthy();
+});
+
+test("a mapped track renders as before, with no build action", async () => {
+  vi.spyOn(api, "listTracks").mockResolvedValue([
+    {
+      slug: "algarve_international_circuit", name: "Algarve", has_map: true,
+      has_notes: false, user_edited: false, captures: 35, live_laps: 35,
+    },
+  ]);
+  render(TracksScreen);
+  const row = (await screen.findByText("Algarve")).closest("li")!;
+  expect(within(row).getByText("map")).toBeTruthy();
+  expect(within(row).getByText("no notes")).toBeTruthy();
+  expect(within(row).getByText("shipped")).toBeTruthy();
+  expect(within(row).getByText("35 laps")).toBeTruthy();
+  expect(within(row).queryByRole("button", { name: /build map/i })).toBeNull();
+});
+
+test("a track with laps but no clouds gets no build action", async () => {
+  // Spa: 991 result-log laps, zero point clouds. The server already refuses to count
+  // those, so the row arrives with captures 0 -- and must not offer a build that
+  // would 422 on a capture that does not exist.
+  vi.spyOn(api, "listTracks").mockResolvedValue([
+    {
+      slug: "circuit_de_spa_francorchamps", name: "Spa", has_map: false,
+      has_notes: false, user_edited: false, captures: 0, live_laps: 0,
+    },
+  ]);
+  render(TracksScreen);
+  const row = (await screen.findByText("Spa")).closest("li")!;
+  expect(within(row).getByText("no map")).toBeTruthy();
+  expect(within(row).queryByText(/laps?$/)).toBeNull();
+  expect(within(row).queryByRole("button", { name: /build map/i })).toBeNull();
+});
+
+test("live laps that carry no position data explain the row and offer no build", async () => {
+  // Sebring: 15 live laps, every one recorded before position capture existed, so none
+  // can ever be rebuilt from. The row must SAY that -- hiding it would leave the driver
+  // thinking the track is covered when it needs re-driving (#66) -- and must not offer a
+  // build that walks straight back into the 422 this feature exists to remove.
+  vi.spyOn(api, "listTracks").mockResolvedValue([
+    {
+      slug: "sebring_international_raceway", name: "Sebring", has_map: false,
+      has_notes: false, user_edited: false, captures: 0, live_laps: 15,
+    },
+  ]);
+  render(TracksScreen);
+  const row = (await screen.findByText("Sebring")).closest("li")!;
+  expect(within(row).getByText("15 laps, none with position data")).toBeTruthy();
+  expect(within(row).queryByRole("button", { name: /build map/i })).toBeNull();
+});
+
+test("a buildable track counts usable laps, not rows, and carries no elevation warning", async () => {
+  // The badge is the build's own count (17 usable of 27 rows). And no elevation-lap
+  // warning at any count: width/banking are now gated server-side on the cloud's real
+  // lateral spread, and the old "< 2 elevation laps" warning fired where they were
+  // closest while staying silent at the 3-4 laps a driver really brings.
+  vi.spyOn(api, "listTracks").mockResolvedValue([
+    {
+      slug: "silverstone_national_circuit", name: "Silverstone", has_map: false,
+      has_notes: false, user_edited: false, captures: 17, live_laps: 27,
+    },
+  ]);
+  render(TracksScreen);
+  const row = (await screen.findByText("Silverstone")).closest("li")!;
+  expect(within(row).getByText("17 laps")).toBeTruthy();   // usable, not the 27 rows
+  expect(within(row).getByRole("button", { name: "Build map from 17 laps" })).toBeTruthy();
+  expect(within(row).queryByText(/elevation/i)).toBeNull();
 });

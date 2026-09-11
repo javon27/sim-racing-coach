@@ -478,6 +478,15 @@
   let trackName = $state("");
   const nameEditable = $derived(!!(map?.curating || (map && !map.shipped)));
 
+  // What backs the ribbon about to be saved. No elevation-lap warning: width/banking
+  // are gated server-side on the cloud's real lateral spread (ribbon._MIN_SPREAD_M) and
+  // saved as unknown without it, so a lap count says nothing about whether they are
+  // right -- the old "< 2 elevation laps" warning fired where they were closest.
+  const provenance = $derived.by(() => {
+    const n = ribbon?.lap_count;
+    return n ? `from ${n} lap${n === 1 ? "" : "s"}` : "";
+  });
+
   // Path slice + midpoint for a named section span (start_dist..end_dist).
   function sectionSeg(s: Section) {
     if (!map) return { pts: "", mid: [0, 0] as [number, number] };
@@ -1078,6 +1087,11 @@
         {#if genPhase !== "off"}
           <button type="button" onclick={cancelGen}>Cancel capture</button>
           {#if genPhase === "preview"}
+            {#if provenance}
+              <!-- Say what backs the geometry before it is committed: a map off 1-3
+                   laps is thin (#41's Imola sector splits rest on a single lap). -->
+              <span class="lapcount">{provenance}</span>
+            {/if}
             <button type="button" class="primary" disabled={saving} onclick={saveGen}>
               {saving ? "Saving…" : "Save ribbon"}
             </button>
@@ -1130,6 +1144,11 @@
     border-bottom: none;
     border-top: 1px solid var(--muted);
     justify-content: flex-end;
+  }
+  .lapcount {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--faint);
   }
   header h2 {
     margin: 0;

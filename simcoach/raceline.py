@@ -129,7 +129,10 @@ def speed_profile(line, mu, g, a_brake, a_accel, bank=None, turn_sign=None):
         tan_t = np.zeros(n)
     else:
         tan_t = np.tan(np.asarray(bank, dtype=float))
-        if not np.any(tan_t[np.isfinite(tan_t)]):     # every station 0 or non-finite
+        # An unknown station (null/NaN: ribbon bins the samples never spanned) is
+        # solved as flat. Left as NaN it poisons v through the min() passes.
+        tan_t[~np.isfinite(tan_t)] = 0.0
+        if not np.any(tan_t):                          # every station 0 or non-finite
             tan_t = np.zeros(n)                       # flat: nothing to sign
         elif turn_sign is None:
             raise ValueError(

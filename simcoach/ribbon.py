@@ -204,11 +204,68 @@ def _lap_grid(x, z, d, max_len, bins):
     return _fill_nan(ex, period=bins), _fill_nan(ez, period=bins)
 
 
+# The lateral range (metres) a bin's samples must span before WIDTH or BANK is
+# estimated there; below it both are written as unknown (None). Laps on one racing
+# line never supply that range at any lap count, and a fit across ~1 m of them is
+# noise: on real Silverstone National clouds the old >1e-6 m test saved max bank 48 deg
+# off 1 elevation lap and 21 deg off 3, and a 4-lap build saved a median width of
+# 1.4 m -- both reaching the coach as owned fact via corner_geometry (#69).
+# Measured share of bins reaching 6 m: first 1-4 racing laps of Silverstone National/
+# Laguna/Algarve 0-6%; mapping captures (Laguna, Algarve, Monza, Bahrain, Le Mans)
+# 97-100%; Spa edge laps 100%. Gated on the spread itself, not on where the laps came
+# from.
+_MIN_SPREAD_M = 6.0
+
+# ...and that spread has to be SUSTAINED along the track: a bin counts only inside a
+# closed-loop run of such bins at least this long. Per bin, peak-to-peak lets ONE lap
+# running wide lend its bins a spread: on 17 real Fuji racing laps (no edge laps) it let
+# 26% of bins through and baked "width 26m, 2 deg banked" into two corners, off a single
+# qualifying lap 24.8 m off the pack.
+#   There is no clean gap, so this is a trade, set on the ASYMMETRY: a fabricated width
+# or camber reaches the coach as owned fact, an unknown one just goes unsaid. Measured
+# (% of bins with width known, at 500 m -> 1000 m):
+#   - racing-line clouds: Fuji 17, Laguna 45, Algarve 19 and every first-4 are 0 at both
+#     (longest local run 236 m). Silverstone National 17 is 24 -> 0: its one 632 m run
+#     straddles start/finish with a 30 s-slow race lap sitting ~16 m off the pack and
+#     reads 18-23 m "wide" -- consistent with the pit lane, not the track.
+#   - spanning clouds: Spa 1 left + 1 right edge lap, Laguna, Imola, Bahrain Endurance,
+#     Le Mans, Monza, Algarve captures 93-100 at both; but Bahrain International 84 -> 74,
+#     Interlagos 79 -> 45, Bahrain Outer 55 -> 30, Monza Curva Grande 66 -> 21, Bahrain
+#     Paddock 47 -> 0. A rebuild or re-bake from THOSE captures says less than it could;
+#     the maps already shipped keep their baked values.
+# ponytail: a length cannot reject a pit lane by design -- Silverstone's is only shorter
+# than this. Excluding in/out laps from a rebuild is the real fix for pit laps.
+_MIN_SPREAD_RUN_M = 1000.0
+
+
+def _sustained(mask: np.ndarray, min_bins: int) -> np.ndarray:
+    """`mask` with every True run shorter than `min_bins` cleared. Closed loop: a run
+    through the start/finish line is one run. An all-True mask is a whole lap and
+    always kept, even on a lap shorter than `min_bins`."""
+    if mask.all() or not mask.any():
+        return mask.copy()
+    start = int(np.argmin(mask))           # a False bin: rotate it first so no run wraps
+    m = np.roll(mask, -start)
+    out = np.zeros(len(m), dtype=bool)
+    i = 0
+    while i < len(m):
+        if not m[i]:
+            i += 1
+            continue
+        j = i
+        while j < len(m) and m[j]:
+            j += 1
+        out[i:j] = j - i >= min_bins
+        i = j
+    return np.roll(out, start)
+
+
 def _bank_per_bin(X, Z, Y, members, ctr_x, ctr_z, lat_x, lat_z, bins, w=_SMOOTH_W):
     """Cross-slope angle per bin from ALL samples: fit pos_y vs lateral offset.
     Positive = the +lateral side is higher; +lateral is the driver's LEFT (#58),
     so positive = banked for a right-hander and negative = banked for a
-    left-hander (rig-validated, 9756b65; matches reconstruct_ribbon)."""
+    left-hander (rig-validated, 9756b65; matches reconstruct_ribbon).
+    NaN (unknown) where the elevation samples span < _MIN_SPREAD_M laterally."""
     bnk = np.full(bins, np.nan)
     for b in range(bins):
         mm = members[b]
@@ -216,9 +273,12 @@ def _bank_per_bin(X, Z, Y, members, ctr_x, ctr_z, lat_x, lat_z, bins, w=_SMOOTH_
             continue
         off = (X[mm] - ctr_x[b]) * lat_x[b] + (Z[mm] - ctr_z[b]) * lat_z[b]
         yb, fin = Y[mm], np.isfinite(Y[mm])
-        if fin.sum() >= 2 and np.ptp(off[fin]) > 1e-6:
+        if fin.sum() >= 2 and np.ptp(off[fin]) >= _MIN_SPREAD_M:
             bnk[b] = np.arctan(np.polyfit(off[fin], yb[fin], 1)[0])
-    return _smooth(_fill_nan(bnk, period=bins), w)
+    known = np.isfinite(bnk)
+    out = _smooth(_fill_nan(bnk, period=bins), w)
+    out[~known] = np.nan    # smoothing may borrow from neighbours, never invent a bin
+    return out
 
 
 def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
@@ -350,18 +410,33 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
     ctr_x, ctr_z = (lx + rx) / 2.0, (lz + rz) / 2.0
     lat_x, lat_z = _lateral(ctr_x, ctr_z)
     wid = np.hypot(lx - rx, lz - rz)
+    # Same gate as bank, over ALL samples (width needs no pos_y): the drawn edges stay
+    # (the editor and the corner solver need a corridor), but a width the samples never
+    # spanned is not written as a measurement. The EDGE separation must clear it too:
+    # the bound-lap branch takes width from two laps, and a third lap straying wide
+    # lends the bin a spread those two never had (real Algarve racing laps: 97 bins
+    # passed on spread alone with a median width of 1.8 m).
+    off = (X - ctr_x[bi]) * lat_x[bi] + (Z - ctr_z[bi]) * lat_z[bi]
+    spread = np.array([np.ptp(off[mm]) if mm.size else 0.0 for mm in members])
+    wid = np.where((spread >= _MIN_SPREAD_M) & (wid >= _MIN_SPREAD_M), wid, np.nan)
 
     bnk = _bank_per_bin(X, Z, Y, members, ctr_x, ctr_z, lat_x, lat_z, bins, w=sw)
+    run = max(1, int(np.ceil(_MIN_SPREAD_RUN_M * bins / max_len)))
+    wid = np.where(_sustained(np.isfinite(wid), run), wid, np.nan)
+    bnk = np.where(_sustained(np.isfinite(bnk), run), bnk, np.nan)
 
-    def _round(a, n):  # non-finite (e.g. bank with no elevation) -> 0.0, JSON-safe
+    def _round(a, n):  # non-finite -> 0.0, JSON-safe (edges/dist are always finite)
         return [round(float(v), n) if np.isfinite(v) else 0.0 for v in a]
+
+    def _known(a, n):  # width/bank: non-finite is UNKNOWN -> null, never 0.0 (= flat)
+        return [round(float(v), n) if np.isfinite(v) else None for v in a]
 
     return {
         "left": [list(p) for p in zip(_round(lx, 2), _round(lz, 2))],
         "right": [list(p) for p in zip(_round(rx, 2), _round(rz, 2))],
         "center": [list(p) for p in zip(_round(ctr_x, 2), _round(ctr_z, 2))],
-        "width": _round(wid, 2),
-        "bank": _round(bnk, 4),
+        "width": _known(wid, 2),
+        "bank": _known(bnk, 4),
         "dist": _round(dist_grid, 2),
     }
 

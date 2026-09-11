@@ -372,6 +372,9 @@ export interface RibbonPreview {
   }[];
   sectors: number[];
   track_name?: string; // session track name, shown in the header + saved with the layout
+  /** Rebuild only: how many point clouds this geometry was reconstructed from. Shown
+   *  before Save, because a map off 1-3 laps is thin and the driver should know. */
+  lap_count?: number;
 }
 
 // Driver-input traces for the Pit Wall graphs (#21). Already resampled onto a
@@ -567,6 +570,13 @@ export interface TrackRow {
   has_map: boolean;
   has_notes: boolean;
   user_edited: boolean;
+  /** Exactly the clouds a Build would consume (the track's saved capture if it has
+   *  one, else its usable live laps). This is the build gate: 0 means nothing to
+   *  rebuild from, whatever live_laps says. */
+  captures: number;
+  /** Live-captured lap rows. Exceeds `captures` for laps recorded before position
+   *  capture existed (47 channels, no pos_*) -- they can never be rebuilt from. */
+  live_laps: number;
 }
 
 export interface TrackNotes {

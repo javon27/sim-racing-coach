@@ -443,6 +443,31 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     expect(screen.getAllByText("T1").length).toBeGreaterThan(0);
   });
 
+  it("Rebuild says how many laps back the geometry, before Save", async () => {
+    // A map off 1-3 clouds is thin (#41), and the rebuild may be falling back to the
+    // track's own live laps -- the driver has to see the count before committing it.
+    vi.mocked(rebuildFromCapture).mockResolvedValue({ ...ribbonFix, lap_count: 3 });
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+
+    await fireEvent.click(screen.getByText("Rebuild from saved capture"));
+    const footer = (await screen.findByText("Save ribbon")).closest("footer")!;
+    expect(footer.textContent).toContain("from 3 laps");
+    // No elevation-lap warning: width/banking are gated server-side on real lateral
+    // spread, so a lap count says nothing about whether they are right (#69).
+    expect(footer.textContent).not.toMatch(/elevation|banking/i);
+  });
+
+  it("Rebuild omits the lap count when the server didn't send one", async () => {
+    vi.mocked(rebuildFromCapture).mockResolvedValue(ribbonFix);   // no lap_count
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+
+    await fireEvent.click(screen.getByText("Rebuild from saved capture"));
+    const footer = (await screen.findByText("Save ribbon")).closest("footer")!;
+    expect(footer.textContent).not.toMatch(/\blaps?\b/);          // not "from undefined laps"
+  });
+
   it("Rebuild shows a hint when there's no saved capture (422)", async () => {
     vi.mocked(rebuildFromCapture).mockRejectedValue(new Error("API request failed: POST /mapcapture/rebuild -> 422"));
     render(TrackMapEditor, { props: { lapId: 7, open: true } });
