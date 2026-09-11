@@ -1569,28 +1569,129 @@ def test_v16_migration_writes_no_backup_when_nothing_is_a_duplicate(tmp_path, sy
     assert not (tmp_path / "c.sqlite.pre-v16.bak").exists()
 
 
-def test_v16_migration_leaves_the_db_alone_when_the_backup_cannot_be_written(tmp_path,
-                                                                            synthetic_lap):
-    """No backup, no delete -- and no v16 stamp, so the next open retries. Raising instead
-    would stop the app opening its store at all."""
+@pytest.mark.parametrize("start", [15, 14])
+def test_v16_migration_leaves_the_db_alone_when_the_backup_cannot_be_written(
+        tmp_path, synthetic_lap, monkeypatch, caplog, start):
+    """No backup, no delete, a logged warning -- and the version stays where the db
+    OPENED, so the next open retries. Run from v14 as well as v15: a hard-coded 15 would
+    pass from v15 alone. Raising instead would stop the app opening its store at all."""
+    import logging
+    import types
+
+    import simcoach.store as store_mod
     from simcoach.store import SCHEMA_VERSION, LapStore
+    monkeypatch.setattr(store_mod, "uuid4", lambda: types.SimpleNamespace(hex="blocked"))
     db, data = str(tmp_path / "c.sqlite"), str(tmp_path / "telem")
     s = LapStore(db, data)
     _capture_live_race(s, synthetic_lap)
     _insert_result_laps_unconditionally(s, _RESULT_TIMES_ALL_TIMED, _RESULT_SID)
-    blocker = tmp_path / "c.sqlite.pre-v16.bak"
+    blocker = tmp_path / "c.sqlite.pre-v16.bak.blocked.tmp"
     blocker.mkdir()                                   # sqlite cannot open a directory
+    s.conn.execute(f"PRAGMA user_version = {start}")
+    s.conn.commit()
+    s.conn.close()
 
-    s2 = _stamp_v15_and_reopen(s, db, data)
+    with caplog.at_level(logging.WARNING, logger="simcoach.store"):
+        s2 = LapStore(db, data)
 
     assert s2.conn.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 18
-    assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == 15
+    assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == start
+    assert "could not write the backup" in caplog.text
     s2.conn.close()
 
     blocker.rmdir()
     s3 = LapStore(db, data)                           # the retry
     assert s3.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert s3.conn.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 9
+
+
+def test_v16_migration_replaces_a_corrupt_leftover_backup(tmp_path, synthetic_lap):
+    """A leftover `.pre-v16.bak` that is not a database used to fail the backup on EVERY
+    launch: the store stayed v15, nothing was logged, and the cleanup never ran. The
+    backup now goes to a fresh temp name and is moved into place, so the cleanup completes
+    and a valid backup replaces the bad file -- with no temp file left behind."""
+    from simcoach.store import SCHEMA_VERSION, LapStore
+    db, data = str(tmp_path / "c.sqlite"), str(tmp_path / "telem")
+    s = LapStore(db, data)
+    _capture_live_race(s, synthetic_lap)
+    _insert_result_laps_unconditionally(s, _RESULT_TIMES_ALL_TIMED, _RESULT_SID)
+    bak = tmp_path / "c.sqlite.pre-v16.bak"
+    bak.write_bytes(b"not a database" * 1000)
+
+    s2 = _stamp_v15_and_reopen(s, db, data)
+
+    assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    assert s2.conn.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 9
+    assert sorted(p.name for p in tmp_path.glob("c.sqlite.pre-v16.bak*")) == [bak.name]
+    b = sqlite3.connect(bak)
+    try:
+        assert b.execute("PRAGMA user_version").fetchone()[0] == 15
+        assert b.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 18
+    finally:
+        b.close()
+
+
+def test_v16_migration_keeps_its_backup_beside_a_read_only_leftover(tmp_path, synthetic_lap,
+                                                                    caplog):
+    """os.replace cannot overwrite a read-only file on Windows, so a read-only leftover
+    would trap the cleanup exactly like a corrupt one. The run's own backup is valid, so it
+    is kept at its temp name, the leftover is left untouched, a warning names both -- and
+    the cleanup still completes."""
+    import logging
+    import stat
+
+    from simcoach.store import SCHEMA_VERSION, LapStore
+    db, data = str(tmp_path / "c.sqlite"), str(tmp_path / "telem")
+    s = LapStore(db, data)
+    _capture_live_race(s, synthetic_lap)
+    _insert_result_laps_unconditionally(s, _RESULT_TIMES_ALL_TIMED, _RESULT_SID)
+    bak = tmp_path / "c.sqlite.pre-v16.bak"
+    bak.write_bytes(b"not a database" * 1000)
+    bak.chmod(stat.S_IREAD)
+
+    with caplog.at_level(logging.WARNING, logger="simcoach.store"):
+        s2 = _stamp_v15_and_reopen(s, db, data)
+
+    assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    assert s2.conn.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 9
+    assert bak.read_bytes() == b"not a database" * 1000
+    (kept,) = tmp_path.glob("c.sqlite.pre-v16.bak.*.tmp")
+    assert "could not replace" in caplog.text and kept.name in caplog.text
+    b = sqlite3.connect(kept)
+    try:
+        assert b.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 18
+    finally:
+        b.close()
+
+
+def test_v16_migration_skips_a_legacy_laps_table_without_sector_columns(tmp_path):
+    """The v16 guard covers every column the matcher READS, s1-s3 included. v7 adds those
+    only when `laps` exists, so a bare legacy table can hold a duplicate pair without them.
+    The matcher selects s1: without the guard, opening this store raises
+    "no such column: s1" and the app cannot open its store at all."""
+    from simcoach.store import SCHEMA_VERSION, LapStore
+    db = str(tmp_path / "c.sqlite")
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE laps (id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, sim TEXT, "
+                "track TEXT, car TEXT, lap_time REAL, valid INTEGER, telemetry_path TEXT, "
+                "phase TEXT, session_id TEXT, source TEXT)")
+    con.execute("CREATE TABLE race_sessions (session_id TEXT PRIMARY KEY, position INTEGER, "
+                "track TEXT, car TEXT, phase TEXT, ts REAL)")
+    con.executemany(
+        "INSERT INTO laps (ts, sim, track, car, lap_time, valid, telemetry_path, phase, "
+        "session_id, source) VALUES (?, 'lmu', ?, ?, 70.4068, 1, ?, 'race', ?, ?)",
+        [(_RACE_TS + 167.0, _TRACK, _CAR, "telem/1.npz", _LIVE_SID, "live"),
+         (_RACE_TS, _TRACK, _CAR, None, _RESULT_SID, "result")])
+    con.execute("INSERT INTO race_sessions VALUES (?, 18, ?, ?, 'race', ?)",
+                (_RESULT_SID, _TRACK, _CAR, _RACE_TS))    # linked, so the pair is eligible
+    con.execute("PRAGMA user_version = 15")
+    con.commit()
+    con.close()
+
+    s = LapStore(db, str(tmp_path / "telem"))
+
+    assert s.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    assert s.conn.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 2
 
 
 def test_v16_backup_on_a_db_older_than_v15_does_not_hang(tmp_path, synthetic_lap):

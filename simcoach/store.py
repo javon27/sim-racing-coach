@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import threading
 import time
-from contextlib import closing
+from contextlib import closing, suppress
 from pathlib import Path
 from uuid import uuid4
 
@@ -253,9 +254,14 @@ def _pair_laps(stored: list[tuple[int, float | None]],
 #   unmatched. Partial result rows are common (345 real), because results.py drops a
 #   missing sector and COMPACTS the list; every real gap is trailing (0 shifted of 1,402
 #   XMLs), so the compaction is harmless today -- and this rule rejects partials anyway.
-# - the three must sum to the live lap_time within _SECTOR_SUM_TOL_S. Every real row
-#   with three sectors does (0 exceptions), and it stops a wrong-stint match writing
-#   ANOTHER lap's sectors into a live row, which is worse than skipping the merge.
+# - the three must sum to the live lap_time within _SECTOR_SUM_TOL_S. What that catches
+#   is an INCONSISTENT set: sectors that do not add up to the lap they are copied onto
+#   (every real row with three sectors does add up -- 0 exceptions). What it does NOT
+#   catch is a wrong-stint match. A result row's sectors sum to its own lap time, and a
+#   pair only exists within _LAP_TIME_TOL_S (1 ms), so every time-matched pair passes --
+#   0 of 120 rejected on the real store -- and a cross-stint coincidence would copy that
+#   other lap's split. Preventing that is the matcher's scope, not this check's; it needs
+#   two stints within 1 ms, and the nearest real coincidence is 10.3 ms apart.
 # A pair that fails still dedupes -- only the sector copy is skipped.
 _SECTOR_SUM_TOL_S = 0.01
 _BACKFILL_SECTORS_SQL = (
@@ -535,17 +541,42 @@ class LapStore:
                     # earlier step is idempotent and user_version is not bumped yet, so a
                     # crash after this commit only re-runs them. The backfill, the DELETE
                     # and the version bump below still commit together, as one.
+                    #
+                    # Written to a fresh temp name and MOVED into place. Backing up
+                    # straight onto `.pre-v16.bak` failed on every launch forever when a
+                    # leftover there was unusable (corrupt, truncated, read-only): each
+                    # open stayed v15, silently. A leftover os.replace cannot overwrite
+                    # (read-only) keeps this run's backup at its temp name instead -- a
+                    # valid backup still exists before anything is deleted.
+                    #
+                    # Known and pre-existing, not specific to this step: if another
+                    # process holds the db at launch, backup() or the writes below fail
+                    # with "database is locked"; nothing past the old version is stamped,
+                    # and the next open retries.
                     if self.conn.in_transaction:
                         self.conn.commit()
+                    bak = f"{db_path}.pre-v16.bak"
+                    tmp = f"{bak}.{uuid4().hex}.tmp"
+                    log = logging.getLogger(__name__)
                     try:
-                        with closing(sqlite3.connect(f"{db_path}.pre-v16.bak")) as bak:
-                            self.conn.backup(bak)
+                        with closing(sqlite3.connect(tmp)) as dst:
+                            self.conn.backup(dst)
                     except sqlite3.Error:
-                        # No backup, no delete. Stay at v15 so the next open retries --
-                        # stamping v16 would skip the cleanup for good, and raising would
-                        # stop the app opening its store over a full disk.
-                        stamp = 15
+                        with suppress(OSError):
+                            os.remove(tmp)
+                        log.warning("v16 duplicate-lap cleanup skipped: could not write the "
+                                    "backup %s; will retry on the next open", tmp,
+                                    exc_info=True)
+                        # No backup, no delete. Keep the version this db OPENED at, so
+                        # the next open retries -- never a hard-coded number, which a
+                        # later step's failure would inherit and mark this one done.
+                        stamp = current_version
                     else:
+                        try:
+                            os.replace(tmp, bak)
+                        except OSError:
+                            log.warning("could not replace %s; this run's pre-v16 backup is "
+                                        "kept at %s", bak, tmp, exc_info=True)
                         self.conn.executemany(_BACKFILL_SECTORS_SQL, [
                             {"id": live_id, "s1": s1, "s2": s2, "s3": s3}
                             for _, live_id, s1, s2, s3 in pairs])
