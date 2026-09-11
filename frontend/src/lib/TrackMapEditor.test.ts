@@ -159,6 +159,21 @@ describe("TrackMapEditor", () => {
     expect(getLapMap).toHaveBeenCalledWith(7); // no avg=1 — shows the frozen/canonical ribbon
   });
 
+  it("says so when the map has an outline but no corners yet", async () => {
+    // A track driven but never corner-mapped (e.g. Fuji): the outline draws, the side
+    // panel was just blank, which read as broken rather than "not mapped yet".
+    vi.mocked(getLapMap).mockResolvedValueOnce({ ...fixture, corners: [] });
+    const { container } = render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    expect(await screen.findByText("No corners mapped for this track yet.")).toBeTruthy();
+    expect(container.querySelector("polyline")).not.toBeNull(); // the outline still renders
+  });
+
+  it("does not show the no-corners message on a mapped track", async () => {
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+    expect(screen.queryByText("No corners mapped for this track yet.")).toBeNull();
+  });
+
   it("shows direction read-only (no input to change it)", async () => {
     const { container } = render(TrackMapEditor, { props: { lapId: 7, open: true } });
     await screen.findByText("First");

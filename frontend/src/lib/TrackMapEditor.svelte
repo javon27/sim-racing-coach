@@ -1006,6 +1006,9 @@
                 {/if}
               </div>
             {/if}
+            {#if corners.length === 0}
+              <p class="hint">No corners mapped for this track yet.</p>
+            {/if}
             <ul class="corners">
               {#each corners as c, i (c.number)}
                 <li>
