@@ -156,7 +156,7 @@
       "apexes": [
         2256.1
       ],
-      "radius_m": 28.6,
+      "radius_m": 123.4,
       "width_m": 9.4,
       "banking_deg": -2.0,
       "elev_delta_m": 0.2
@@ -204,7 +204,7 @@
       "apexes": [
         2506.8
       ],
-      "radius_m": 40.8,
+      "radius_m": 340.7,
       "width_m": 10.8,
       "banking_deg": 0.7,
       "elev_delta_m": -4.4

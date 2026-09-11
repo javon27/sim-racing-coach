@@ -44,7 +44,7 @@
       "apexes": [
         765.5
       ],
-      "radius_m": 128.8,
+      "radius_m": 217.3,
       "width_m": 7.2,
       "banking_deg": 0.4,
       "elev_delta_m": 0.6
@@ -76,7 +76,7 @@
       "apexes": [
         1295.5
       ],
-      "radius_m": 95.8,
+      "radius_m": 211.9,
       "width_m": 8.1,
       "banking_deg": -0.3,
       "elev_delta_m": 1.1
@@ -156,7 +156,7 @@
       "apexes": [
         2473.3
       ],
-      "radius_m": 98.0,
+      "radius_m": 146.4,
       "width_m": 7.8,
       "banking_deg": -2.4,
       "elev_delta_m": -13.1
@@ -172,7 +172,7 @@
       "apexes": [
         2708.9
       ],
-      "radius_m": 70.2,
+      "radius_m": 107.7,
       "width_m": 7.8,
       "banking_deg": 0.7,
       "elev_delta_m": -7.9
@@ -204,7 +204,7 @@
       "apexes": [
         2944.4
       ],
-      "radius_m": 67.7,
+      "radius_m": 322.1,
       "width_m": 8.0,
       "banking_deg": -0.0,
       "elev_delta_m": 14.1
@@ -220,7 +220,7 @@
       "apexes": [
         3278.1
       ],
-      "radius_m": 122.3,
+      "radius_m": 346.0,
       "width_m": 7.4,
       "banking_deg": -0.1,
       "elev_delta_m": 2.4
@@ -252,7 +252,7 @@
       "apexes": [
         3945.5
       ],
-      "radius_m": 197.2,
+      "radius_m": 332.6,
       "width_m": 7.9,
       "banking_deg": 1.0,
       "elev_delta_m": -15.0

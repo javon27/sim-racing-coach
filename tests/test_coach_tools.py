@@ -264,8 +264,100 @@ def test_get_race_result_arc_is_race_phase_only(tmp_path, synthetic_lap):
         store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "arc-1",
                                 "timestamp": float(i), "position": place, "phase": "race"}))
     out = ctx.get_race_result()
-    assert "started P5" in out and "as low as P10" in out and "P3" in out
+    assert "P5 on the first captured lap" in out and "as low as P10" in out and "P3" in out
     assert "P14" not in out  # practice position excluded
+    # With no result log there is no grid slot, and the first lap capture happened to
+    # record is NOT one -- the tool must not offer it as a start (issue #67).
+    assert "started p" not in out.lower()
+    assert "grid position was not captured" in out
+
+
+def test_get_race_result_for_a_live_session_reports_the_real_arc(tmp_path, synthetic_lap):
+    """The 2026-09-10 Silverstone race (issue #67): the coach said 'you started P18 and
+    crossed the line P18. No incidents or penalties logged' for a P9 -> P18 race with a
+    logged contact, because the live session id never joined the result-log row."""
+    from simcoach.lmu.results import ResultLap, ResultSession
+    from simcoach.model_types import LapRecord
+    track, car = "Silverstone National Circuit", "Team WRT 2026 #32:WEC"
+    live_sid = "silverstone-national-circuit--team-wrt-2026-32-wec--offline"
+    result_sid = "2026_09_10_00_39_07-16R1"   # the XML stem: NOT the live id
+    contact = "Jayson G(0) reported contact (948.15) with another vehicle"
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    # Live capture got every timed lap the XML lists, at the sim's full float precision,
+    # the first of them already running P18. So the dedupe leaves NO result lap row and
+    # the link has to hold without one.
+    live_times = [70.40680694580078, 88.20706176757812, 92.79763793945312,
+                  66.87100219726562, 62.2532958984375, 60.8125, 62.413330078125,
+                  63.27410888671875, 76.2119140625]
+    for i, (lt, place) in enumerate(zip(live_times, [18, 2, 18, 18, 18, 18, 18, 18, 18])):
+        store.save(LapRecord(**{**synthetic_lap.__dict__, "track": track, "car": car,
+                                "lap_time": lt, "phase": "race",
+                                "timestamp": 1789017974.0 + 63.0 * i,
+                                "session_id": live_sid, "position": place}))
+    store.save_result_session(ResultSession(
+        sim="lmu", track=track, car=car, car_class="GT3", date_ts=1789017807.0,
+        session_type="race", position=18, class_position=18, best_lap=60.8125,
+        finish_status="Finished Normally", grid_position=9, class_grid_position=9,
+        online=False,
+        laps=[ResultLap(lap_no=i + 1, lap_time=t, sectors=[], valid=True) for i, t in
+              enumerate([70.4068, 88.2071, 92.7976, 66.8710, 62.2533, 60.8125,
+                         62.4133, 63.2741, 76.2119])],
+        incidents=[contact], penalties=[]), session_id=result_sid)
+    assert store.session_lap_ids(result_sid) == [], "fixture must leave no result laps"
+
+    ctx = CoachContext(store, track=track, car=car, session_id=live_sid, on_track=True)
+    out = ctx.get_race_result()
+
+    assert "Started P9 on the grid" in out
+    assert "P18 overall" in out and "Finished Normally" in out
+    assert "Incidents (1)" in out and "contact" in out
+    # The first captured lap ran P18; that is not a start position and must not be sold
+    # as one -- reporting it as the start is what inverted the whole race narrative.
+    assert "started P18" not in out and "started p18" not in out.lower()
+    # With a known grid slot the disclaimer is unnecessary and must not appear.
+    assert "grid position was not captured" not in out
+
+
+def test_get_race_result_is_honest_while_a_second_race_is_running(tmp_path, synthetic_lap):
+    """Mid-race-2 the only result log on disk is race 1's, because a race's log is not
+    written until after it finishes. Reporting from it asserted a grid slot and
+    'Finished Normally' for a race still being driven, and merged both races' laps into
+    one arc -- a confident wrong where the tool used to say nothing."""
+    from simcoach.lmu.results import ResultLap, ResultSession
+    from simcoach.model_types import LapRecord
+    track, car = "Silverstone National Circuit", "Team WRT 2026 #32:WEC"
+    live_sid = "silverstone-national-circuit--team-wrt-2026-32-wec--offline"
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+
+    def _laps(times, places, t0):
+        for i, (lt, place) in enumerate(zip(times, places)):
+            store.save(LapRecord(**{**synthetic_lap.__dict__, "track": track, "car": car,
+                                    "lap_time": lt, "phase": "race", "position": place,
+                                    "timestamp": t0 + 63.0 * i, "session_id": live_sid}))
+
+    race1 = [70.4068, 88.2071, 92.7976, 66.8710, 62.2533, 60.8125, 62.4133, 63.2741]
+    _laps(race1, [14, 12, 10, 9, 8, 7, 6, 6], 1789017974.0)
+    store.save_result_session(ResultSession(
+        sim="lmu", track=track, car=car, car_class="GT3", date_ts=1789017807.0,
+        session_type="race", position=6, class_position=6, best_lap=60.8125,
+        finish_status="Finished Normally", grid_position=9, class_grid_position=9,
+        online=False, incidents=[], penalties=[],
+        laps=[ResultLap(lap_no=i + 1, lap_time=t, sectors=[], valid=True)
+              for i, t in enumerate(race1)]), session_id="2026_09_10_00_39_07-16R1",
+        logged_ts=1789018800.0)
+    # Race 2, two hours later, three laps in. Its log does not exist yet.
+    _laps([64.1, 64.2, 64.3], [18, 17, 16], 1789017807.0 + 7200.0)
+
+    ctx = CoachContext(store, track=track, car=car, session_id=live_sid, on_track=True)
+    out = ctx.get_race_result()
+
+    # No grid slot, no finish, no status invented for a race still running.
+    assert "Started P9" not in out and "on the grid" not in out
+    assert "Finished P6" not in out and "Finished Normally" not in out
+    # And the arc covers race 2's three laps only, not all eleven.
+    assert "over 3 captured lap(s)" in out
+    assert "P18 on the first captured lap" in out and "P16 on the most recent" in out
+    assert "grid position was not captured" in out
 
 
 def test_no_lap_context_is_honest(tmp_path):

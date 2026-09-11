@@ -425,13 +425,11 @@ def test_self_save_of_shipped_imola_keeps_every_authored_note(tmp_path):
     assert r.status_code == 200, r.text
     after = json.loads((tracks_dir / f"{slug}.json").read_text(encoding="utf-8"))
     assert after["notes"] == before["notes"]        # every authored note, verbatim
-    # Otherwise a no-op. Not byte-identical only because a self-save re-bakes
-    # radius_m on 7 corners to different values than the shipped file carries --
-    # a separate, pre-existing geometry drift, unrelated to notes.
-    assert sorted(k for k in set(before) | set(after)
-                  if before.get(k) != after.get(k)) == ["corners"]
-    assert {f for b, a in zip(before["corners"], after["corners"])
-            for f in set(b) | set(a) if b.get(f) != a.get(f)} == {"radius_m"}
+    # And a no-op in FULL. This used to have to carve out radius_m, which the save
+    # re-baked on 7 of Imola's corners (T13: 67.7 m -> 322.1 m) -- a separate defect
+    # from the note loss, fixed in #62, so the carve-out is gone and the whole map
+    # round-trips. tests/test_map_save_geometry.py owns that rule across every map.
+    assert after == before
 
 
 def test_save_track_map_has_notes_false_once_only_orphans_remained(tmp_path):

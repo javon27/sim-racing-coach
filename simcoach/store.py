@@ -23,6 +23,42 @@ _CLASS_ORDER = ["Hyper", "LMP2", "LMP2_ELMS", "LMP3", "GT3", "GTE"]
 # current weekend (survives a sidecar restart), beyond it starts a new instance.
 _SESSION_GAP_S = 6 * 3600  # 6 hours
 
+# Lap-time match tolerance when deciding whether a result-log lap is one already
+# stored. NOT exact equality: LMU's result XML rounds lap times to 4 decimals
+# ('70.4068') while live capture keeps the sim's full float ('70.40680694580078'),
+# so the same lap differs by up to 5e-5 s. 1 ms is far above that rounding and far
+# below any real gap between two different laps.
+_LAP_TIME_TOL_S = 0.001
+
+# How far a session's race laps may run past the moment a race's result log was written
+# before that log is treated as describing an EARLIER race. A race's log does not exist
+# while the race is being driven -- LMU writes it 153-229 s after the driver's finish
+# (measured over the real logs) -- so during race 2 of a sitting the newest log on disk
+# is race 1's, and using it would assert a grid slot and a "Finished" status for a race
+# still in progress.
+#
+# ponytail: a calibrated margin, not a derived bound. It only has to separate a post-race
+# cooldown lap (one lap, ~60-90 s, still stamped phase='race') from the next race in the
+# sitting (>= ~40 min later in the real data; the tightest genuine last-lap-to-mtime gap
+# measured is -46.8 s, leaving 646.8 s of headroom). Sim-clock fields cannot do this job:
+# FinishTime runs from the green flag while DateTime runs from session start, so
+# ts + FinishTime undershoots the real end by +122 to +2243 s. Narrow it if a cooldown
+# stint is ever seen crossing it.
+#
+# Trusting an mtime has two failure directions, and they are not symmetric:
+#   - SAFE: an mtime rewritten BACKWARDS, or a clock that jumps forward, only makes the
+#     guard refuse more readily, which costs the grid/finish line and claims nothing.
+#   - CONFIDENT-WRONG: an mtime rewritten FORWARDS (a backup restore, a sync tool, any
+#     touch) or a clock stepped backwards disarms the guard and reinstates the stale-row
+#     bug verbatim. A forward mtime is also self-reinforcing: it fails is_ingested(), so
+#     the file re-imports and re-stamps logged_ts permanently.
+# Deliberately NOT guarded. The only bound that does not depend on the file is a sim-clock
+# one, and the FinishTime spread above is exactly why that cannot work -- a clamp would
+# reintroduce the error it was measured to have. A NULL logged_ts has the same shape and
+# also goes unguarded: it disables the check entirely, and is only reachable through a
+# save_result_session caller that omits the argument (real data is 1399/1399 stamped).
+_RACE_LOG_LAG_S = 600
+
 
 def _is_deterministic_sid(sid: str) -> bool:
     return sid.endswith("--online") or sid.endswith("--offline")
@@ -38,7 +74,7 @@ def _session_base(sid: str) -> str:
     """The (track, car, mode) base of a session id, dropping any ~<instance> suffix."""
     return sid.split(_SESSION_SEP, 1)[0]
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 15
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
@@ -155,7 +191,15 @@ CREATE TABLE IF NOT EXISTS race_sessions (
     class_position INTEGER,
     finish_status TEXT,
     incidents TEXT,
-    penalties TEXT
+    penalties TEXT,
+    grid_position INTEGER,
+    class_grid_position INTEGER,
+    track TEXT,
+    car TEXT,
+    phase TEXT,
+    ts REAL,
+    mode TEXT,
+    logged_ts REAL
 );
 """ + _COACH_CHAT_SCHEMA + _PROFILE_SCHEMA
 
@@ -194,7 +238,16 @@ class LapStore:
         self.conn.execute("PRAGMA busy_timeout=5000")
         self._lock = threading.RLock()
         current_version = self.conn.execute("PRAGMA user_version").fetchone()[0]
-        if current_version == 0:
+        # A FRESH db is version 0 AND empty. Version 0 with tables already present is a
+        # db that lost its header -- `sqlite3 .dump` + restore does exactly this, since
+        # the dump carries no `PRAGMA user_version`. Treating that as fresh would run
+        # _SCHEMA, whose every statement is CREATE TABLE IF NOT EXISTS and so no-ops,
+        # skip the whole migration chain, and stamp it current: the columns added since
+        # would be missing and every read of race_sessions would raise. So fall through
+        # to the cumulative migrations, which are all idempotent and handle it correctly.
+        has_tables = self.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' LIMIT 1").fetchone() is not None
+        if current_version == 0 and not has_tables:
             self.conn.executescript(_SCHEMA)
         else:
             # Cumulative migrations: an old db steps through each version it's behind.
@@ -282,6 +335,38 @@ class LapStore:
                             _add_column(self.conn, "coach_chat", f"{col} INTEGER")
                     if "model" not in cols:
                         _add_column(self.conn, "coach_chat", "model TEXT")
+            if current_version < 15:
+                # v12 -> v15: give race_sessions the GRID position the race started from
+                # (parsed from the result log but previously dropped -- without it the
+                # coach read its first captured lap as the start, issue #67) AND its own
+                # session identity. The identity columns matter because the row is keyed
+                # by the result-log id: with no track/car/phase/ts/mode of its own, the
+                # only way to find it from a live session was to join through `laps`,
+                # which result-lap dedupe and clear_all both empty. Guard the ADD COLUMNs
+                # on the table existing, like the v6/v9 steps.
+                #
+                # Numbered 15 rather than reusing 13/14: two interim unreleased builds
+                # stamped those after adding only some of these columns, and a gate at the
+                # older number would skip such a db entirely and then crash on every read
+                # of race_sessions ("no such column: track") rather than degrade. The
+                # ADD COLUMN loop is idempotent, so re-running it costs nothing -- every
+                # future column added here should bump the number the same way.
+                cols = [r[1] for r in self.conn.execute("PRAGMA table_info(race_sessions)")]
+                if cols:
+                    for c, t in (("grid_position", "INTEGER"), ("class_grid_position", "INTEGER"),
+                                 ("track", "TEXT"), ("car", "TEXT"), ("phase", "TEXT"),
+                                 ("ts", "REAL"), ("mode", "TEXT"), ("logged_ts", "REAL")):
+                        if c not in cols:
+                            _add_column(self.conn, "race_sessions", f"{c} {t}")
+                # Forget which result files are imported, so the next ingest re-reads them
+                # and backfills the grid positions the old rows never stored. Ingest is
+                # idempotent on (path, mtime), so without this those races stay blank
+                # forever. Safe to re-read now that save_result_session skips laps it
+                # already has -- before that, this would have duplicated every lap.
+                self.conn.execute(
+                    "CREATE TABLE IF NOT EXISTS ingested_files (path TEXT PRIMARY KEY, mtime REAL)"
+                )
+                self.conn.execute("DELETE FROM ingested_files")
         if current_version != SCHEMA_VERSION:
             self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self.conn.commit()
@@ -811,17 +896,29 @@ class LapStore:
                 out.append(d)
             return out
 
-    def session_position_arc(self, session_id: str, phase: str | None = None) -> dict | None:
+    def session_position_arc(self, session_id: str, phase: str | None = None,
+                             since: float | None = None,
+                             until: float | None = None) -> dict | None:
         """The session's live per-lap race-position arc, or None if no lap carried
         a position. Lower place number = better, so best = min. Ordered by ts so
         start/last are the first/last lap actually driven. Pass phase='race' to scope
         to the race stint — a session_id spans practice/qualy/race, and positions from
-        those earlier phases would otherwise pollute the start/worst/finish figures."""
+        those earlier phases would otherwise pollute the start/worst/finish figures.
+
+        since/until bound the arc in time, for a sitting that ran more than one race:
+        phase='race' alone spans every race the session covers, which would describe
+        two different races in one arc."""
         query = "SELECT position FROM laps WHERE session_id = ? AND position IS NOT NULL"
         params: list = [session_id]
         if phase is not None:
             query += " AND phase = ?"
             params.append(phase)
+        if since is not None:
+            query += " AND ts >= ?"
+            params.append(since)
+        if until is not None:
+            query += " AND ts < ?"
+            params.append(until)
         query += " ORDER BY ts"
         with self._lock:
             rows = self.conn.execute(query, params).fetchall()
@@ -837,53 +934,235 @@ class LapStore:
         }
 
     def clear_all(self) -> None:
-        """Wipe all persisted data: laps, setups, corner metrics, coach chat,
-        and the raw per-lap telemetry files. Used by Settings > reset data."""
+        """Wipe all persisted data: laps, setups, corner metrics, coach chat, race
+        outcomes, the record of which result files were imported, and the raw per-lap
+        telemetry files. Used by Settings > reset data.
+
+        race_sessions and ingested_files are cleared too: leaving them behind left race
+        outcomes with no laps to belong to, and told the next ingest every result file
+        was already imported -- so a reset could never be undone by re-importing."""
         with self._lock:
-            for t in ("corner_metrics", "coach_chat", "laps", "setups"):
-                self.conn.execute(f"DELETE FROM {t}")
+            # Skip a table this db doesn't have, matching the `if cols` guard the v15
+            # migration step uses two functions away: a reset must not raise on a db
+            # that predates (or has lost) one of these tables.
+            present = {r[0] for r in self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'")}
+            for t in ("corner_metrics", "coach_chat", "laps", "setups",
+                      "race_sessions", "ingested_files"):
+                if t in present:
+                    self.conn.execute(f"DELETE FROM {t}")
             self.conn.commit()
         for f in Path(self.data_dir).glob("*.npz"):
             f.unlink(missing_ok=True)
 
-    def save_result_session(self, rs, session_id: str) -> None:
+    def _already_stored_lap_times(self, rs, session_id: str) -> list[float | None]:
+        """Lap times already stored for THIS result session -- the live capture of the
+        same stint, plus this result file's own earlier import. Includes NULL times (a
+        result lap with no time) so those dedupe too. Must be called under self._lock.
+
+        The `source = 'live' OR session_id = ?` scope is load-bearing: LMU writes P1/P2,
+        and repeated races, as separate files with the same track/car/phase in one
+        sitting, so a plain (track, car, phase, window) scope let session 2's laps
+        dedupe against session 1's rows and silently dropped real laps (379 of 7066 on
+        a fresh import of 1402 real logs). Only live rows and this same file's rows can
+        legitimately already hold a lap this file lists.
+
+        Known limit: the `source = 'live'` half is still scoped to the WINDOW, not to one
+        live session, so a live lap from a neighbouring stint can absorb this file's lap.
+        Unreachable today -- a timed match needs a sub-millisecond coincidence across
+        stints, and an untimed one needs a live lap with a NULL lap_time, which capture
+        cannot produce (LapRecord.lap_time is a float; 0 of 173 live rows are NULL). It
+        goes live the day capture records an unfinished lap, and the fix then is to scope
+        this half to the live session the result's window actually overlaps."""
+        query = ("SELECT lap_time FROM laps WHERE track IS ? AND car IS ? AND phase IS ? "
+                 "AND (source = 'live' OR session_id = ?)")
+        params: list = [rs.track, rs.car, rs.session_type, session_id]
+        if rs.date_ts is not None:
+            query += " AND ts BETWEEN ? AND ?"
+            params += [rs.date_ts - _SESSION_GAP_S, rs.date_ts + _SESSION_GAP_S]
+        return [r[0] for r in self.conn.execute(query, params).fetchall()]
+
+    def save_result_session(self, rs, session_id: str, logged_ts: float | None = None) -> None:
         """Backfill a parsed LMU result-log session's laps into the laps
-        table (source='result', no telemetry -- summary only)."""
+        table (source='result', no telemetry -- summary only).
+
+        Laps already stored for this stint are SKIPPED. A session driven with the
+        sidecar running is both captured live and written to a result log, so every
+        lap arrived twice (issue #68: 19 rows for a 10-lap race). The already-stored
+        row wins because a live one is strictly richer -- telemetry `.npz`, per-lap
+        position, sector bounds -- while the result copy has none of those; skipping
+        also makes a re-import of the same file a no-op. Scoped to this session's own
+        rows (see _already_stored_lap_times) so a sibling session is never raided.
+        Matching is a lap-time match
+        within _LAP_TIME_TOL_S (not `==`: see that constant) and each stored lap
+        absorbs at most one result lap, so two genuinely identical times still keep
+        two rows. A result lap with no time ('--.----') -- the lap live capture tends to
+        miss -- is kept on a first import and matched against an equally timeless stored
+        lap after that, so re-importing it does not pile up copies.
+
+        `logged_ts` is when the result file was WRITTEN (its mtime), which bounds which
+        laps it can possibly describe -- see _RACE_LOG_LAG_S. NULL when unknown, which
+        keeps the bound from being applied at all."""
         def _sec(sectors, i):
             return sectors[i] if sectors is not None and len(sectors) > i else None
 
         with self._lock, self.conn:
+            unclaimed = self._already_stored_lap_times(rs, session_id)
+            rows = []
+            for lap in rs.laps:
+                if lap.lap_time is None:
+                    at = next((i for i, t in enumerate(unclaimed) if t is None), None)
+                else:
+                    at = next((i for i, t in enumerate(unclaimed) if t is not None
+                               and abs(t - lap.lap_time) <= _LAP_TIME_TOL_S), None)
+                if at is not None:
+                    unclaimed.pop(at)   # one stored lap absorbs one result lap
+                    continue
+                rows.append(
+                    (rs.date_ts, rs.sim, rs.track, rs.car, lap.lap_time, int(lap.valid),
+                     None, rs.session_type, session_id,
+                     _sec(lap.sectors, 0), _sec(lap.sectors, 1), _sec(lap.sectors, 2)))
             self.conn.executemany(
                 "INSERT INTO laps (ts, sim, track, car, lap_time, valid, telemetry_path, "
                 "phase, session_id, source, s1, s2, s3) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'result', ?, ?, ?)",
-                [
-                    (rs.date_ts, rs.sim, rs.track, rs.car, lap.lap_time, int(lap.valid),
-                     None, rs.session_type, session_id,
-                     _sec(lap.sectors, 0), _sec(lap.sectors, 1), _sec(lap.sectors, 2))
-                    for lap in rs.laps
-                ],
+                rows,
             )
             self.conn.execute(
                 "INSERT OR REPLACE INTO race_sessions "
-                "(session_id, position, class_position, finish_status, incidents, penalties) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "(session_id, position, class_position, finish_status, incidents, penalties, "
+                "grid_position, class_grid_position, track, car, phase, ts, mode, logged_ts) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (session_id, rs.position, rs.class_position, rs.finish_status,
-                 json.dumps(rs.incidents or []), json.dumps(rs.penalties or [])),
+                 json.dumps(rs.incidents or []), json.dumps(rs.penalties or []),
+                 rs.grid_position, rs.class_grid_position,
+                 rs.track, rs.car, rs.session_type, rs.date_ts,
+                 None if rs.online is None else ("online" if rs.online else "offline"),
+                 logged_ts),
             )
 
-    def race_session(self, session_id: str) -> dict | None:
-        """The persisted race outcome (position, incidents, penalties) for a
-        session, or None if no race row exists (practice/qualy, or not imported)."""
+    def _linked_result_session(self, session_id: str) -> str | None:
+        """The result-log session id (XML filename stem) holding the race outcome for
+        a LIVE session id, or None.
+
+        Live capture keys laps by `track--car--online|offline`; result ingest keys them
+        by the XML stem, so `race_sessions` rows can never be found from a live id by
+        session_id alone -- that join failure is why the coach reported a race backwards
+        (issue #67). Match instead on the identity race_sessions now carries itself:
+        same track and car (both sides agree on the strings), a race phase, the same
+        online/offline mode, and a timestamp inside the live session's RACE window.
+
+        Resolving against race_sessions rather than joining through `laps` is what keeps
+        this working: result laps are skipped when live capture already holds them, so a
+        cleanly captured race leaves zero result lap rows and a laps-join finds nothing
+        -- restoring #67's symptom on exactly the races that were captured best.
+
+        Scope rules, each guarding a way to attach the wrong race:
+        - Only a live session with RACE laps resolves; a practice-only session must not
+          inherit the sitting's race result.
+        - NEAREST result to the LAST captured race lap. Anchoring on the first would
+          always answer with race 1 of a sitting: a session instance deliberately spans
+          a 6 h gap, so both races share one session_id and `ABS(ts - first)` can never
+          reach race 2. The coach's session is always the current one, so the most
+          recent race is the right default -- and `race_ts`/`next_race_ts` then bound
+          the arc to that race rather than to the sitting.
+        - Mode must match. One online race in the window would otherwise answer for both
+          `t--c--online` and `t--c--offline`, so an offline session would report a grid
+          slot and a finish it never drove. Rows ingested before mode existed carry NULL
+          and are still allowed, but always lose to an exact-mode match.
+        - Ties are broken by newest ts, then session_id, so two equidistant results
+          resolve by contract instead of by scan order.
+        - A row whose log was WRITTEN before these laps were driven describes an earlier
+          race, and is refused. A race's log does not exist while it is being driven, so
+          mid-race-2 the newest log on disk is race 1's -- using it asserted a grid slot
+          and a "Finished" status for a race still in progress. See _RACE_LOG_LAG_S.
+
+        Returns (result session id, arc-floor ts). The second value is set only on that
+        refusal: it is when the stale log was written, which is the point after which the
+        session's race laps belong to the race that has no log yet -- so the caller can
+        still scope an honest per-lap arc to the current race instead of spanning both."""
+        row = self.conn.execute(
+            "SELECT track, car, MIN(ts), MAX(ts) FROM laps "
+            "WHERE session_id = ? AND source = 'live' AND phase = 'race'",
+            (session_id,),
+        ).fetchone()
+        if row is None or row[2] is None:
+            return None, None
+        track, car, first, last = row
+        base = _session_base(session_id)
+        mode = ("online" if base.endswith("--online")
+                else "offline" if base.endswith("--offline") else None)
+        query = ("SELECT session_id, logged_ts FROM race_sessions WHERE phase = 'race' "
+                 "AND track IS ? AND car IS ? AND ts IS NOT NULL AND ts BETWEEN ? AND ?")
+        params: list = [track, car, first - _SESSION_GAP_S, last + _SESSION_GAP_S]
+        order = "ORDER BY ABS(ts - ?), ts DESC, session_id LIMIT 1"
+        if mode is not None:
+            query += " AND (mode IS NULL OR mode = ?)"
+            params.append(mode)
+            order = "ORDER BY (mode IS NULL), ABS(ts - ?), ts DESC, session_id LIMIT 1"
+        hit = self.conn.execute(f"{query} {order}", params + [last]).fetchone()
+        if hit is None:
+            return None, None
+        sid, logged_ts = hit
+        if logged_ts is not None and last > logged_ts + _RACE_LOG_LAG_S:
+            return None, logged_ts
+        return sid, None
+
+    def unlogged_race_since(self, session_id: str) -> float | None:
+        """When the last result-logged race of this sitting was written, if the session
+        has race laps driven AFTER it -- i.e. a race is in progress (or finished but not
+        imported) and has no result row yet. None otherwise.
+
+        Used to floor the per-lap arc on that race alone: with no result row there is no
+        `race_ts` to bound it, so the arc would otherwise span every race in the sitting
+        and report an earlier race's worst position as this one's.
+
+        Known limit: the floor reaches back to the last LOGGED race, not the last race, so
+        two consecutive unlogged races would merge into one arc. Measured unreachable on
+        the real data: of 112 consecutive race pairs across 233 sittings, 110 have the
+        earlier race's log already written when the next race STARTS (median 967 s early),
+        and the two exceptions are -1 s and -0 s against the next race's start stamp --
+        while a race's first lap cannot complete for at least 67 s after that stamp (min
+        over 333 races, median 132 s). So the previous log always exists >= 66 s before the
+        next race's first lap row does, and this never merges. It matches the observed
+        behaviour that LMU writes the log when you leave the session: starting another race
+        requires leaving, which writes it.
+
+        Do NOT try to derive the boundary from lap-timestamp discontinuities instead. That
+        was measured and it does not separate: in the one real session spanning two races
+        (11 laps, ONE real boundary) a >300 s gap rule fires 6 times, because pit stops,
+        incidents and garage time produce 316-924 s gaps inside a single race while genuine
+        within-race gaps reach 2.1x the lap time. It would shred one race into many."""
         with self._lock:
-            row = self.conn.execute(
-                "SELECT position, class_position, finish_status, incidents, penalties "
-                "FROM race_sessions WHERE session_id = ?",
-                (session_id,),
-            ).fetchone()
-        if row is None:
-            return None
-        pos, cls_pos, finish, incidents, penalties = row
+            return self._linked_result_session(session_id)[1]
+
+    def race_session(self, session_id: str) -> dict | None:
+        """The persisted race outcome (grid/finish position, incidents, penalties) for
+        a session, or None if no race row exists (practice/qualy, or not imported).
+
+        Falls back to the result-log row linked to a LIVE session id (see
+        _linked_result_session) -- the row is keyed by the XML stem, so a live session
+        has no row of its own. None while a race is still being driven: its log is not
+        written yet, and the newest one on disk belongs to an earlier race."""
+        cols = ("SELECT position, class_position, finish_status, incidents, penalties, "
+                "grid_position, class_grid_position, track, car, ts, mode "
+                "FROM race_sessions WHERE session_id = ?")
+        with self._lock:
+            row = self.conn.execute(cols, (session_id,)).fetchone()
+            if row is None:
+                linked, _ = self._linked_result_session(session_id)
+                row = self.conn.execute(cols, (linked,)).fetchone() if linked else None
+            if row is None:
+                return None
+            pos, cls_pos, finish, incidents, penalties, grid, cls_grid, track, car, ts, mode = row
+            # When this race is one of several in a sitting, the live session spans them
+            # all -- so hand the caller the window this race occupies (its own start, up
+            # to the next race's) or the per-lap arc would mix two races into one answer.
+            next_ts = self.conn.execute(
+                "SELECT MIN(ts) FROM race_sessions WHERE phase = 'race' AND track IS ? "
+                "AND car IS ? AND ts > ? AND (mode IS NULL OR mode IS ?)",
+                (track, car, ts, mode),
+            ).fetchone()[0] if ts is not None else None
 
         def _load(s):
             try:
@@ -897,6 +1176,10 @@ class LapStore:
             "finish_status": finish,
             "incidents": _load(incidents),
             "penalties": _load(penalties),
+            "grid_position": grid,
+            "class_grid_position": cls_grid,
+            "race_ts": ts,
+            "next_race_ts": next_ts,
         }
 
     def is_ingested(self, path: str, mtime: float) -> bool:
