@@ -5,6 +5,7 @@ import os
 import sqlite3
 import threading
 import time
+from contextlib import closing
 from pathlib import Path
 from uuid import uuid4
 
@@ -214,40 +215,100 @@ def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
             raise
 
 
-def _duplicate_result_lap_ids(conn: sqlite3.Connection) -> list[int]:
-    """The `source='result'` lap rows that duplicate a lap live capture already holds.
+def _pair_laps(stored: list[tuple[int, float | None]],
+               lap_times: list[float | None]) -> list[int | None]:
+    """For each incoming lap time, the id of the stored lap that already holds it, or
+    None. THE lap-identity rule, shared by result ingest (#68) and the v16 cleanup
+    (#71) so the two directions cannot drift apart: a lap time matches within
+    _LAP_TIME_TOL_S (not `==`: the XML rounds to 4 decimals, 70.4068 vs
+    70.40680694580078), an untimed lap matches only an untimed one, and each stored
+    lap absorbs at most one incoming lap, so two genuinely identical times keep two
+    rows. `stored` is (id, lap_time) in the order candidates should be preferred."""
+    unclaimed = list(stored)
+    twins: list[int | None] = []
+    for lt in lap_times:
+        if lt is None:
+            at = next((k for k, (_, t) in enumerate(unclaimed) if t is None), None)
+        else:
+            at = next((k for k, (_, t) in enumerate(unclaimed)
+                       if t is not None and abs(t - lt) <= _LAP_TIME_TOL_S), None)
+        twins.append(None if at is None else unclaimed.pop(at)[0])
+    return twins
 
-    Read-only: it identifies rows, it does not delete them, so the v16 migration and a
-    dry-run against a copy of the real store run the SAME matcher. Issue #71 -- the
+
+# A duplicate result lap's sectors, copied onto the LIVE twin kept in its place before
+# the result copy is dropped. "The live row is strictly richer" is FALSE for sectors:
+# live capture still writes sector-less laps when its split fails (31 of 173 live rows
+# on the real store, newest 2026-09-08), and in 17 of the 120 duplicate pairs the result
+# row held the only full set -- one race kept 11 of 12 laps' sectors ONLY on its result
+# rows. A column-by-column audit of those pairs found no other column the result row
+# alone holds (every other one agrees, is live-only, or differs by design: id/ts/source).
+#
+# ALL OR NOTHING, and the whole rule lives in this one statement so the migration and
+# ingest cannot apply different ones:
+# - the twin must be `source = 'live'` with all three sectors NULL. Live capture writes
+#   three or none (lmu/smm.py), so a column-wise COALESCE would mint a shape it never
+#   produces -- e.g. result (32.662, NULL, NULL) onto an all-NULL live twin.
+# - the result must hold all three: NULL arithmetic makes the sum NULL and the row
+#   unmatched. Partial result rows are common (345 real), because results.py drops a
+#   missing sector and COMPACTS the list; every real gap is trailing (0 shifted of 1,402
+#   XMLs), so the compaction is harmless today -- and this rule rejects partials anyway.
+# - the three must sum to the live lap_time within _SECTOR_SUM_TOL_S. Every real row
+#   with three sectors does (0 exceptions), and it stops a wrong-stint match writing
+#   ANOTHER lap's sectors into a live row, which is worse than skipping the merge.
+# A pair that fails still dedupes -- only the sector copy is skipped.
+_SECTOR_SUM_TOL_S = 0.01
+_BACKFILL_SECTORS_SQL = (
+    "UPDATE laps SET s1 = :s1, s2 = :s2, s3 = :s3 WHERE id = :id AND source = 'live' "
+    "AND s1 IS NULL AND s2 IS NULL AND s3 IS NULL "
+    f"AND ABS(:s1 + :s2 + :s3 - lap_time) <= {_SECTOR_SUM_TOL_S}")
+
+
+def _duplicate_result_lap_pairs(conn: sqlite3.Connection) -> list[tuple]:
+    """The `source='result'` lap rows that duplicate a lap live capture already holds,
+    as (result_id, live_id, s1, s2, s3) -- the row to delete, the twin kept in its
+    place, and the sectors to merge into that twin first (_BACKFILL_SECTORS_SQL).
+
+    Read-only: it identifies rows, it does not change them, so the v16 migration and a
+    dry-run against a copy of the real store run the SAME code. Issue #71 -- the
     ingest-side skip (#68) stops NEW duplicates; these are the rows written before it.
 
-    The matcher is save_result_session's, run backwards. Each result row is matched
-    against the live rows of the same stint -- same track, car and phase, within the
-    session window of the result row's own ts -- by lap time within _LAP_TIME_TOL_S
-    (not `==`: the XML rounds to 4 decimals, e.g. 70.4068 vs 70.40680694580078), with
-    an untimed row matching only an untimed one. A live row absorbs at most one result
-    row, GLOBALLY (`claimed`), so two result files sharing a window cannot both delete
-    against the same live lap -- the count of rows this can remove is bounded by the
-    count of live laps. Groups run in `ts` order so which of two such files claims a
-    live lap is deterministic (the earlier one) rather than left to SQLite's grouping.
+    Each result row is matched by _pair_laps against the live rows of the same stint --
+    same track, car and phase, within the session window of the result row's own ts. A
+    live row absorbs at most one result row GLOBALLY (`claimed`), so two result files
+    sharing a window cannot both delete against the same live lap: the rows this can
+    remove are bounded by the live laps. Groups run in `ts` order so which of two such
+    files claims a live lap is deterministic (the earlier one).
 
-    Two deliberate narrowings versus the ingest predicate, both so a lap that exists
-    only once is never in the delete set:
+    Deliberate narrowings versus the ingest predicate, each so that nothing held only
+    once is lost:
 
-    - Only `source = 'live'` rows are candidates, not the shipped predicate's
-      `source = 'live' OR session_id = ?`. That second half exists so a RE-import of a
-      file dedupes against its own earlier rows; here it would mean one result row
-      deleting another with no live twin at all. The session scoping it protects is
-      kept a different way: result rows are grouped BY session_id, so one result
-      session never matches against a sibling session's rows -- the scoping whose
-      absence ate 379 laps of 7,066 on a fresh import.
-    - A row with a telemetry_path is never returned, however it matched. The `.npz` is
-      the artifact that cannot be regenerated without re-driving (#66); result rows are
-      inserted with telemetry_path NULL, so this only ever fires on a matching bug.
-      It also means no deletion here can orphan or break a point-cloud file.
+    - Only `source = 'live'` rows are candidates, not the ingest's
+      `source = 'live' OR session_id = ?`. That second half lets a RE-import dedupe
+      against its own earlier rows; here it would mean one result row deleting another
+      with no live twin at all. THIS, together with the global `claimed` set, is what
+      keeps a sibling session (P1/P2, or two races in one sitting) from being raided --
+      the loss that ate 379 laps of 7,066 on a fresh import: a result row can only be
+      deleted against a live lap, and a live lap can delete only one result row. The
+      grouping below is NOT that protection; it only yields each file's scope (track,
+      car, phase, ts) and the per-session row count the next bullet needs.
+    - A row with a telemetry_path is never returned, however it matched. The `.npz`
+      cannot be regenerated without re-driving (#66); result rows are inserted with
+      telemetry_path NULL, so this only fires on a matching bug -- and it means no
+      deletion here can orphan or break a point-cloud file. It is filtered BEFORE
+      pairing, so a spared row never claims the live lap a real duplicate needs.
+    - A result session is never EMPTIED unless its race outcome stays reachable. The
+      Sessions list is built from lap rows, so a session with none drops out of it;
+      the outcome is then only reachable through _linked_result_session, which needs a
+      race_sessions row of phase 'race' carrying its identity (track, car, ts). Rows
+      ingested before v15 have none -- all 1,399 on the real store -- so emptying such
+      a session hid two real races. Such a session keeps ALL its rows (not "all but
+      one", which would pick a survivor arbitrarily); a partial match still cleans.
+      Its claims are not released, so a later file cannot delete against those laps.
     """
-    doomed: list[int] = []
+    pairs: list[tuple] = []
     claimed: set[int] = set()
+    removed_by_sid: dict[str, int] = {}
     groups = conn.execute(
         "SELECT session_id, track, car, phase, ts FROM laps WHERE source = 'result' "
         "GROUP BY session_id, track, car, phase, ts ORDER BY ts").fetchall()
@@ -258,23 +319,32 @@ def _duplicate_result_lap_ids(conn: sqlite3.Connection) -> list[int]:
         if ts is not None:
             query += " AND ts BETWEEN ? AND ?"
             params += [ts - _SESSION_GAP_S, ts + _SESSION_GAP_S]
+        query += " ORDER BY id"
         unclaimed = [r for r in conn.execute(query, params).fetchall() if r[0] not in claimed]
+        # `telemetry_path IS NULL`: 0 of 7,066 real result rows carry one, so this never
+        # changes HOW MANY rows are removed today. On a store where it did fire, it would
+        # change WHICH of two same-time result rows goes -- the spared one never enters
+        # pairing, so the live lap stays available to the other.
         rows = conn.execute(
-            "SELECT id, lap_time FROM laps WHERE source = 'result' AND session_id IS ? "
-            "AND track IS ? AND car IS ? AND phase IS ? AND ts IS ? "
+            "SELECT id, lap_time, s1, s2, s3 FROM laps WHERE source = 'result' "
+            "AND session_id IS ? AND track IS ? AND car IS ? AND phase IS ? AND ts IS ? "
             "AND telemetry_path IS NULL ORDER BY id",
             (sid, track, car, phase, ts)).fetchall()
-        for rid, lap_time in rows:
-            if lap_time is None:
-                at = next((k for k, (_, t) in enumerate(unclaimed) if t is None), None)
-            else:
-                at = next((k for k, (_, t) in enumerate(unclaimed)
-                           if t is not None and abs(t - lap_time) <= _LAP_TIME_TOL_S), None)
-            if at is None:
-                continue
-            claimed.add(unclaimed.pop(at)[0])
-            doomed.append(rid)
-    return doomed
+        twins = _pair_laps(unclaimed, [r[1] for r in rows])
+        found = [(r[0], twin, r[2], r[3], r[4]) for r, twin in zip(rows, twins)
+                 if twin is not None]
+        claimed.update(p[1] for p in found)
+        removed = removed_by_sid.get(sid, 0) + len(found)
+        session_rows = conn.execute(
+            "SELECT COUNT(*) FROM laps WHERE session_id IS ?", (sid,)).fetchone()[0]
+        if found and removed == session_rows and conn.execute(
+                "SELECT 1 FROM race_sessions WHERE session_id IS ? AND phase = 'race' "
+                "AND track IS NOT NULL AND car IS NOT NULL AND ts IS NOT NULL",
+                (sid,)).fetchone() is None:
+            continue
+        removed_by_sid[sid] = removed
+        pairs.extend(found)
+    return pairs
 
 
 def _decode(tc):
@@ -310,6 +380,7 @@ class LapStore:
         # to the cumulative migrations, which are all idempotent and handle it correctly.
         has_tables = self.conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' LIMIT 1").fetchone() is not None
+        stamp = SCHEMA_VERSION   # lowered only by a step that must retry next open (v16)
         if current_version == 0 and not has_tables:
             self.conn.executescript(_SCHEMA)
         else:
@@ -431,30 +502,57 @@ class LapStore:
                 )
                 self.conn.execute("DELETE FROM ingested_files")
             if current_version < 16:
-                # v15 -> v16: delete the result-log lap rows that duplicate a lap live
+                # v15 -> v16: remove the result-log lap rows that duplicate a lap live
                 # capture already holds (issue #71). v15's fix stops NEW duplicates on
                 # ingest; the rows written before it are still there -- 19 rows for a
-                # 10-lap race, with the result copy carrying no telemetry, no per-lap
-                # position and no sector bounds, so anything that COUNTS is wrong while
-                # anything that averages still looks right.
+                # 10-lap race -- so anything that COUNTS is wrong while anything that
+                # averages still looks right. _duplicate_result_lap_pairs says what is
+                # never removed; _BACKFILL_SECTORS_SQL merges the one field a result copy
+                # can hold alone onto its live twin before the copy goes. Idempotent: a
+                # second run finds those rows gone and matches nothing.
                 #
-                # _duplicate_result_lap_ids only ever returns a result row whose lap a
-                # live row also holds, and never one with a telemetry_path, so this can
-                # neither delete a uniquely-held lap nor orphan an `.npz`. Idempotent:
-                # a second run finds those rows gone and matches nothing.
+                # DELETE, not a `source='duplicate'` mark: session_laps, session_lap_ids
+                # and the Sessions list do not filter on source, so a staged row would
+                # still be listed and counted -- the #71 symptom itself.
                 #
                 # Guarded on every column the matcher READS, not just on the table
-                # existing like the v6/v9 steps: a db that has never held a result lap
-                # can be missing any of them (some tests build a bare `laps` of two
-                # columns), and there is nothing to clean in one anyway.
+                # existing like the v6/v9 steps: v7 only adds s1-s3 when `laps` exists,
+                # and some tests build a bare `laps` of two columns. Nothing to clean in
+                # such a db anyway.
                 cols = {r[1] for r in self.conn.execute("PRAGMA table_info(laps)")}
-                if {"id", "source", "telemetry_path", "track", "car", "phase", "ts",
-                        "lap_time", "session_id"} <= cols:
-                    self.conn.executemany(
-                        "DELETE FROM laps WHERE id = ?",
-                        [(i,) for i in _duplicate_result_lap_ids(self.conn)])
-        if current_version != SCHEMA_VERSION:
-            self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+                has_race_sessions = self.conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                    "AND name = 'race_sessions'").fetchone() is not None
+                pairs = (_duplicate_result_lap_pairs(self.conn) if has_race_sessions and {
+                    "id", "source", "telemetry_path", "track", "car", "phase", "ts",
+                    "lap_time", "session_id", "s1", "s2", "s3"} <= cols else [])
+                if pairs:
+                    # Back up first -- this runs unprompted on app launch -- and only when
+                    # something is about to be removed. backup() against an open WRITE
+                    # transaction on its own connection retries SQLITE_LOCKED forever
+                    # (measured: still hung after 10 s), and an older db arrives here with
+                    # earlier steps' writes uncommitted, so commit those first. Safe: each
+                    # earlier step is idempotent and user_version is not bumped yet, so a
+                    # crash after this commit only re-runs them. The backfill, the DELETE
+                    # and the version bump below still commit together, as one.
+                    if self.conn.in_transaction:
+                        self.conn.commit()
+                    try:
+                        with closing(sqlite3.connect(f"{db_path}.pre-v16.bak")) as bak:
+                            self.conn.backup(bak)
+                    except sqlite3.Error:
+                        # No backup, no delete. Stay at v15 so the next open retries --
+                        # stamping v16 would skip the cleanup for good, and raising would
+                        # stop the app opening its store over a full disk.
+                        stamp = 15
+                    else:
+                        self.conn.executemany(_BACKFILL_SECTORS_SQL, [
+                            {"id": live_id, "s1": s1, "s2": s2, "s3": s3}
+                            for _, live_id, s1, s2, s3 in pairs])
+                        self.conn.executemany("DELETE FROM laps WHERE id = ?",
+                                              [(p[0],) for p in pairs])
+        if current_version != stamp:
+            self.conn.execute(f"PRAGMA user_version = {stamp}")
         self.conn.commit()
 
     def _resolve_session_instance(self, base: str, ts: float) -> str:
@@ -1041,10 +1139,12 @@ class LapStore:
         for f in Path(self.data_dir).glob("*.npz"):
             f.unlink(missing_ok=True)
 
-    def _already_stored_lap_times(self, rs, session_id: str) -> list[float | None]:
-        """Lap times already stored for THIS result session -- the live capture of the
-        same stint, plus this result file's own earlier import. Includes NULL times (a
-        result lap with no time) so those dedupe too. Must be called under self._lock.
+    def _already_stored_laps(self, rs, session_id: str) -> list[tuple[int, float | None]]:
+        """(id, lap_time) of the laps already stored for THIS result session -- the live
+        capture of the same stint, plus this result file's own earlier import -- in id
+        order, for _pair_laps. Includes NULL times (a result lap with no time) so those
+        dedupe too. The id is what lets a skipped lap's sectors reach the exact stored
+        twin it matched (_BACKFILL_SECTORS_SQL). Must be called under self._lock.
 
         The `source = 'live' OR session_id = ?` scope is load-bearing: LMU writes P1/P2,
         and repeated races, as separate files with the same track/car/phase in one
@@ -1060,13 +1160,13 @@ class LapStore:
         cannot produce (LapRecord.lap_time is a float; 0 of 173 live rows are NULL). It
         goes live the day capture records an unfinished lap, and the fix then is to scope
         this half to the live session the result's window actually overlaps."""
-        query = ("SELECT lap_time FROM laps WHERE track IS ? AND car IS ? AND phase IS ? "
+        query = ("SELECT id, lap_time FROM laps WHERE track IS ? AND car IS ? AND phase IS ? "
                  "AND (source = 'live' OR session_id = ?)")
         params: list = [rs.track, rs.car, rs.session_type, session_id]
         if rs.date_ts is not None:
             query += " AND ts BETWEEN ? AND ?"
             params += [rs.date_ts - _SESSION_GAP_S, rs.date_ts + _SESSION_GAP_S]
-        return [r[0] for r in self.conn.execute(query, params).fetchall()]
+        return self.conn.execute(query + " ORDER BY id", params).fetchall()
 
     def save_result_session(self, rs, session_id: str, logged_ts: float | None = None) -> None:
         """Backfill a parsed LMU result-log session's laps into the laps
@@ -1075,16 +1175,18 @@ class LapStore:
         Laps already stored for this stint are SKIPPED. A session driven with the
         sidecar running is both captured live and written to a result log, so every
         lap arrived twice (issue #68: 19 rows for a 10-lap race). The already-stored
-        row wins because a live one is strictly richer -- telemetry `.npz`, per-lap
-        position, sector bounds -- while the result copy has none of those; skipping
-        also makes a re-import of the same file a no-op. Scoped to this session's own
-        rows (see _already_stored_lap_times) so a sibling session is never raided.
-        Matching is a lap-time match
-        within _LAP_TIME_TOL_S (not `==`: see that constant) and each stored lap
-        absorbs at most one result lap, so two genuinely identical times still keep
-        two rows. A result lap with no time ('--.----') -- the lap live capture tends to
-        miss -- is kept on a first import and matched against an equally timeless stored
-        lap after that, so re-importing it does not pile up copies.
+        row wins: a live one carries the telemetry `.npz`, per-lap position and sector
+        bounds the result copy lacks, and skipping makes a re-import of the same file a
+        no-op. The one thing a skipped lap may hold alone is its SECTORS -- live capture
+        writes none when its split fails -- so those are merged onto a live twin that
+        lacks them (_BACKFILL_SECTORS_SQL, the same rule the v16 cleanup applies).
+        Scoped to this session's own rows (see _already_stored_laps) so a sibling
+        session is never raided. Matching is _pair_laps: a lap-time match within
+        _LAP_TIME_TOL_S (not `==`: see that constant), each stored lap absorbing at most
+        one result lap, so two genuinely identical times still keep two rows. A result
+        lap with no time ('--.----') -- the lap live capture tends to miss -- is kept on
+        a first import and matched against an equally timeless stored lap after that,
+        so re-importing it does not pile up copies.
 
         `logged_ts` is when the result file was WRITTEN (its mtime), which bounds which
         laps it can possibly describe -- see _RACE_LOG_LAG_S. NULL when unknown, which
@@ -1093,21 +1195,21 @@ class LapStore:
             return sectors[i] if sectors is not None and len(sectors) > i else None
 
         with self._lock, self.conn:
-            unclaimed = self._already_stored_lap_times(rs, session_id)
-            rows = []
-            for lap in rs.laps:
-                if lap.lap_time is None:
-                    at = next((i for i, t in enumerate(unclaimed) if t is None), None)
-                else:
-                    at = next((i for i, t in enumerate(unclaimed) if t is not None
-                               and abs(t - lap.lap_time) <= _LAP_TIME_TOL_S), None)
-                if at is not None:
-                    unclaimed.pop(at)   # one stored lap absorbs one result lap
+            twins = _pair_laps(self._already_stored_laps(rs, session_id),
+                               [lap.lap_time for lap in rs.laps])
+            rows, backfill = [], []
+            for lap, twin in zip(rs.laps, twins):
+                s1, s2, s3 = (_sec(lap.sectors, i) for i in range(3))
+                if twin is not None:
+                    # Skip the copy; offer its sectors to the exact twin it matched. The
+                    # statement's own WHERE refuses anything but a live, sector-less twin
+                    # whose lap time the three add up to.
+                    backfill.append({"id": twin, "s1": s1, "s2": s2, "s3": s3})
                     continue
                 rows.append(
                     (rs.date_ts, rs.sim, rs.track, rs.car, lap.lap_time, int(lap.valid),
-                     None, rs.session_type, session_id,
-                     _sec(lap.sectors, 0), _sec(lap.sectors, 1), _sec(lap.sectors, 2)))
+                     None, rs.session_type, session_id, s1, s2, s3))
+            self.conn.executemany(_BACKFILL_SECTORS_SQL, backfill)
             self.conn.executemany(
                 "INSERT INTO laps (ts, sim, track, car, lap_time, valid, telemetry_path, "
                 "phase, session_id, source, s1, s2, s3) "
