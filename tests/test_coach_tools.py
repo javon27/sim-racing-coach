@@ -1,7 +1,9 @@
 """Agentic tool layer: the tools return the right on-demand summaries, and the
 Coach agentic loop dispatches the model's tool calls (via FakeModel scripting)."""
+import pytest
+
 from simcoach.coach import Coach
-from simcoach.coach_tools import TOOLS, CoachContext
+from simcoach.coach_tools import TOOLS, CoachContext, scrub_stored_answer
 from simcoach.corners import CornerMap
 from simcoach.model.fake import FakeModel
 from simcoach.store import LapStore
@@ -799,3 +801,55 @@ def test_current_lap_resolved_from_store_when_not_pinned(tmp_path, synthetic_lap
     assert "Corner facts" in summary and "T1 " in summary
     assert ctx.get_corner("1").startswith("T1 ")
     assert "Current lap: yes" in ctx.get_session_status()
+
+
+# Either side of the #67 fix merging (56aa319). BEFORE is the stored timestamp of the
+# answer that told a P9 -> P18 driver "you started P18 ... No incidents".
+_BEFORE_67_FIX = 1789018942.56
+_AFTER_67_FIX = 1789057327.0
+
+
+@pytest.mark.parametrize("excerpt", [
+    # Every grip shape among the driver's stored answers (#72)...
+    "with min grip reading zero you're asking for more than the rear can give",
+    "min grip reading 0.00 there confirms the tires weren't gripping at all",
+    "- **Min grip 0.00** logged mid-corner",
+    "**TC hammers in at 48%** and grip drops to **0.00** -- the rear letting go completely",
+    # ...and a capital that only a case-insensitive match catches.
+    "Min Grip reading zero mid-corner",
+])
+def test_scrub_retracts_a_fabricated_grip_reading_whenever_written(excerpt):
+    # The channel never carried data, so there is no cutoff: a row from any time is void.
+    for ts in (_BEFORE_67_FIX, _AFTER_67_FIX):
+        out = scrub_stored_answer(excerpt, ts)
+        assert out.startswith(excerpt + "\n\n[Correction") and "mGripFract" in out
+        assert "never the grid slot" not in out
+
+
+@pytest.mark.parametrize("excerpt", [
+    # Every start / incident shape among the pre-fix stored answers (#67)...
+    "you started P3, had a rough patch that dropped you as low as P15",
+    "you started **P18** and crossed the line **P18**",
+    "I shouldn't have assumed that P1 starting spot",
+    "that P1→P34 overall swing is almost certainly the prototypes",
+    "**P14 to P9** is a solid haul through the field",
+    "it explains the drop from P4 down toward P11",
+    # ...where only a case-insensitive match catches the capital.
+    "No incidents or penalties logged.",
+])
+def test_scrub_retracts_a_race_start_claim_only_before_the_fix(excerpt):
+    out = scrub_stored_answer(excerpt, _BEFORE_67_FIX)
+    assert out.startswith(excerpt + "\n\n[Correction") and "never the grid slot" in out
+    # After the fix the same words are the coach reading a real result log.
+    assert scrub_stored_answer(excerpt, _AFTER_67_FIX) == excerpt
+
+
+@pytest.mark.parametrize("excerpt", [
+    # Authored-style grip prose: a blanket "grip" filter would gut knowledge/ and cars/.
+    "You ran out of front grip on entry; the mechanical grip balance is rearward.",
+    # Pre-fix stored answers that name a position without claiming a start.
+    "that P1 driver was almost **1.7 seconds** faster than you",
+    "your last outing dipped to 1:28.602 (P32)",
+])
+def test_scrub_leaves_every_other_answer_untouched(excerpt):
+    assert scrub_stored_answer(excerpt, _BEFORE_67_FIX) == excerpt

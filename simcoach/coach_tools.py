@@ -238,19 +238,46 @@ TOOLS = [
 ]
 
 
-_FABRICATED_GRIP = re.compile(r"min[ _]grip", re.IGNORECASE)
-
-_GRIP_RETRACTION = (
-    "\n\n[Correction, added on read and not part of what was said: the answer above "
-    "cites a \"min grip\" reading. That channel (mGripFract) is never populated by the "
-    "game -- it reads 0.00 on every captured lap of every car -- so the figure was "
-    "fabricated and any conclusion drawn from it is void. Disregard it and do not "
-    "repeat it.]"
+# Claims a stored answer makes that the code now knows were never true, as
+# (pattern, cutoff, retraction): an answer written before `cutoff` (epoch seconds) that
+# matches `pattern` re-enters the model's context with `retraction` appended. Each
+# pattern was measured against every answer in the driver's store and against the
+# authored knowledge/*.md and cars/*.json prose, and matches exactly the poisoned rows.
+_STORED_ANSWER_RETRACTIONS = (
+    # #72: mGripFract is never populated by LMU, so every grip reading was fabricated --
+    # no cutoff. Shapes in the store: "min grip reading zero", "**Min grip 0.00**",
+    # "grip drops to **0.00**".
+    (re.compile(r"min[ _]grip|grip[^.\n]{0,40}\b0\.00\b", re.IGNORECASE),
+     float("inf"),
+     ("\n\n[Correction, added on read and not part of what was said: the answer above "
+      "cites a grip reading (a \"min grip\" figure, or grip falling to zero). That "
+      "channel (mGripFract) is never populated by the game -- it reads zero on every "
+      "captured lap of every car -- so the figure was fabricated and any conclusion "
+      "drawn from it is void. Disregard it and do not repeat it.]")),
+    # #67: until the fix merged (56aa319, 2026-09-10 10:22:07 -05:00) get_race_result
+    # could not reach a live session's result log and never had the grid slot. Shapes:
+    # "started **P18**", "P1 starting spot", "P14 to P9", "P1→P34", "from P4 down",
+    # "No incidents". After the fix the coach legitimately says "Started P9 on the grid",
+    # which this pattern also matches -- the cutoff, not the pattern, spares it.
+    # ponytail: a sidecar still running pre-fix code past the cutoff writes rows this
+    # treats as post-fix; none exist in the store, key on the code version if one does.
+    (re.compile(r"\bstart\w*\W{1,4}P\d+|\bP\d+\W{1,4}start|\bP\d+\W{0,4}(?:→|->|to)"
+                r"\W{0,4}P\d+|\bfrom\W{1,4}P\d+\W{1,4}(?:up|down)\b|\bno incidents\b",
+                re.IGNORECASE),
+     1789053727.0,
+     ("\n\n[Correction, added on read and not part of what was said: the answer above "
+      "states a starting position, or that no incidents were logged. It was written "
+      "before the coach could read the race's result log: its \"start\" was only the "
+      "first lap capture happened to record, already underway and never the grid slot, "
+      "and \"no incidents\" meant none were visible to it, not that none happened. Treat "
+      "both as unverified, call get_race_result for the real grid slot, finish and "
+      "incidents, and do not repeat the earlier figures.]")),
 )
 
 
-def scrub_stored_answer(answer: str) -> str:
-    """Annotate a stored coach answer before it re-enters the model's context.
+def scrub_stored_answer(answer: str, ts: float) -> str:
+    """Annotate a stored coach answer, written at `ts`, before it re-enters the model's
+    context.
 
     Filter on READ, never on disk: the coach did say those things, and rewriting the
     driver's own conversation history is a worse wrong than leaving a bad number in it
@@ -259,13 +286,17 @@ def scrub_stored_answer(answer: str) -> str:
 
     Deliberately narrow. A blanket filter on "grip" would strip the legitimate authored
     driving prose that `simcoach/knowledge/*.md` and `simcoach/cars/*.json` are full of,
-    and that prose reaches the model through other tools. Only the specific fabricated
-    metric is matched -- it was removed from `analysis.py` and `format.py`, so no new
-    answer can contain it and this only ever fires on rows written before that.
+    and that prose reaches the model through other tools.
+
+    New answers CAN still match: each retraction names the claim it retracts, so a model
+    that echoes a correction writes a row that matches again. For grip that row is just
+    retracted again; for the race start it falls after the cutoff and is left alone.
     """
-    if not answer or not _FABRICATED_GRIP.search(answer):
+    if not answer:
         return answer
-    return answer + _GRIP_RETRACTION
+    return answer + "".join(retraction
+                            for pattern, cutoff, retraction in _STORED_ANSWER_RETRACTIONS
+                            if ts < cutoff and pattern.search(answer))
 
 
 def race_result_text(store, session_id) -> str:

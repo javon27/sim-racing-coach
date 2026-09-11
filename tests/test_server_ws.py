@@ -296,7 +296,9 @@ def test_ws_coach_retracts_a_fabricated_grip_claim_in_resumed_history(tmp_path):
                 break
 
     sent = [m["content"] for m in fake.last_messages]
-    carried = [m for m in sent if "min grip" in m]
+    # A phrase only the stored answer has -- "min grip" is also in the retraction's own
+    # text, so an answer REPLACED by the retraction would satisfy that.
+    carried = [m for m in sent if "weren't gripping at all" in m]
     assert carried, "the prior answer should still be threaded, not dropped"
     assert all("fabricated" in m and "Disregard it" in m for m in carried), \
         f"the grip claim reached the model unretracted: {carried}"
@@ -325,6 +327,41 @@ def test_ws_coach_leaves_ordinary_grip_prose_alone(tmp_path):
                 break
 
     assert legit in [m["content"] for m in fake.last_messages]
+
+
+def test_ws_coach_retracts_a_pre_fix_race_start_but_not_a_post_fix_one(tmp_path):
+    # #67 residue. Before the fix merged, get_race_result could not reach the result log
+    # for a live session and never had the grid slot, so the coach told a driver who
+    # started P9 and finished P18 with 15 incidents "you started P18 ... No incidents".
+    # That answer (the store's own text and timestamp) re-enters a resumed chat. After
+    # the fix the coach legitimately says "Started P9 on the grid" -- which the same
+    # pattern matches, so only the written-before cutoff can tell the two apart.
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    fake = FakeModel(reply="Third answer.")
+    app = create_app(store, Coach(fake))
+    before = ("That one's tough to sugarcoat -- you started **P18** and crossed the line "
+              "**P18**. No incidents or penalties logged.")
+    after = "You started P9 on the grid and finished P18, with 15 incidents logged."
+    store.save_chat("c1", "s1", "trk", "car", None, "how did that race go?", before, None,
+                    ts=1789018942.56)
+    store.save_chat("c1", "s1", "trk", "car", None, "and now?", after, None,
+                    ts=1789057327.0)
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "third question", "chat_id": "c1"})
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"):
+                break
+
+    sent = [m["content"] for m in fake.last_messages]
+    carried = [m for m in sent if "tough to sugarcoat" in m]
+    assert len(carried) == 1, f"the pre-fix answer should be threaded once: {sent}"
+    assert carried[0].startswith(before) and "never the grid slot" in carried[0], \
+        f"the pre-fix start claim reached the model unretracted: {carried}"
+    assert after in sent, "a post-fix answer must reach the model exactly as said"
+    assert store.chat_messages("c1")[0]["answer"] == before
 
 
 def test_ws_coach_no_history_for_new_chat(tmp_path):

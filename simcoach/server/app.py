@@ -1610,12 +1610,14 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                         if row.get("question"):
                             history.append({"role": "user", "content": row["question"]})
                         if row.get("answer"):
-                            # scrub_stored_answer, not the raw row: an answer written
-                            # before #43 can assert a fabricated metric as established
-                            # fact, and resuming the chat would re-feed it to the model
-                            # as its own prior reasoning (#72).
+                            # scrub_stored_answer, not the raw row: an older answer can
+                            # assert a fabricated grip reading (#72) or a race start the
+                            # coach could not know (#67) as established fact, and
+                            # resuming the chat would re-feed it to the model as its own
+                            # prior reasoning.
                             history.append({"role": "assistant",
-                                            "content": scrub_stored_answer(row["answer"])})
+                                            "content": scrub_stored_answer(row["answer"],
+                                                                           row["ts"])})
                 except Exception:
                     history = []
 
@@ -1798,7 +1800,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                     # and keep the fabricated claim. Scrubbing what actually reaches the
                     # model is also exactly right -- a claim past char 200 never gets
                     # there, so it needs no retraction (#72).
-                    digest.append(f"Coach answered: {scrub_stored_answer(m['answer'][:200])}")
+                    digest.append("Coach answered: "
+                                  + scrub_stored_answer(m["answer"][:200], m["ts"]))
 
         system = (
             "You are distilling durable driver-profile observations from one session's "

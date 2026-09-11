@@ -177,8 +177,36 @@ def test_distill_retracts_a_fabricated_grip_claim_in_the_chat_excerpt(tmp_path, 
                     None)
 
     prompt = _distill_prompt(c, store)
-    assert "min grip" in prompt, "the excerpt should still be quoted, not dropped"
+    # A phrase only the stored answer has: "min grip" is also in the retraction's text.
+    assert "asking for more than the rear" in prompt, \
+        "the excerpt should still be quoted, not dropped"
     assert "fabricated" in prompt and "Disregard it" in prompt
+
+
+def test_distill_retracts_a_pre_fix_race_start_but_not_a_post_fix_one(tmp_path, monkeypatch,
+                                                                       mem_keyring,
+                                                                       synthetic_lap):
+    # #67 residue on the digest's read path; see the ws test of the same name. The
+    # post-fix answer matches the same pattern, so only the cutoff spares it.
+    c, store = _client(tmp_path, monkeypatch, mem_keyring, model_reply=json.dumps(
+        {"memories": [], "summary": ""}))
+    _seed_session(store, synthetic_lap, session_id="sess-1")
+    before = ("That one's tough to sugarcoat -- you started **P18** and crossed the line "
+              "**P18**. No incidents or penalties logged.")
+    after = "You started P9 on the grid and finished P18, with 15 incidents logged."
+    store.save_chat("c1", "sess-1", "trk", "car", None, "how did it go?", before, None,
+                    ts=1789018942.56)
+    store.save_chat("c1", "sess-1", "trk", "car", None, "and now?", after, None,
+                    ts=1789057327.0)
+
+    prompt = _distill_prompt(c, store)
+    assert "tough to sugarcoat" in prompt, "the excerpt should still be quoted, not dropped"
+    assert prompt.count("never the grid slot") == 1, \
+        "exactly the pre-fix answer carries the retraction, the post-fix one does not"
+    # The chat excerpt closes the digest, so a retraction appended to the post-fix
+    # answer would be the digest's tail.
+    digest = c.app.state.coach.model.last_messages[0]["content"]
+    assert digest.endswith(f"Coach answered: {after}")
 
 
 def test_distill_no_such_session_404(tmp_path, monkeypatch, mem_keyring):
