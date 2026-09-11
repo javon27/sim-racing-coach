@@ -251,11 +251,26 @@ def _corner_apexes(corners) -> list[tuple[str, float | None, str]]:
 # the 11 tracks; requiring the old apex inside the new corner's window as well changed
 # nothing; window containment alone misbound a note on Bahrain Paddock.
 #   What a distance alone cannot tell apart is two neighbours drifting together (Bahrain
-# Endurance T7/T8, 50.2 m apart, both +30 m). Rule 2 below settles that with the corners'
-# own direction and by refusing any choice with a second candidate; on the red-team's
-# drift harness that took cross-corner misbinds from 0/5/16/92/258 to 0/0/1/4/9 at
-# 0/10/20/30/40 m of drift, with no note lost on any real rebuild.
+# Endurance T7/T8, 50.2 m apart, both +30 m). Rule 2 below settles most of that with the
+# corners' own direction and by refusing a near-tie (_NEAR_TIE_RATIO).
+#   THE RESIDUAL, accepted on review: same-direction neighbours under 30-40 m of drift plus
+# 10-20 m of jitter can still swap notes -- 7 and 21 cross-corner misbinds per 4,860 notes
+# at 30 and 40 m on the red-team's direction-aware rebuild harness (harness4), and none on
+# any of the 11 real captures (rebuild_probe3). Nothing available separates such a pair:
+# apex distance and direction are already used; rebuilt corners carry no radius_m; window
+# span picks the right corner only 17 of 28 times; and the red-team found XY position and
+# lap order no better. A misbind reaches the coach as fact, so the ambiguous cases this
+# does catch are dropped and logged rather than guessed.
 _SAME_CORNER_M = 50.0
+
+# How much nearer the nearest candidate must be than the next free same-way one before it
+# is trusted. The editor case it exists for: a corner dragged 10 m, with a same-way corner
+# added 25 m the other side of where it was, keeps its note (10 m against 25 m); one dragged
+# 20 m does not (20 m against 25 m -- genuinely unclear). MEASURED on the red-team's
+# drag+add harness (1,352 edits): 1.5 misbound 8 notes onto the wrong corner; 2.0 is the
+# smallest ratio with none, and loses notes only on 20-40 m drags (453, none at 5-10 m);
+# refusing ANY second candidate (7ea972a) lost 919, including every 5-10 m drag.
+_NEAR_TIE_RATIO = 2.0
 
 
 def corner_identity_map(old_corners, new_corners) -> dict[str, str]:
@@ -271,9 +286,10 @@ def corner_identity_map(old_corners, new_corners) -> dict[str, str]:
          claims are made first, so an exact match always beats a tolerant one.
       2. For each old corner still unmatched: its nearest new corner that turns the same
          way -- `direction` is computed geometry the map owns; a missing one never blocks
-         -- if that corner is unclaimed, within _SAME_CORNER_M, and UNAMBIGUOUS: it is the
-         only free same-way corner within reach, no other unmatched old corner nominates
-         it, and no other same-way unmatched old corner is at least as near to it. A
+         -- if that corner is unclaimed, within _SAME_CORNER_M, and UNAMBIGUOUS: no other
+         free same-way corner within reach is a near-tie for it (within _NEAR_TIE_RATIO
+         of its distance), no other unmatched old corner nominates it, and no other
+         same-way unmatched old corner is at least as near to it. A
          rebuild moves every apex by tens of metres, and a curator drags one by a few;
          both stay the same corner. It also absorbs the 1 dp rounding boundary (100.04
          and 100.06 round apart). If the nearest corner already belongs to an exact
@@ -328,8 +344,10 @@ def corner_identity_map(old_corners, new_corners) -> dict[str, str]:
         near = [j for j in ways if gap(i, j) == g]
         if g > _SAME_CORNER_M or len(near) != 1 or near[0] in claimed:
             return None                            # too far, a tie, or already someone's
-        if sum(1 for j in ways if j not in claimed and gap(i, j) <= _SAME_CORNER_M) > 1:
-            return None                            # two free corners it could be
+        second = min((gap(i, j) for j in ways if j != near[0] and j not in claimed),
+                     default=math.inf)
+        if second <= _SAME_CORNER_M and second <= _NEAR_TIE_RATIO * g:
+            return None                            # a near-tie: two corners it could be
         return near[0]
 
     # ponytail: O(leftovers^2); both sides are capped at 100 corners.

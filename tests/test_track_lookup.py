@@ -499,16 +499,20 @@ def test_a_corner_re_split_into_two_pieces():
     # apart. T3 (a left at 60 m) comes back from a rebuild as two pieces, both within 50 m.
     # The contract: direction is the map's own computed geometry, so the piece that turns
     # the same way gets the note -- even when the other piece is nearer. When both pieces
-    # turn the same way nothing says which one is the corner, so the note is dropped rather
-    # than guessed.
+    # turn the same way, the clearly nearer one gets it; a near-tie (the second within
+    # _NEAR_TIE_RATIO of the first) says nothing about which is the corner, so the note is
+    # dropped rather than guessed.
     old = [{"label": "3", "apex_dist": 60.0, "direction": "left"}]
     notes = {"corners": {"3": "the chicane"}}
     left_and_right = [{"label": "3", "apex_dist": 55.0, "direction": "right"},
                       {"label": "4", "apex_dist": 70.0, "direction": "left"}]
     assert guard_corner_notes("t", notes, old, left_and_right)["corners"] == {"4": "the chicane"}
-    both_left = [{"label": "3", "apex_dist": 55.0, "direction": "left"},
-                 {"label": "4", "apex_dist": 70.0, "direction": "left"}]
-    assert guard_corner_notes("t", notes, old, both_left) is None
+    clearly_nearer = [{"label": "3", "apex_dist": 57.0, "direction": "left"},     # 3 m
+                      {"label": "4", "apex_dist": 75.0, "direction": "left"}]     # 15 m
+    assert guard_corner_notes("t", notes, old, clearly_nearer)["corners"] == {"3": "the chicane"}
+    near_tie = [{"label": "3", "apex_dist": 57.0, "direction": "left"},           # 3 m
+                {"label": "4", "apex_dist": 64.0, "direction": "left"}]           # 4 m
+    assert guard_corner_notes("t", notes, old, near_tie) is None
 
 
 def test_a_deleted_corner_and_an_added_one_never_bind_even_at_the_same_count():

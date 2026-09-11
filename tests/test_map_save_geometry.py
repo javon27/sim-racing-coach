@@ -351,6 +351,41 @@ def test_an_unmeasurable_stored_metric_is_replaced_not_preserved(tmp_path, bad, 
     assert after["13"]["radius_m"] == expect
 
 
+def test_splitting_a_corner_keeps_its_note_on_the_dragged_corner(tmp_path):
+    """8 -> 8A/8B on a real layout. The curator drags Algarve T5's apex 8 m and adds a
+    corner 30 m the other side of where T5 was -- both turn left, as the server derives
+    direction from the shipped path. T5's note belongs to the corner that was dragged: 8 m
+    away against 30 m. 7ea972a treated ANY second same-way corner within 50 m as ambiguous
+    and dropped the note on every save of this shape; only a near-tie is ambiguous now.
+    Asserted through PUT /map, so the directions are the server's, not the fixture's."""
+    slug = "algarve_international_circuit"
+    tracks = tmp_path / "tracks"
+    tracks.mkdir()
+    (tracks / f"{slug}.json").write_bytes((SHIPPED / f"{slug}.json").read_bytes())
+    shipped = _shipped(slug)
+    note = shipped["notes"]["corners"]["5"]
+    t5 = next(c for c in shipped["corners"] if str(c["label"]) == "5")
+    dragged = round(t5["apex_dist"] + 8.0, 1)
+    body = [dict(c, apex_dist=dragged, apexes=[dragged]) if c is t5 else dict(c)
+            for c in shipped["corners"]]
+    body.append({"number": 0, "label": "5A", "name": "Turn 5A",
+                 "apex_dist": round(t5["apex_dist"] - 30.0, 1)})
+    body.sort(key=lambda c: c["apex_dist"])
+    for n, c in enumerate(body, 1):
+        c["number"] = n                        # the editor renumbers; labels are kept
+    client = TestClient(create_app(LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data")),
+                                   Coach(FakeModel("{}")), tracks_dir=str(tracks)),
+                        base_url="http://127.0.0.1")
+    r = client.put(f"/tracks/{slug}/map", json={"corners": body})
+    assert r.status_code == 200, r.text
+    assert r.json()["dropped_notes"] == {}
+    saved = json.loads((tracks / f"{slug}.json").read_text(encoding="utf-8"))
+    assert saved["notes"]["corners"]["5"] == note
+    by_label = {str(c["label"]): c for c in saved["corners"]}
+    assert by_label["5"]["apex_dist"] == dragged           # the note names the dragged corner
+    assert by_label["5"]["direction"] == by_label["5A"]["direction"] == t5["direction"]
+
+
 def test_the_signed_metrics_are_classified_beside_the_key_list():
     """`measurable_geometry` exempts the SIGNED metrics from its positivity rule, and
     which those are must not become a second independent list of the metrics that exist
