@@ -3,11 +3,13 @@ slug of the (series-suffix-stripped, accent-normalized) full name — distinct l
 get distinct files, and an unknown layout resolves to None so the caller auto-builds."""
 import json
 import logging
+import random
 from pathlib import Path
 
 import pytest
 
 from simcoach.track_lookup import (
+    corner_identity_map,
     guard_corner_notes,
     load_track_knowledge,
     note_key_binds,
@@ -451,13 +453,19 @@ def test_a_deleted_corner_drops_its_own_note_and_only_its_own():
 def test_dragging_an_apex_keeps_the_note_on_that_corner():
     # The curator nudges every apex a little. No apex matches exactly any more, so each
     # corner is identified by its nearest counterpart within the tolerance -- an authored
-    # note must not evaporate because someone moved a marker a few metres. Corners 100 m
-    # apart, as real ones are: at the 10 m spacing this used, every corner has two free
-    # candidates within 50 m, which is exactly the shape rule 2 now calls ambiguous.
+    # note must not evaporate because someone moved a marker a few metres.
     notes = guard_corner_notes(
         "algarve", {"corners": {"2": "late apex"}},
         _at(("1", 100.0), ("2", 200.0), ("3", 300.0)),
         _at(("1", 102.0), ("2", 204.0), ("3", 306.0)))
+    assert notes["corners"] == {"2": "late apex"}
+    # And at chicane spacing, corners 10 m apart. Every corner now has other free
+    # candidates within 50 m, but none is a near-tie (T2's own apex is 2 m away, the next
+    # 9 m), so each note stays put. 7ea972a refused ANY second candidate and dropped this.
+    notes = guard_corner_notes(
+        "algarve", {"corners": {"2": "late apex"}},
+        _at(("1", 10.0), ("2", 20.0), ("3", 30.0)),
+        _at(("1", 11.0), ("2", 22.0), ("3", 33.0)))
     assert notes["corners"] == {"2": "late apex"}
     # The 1 dp rounding boundary: 100.04 and 100.06 round apart, and are one corner.
     notes = guard_corner_notes("algarve", {"corners": {"7": "x"}},
@@ -492,6 +500,39 @@ def test_two_neighbours_drifting_together_never_swap_notes():
             served_on = {physical.get(c["apex_dist"]) for c in new
                          if c["label"] in note_key_labels(key)}
             assert served_on == {text[:2]}, (name, key, text, served_on)
+
+
+def test_matching_does_not_depend_on_the_order_corners_are_listed_in():
+    # Review of 9f3d3e0. Rule 2 makes every nomination before accepting any, so its answer
+    # cannot depend on list order -- but nothing pinned that. A revert to claim-as-you-go
+    # (accept each match inside the loop, so later corners see what earlier ones took) is
+    # order-DEPENDENT on 43 of 3,000 random layouts and still passed every other notes test.
+    #   The second layout is the shape where it shows: two lefts drifting together. When A
+    # is looked at first it claims 115, which takes 115 out of B's near-tie check, so B then
+    # binds 170. When B is looked at first, 115 is still free and a near-tie for B (35 m
+    # against 20 m), so B is dropped. The same save, two answers.
+    def corner(label, apex, direction):
+        return {"label": label, "apex_dist": apex, "direction": direction}
+
+    layouts = {
+        "Endurance T7/T8 drifting +30 m": (
+            [corner("6", 1900.0, "right"), corner("7", 2043.0, "left"), corner("8", 2093.2, "right")],
+            [corner("6", 1900.0, "right"), corner("7", 2073.0, "left"), corner("8", 2128.2, "right")]),
+        "same-direction pair drifting together": (
+            [corner("1", 50.0, "right"), corner("A", 100.0, "left"), corner("B", 150.0, "left")],
+            [corner("1", 50.0, "right"), corner("2", 115.0, "left"), corner("3", 170.0, "left")]),
+    }
+    for name, (old, new) in layouts.items():
+        notes = {c["label"]: f"note about {c['label']}" for c in old}
+        want_map = corner_identity_map(old, new)
+        want_notes = guard_corner_notes("t", {"corners": dict(notes)}, old, new)
+        rnd = random.Random(name)
+        for _ in range(12):
+            o, n = old[:], new[:]
+            rnd.shuffle(o)
+            rnd.shuffle(n)
+            assert corner_identity_map(o, n) == want_map, (name, o, n)
+            assert guard_corner_notes("t", {"corners": dict(notes)}, o, n) == want_notes, (name, o, n)
 
 
 def test_a_corner_re_split_into_two_pieces():
