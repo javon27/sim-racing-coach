@@ -173,6 +173,44 @@ def test_corner_metrics_fields_vary_or_are_allowlisted(synthetic_lap):
     assert checked >= 17, f"only {checked} numeric fields compared"
 
 
+def test_synthetic_lap_uses_lmu_sign_conventions(synthetic_lap):
+    # Pins the shared fixture to the signs LMU actually writes, measured on real stored
+    # laps (#70). analysis.py takes magnitudes of all four channels, so no per-corner
+    # metric test can notice a flipped sign -- the fixture had lat_g and long_g
+    # backwards and stayed green. Consumers that DO read a sign (raceline._calibrate:
+    # long_g; ribbon.multi_signal_direction: lat_g) inherit whatever this encodes.
+    import numpy as np
+
+    ch = synthetic_lap.channels
+    d, steer, lat = ch["lap_distance"], ch["steering"], ch["lat_g"]
+    left, right = (d > 800) & (d < 1200), (d > 2000) & (d < 2400)
+
+    # long_g: + under braking, - accelerating out of a corner. Every braking sample is
+    # positive; the MEDIAN carries the magnitude (np.gradient smears the first/last
+    # sample of a braking zone, so a per-sample floor would test the smoothing).
+    braking = ch["long_g"][ch["brake"] > 0.5]
+    assert np.all(braking > 0) and np.median(braking) > 0.9
+    # On throttle: never positive, and the strongest pull out of a corner is negative
+    # (a median would sit on the 0.0 of the speed-cap plateau).
+    accel = ch["long_g"][(ch["throttle"] > 0.5) & (left | right)]
+    assert np.all(accel <= 1e-9) and np.min(accel) < -0.3
+    # lat_g: + in the LEFT corner, - in the right; steering has the opposite sign.
+    turning = np.abs(steer) > 0.1
+    assert np.all(lat[left & turning] > 0) and np.all(steer[left & turning] < 0)
+    assert np.all(lat[right & turning] < 0) and np.all(steer[right & turning] > 0)
+    # path_lateral (+ = right): the left hairpin is out wide right, apexes left, out right.
+    pl = ch["path_lateral"]
+
+    def at(x):
+        return pl[int(np.argmin(np.abs(d - x)))]
+
+    assert at(940) > 3 and at(1015) < -3 and at(1120) > 3
+    assert at(2120) < -3 and at(2185) > 3 and at(2320) < -3
+    # track_edge is the edge on the car's own side: same sign as path_lateral.
+    wide = np.abs(pl) > 1
+    assert np.all(np.sign(ch["track_edge"][wide]) == np.sign(pl[wide]))
+
+
 def test_extended_corner_inputs(synthetic_lap):
     # Longitudinal-g (split by pedal), steering, ABS/TC, and track-width usage
     # reach the per-corner metrics and the coach's corner line.
@@ -186,7 +224,9 @@ def test_extended_corner_inputs(synthetic_lap):
     brake, throttle = ch["brake"], ch["throttle"]
     dist = ch["lap_distance"]
     left = (dist > 800) & (dist < 1200)   # the first corner (braking, close to edge)
-    ch["long_g"] = np.where(brake > 0.1, -1.4, 0.3)   # 1.4g decel under braking
+    # LMU sign: +1.4 g under braking, -0.3 g on throttle (#70). The metrics are
+    # magnitudes split by pedal, so the sign must not change what they report.
+    ch["long_g"] = np.where(brake > 0.1, 1.4, -0.3)
     ch["abs_active"] = (brake > 0.1).astype(float)    # ABS on under braking
     ch["tc_active"] = np.zeros_like(brake)
     abs_expect = float(np.mean((brake > 0.1)[left]))  # the fraction ABS is actually on
@@ -355,12 +395,25 @@ def test_no_throttle_clause_when_the_driver_never_gets_past_the_gate(synthetic_l
 
 
 def test_analyze_lap_delta(synthetic_lap):
+    # A DISTINCT reference: the best lap carried 5 km/h more through corner 1 and drove
+    # corner 2 identically. Using synthetic_lap as its own reference made every delta
+    # exactly 0, so a wrong-corner read -- applied to both laps, as a real bug would be
+    # -- still printed 0 and passed (#70 review). Here the right deltas are -5 at
+    # corner 1 and 0 at corner 2; reading the other corner swaps them.
+    import dataclasses
+
     from simcoach.analysis import analyze_lap
     from simcoach.corners import CornerMap
     cmap = CornerMap.load("simcoach/tracks/test_track.json")
-    a = analyze_lap(synthetic_lap, cmap, reference=synthetic_lap)
+    d = synthetic_lap.channels["lap_distance"]
+    faster_t1 = synthetic_lap.channels["speed"] + 5.0 * ((d >= 800) & (d <= 1200))
+    best = dataclasses.replace(synthetic_lap, channels={**synthetic_lap.channels,
+                                                        "speed": faster_t1})
+    a = analyze_lap(synthetic_lap, cmap, reference=best)
     assert a.has_reference is True
-    assert abs(a.corners[0].min_spd_delta) < 1e-6
+    c1, c2 = a.corners
+    assert abs(c1.min_spd_delta - -5.0) < 1e-9
+    assert abs(c2.min_spd_delta) < 1e-9
 
 
 def _lap_with_speed(synthetic_lap, speed):

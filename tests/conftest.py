@@ -51,28 +51,45 @@ _CORNERS = (
 # to the speed it crosses the line at. Different caps are what make the two corners'
 # ENTRY speeds differ -- a single top speed ties entry_spd no matter how the corners
 # themselves are driven.
-# (the cap values are also what makes the integrated time axis land on the record's
-# 92.5 s lap time, so the lap is internally consistent end to end.)
+# (the caps also set the lap time: the integrated time axis ends at 92.2 s, within
+# 0.3 s of the record's nominal 92.5 s. Nothing reads `time`; it is there to agree.)
 _CAP = ((0.0, 31.0), (900.0, 31.0), (1750.0, 36.5), (2600.0, 36.5), (2800.0, 31.0),
         (3000.0, 31.0))
-# Steering: peak lock at the driver's minimum, released through the exit. Sign is the
-# turn direction (negative = left), which is what compute_direction reads.
+#
+# SIGN CONVENTIONS -- LMU's, measured on real stored laps (#70), not assumed:
+#   steering      negative = left (RIGHT_IS_POSITIVE)
+#   lat_g         POSITIVE in a LEFT corner, negative in a right (ribbon.py; real left
+#                 corners read +0.6..+1.4 g) -- the OPPOSITE sign to steering
+#   long_g        POSITIVE under BRAKING, negative accelerating (real: +1.3..+1.7 g
+#                 at brake > 0.5, -0.2..-0.5 g at full throttle)
+#   path_lateral  positive = car RIGHT of the centre path
+#   track_edge    signed, always the SAME sign as path_lateral (the edge on the side
+#                 the car is on; 100% agreement where |path_lateral| > 1 m)
+# The fixture once had lat_g and long_g the other way round, and every consumer that
+# takes np.abs() of them could not notice -- only the one reading the sign could.
+#
+# Steering: peak lock at the driver's minimum, released through the exit.
 _STEER = (
     ((860.0, 980.0, 1015.0, 1120.0, 1220.0), (0.0, -0.30, -0.62, -0.30, 0.0)),
     ((2100.0, 2125.0, 2185.0, 2320.0, 2430.0), (0.0, 0.10, 0.38, 0.20, 0.0)),
 )
-# Lateral g per unit of steering lock. The sweeper pulls MORE g on LESS lock, which
-# is what distinguishes a fast corner from a hairpin -- and is why lat_g must be its
-# own channel rather than a constant multiple of `steer` (that tied peak_lat_g).
-_LAT_PER_STEER = (2.02, 4.03)
-# Car's lateral offset from the centre path (m): both corners run out to the exit
-# kerb, the hairpin closer to the line than the sweeper.
+# Lateral g per unit of steering lock, NEGATIVE because lat_g's sign is opposite to
+# steering's. The sweeper pulls MORE g on LESS lock, which is what distinguishes a fast
+# corner from a hairpin -- and is why lat_g is not one constant multiple of `steer`
+# (that tied peak_lat_g).
+_LAT_PER_STEER = (-2.02, -4.03)
+# The racing line, as path_lateral (m, + = right of centre): outside-inside-outside.
+# The left hairpin enters wide RIGHT, clips the apex on the LEFT, and runs out to the
+# right-hand exit kerb (0.3 m from it -- the corner's closest approach); the right
+# sweeper is the mirror, and never gets closer than 1.5 m (its left exit kerb).
 _PATH_LAT = (
-    ((860.0, 1000.0, 1120.0, 1220.0), (0.0, 2.0, 4.7, 0.0)),
-    ((2040.0, 2200.0, 2320.0, 2430.0), (0.0, 2.5, 5.0, 0.0)),
+    ((860.0, 940.0, 1015.0, 1120.0, 1220.0), (0.0, 3.8, -4.2, 4.7, 0.0)),
+    ((2040.0, 2120.0, 2185.0, 2320.0, 2430.0), (0.0, -4.0, 4.5, -5.0, 0.0)),
 )
 _HALF_WIDTH = ((800.0, 1230.0, 5.0), (2000.0, 2440.0, 6.5))   # (start, end, m)
-_ABS_ON = ((990.0, 1015.0), (2140.0, 2148.0))   # heavy stop vs a blip on initial bite
+# ABS only where the brake is genuinely hard (real laps: ABS below brake 0.1 is ~1% of
+# samples): most of the hairpin's 0.97 stop, a short bite in the sweeper's 0.70 zone.
+_ABS_ON = ((990.0, 1015.0), (2112.0, 2120.0))
 _TC_ON = ((1015.0, 1115.0), (2185.0, 2215.0))   # hairpin exit spins up; sweeper barely
 
 
@@ -100,8 +117,8 @@ def synthetic_lap():
         v = np.minimum(v, np.select(
             [dist < rel, dist <= md], [braking, coast], default=exiting))
 
-    long_g = v * np.gradient(v, dist) / _G
-    brake = np.clip(-long_g / _MU, 0.0, 1.0)
+    long_g = -v * np.gradient(v, dist) / _G   # LMU sign: + decelerating, - accelerating
+    brake = np.clip(long_g / _MU, 0.0, 1.0)
     throttle = np.ones(n)
     for md, _, _, _, _, ramp, rel in _CORNERS:
         # From brake release (not from the minimum): the clip holds throttle at 0
@@ -122,6 +139,7 @@ def synthetic_lap():
     track_edge = np.full(n, 7.0)
     for lo, hi, w in _HALF_WIDTH:
         track_edge[(dist >= lo) & (dist <= hi)] = w
+    track_edge = np.copysign(track_edge, path_lat)   # the edge on the car's own side
 
     # Elapsed time integrated from the speed trace, so the time axis agrees with it.
     time = np.concatenate(([0.0], np.cumsum(np.diff(dist) / ((v[:-1] + v[1:]) / 2))))

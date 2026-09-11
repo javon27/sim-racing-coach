@@ -259,9 +259,24 @@ def test_telem_calibration_raises_corner_speed_cap():
     # telemetry showing more grip than the GT3 default
     telem = {
         "lat_g": np.array([2.2, -2.2, 0.4, np.nan]),
-        "long_g": np.array([1.5, -1.8, 0.0]),
+        "long_g": np.array([1.8, -0.9, 0.0]),   # LMU sign: + braking, - accelerating
         "speed": np.array([200.0, 100.0, 150.0]),
     }
     hot = solve_corners(left, right, telem=telem)
 
     assert min(c["min_speed_kmh"] for c in hot) > min(c["min_speed_kmh"] for c in base)
+
+
+def test_telem_calibration_reads_lmu_long_g_sign():
+    # LMU's long_g is POSITIVE under braking (mLocalAccel.z; #70). The peaks below are
+    # a real stored lap's (7045.npz: 99th pct braking +2.38 g, 1st pct at full throttle
+    # -0.90 g). They are deliberately ASYMMETRIC: read the wrong way round the car
+    # brakes at 0.90 g and accelerates at 2.38 g, which is what the old reading did,
+    # and a symmetric pair could not tell the two readings apart.
+    from simcoach.raceline import CarParams, _calibrate
+
+    car = _calibrate(CarParams(), {"lat_g": np.array([1.8, -1.7]),
+                                   "long_g": np.array([2.38, 0.4, -0.90, np.nan])})
+    assert abs(car.a_brake - 2.38 * car.g) < 1e-9
+    assert abs(car.a_accel - 0.90 * car.g) < 1e-9
+    assert car.a_brake > car.a_accel   # a car brakes harder than it accelerates
