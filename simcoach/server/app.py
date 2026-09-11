@@ -25,16 +25,16 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 from .. import config, logging_setup, paths, secrets
 from ..analysis import (
     CORNER_GEOMETRY_KEYS,
-    SIGNED_GEOMETRY_KEYS,
     analyze_lap,
     corner_geometry,
     geometry_clause,
     input_traces,
+    measurable_geometry,
 )
 from ..car_lookup import resolve_car
 from ..car_notes import load_car_notes, load_setup_concepts
 from ..coach_tools import CoachContext
-from ..corners import CornerMap, in_window, validated_sectors
+from ..corners import CornerMap, in_window, validated_sections, validated_sectors
 from ..driver import DriverProfile
 from ..lmu.ingest import ingest_all
 from ..model.base import TokenUsage
@@ -42,7 +42,12 @@ from ..model.factory import CoachUserError, make_model
 from ..pricing import estimate_chat_cost
 from ..ribbon import multi_signal_direction, reconstruct_surface, ribbon_to_screen
 from ..tiers import adjustable_from_setup, legal_adjustments
-from ..track_lookup import guard_corner_notes, load_map_data, track_slug
+from ..track_lookup import (
+    corner_apex_key,
+    guard_corner_notes,
+    load_map_data,
+    track_slug,
+)
 from ..trackmap import average_racing_line, build_track_map, direction_from_path
 
 # Shipped corner-map dir, resolved off the package (not cwd) so it's correct
@@ -57,43 +62,6 @@ _DEFAULT_TRACKS_DIR = Path(__file__).resolve().parent.parent / "tracks"
 # 6x the 50-word per-corner budget the drafting prompt states, so it cannot clip prose
 # authored to spec. Over-limit input is REJECTED, never truncated -- silently shortening
 # authored notes is the class of bug this path just got fixed for.
-def _apex_key(corner: dict):
-    """Identity of a corner for carrying baked geometry across a save (#62): its apex
-    distance, rounded the way _persist_map writes it. `label` and `number` both get
-    rewritten by the editor (free-text box / positional renumber), so neither names the
-    same corner before and after an edit -- the apex is where the metric was measured.
-    None for a corner with no usable apex, which matches nothing rather than everything.
-    """
-    try:
-        a = float(corner["apex_dist"])
-    except (KeyError, TypeError, ValueError):
-        return None
-    return round(a, 1) if math.isfinite(a) else None
-
-
-def _measurable(key: str, value) -> bool:
-    """Is a stored geometry value one that could have been MEASURED, and so is worth
-    carrying forward rather than recomputing (#62)?
-
-    These come off disk, including hand-edited and third-party maps, so `null`, a
-    string, a dict, a non-finite float and a zero/negative LENGTH are not data to
-    preserve -- they fall through to the computed value, which is what the pre-#62 code
-    would have written anyway. NaN/Infinity matter most: _write_track_json serialises
-    with allow_nan=False, so carrying one forward turns a save into a 500.
-
-    Which metrics are signed is `analysis.SIGNED_GEOMETRY_KEYS`, beside the key list
-    itself, so this cannot become a second independent list of the metrics that exist.
-
-    The bool check is load-bearing, not defensive noise: bool IS an int in Python, so
-    `True > 0` would carry a stored `true` through as a measurement.
-    """
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return False
-    if not math.isfinite(value):
-        return False
-    return value > 0 or key in SIGNED_GEOMETRY_KEYS
-
-
 _MAX_NOTE_KEYS = 100
 _MAX_NOTE_KEY_CHARS = 80
 _MAX_NOTE_CHARS = 2000
@@ -325,6 +293,17 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         return p
 
     def _write_track_json(track: str, out: dict) -> None:
+        # THE one writer of a track JSON file, and therefore the one place the rules for
+        # what may land in one live (#65). There used to be four writers and three
+        # validators each wired to one of them: `_persist_map` validated sections,
+        # sectors and the notes overlay, and the other three wrote whatever they were
+        # handed -- which is how POST /mapcapture/save silently deleted every authored
+        # note for a track (30,445 bytes / 135 notes across the shipped maps were one
+        # "Save ribbon" away), and how an unvalidated `sections` span could commit a map
+        # that CornerMap.from_data refuses to open, killing the track for every client.
+        # A shared validator only two of four writers call is a half-done
+        # centralisation; validate HERE, where nothing can write around it.
+        #
         # Atomic write (unique tmp + os.replace) so a crash mid-write never leaves a
         # partial file. Dev (running from source) curates the shipped maps in the repo
         # tracks dir; an installed build writes to app-data — its bundled dir is
@@ -333,6 +312,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         slug = track_slug(track)
         if not slug:
             raise HTTPException(400, "invalid track")
+        out = _validated_track_data(track, slug, out)
         user_dir, bundled = _map_dirs()
         target = _in(bundled if _curating() else user_dir, slug)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -366,27 +346,72 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         user_dir, bundled = _map_dirs()
         return load_map_data(track, str(bundled), str(user_dir))
 
-    def _clean_sections(raw, length: float) -> list:
-        # Validate/normalize a client sections array: [{name,kind,start_dist,end_dist}]
-        # with 0<=start<end<=length. 422 on anything malformed.
-        if raw is None:
-            return []
-        if not isinstance(raw, list):
-            raise HTTPException(422, "sections must be a list")
-        out = []
-        for s in raw:
-            if not isinstance(s, dict):
-                raise HTTPException(422, "each section must be an object")
-            try:
-                sd, ed = float(s["start_dist"]), float(s["end_dist"])
-            except (KeyError, TypeError, ValueError):
-                raise HTTPException(422, "section requires numeric start_dist/end_dist")
-            if not (math.isfinite(sd) and math.isfinite(ed) and 0.0 <= sd < ed <= length):
-                raise HTTPException(422, "section span must satisfy 0 <= start < end <= length")
-            out.append({"name": str(s.get("name", ""))[:60],
-                        "kind": str(s.get("kind", "section"))[:16],
-                        "start_dist": round(sd, 1), "end_dist": round(ed, 1)})
+    def _validated_track_data(track: str, slug: str, out: dict) -> dict:
+        """Everything that must be true of a track JSON, applied to what a writer is
+        about to persist. Called only from `_write_track_json`, so every writer gets it
+        (#65) -- do not call it from a route, and do not write around it.
+
+        Refuses (422) what would commit a map the app cannot open: `CornerMap.from_data`
+        raises on a bad `sections` span, so an unvalidated one kills the track for every
+        client, and `sectors` reach the client as-is (strings and `true` both used to
+        land in a shipped file). Per-corner geometry is DROPPED rather than refused:
+        it is derived, re-bakeable data, and a string in `radius_m` is a crash in
+        `geometry_clause` on the coach's next answer -- refusing would make the editor
+        the only way to fix a file the editor then cannot save.
+
+        The authored `notes` overlay is carried across the rewrite unless the caller
+        passes its own (only `PUT /tracks/{slug}/notes` does -- it IS the author typing,
+        including keys that name no corner yet, which the Tracks screen surfaces). So a
+        writer that rebuilds a track file gets the guard for free, and one that seeds its
+        payload from `_track_file_data` keeps what was already there.
+        """
+        existing = _track_file_data(track)
+        out = dict(out)
+        length = out.get("length") or out.get("length_m")
+        if not measurable_geometry("length", length):
+            # No usable length to bound a span against (a corner-less ribbon save writes
+            # 0.0). Shape, type and ordering still hold; only the upper bound relaxes.
+            length = math.inf
+        try:
+            sectors = validated_sectors(out.get("sectors") or [], length)
+            sections = validated_sections(out.get("sections"), length)
+        except (TypeError, ValueError) as e:
+            raise HTTPException(422, str(e)) from None
+        # Only write the key back if it was there or has content: a validated empty list
+        # is not a reason to add `"sections": []` to a file that never had one.
+        for key, value in (("sectors", sectors), ("sections", sections)):
+            if key in out or value:
+                out[key] = value
+        if isinstance(out.get("corners"), list):
+            out["corners"] = [_clean_corner_geometry(slug, c) for c in out["corners"]]
+        if "notes" not in out:
+            notes = guard_corner_notes(slug, existing.get("notes"),
+                                       existing.get("corners"), out.get("corners"))
+            if notes:
+                out["notes"] = notes
         return out
+
+    def _clean_corner_geometry(slug: str, corner: dict) -> dict:
+        # Strip a baked per-corner metric that isn't a finite number of the right sign.
+        # `measurable_geometry` is the same owner the save path uses to decide whether a
+        # stored metric is a measurement (#62), so "what may be written" and "what may be
+        # carried forward" cannot disagree. A string radius loads fine and then raises
+        # `Unknown format code 'f'` inside geometry_clause -- on the coach's answer, far
+        # from the save that wrote it, and no test over the shipped maps caught it.
+        if not isinstance(corner, dict):
+            return corner
+        bad = [k for k in CORNER_GEOMETRY_KEYS
+               if k in corner and not measurable_geometry(k, corner[k])]
+        if not bad:
+            return corner
+        # Types, not values: the value is junk by definition, and a str() of it is
+        # unbounded input on its way into a log line.
+        logging.getLogger(__name__).warning(
+            "track %s corner %.40s: dropped unusable baked geometry %s; each must be a "
+            "finite number (a length also > 0).",
+            slug, str(corner.get("label") or corner.get("number")),
+            {k: type(corner[k]).__name__ for k in bad})
+        return {k: v for k, v in corner.items() if k not in bad}
 
     def _track_rotation(track: str) -> float:
         # Per-track display rotation (degrees), 0 if unset/invalid (back-compat).
@@ -874,12 +899,9 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             })
         corners.sort(key=lambda c: c["apex_dist"])
 
-        try:
-            sectors = validated_sectors(body.get("sectors") or [], length)
-        except (TypeError, ValueError) as e:
-            raise HTTPException(422, str(e)) from None
-
-        sections = _clean_sections(body.get("sections"), length)
+        # `sectors`/`sections` are validated by _write_track_json, the one writer, along
+        # with every other writer's (#65) -- the same owners (`validated_sectors` /
+        # `validated_sections`), the same 422, one call site.
 
         # Optional display-name override. Not an annotation-merge field, so an
         # end-user's app-data copy can't rename a shipped track (its read still takes
@@ -944,14 +966,14 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # at the top of this function. Separate defect, not this one's to fix.)
         probe = [dict(c, label=str(i)) for i, c in enumerate(corners)]
         geo = corner_geometry(path, dist, probe, width=rib_w, bank=rib_b)
-        prior = {_apex_key(pc): pc for pc in (existing.get("corners") or [])}
+        prior = {corner_apex_key(pc): pc for pc in (existing.get("corners") or [])}
         for i, c in enumerate(corners):
-            baked = prior.get(_apex_key(c), {})
+            baked = prior.get(corner_apex_key(c), {})
             for k in CORNER_GEOMETRY_KEYS:
                 # elev_delta_m is never in `geo` here (no pos_y on a corner/label edit),
                 # so for it this is the carry-forward it always was.
                 v = baked.get(k)
-                if not _measurable(k, v):
+                if not measurable_geometry(k, v):
                     v = geo.get(str(i), {}).get(k)
                 if v is not None:
                     c[k] = v
@@ -961,8 +983,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             "corners": corners,
             "path": path,
             "path_dist": dist,
-            "sectors": sectors,
-            "sections": sections,
+            "sectors": body.get("sectors") or [],
+            "sections": body.get("sections"),
             "length": length,
             "rotation": _track_rotation(track),  # preserve existing rotation
         }
@@ -970,16 +992,9 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             out["name"] = name
         if keep_ribbon:
             out["ribbon"] = keep_ribbon  # keep the reconstructed surface across edits
-        # Carry the authored notes overlay across a rebuild instead of wiping it (#37),
-        # dropping only the per-corner notes whose keys no longer name a corner that
-        # exists. `guard_corner_notes` owns that rule (and asks `note_key_binds` which
-        # corners a key names, so a range key like '2-4' survives) -- the promote-to-
-        # shipped script calls the same function, so the two paths cannot drift.
-        notes = guard_corner_notes(track_slug(track), existing.get("notes"),
-                                   len(existing.get("corners") or []),
-                                   [c["label"] for c in corners])
-        if notes:
-            out["notes"] = notes
+        # No `notes` key, deliberately: _write_track_json carries the authored overlay
+        # across a rebuild (#37/#64) for every writer, so passing one here would be the
+        # caller opting OUT of the guard that exists for this exact path.
         _write_track_json(track, out)
         # Invalidate cmap + canonical caches so the next GET returns the new
         # canonical map (now frozen into the file).
@@ -1316,22 +1331,13 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             "length": world["dist"][-1] if world["dist"] else 0.0,
             "rotation": _track_rotation(track),  # preserve any existing rotation
         }
-        # _write_track_json REPLACES the file, so the authored notes overlay has to be
-        # carried forward here too -- same owner, same rule, as the editor's save.
-        #
-        # EXCEPT on a corner-less rebuild. A thin capture can yield zero solver corners
-        # and this route still has a job to do (it exists to persist the reconstructed
-        # SURFACE; corners are a first-pass bonus -- see
-        # test_mapcapture_save_writes_track_json). Zero new corners cannot rebind a note
-        # to the wrong corner, so the count-change rule has nothing to protect against
-        # and dropping every per-corner note would be pure loss. Carry the overlay
-        # verbatim instead. _persist_map never reaches this -- it 422s on an empty list.
-        carried = (guard_corner_notes(track_slug(track), existing.get("notes"),
-                                     len(existing.get("corners") or []),
-                                     [str(c.get("label") or c.get("number")) for c in corners])
-                   if corners else existing.get("notes"))
-        if carried:
-            out["notes"] = carried
+        # No `notes` key, deliberately -- see _persist_map. _write_track_json REPLACES
+        # the file, and this route builds its payload from scratch, which is how "Save
+        # ribbon" used to delete every authored note for the track (#65). The one writer
+        # carries the overlay, including on a corner-less rebuild: a thin capture can
+        # yield zero solver corners and this route still has a job to do (it exists to
+        # persist the reconstructed SURFACE -- see test_mapcapture_save_writes_track_json),
+        # and zero new corners cannot rebind a note to the wrong corner.
         _write_track_json(track, out)
         # Persist the raw point cloud (app-data, not the repo tracks dir) so the
         # ribbon can be rebuilt after algorithm changes with no re-drive.

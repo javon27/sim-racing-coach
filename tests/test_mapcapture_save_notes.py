@@ -12,7 +12,10 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from simcoach.analysis import geometry_clause
 from simcoach.coach import Coach
+from simcoach.coach_tools import CoachContext
+from simcoach.corners import CornerMap
 from simcoach.model.fake import FakeModel
 from simcoach.server.app import create_app
 from simcoach.store import LapStore
@@ -86,44 +89,48 @@ def test_mapcapture_save_preserves_authored_notes(tmp_path):
     assert written["ribbon"]["width"]            # ...including the new surface
 
 
-def test_mapcapture_save_drops_corner_notes_when_corner_count_changes(tmp_path, caplog):
-    # Matches _persist_map exactly: a re-split chicane changes the corner count, so a
-    # label-keyed note would rebind to a DIFFERENT corner -- and the coach states
-    # authored notes as owned fact. Drop the corner-keyed ones, LOUDLY; keep the rest.
+def test_mapcapture_save_drops_the_note_of_a_corner_the_rebuild_moved(tmp_path, caplog):
+    # Was "drops corner notes when the corner count changes", which deleted EVERY
+    # per-corner note whenever the solver found one more corner anywhere on the lap.
+    # Under #64 a note is dropped only when the corner it was written about is gone:
+    # here the rebuild keeps T1 at 20 m but finds nothing at 40 m (its corners land at
+    # 45 m and 60 m), so T2's note goes -- LOUDLY, with its text -- and T1's stays.
     app, client, tracks_dir = _client(tmp_path)
-    assert _put_notes(client, {"1": "the slow left hairpin - huge patience"}).status_code == 200
-    app.state.last_ribbon = _ribbon(["1", "2", "3"])
+    assert _put_notes(client, {"1": "brake late",
+                               "2": "the slow left hairpin - huge patience"}).status_code == 200
+    rib = _ribbon(["1", "2", "3"])
+    rib["corners"][1]["apex_dist"], rib["corners"][2]["apex_dist"] = 45.0, 60.0
+    app.state.last_ribbon = rib
 
-    with caplog.at_level(logging.WARNING, logger="simcoach.server.app"):
+    with caplog.at_level(logging.WARNING, logger="simcoach.track_lookup"):
         r = client.post("/mapcapture/save", json={})
 
     assert r.status_code == 200, r.text
     assert "huge patience" in caplog.text       # recoverable from the log, not silent
+    assert "the corners they name no longer exist" in caplog.text
     written = _written(tracks_dir)
-    assert written["notes"]["corners"] == {}    # not rebound to the new T1/T2/T3
+    assert written["notes"]["corners"] == {"1": "brake late"}   # not rebound to the new T2
     assert written["notes"]["overview"] == "rhythm track"
     assert written["notes"]["reference_times"] == {"GT3": "1:32.500"}
     assert written["notes"]["source"] == "me"
 
 
-def test_mapcapture_save_drops_orphaned_corner_notes_on_relabel(tmp_path, caplog):
-    # Same corner count, but GP-style relabelling ('2' -> '2A') leaves a key that
-    # names no corner. Unreachable to the coach -> drop it, keep the ones that bind.
+def test_mapcapture_save_moves_notes_onto_relabelled_corners(tmp_path, caplog):
+    # Was "drops orphaned notes on relabel". Same corners, GP-style relabelling ('2' ->
+    # '2A'): the corner at 40 m is the one the note was written about, so the note
+    # follows it instead of being deleted (#64) -- and the move is surfaced in the log.
     app, client, tracks_dir = _client(tmp_path)
     assert _put_notes(client, {"1": "brake late", "2": "middle of the chicane"}).status_code == 200
     app.state.last_ribbon = _ribbon(["1", "2A"])
 
-    with caplog.at_level(logging.WARNING, logger="simcoach.server.app"):
+    with caplog.at_level(logging.WARNING, logger="simcoach.track_lookup"):
         r = client.post("/mapcapture/save", json={})
 
     assert r.status_code == 200, r.text
     written = _written(tracks_dir)
-    assert written["notes"]["corners"] == {"1": "brake late"}
+    assert written["notes"]["corners"] == {"1": "brake late", "2A": "middle of the chicane"}
     assert written["notes"]["overview"] == "rhythm track"
-    # main's wording, not "labels no longer exist": under the range-aware predicate a
-    # dropped '2-4' was never a label, so the old text misdescribed exactly the drops
-    # that predicate exists to handle. Asserted so it can't be silently reverted.
-    assert "the corners they name no longer exist" in caplog.text
+    assert 'moved 1 authored' in caplog.text and '"2": "2A"' in caplog.text
 
 
 def test_mapcapture_save_of_corner_less_rebuild_keeps_every_note(tmp_path):
@@ -203,6 +210,128 @@ def test_both_track_file_writers_agree_on_which_notes_survive(tmp_path):
     # One rule, one owner: the same prior notes and the same corner set must survive
     # a track-file write identically, whichever route performed it.
     assert ribbon == editor
+
+
+# --- #64 x #65: one writer, identity-keyed notes -----------------------------------------
+
+_LABELS = ["1", "2", "3", "4"]                  # apexes 20/40/60/80 m, per _corner
+_PRIOR = {"1": "the hairpin at 20 m", "3-4": "the chicane at 60-80 m"}
+
+
+def _save_via(writer, app, client, labels):
+    """Drive one of the FOUR writers of a track file (#65), by the route the app uses."""
+    if writer == "editor":
+        return client.put(f"/tracks/{SLUG}/map", json={"corners": [
+            {"number": i, "label": lab, "name": f"Turn {lab}", "apex_dist": 20.0 * i}
+            for i, lab in enumerate(labels, 1)]})
+    if writer == "ribbon":
+        app.state.last_ribbon = _ribbon(labels)
+        return client.post("/mapcapture/save", json={})
+    if writer == "rotation":
+        return client.post(f"/tracks/{SLUG}/rotation", json={"degrees": 90})
+    assert writer == "notes"
+    # What the Tracks screen does: read the whole notes object, PUT it straight back.
+    got = client.get(f"/tracks/{SLUG}/notes").json()
+    return client.put(f"/tracks/{SLUG}/notes", json={"track": TRACK, "notes": got})
+
+
+def test_all_four_writers_keep_the_same_notes_across_a_no_op_save(tmp_path):
+    # The cross-writer equivalence. Four routes write a track file; before #65 they did
+    # four different things to the notes overlay, and "Save ribbon" deleted all of it.
+    # Same prior notes -- a plain key AND a range key -- same corners, every writer: the
+    # survivors must be identical, and identical to what was authored.
+    results = {}
+    for writer in ("editor", "ribbon", "rotation", "notes"):
+        app, client, tracks_dir = _client(tmp_path / writer, _LABELS)
+        assert _put_notes(client, _PRIOR).status_code == 200
+        r = _save_via(writer, app, client, _LABELS)
+        assert r.status_code == 200, (writer, r.text)
+        results[writer] = _written(tracks_dir)["notes"]
+    assert results["editor"]["corners"] == _PRIOR          # not vacuously equal
+    assert results["editor"]["reference_times"] == {"GT3": "1:32.500"}
+    for writer, notes in results.items():
+        assert notes == results["editor"], writer
+
+
+def test_a_relabel_moves_the_notes_through_either_corner_writer_and_nothing_undoes_it(tmp_path):
+    # THE cross case between the two fixes. #65 moved the note carry INTO the one writer,
+    # keyed on "the caller passed no notes"; #64 rebinds a note by identifying corners
+    # against the file ON DISK. The shape that makes one remove what the other needs is a
+    # writer whose payload already holds the notes -- the cheap #65 fix ("seed `out` from
+    # _track_file_data") -- because then the guard never runs and a relabel keeps '3-4'
+    # verbatim, which is #64's misbind exactly. So: relabel 1-4 -> 3-6 (the corners do not
+    # move) through each writer that CAN relabel, then run the two seeded-from-disk
+    # writers over the result, and check what the COACH serves, not just the file.
+    shifted = ["3", "4", "5", "6"]
+    expected = {"3": _PRIOR["1"], "5-6": _PRIOR["3-4"]}
+    for writer in ("editor", "ribbon"):
+        app, client, tracks_dir = _client(tmp_path / writer, _LABELS)
+        assert _put_notes(client, _PRIOR).status_code == 200
+        assert _save_via(writer, app, client, shifted).status_code == 200
+        assert _written(tracks_dir)["notes"]["corners"] == expected, writer
+        for follow in ("rotation", "notes"):
+            assert _save_via(follow, app, client, shifted).status_code == 200
+            assert _written(tracks_dir)["notes"]["corners"] == expected, (writer, follow)
+        ctx = CoachContext(store=None, cmap=CornerMap.from_data(_written(tracks_dir)),
+                           track=TRACK, car="GT3")
+        assert ctx._corner_note("3") == _PRIOR["1"], writer       # the 20 m corner, renamed
+        assert ctx._corner_note("4") is None, writer              # 40 m: nobody wrote about it
+        assert ctx._corner_note("5") == _PRIOR["3-4"], writer     # the chicane, renamed
+        assert ctx._corner_note("6") == _PRIOR["3-4"], writer
+
+
+def _disk(tracks_dir):
+    return tracks_dir / f"{SLUG}.json"
+
+
+@pytest.mark.parametrize("writer", ["ribbon", "rotation", "notes"])
+def test_no_writer_commits_a_section_the_app_cannot_open(tmp_path, writer):
+    # #65: only the editor's save validated `sections`; the other three wrote them as
+    # handed, and CornerMap.from_data RAISES on a backwards span -- the track is then dead
+    # for every client. Refused (422) and the file on disk is left byte-for-byte alone.
+    app, client, tracks_dir = _client(tmp_path, _LABELS)
+    assert _put_notes(client, _PRIOR).status_code == 200
+    data = json.loads(_disk(tracks_dir).read_text())
+    junk = [{"name": "x", "start_dist": 90.0, "end_dist": 10.0}]
+    with pytest.raises(ValueError):
+        CornerMap.from_data({**data, "sections": junk})       # the failure is real
+    if writer == "ribbon":
+        app.state.last_ribbon = {**_ribbon(_LABELS), "sections": junk}
+    else:
+        _disk(tracks_dir).write_text(json.dumps({**data, "sections": junk}))
+    before = _disk(tracks_dir).read_bytes()
+    r = _save_via(writer, app, client, _LABELS) if writer != "ribbon" else \
+        client.post("/mapcapture/save", json={})
+    assert r.status_code == 422, (writer, r.text)
+    assert _disk(tracks_dir).read_bytes() == before
+
+
+def test_a_seeded_writer_strips_unusable_geometry_and_writes_sectors_as_numbers(tmp_path):
+    # #65, through the rotation writer, which rewrites the whole file from disk: a string
+    # radius_m, a string banking_deg and a -1e9 width all used to go back out verbatim,
+    # and `sectors` stayed strings. Unusable geometry is stripped (it is re-bakeable; a
+    # string in it crashes the coach), usable geometry beside it is untouched.
+    _, client, tracks_dir = _client(tmp_path, _LABELS)
+    data = json.loads(_disk(tracks_dir).read_text())
+    data["corners"][0].update(radius_m="banana", banking_deg="3", width_m=12.0)
+    data["corners"][1]["width_m"] = -1e9
+    data["sectors"] = ["30", "70"]
+    _disk(tracks_dir).write_text(json.dumps(data))
+    with pytest.raises(ValueError):
+        geometry_clause(data["corners"][0], "right")          # the crash is real
+
+    assert client.post(f"/tracks/{SLUG}/rotation", json={"degrees": 90}).status_code == 200
+
+    written = json.loads(_disk(tracks_dir).read_text())
+    c0, c1 = written["corners"][0], written["corners"][1]
+    assert "radius_m" not in c0 and "banking_deg" not in c0
+    assert c0["width_m"] == 12.0
+    assert "width_m" not in c1
+    assert written["sectors"] == [30.0, 70.0]
+    assert [type(s) for s in written["sectors"]] == [float, float]
+    for c in written["corners"]:
+        geometry_clause(c, c["direction"])                    # must not raise
+
 
 # No test for the "all notes dropped -> write no hollow notes block" arm of
 # _carry_notes here: with the bug present this route wrote no notes key at all, so

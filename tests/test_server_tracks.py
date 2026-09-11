@@ -234,10 +234,11 @@ def test_save_track_map_drops_corner_notes_when_corner_count_changes(tmp_path, c
     assert written["notes"]["source"] == "me"
 
 
-def test_save_track_map_drops_orphaned_corner_notes_on_relabel(tmp_path):
-    # Issue #37 (rework): same corner count, but GP-style relabelling ('2' -> '2A'
-    # /'2B') leaves note keys that no longer name any corner. Those are silently
-    # unreachable -- drop them, keep the labels that still exist.
+def test_save_track_map_moves_corner_notes_onto_relabelled_corners(tmp_path):
+    # Was "drops orphaned notes on relabel" (#37). GP-style relabelling ('2' -> '2A'/'2B')
+    # leaves every corner where it was, so under #64 the corners are identified by apex
+    # and the notes move WITH them -- the old rule deleted hand-authored prose about a
+    # corner that still existed, just under a new name.
     client, tracks_dir = _client_with_frozen_path(tmp_path)
     three = [{"number": 1, "label": "1", "name": "Turn 1", "apex_dist": 20.0},
              {"number": 2, "label": "2", "name": "Turn 2", "apex_dist": 50.0},
@@ -252,7 +253,8 @@ def test_save_track_map_drops_orphaned_corner_notes_on_relabel(tmp_path):
     ]})
     assert r.status_code == 200, r.text
     written = _written(tracks_dir)
-    assert written["notes"]["corners"] == {"1": "brake late"}   # '2'/'3' orphaned
+    assert written["notes"]["corners"] == {
+        "1": "brake late", "2A": "middle of the chicane", "2B": "flat in 6th"}
     assert written["notes"]["overview"] == "rhythm track"
 
 
@@ -299,10 +301,11 @@ def test_save_track_map_keeps_range_note_when_only_some_of_its_corners_survive(t
     assert _written(tracks_dir)["notes"]["corners"] == {"1-3": "the downhill complex"}
 
 
-def test_save_track_map_drops_range_note_when_no_corner_it_names_survives(tmp_path):
-    # GUARD (passes before the fix too -- the old code dropped every range key
-    # unconditionally, so this case cannot be made red). Pins the other side of the
-    # rule: a range naming nothing that still exists is unreachable, so it goes.
+def test_save_track_map_narrows_a_range_note_whose_corners_were_all_renamed(tmp_path):
+    # Was "drops a range note when no corner it names survives". Every corner it named
+    # still exists (same apexes) under a non-numeric designation, which no single range
+    # key can express -- so under #64 the note narrows onto the first of them instead of
+    # being deleted. Under-serving authored prose is recoverable; deleting it is not.
     client, tracks_dir = _client_with_frozen_path(tmp_path)
     three = [{"number": n, "label": str(n), "name": f"Turn {n}", "apex_dist": 20.0 * n}
              for n in (1, 2, 3)]
@@ -315,26 +318,26 @@ def test_save_track_map_drops_range_note_when_no_corner_it_names_survives(tmp_pa
         {"number": 3, "label": "3A", "name": "Turn 3A", "apex_dist": 60.0},
     ]})
     assert r.status_code == 200, r.text
-    assert _written(tracks_dir)["notes"]["corners"] == {}
+    assert _written(tracks_dir)["notes"]["corners"] == {"2A": "the chicane"}
 
 
-def test_save_track_map_drops_range_keyed_notes_when_corner_count_changes(tmp_path, caplog):
-    # GUARD (passes before the fix too). #37's renumbering-safety arm must treat a
-    # range key no differently: a changed corner count drops per-corner notes
-    # wholesale, because every label downstream of a re-split complex shifts.
+def test_save_track_map_drops_only_the_notes_of_a_deleted_corner(tmp_path, caplog):
+    # Was "drops range-keyed notes when the corner count changes": a changed count
+    # deleted every per-corner note on the track. Deleting corner 4 now drops only what
+    # named corner 4 ALONE; '2-4' still names corners 2 and 3, the same apexes it was
+    # written about, so it stays -- and a note about corner 4 alone goes, with its text.
     client, tracks_dir = _client_with_frozen_path(tmp_path)
     four = _four_corners()
     assert client.put("/tracks/algarve_international_circuit/map",
                       json={"corners": four}).status_code == 200
-    _put_notes(client, {"2-4": "the fast left-right-left"})
-    with caplog.at_level(logging.WARNING, logger="simcoach.server.app"):
+    _put_notes(client, {"2-4": "the fast left-right-left", "4": "the last corner"})
+    with caplog.at_level(logging.WARNING, logger="simcoach.track_lookup"):
         r = client.put("/tracks/algarve_international_circuit/map",
                        json={"corners": four[:3]})
     assert r.status_code == 200, r.text
     written = _written(tracks_dir)
-    assert written["notes"]["corners"] == {}
-    assert "the fast left-right-left" in caplog.text   # recoverable from the log
-    assert "corner count changed" in caplog.text
+    assert written["notes"]["corners"] == {"2-4": "the fast left-right-left"}
+    assert "the last corner" in caplog.text            # recoverable from the log
     assert written["notes"]["overview"] == "rhythm track"
 
 
@@ -618,11 +621,13 @@ def test_dropped_note_log_is_bounded(tmp_path, caplog):
     # `guard_corner_notes`, which the promote script shares with this save path.
     with caplog.at_level(logging.WARNING, logger="simcoach.track_lookup"):
         r = client.put("/tracks/algarve_international_circuit/map",
-                       json={"corners": four[:3]})      # count change -> drop them all
+                       json={"corners": four[:3]})      # corner 4 deleted
     assert r.status_code == 200, r.text
-    assert _written(tracks_dir)["notes"]["corners"] == {}
+    # Corners 1-3 kept their apexes, so their notes stay (#64); '4'..'31' name nothing
+    # that exists and all 28 are dropped -- still well past the 20-key sample bound.
+    assert sorted(_written(tracks_dir)["notes"]["corners"]) == ["1", "2", "3"]
     (rec,) = [x for x in caplog.records if "dropped" in x.getMessage()]
     msg = rec.getMessage()
     assert len(msg) < 10_000, f"warning record is {len(msg)} chars"   # was the whole ~62 KB
-    assert "dropped 31 authored" in msg           # the exact count still reported
-    assert '"1": "note 1 ' in msg                 # and a sample is still recoverable
+    assert "dropped 28 authored" in msg           # the exact count still reported
+    assert '"10": "note 10 ' in msg               # and a sample is still recoverable

@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 import simcoach
 import simcoach.server.app as app_module
+from simcoach import analysis
 from simcoach.analysis import (
     CORNER_GEOMETRY_KEYS,
     SIGNED_GEOMETRY_KEYS,
@@ -351,13 +352,19 @@ def test_an_unmeasurable_stored_metric_is_replaced_not_preserved(tmp_path, bad, 
 
 
 def test_the_signed_metrics_are_classified_beside_the_key_list():
-    """`_measurable` exempts the SIGNED metrics from its positivity rule, and which
-    those are must not become a second independent list of the metrics that exist --
-    that shape (one writer's list missing a key) is what deleted Laguna's width/banking.
+    """`measurable_geometry` exempts the SIGNED metrics from its positivity rule, and
+    which those are must not become a second independent list of the metrics that exist
+    -- that shape (one writer's list missing a key) is what deleted Laguna's width/banking.
     A metric added to CORNER_GEOMETRY_KEYS and not classified silently inherits `> 0`.
+
+    The rule itself moved beside the lists (#65) because it now gates what ANY writer may
+    put in a track file, not only what the editor carries forward. So what must not be a
+    local copy is the rule, and the server must use the same function object.
     """
     assert SIGNED_GEOMETRY_KEYS <= set(CORNER_GEOMETRY_KEYS)
-    assert app_module.SIGNED_GEOMETRY_KEYS is SIGNED_GEOMETRY_KEYS  # not a local copy
+    assert app_module.measurable_geometry is analysis.measurable_geometry   # not a local copy
+    assert not hasattr(app_module, "_measurable")
+    assert not hasattr(app_module, "SIGNED_GEOMETRY_KEYS")
 
 
 def test_the_positivity_rule_matches_what_the_shipped_maps_actually_hold():

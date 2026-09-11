@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import unicodedata
 from pathlib import Path
@@ -53,12 +54,14 @@ _NOTE_RANGE = re.compile(rf"([0-9]{{1,{_MAX_CORNER_DIGITS}}})-([0-9]{{1,{_MAX_CO
 _MAX_RANGE_SPAN = 100
 
 
-def note_key_binds(key: str, labels: set[str]) -> bool:
-    """Does a per-corner note key still name at least one corner that exists?
+def note_key_labels(key: str) -> list[str]:
+    """Every corner label a per-corner note key can name: the key itself, then -- for
+    a range key -- each label across its span, ascending.
 
-    The one place that owns the note-key grammar, so the coach's READ path and the
-    map-save guard that decides which notes survive a rebuild cannot drift apart:
-    a note is kept exactly when the coach could still serve it.
+    THE one place that owns the note-key grammar, so the coach's READ path, the
+    map-save guard that decides which notes survive a rebuild, and the guard's
+    REBINDING of a key onto relabelled corners (#64) cannot drift apart: a note is
+    kept, moved, and served for exactly the same set of corners.
 
     A plain key names itself. A numeric range names every label it spans, matching
     how `CoachContext._corner_note` resolves one -- endpoints only would drop a note
@@ -74,27 +77,38 @@ def note_key_binds(key: str, labels: set[str]) -> bool:
     down to it -- a note the guard keeps and the coach states as owned fact must not
     be the same note the Tracks screen calls an orphan. Loosen one, loosen both.
 
-    TOTAL: returns a bool for every (key, labels) pair and never raises. Both callers
-    use it as a predicate inside a comprehension, and both get their keys and labels
-    from free-text user input -- a raise here is a 500 on a map save, or a dead coach
-    tool, so the contract is no-exceptions rather than exceptions-documented.
+    TOTAL: returns a list for every key and never raises. Every caller feeds it free
+    text (a note key off disk, out of a PUT body, or out of an LLM tool call) -- a
+    raise here is a 500 on a map save, or a dead coach tool, so the contract is
+    no-exceptions rather than exceptions-documented. The span is bounded by
+    _MAX_RANGE_SPAN, so the list is at most 101 short strings however wide the key.
     """
     key = str(key)
-    if key in labels:
-        return True
+    out = [key]
     m = _NOTE_RANGE.fullmatch(key)
     if not m:
-        return False
+        return out
     lo, hi = int(m.group(1)), int(m.group(2))     # NOT sorted, deliberately -- below
     if hi - lo >= _MAX_RANGE_SPAN:
-        return False
+        return out
+    # A descending key needs no code: range(13, 12) is empty, so '13-11' names only
+    # itself and binds nothing, matching both `main` and the UI.
+    out += [str(n) for n in range(lo, hi + 1)]
+    return out
+
+
+def note_key_binds(key: str, labels: set[str]) -> bool:
+    """Does a per-corner note key still name at least one corner that exists?
+
+    Kept as its own name because it is the predicate three call sites read as one
+    (the coach's read, the save guard, the promote script); the grammar itself lives
+    in `note_key_labels` above. TOTAL, for the same reason it is.
+    """
     # Probes the label set over the span instead of parsing each label. `labels` comes
     # from the MAP, so no key-side regex reaches it, and the editor's label box is free
     # text where '²' U+00B2, '₂' U+2082 and '⑥' U+2465 all satisfy str.isdigit() and
-    # RAISE on int() -- comparing as strings leaves no parse to get wrong. It is also
-    # why a descending key needs no code: range(13, 12) is empty, so '13-11' binds
-    # nothing, matching both `main` and the UI. Both callers pass a set, so each probe
-    # is O(1); a list here would make this quadratic.
+    # RAISE on int() -- comparing as strings leaves no parse to get wrong. Callers pass
+    # a set, so each probe is O(1); a list here would make this quadratic.
     #
     # DO NOT turn this back into a label parse. The obvious-looking alternative,
     #     any(len(lab) <= 3 and lab.isascii() and lab.isdigit() and lo <= int(lab) <= hi ...)
@@ -106,7 +120,7 @@ def note_key_binds(key: str, labels: set[str]) -> bool:
     # LLM-callable tool. The parse's only gain was binding a '07' label under '5-9'; no
     # shipped map has a zero-padded label, and when the two differ the note surfaces as
     # a UI-flagged orphan instead of silently rebinding.
-    return any(str(n) in labels for n in range(lo, hi + 1))
+    return any(lab in labels for lab in note_key_labels(key))
 
 
 def track_slug(track_name: str) -> str:
@@ -183,31 +197,149 @@ def load_map_data(
     return merged
 
 
-def guard_corner_notes(slug: str, old_notes: dict | None, old_corner_count: int,
-                       new_labels: list[str]) -> dict | None:
-    """Carry an authored `notes` overlay across a map rebuild (#37).
+def corner_apex_key(corner: dict) -> float | None:
+    """Identity of a corner ACROSS A SAVE: its apex distance, rounded the way the
+    save paths write it (1 dp).
 
-    Per-corner notes name corners by LABEL, and a rebuild can re-split a chicane
-    or relabel '2' as '2A'/'2B'. A stale key then rebinds a note to a DIFFERENT
-    corner, which get_corner states as owned fact ("Authored note: ...") -- worse
-    than losing it. So keep a per-corner note only when the corner count is
-    unchanged AND the key still names a corner that exists;
+    `label` and `number` are both rewritten by the editor -- `label` is the free-text
+    box the curator types in, `number` is reassigned POSITIONALLY by its renumber() on
+    every insert -- so neither names the same physical corner before and after an edit.
+    The apex is where the corner IS. Both things that get carried across a save key on
+    this: the baked per-corner geometry (#62, which is where this started) and the
+    authored per-corner notes (#64).
+
+    None for a corner with no usable apex, which matches nothing rather than
+    everything. Total: takes anything off disk and never raises.
+    """
+    if not isinstance(corner, dict):
+        return None
+    try:
+        a = float(corner["apex_dist"])
+    except (KeyError, TypeError, ValueError, OverflowError):   # OverflowError: huge int
+        return None
+    return round(a, 1) if math.isfinite(a) else None
+
+
+def _corner_labels(corners) -> list[tuple[str, float | None]]:
+    """(label, apex identity) per corner, in LAP ORDER -- which is what makes the
+    positional fallback in `corner_identity_map` mean "the Nth corner of the lap"
+    rather than "the Nth line in the file". Corners arrive here from arbitrary JSON,
+    so anything that isn't a corner-shaped dict with a designation is skipped."""
+    if not isinstance(corners, list):
+        return []
+    out = [(str(c.get("label") or c.get("number") or ""), corner_apex_key(c))
+           for c in corners if isinstance(c, dict)]
+    out.sort(key=lambda t: (t[1] is None, t[1] or 0.0))
+    return [t for t in out if t[0]]
+
+
+def corner_identity_map(old_corners, new_corners) -> dict[str, str]:
+    """old corner label -> new corner label, for every corner that is THE SAME
+    PHYSICAL CORNER on both sides of a save. The key to #64.
+
+    Two rules, in order:
+
+      1. Same apex (`corner_apex_key`) -- the corner did not move, whatever it is now
+         called. This is the whole relabel case: labels 1,2,3,4 renumbered to 3,4,5,6
+         leaves every apex where it was, so every corner is identified and every note
+         moves with it instead of rebinding to the corner two places up the lap.
+      2. Same POSITION in lap order, when the corner COUNT is unchanged. This is the
+         curator dragging an apex marker: the corner moved a metre, it is still the
+         same corner, and its authored note should not evaporate because of it.
+
+    Never falls back to the label: a label match is exactly the thing that misbinds
+    (#64), and rule 2 is a position match, not a count match -- a relabel cannot ride
+    on it, because the position it maps to is the position it already had.
+
+    Unmatched old corners are simply absent, and the caller treats a note that names
+    only absent corners as unbindable. Total: never raises, whatever is on disk.
+    """
+    old, new = _corner_labels(old_corners), _corner_labels(new_corners)
+    by_apex: dict[float, str] = {}
+    for lab, apex in new:
+        if apex is not None:
+            by_apex.setdefault(apex, lab)
+    out: dict[str, str] = {}
+    for i, (lab, apex) in enumerate(old):
+        target = by_apex.get(apex) if apex is not None else None
+        if target is None and len(old) == len(new):
+            target = new[i][0]
+        if target:
+            out.setdefault(lab, target)
+    return out
+
+
+def _rebound_key(key: str, targets: list[str], new_labels: set[str]) -> str | None:
+    """The key `key`'s note should be filed under after a save, or None if the corners
+    it named are all gone. `targets` are the NEW labels of the corners it named, in
+    lap order.
+
+    Keeps the authored key whenever keeping it is harmless -- it binds something, and
+    everything it binds is a corner it was written about. '1-3' over corners
+    relabelled 1/2A/3 still names 1 and 3 and nothing else, so rewriting it would
+    churn the author's text for no gain.
+
+    Otherwise it names the wrong corners (or none), so it is REWRITTEN onto the
+    corners it was written about. A range is rebuilt by asking the grammar owner to
+    expand the candidate and accepting it only if that expansion is exactly the
+    targets -- so the rewritten key cannot name a corner the note was not about, and
+    no second parse of a label ever happens here (a label is free text; '²' raises on
+    int()). When the targets cannot be expressed as one key -- '2-3' whose corners are
+    now '2A' and '3A' -- the note narrows onto its first corner rather than being
+    deleted: under-serving an authored note is recoverable, deleting it is not.
+    """
+    if not targets:
+        return None
+    binds_now = [lab for lab in note_key_labels(key) if lab in new_labels]
+    if binds_now and set(binds_now) <= set(targets):
+        return key
+    if len(targets) == 1:
+        return targets[0]
+    candidate = f"{targets[0]}-{targets[-1]}"
+    return candidate if note_key_labels(candidate)[1:] == targets else targets[0]
+
+
+def guard_corner_notes(slug: str, old_notes: dict | None, old_corners,
+                       new_corners) -> dict | None:
+    """Carry an authored `notes` overlay across a map rebuild (#37, #64).
+
+    Per-corner notes name corners by LABEL, and a save can re-split a chicane,
+    renumber the lap, or relabel '2' as '2A'/'2B'. A stale key then rebinds a note to
+    a DIFFERENT corner, which get_corner states as owned fact ("Authored note: ...")
+    -- worse than losing it. But a note is expensive hand-authored prose (30,445 bytes
+    across the shipped maps), so the answer is not to delete on sight either.
+
+    So: identify the corners themselves (`corner_identity_map`, by apex/position, never
+    by label), move each note onto whatever its corners are called NOW, and drop only a
+    note whose corners are genuinely gone. Corner COUNT is not consulted anywhere --
+    keying on it is #64: it let a same-count relabel rebind every note on the track,
+    and it deleted every note on the track whenever a corner was added elsewhere.
     overview/reference_times/source are not corner-keyed and are always kept.
-    Dropped notes are logged with their text so the author can recover them.
 
     A key may name a RANGE ('2-4', '11-13' -- how a complex is annotated, and 16 of
-    the 135 shipped note keys), so ask `note_key_binds` what it names rather than
+    the 135 shipped note keys), so ask `note_key_labels` what a key names rather than
     testing the raw key against the labels: '2-4' is never itself a label, and
     treating it as one silently deleted every range-keyed note on every save.
 
-    Returns the notes block to write, or None when it would be hollow. Shared by
-    the editor's save path and the promote-to-shipped script so the two can't drift.
+    Notes are carried VERBATIM when either side has no corners at all. With no NEW
+    corners nothing can be rebound, and a corner-less ribbon save is legitimate (it
+    exists to persist the reconstructed surface -- test_mapcapture_save_writes_track
+    _json saves one deliberately), so dropping every note there is pure loss. With no
+    OLD corners there is nothing to identify a note against; the keys were authored
+    against whatever the app displayed, so keeping them is the only non-destructive
+    reading. Both arms used to delete instead.
+
+    Moves and drops are logged, with the dropped text, so the author can recover them.
+
+    Returns the notes block to write, or None when it would be hollow. Shared by every
+    writer of a track file -- the server's one `_write_track_json` and the
+    promote-to-shipped script -- so no two of them can drift.
     """
     # `notes` reaches the promote path straight out of an arbitrary user JSON file, so
     # a non-dict `corners` is input, not a bug: refuse it as empty rather than raising.
     old = (old_notes or {}).get("corners")
-    old_corners = {str(k): v for k, v in old.items()} if isinstance(old, dict) else {}
-    if old and not old_corners:
+    old_notes_by_key = {str(k): v for k, v in old.items()} if isinstance(old, dict) else {}
+    if old and not old_notes_by_key:
         # Truthy but not an object: nothing to carry, so say what was ignored. A
         # promote reads this out of an arbitrary user JSON file, where `"corners":
         # "2-3: brake late"` (a string, not an object) is a plausible typo -- silently
@@ -216,10 +348,41 @@ def guard_corner_notes(slug: str, old_notes: dict | None, old_corner_count: int,
             "track %s: ignored a non-object `notes.corners` (%s, %d chars); per-corner "
             "notes must be an object keyed by corner label. Ignored: %.200r",
             slug, type(old).__name__, len(str(old)), old)
-    labels = set(new_labels)
-    kept = ({k: v for k, v in old_corners.items() if note_key_binds(k, labels)}
-            if old_corner_count == len(new_labels) else {})
-    dropped = {k: v for k, v in old_corners.items() if k not in kept}
+    new_labels = {lab for lab, _ in _corner_labels(new_corners)}
+    identity = corner_identity_map(old_corners, new_corners)
+    moved: dict[str, str] = {}
+    if not _corner_labels(old_corners) or not new_labels:
+        kept = dict(old_notes_by_key)             # nothing to rebind from, or onto
+    else:
+        kept = {}
+        # AUTHORED ORDER, not sorted: this is what the notes block is re-serialised in,
+        # and re-promoting a shipped map from its own file has to be a byte-identical
+        # no-op (test_self_promoting_a_shipped_map_is_a_byte_identical_no_op). Order is
+        # still deterministic -- it is the file's -- so the first note to claim a corner
+        # wins the same way on every run.
+        for key, text in old_notes_by_key.items():
+            # dict.fromkeys DEDUPES while keeping lap order -- two labels of one key can
+            # name the same corner once a complex is merged, and 'N-N-N' is not a key.
+            targets = list(dict.fromkeys(
+                identity[lab] for lab in note_key_labels(key) if lab in identity))
+            new_key = _rebound_key(key, targets, new_labels)
+            if new_key is None or new_key in kept:
+                continue                          # gone, or another note already holds it
+            kept[new_key] = text
+            if new_key != key:
+                moved[key] = new_key
+    dropped = {k: v for k, v in old_notes_by_key.items() if k not in moved and k not in kept}
+    if moved:
+        # Surfaced, not silent: this is authored prose being re-filed under a key the
+        # author did not type. Keys only (values are unchanged and already on disk),
+        # bounded the same way the drop log is -- a note key off a legacy file can be
+        # thousands of characters.
+        logging.getLogger(__name__).warning(
+            "track %s: moved %d authored per-corner note(s) onto the corners they were "
+            "written for, which this save relabelled. Moved (%d shown): %s",
+            slug, len(moved), min(len(moved), 20),
+            json.dumps({str(k)[:80]: str(moved[k])[:80] for k in sorted(moved)[:20]},
+                       ensure_ascii=False))
     if dropped:
         # Loud, and with the text, so the author can recover it from the log -- but
         # BOUNDED. This dumped every dropped note in full, and wrote 4.6 MB in a single
@@ -243,8 +406,8 @@ def guard_corner_notes(slug: str, old_notes: dict | None, old_corner_count: int,
             "track %s: dropped %d authored per-corner note(s) on map save (%s); "
             "re-author them against the new layout. Dropped (%d shown): %s",
             slug, len(dropped),
-            "corner count changed" if old_corner_count != len(new_labels)
-            else "the corners they name no longer exist",
+            "the corners they name no longer exist, or another note already holds the "
+            "corner they moved to",
             len(sample), json.dumps(sample, ensure_ascii=False))
     notes = {**(old_notes or {}), "corners": kept}
     return notes if any(notes.values()) else None

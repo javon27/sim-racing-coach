@@ -12,6 +12,7 @@ import pytest
 
 from scripts import promote_map
 from scripts.promote_map import PromoteError, main, promote
+from simcoach.corners import CornerMap
 
 SHIPPED_DIR = Path(__file__).resolve().parents[1] / "simcoach" / "tracks"
 
@@ -163,19 +164,36 @@ def test_authored_notes_survive_but_a_stale_corner_key_is_dropped(tmp_path):
     assert written["notes"]["corners"] == {"1": "brake late"}
 
 
-def test_force_keeps_the_shipped_maps_notes_that_still_bind(tmp_path):
-    """--force must run the notes guard, not bypass it: a note whose label survives
-    the replacement is kept, one whose label is gone is dropped rather than rebound."""
+def test_force_carries_the_shipped_maps_notes_onto_the_replacements_corners(tmp_path):
+    """--force must run the notes guard, not bypass it. The shipped map's notes are
+    identified against the SHIPPED corners: corner 3 is relabelled '3A' in the
+    replacement (same apex), so its note moves onto '3A' rather than being deleted (#64),
+    and a shipped note whose corner the replacement drops is not rebound to anything."""
     tracks = _tracks(tmp_path)
     promote(_src(tmp_path, _map(notes={"overview": "curator wrote this",
                                        "corners": {"2": "late apex", "3": "flat"}})),
             tracks)
     replacement = _map(notes={"corners": {"1": "from the driver"}})
-    replacement["corners"][2]["label"] = "3A"     # corner 3 relabelled: "3" no longer binds
+    replacement["corners"][2]["label"] = "3A"     # corner 3 relabelled, same apex
     written = json.loads(promote(_src(tmp_path, replacement), tracks, force=True)
                          .read_text("utf-8"))
     assert written["notes"]["overview"] == "curator wrote this"   # not corner-keyed
-    assert written["notes"]["corners"] == {"1": "from the driver", "2": "late apex"}
+    assert written["notes"]["corners"] == {"1": "from the driver", "2": "late apex",
+                                           "3A": "flat"}
+
+
+def test_force_drops_a_shipped_note_whose_corner_the_replacement_removes(tmp_path):
+    """The other side: the replacement has no corner at 750 m at all (it has one at
+    600 m and one at 900 m instead), so the shipped note about the 750 m corner cannot
+    be carried -- and '3' must not land on whatever the replacement happens to call '3'."""
+    tracks = _tracks(tmp_path)
+    promote(_src(tmp_path, _map(notes={"corners": {"2": "late apex", "3": "flat"}})), tracks)
+    replacement = _map()
+    replacement["corners"] = [_corner(1, 100.0, 150.0, 200.0), _corner(2, 400.0, 450.0, 500.0),
+                              _corner(3, 550.0, 600.0, 650.0), _corner(4, 850.0, 900.0, 950.0)]
+    written = json.loads(promote(_src(tmp_path, replacement), tracks, force=True)
+                         .read_text("utf-8"))
+    assert written["notes"]["corners"] == {"2": "late apex"}
 
 
 def test_range_keyed_note_survives_a_same_count_promote(tmp_path):
@@ -187,6 +205,46 @@ def test_range_keyed_note_survives_a_same_count_promote(tmp_path):
                                    "7-9": "no such corners"}})
     written = json.loads(promote(_src(tmp_path, data), _tracks(tmp_path)).read_text("utf-8"))
     assert written["notes"]["corners"] == {"2-3": "one flowing complex", "1": "brake late"}
+
+
+@pytest.mark.parametrize("sections", [
+    [{"name": "x", "start_dist": 900.0, "end_dist": 100.0}],     # #65's table, row by row
+    [{"name": "x", "start_dist": 0.0, "end_dist": 99999.0}],
+    [{"name": "x", "start_dist": 0.0}],
+    ["nope"],
+])
+def test_a_section_the_app_cannot_open_is_refused(tmp_path, sections):
+    """#65: `sections` was written verbatim, and CornerMap.from_data RAISES on each of
+    these -- a promote committed a map no client can open. Fixture sanity first, so the
+    refusal below is proven to be about a map that really is unloadable."""
+    data = _map(sections=sections)
+    with pytest.raises((ValueError, KeyError, TypeError)):
+        CornerMap.from_data(data)
+    with pytest.raises(PromoteError):
+        promote(_src(tmp_path, data), _tracks(tmp_path))
+
+
+@pytest.mark.parametrize("key, value", [("radius_m", "banana"), ("banking_deg", "3"),
+                                        ("width_m", -1e9), ("radius_m", True),
+                                        ("elev_delta_m", 10**400)])
+def test_unusable_baked_geometry_is_refused(tmp_path, key, value):
+    """#65: every per-corner key was carried through `{**c, ...}` unexamined. A string
+    radius loads fine and then crashes geometry_clause on the coach's answer."""
+    data = _map()
+    data["corners"][1][key] = value
+    with pytest.raises(PromoteError, match=key):
+        promote(_src(tmp_path, data), _tracks(tmp_path))
+
+
+def test_promote_writes_the_validated_sectors_not_the_source_value(tmp_path):
+    """#65: sectors were validated and the result DISCARDED, so strings passed the check
+    as numbers and shipped as strings. And `true` is refused, not shipped as a 1 m split."""
+    written = json.loads(promote(_src(tmp_path, _map(sectors=["300", "700"])),
+                                 _tracks(tmp_path)).read_text("utf-8"))
+    assert written["sectors"] == [300.0, 700.0]
+    assert [type(s) for s in written["sectors"]] == [float, float]
+    with pytest.raises(PromoteError):
+        promote(_src(tmp_path, _map(sectors=[True])), _tracks(tmp_path), force=True)
 
 
 @pytest.mark.parametrize("bad", ["2-3: brake late", 5])
