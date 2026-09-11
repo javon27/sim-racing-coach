@@ -1617,7 +1617,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                             # prior reasoning.
                             history.append({"role": "assistant",
                                             "content": scrub_stored_answer(row["answer"],
-                                                                           row["ts"])})
+                                                                           row["ts"],
+                                                                           row.get("track"))})
                 except Exception:
                     history = []
 
@@ -1801,7 +1802,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                     # model is also exactly right -- a claim past char 200 never gets
                     # there, so it needs no retraction (#72).
                     digest.append("Coach answered: "
-                                  + scrub_stored_answer(m["answer"][:200], m["ts"]))
+                                  + scrub_stored_answer(m["answer"][:200], m["ts"],
+                                                        m.get("track")))
 
         system = (
             "You are distilling durable driver-profile observations from one session's "

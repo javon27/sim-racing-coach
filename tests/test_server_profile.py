@@ -203,6 +203,8 @@ def test_distill_retracts_a_pre_fix_race_start_but_not_a_post_fix_one(tmp_path, 
     assert "tough to sugarcoat" in prompt, "the excerpt should still be quoted, not dropped"
     assert prompt.count("never the grid slot") == 1, \
         "exactly the pre-fix answer carries the retraction, the post-fix one does not"
+    assert "only if the track it names is trk" in prompt, \
+        "the digest's retraction must name the stored answer's own track"
     # The chat excerpt closes the digest, so a retraction appended to the post-fix
     # answer would be the digest's tail.
     digest = c.app.state.coach.model.last_messages[0]["content"]

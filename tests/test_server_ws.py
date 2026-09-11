@@ -387,6 +387,9 @@ def test_ws_coach_retracts_a_pre_fix_race_start_but_not_a_post_fix_one(tmp_path)
     assert len(carried) == 1, f"the pre-fix answer should be threaded once: {sent}"
     assert carried[0].startswith(before) and "never the grid slot" in carried[0], \
         f"the pre-fix start claim reached the model unretracted: {carried}"
+    # The retraction names the stored row's own track, so "use get_race_result only for
+    # the same race" is a comparison the model can actually make.
+    assert "only if the track it names is trk" in carried[0], carried[0]
     assert after in sent, "a post-fix answer must reach the model exactly as said"
     assert store.chat_messages("c1")[0]["answer"] == before
 

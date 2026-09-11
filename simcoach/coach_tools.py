@@ -271,12 +271,12 @@ _STORED_ANSWER_RETRACTIONS = (
       "first lap capture happened to record, already underway and never the grid slot, "
       "and \"no incidents\" meant none were visible to it, not that none happened. Treat "
       "both as unverified and do not repeat the earlier figures. get_race_result "
-      "reports the session currently selected in the app and names its track: use its "
-      "figures for the race this answer was about only if it is that same race.]")),
+      "names the track of the session it reports: use its figures for the race this "
+      "answer was about only if {same_race}.]")),
 )
 
 
-def scrub_stored_answer(answer: str, ts: float) -> str:
+def scrub_stored_answer(answer: str, ts: float, track: str | None = None) -> str:
     """Annotate a stored coach answer, written at `ts`, before it re-enters the model's
     context.
 
@@ -295,7 +295,11 @@ def scrub_stored_answer(answer: str, ts: float) -> str:
     """
     if not answer:
         return answer
-    return answer + "".join(retraction
+    # `track` is the track the stored answer was about. The race retraction can only be
+    # checked against get_race_result if it names one: the resumed history itself usually
+    # never does, so without it "the same race" is a condition the model cannot test.
+    same_race = f"the track it names is {track}" if track else "it is that same race"
+    return answer + "".join(retraction.replace("{same_race}", same_race)
                             for pattern, cutoff, retraction in _STORED_ANSWER_RETRACTIONS
                             if ts < cutoff and pattern.search(answer))
 
@@ -763,11 +767,16 @@ class CoachContext:
         return "\n".join(lines) if lines else "No fuel/energy data captured for this lap."
 
     def get_race_result(self):
-        # Name the track. A resumed chat's race retraction (scrub_stored_answer) lets the
-        # model use these figures for an earlier race only when it is the same race, and
-        # the result text alone carries nothing that says which race it describes.
+        # Name the track of the session these figures DESCRIBE, taken from that session's
+        # own laps -- never self.track, which follows the live game or the last capture
+        # and can be another track entirely (reviewing Silverstone while the game sat at
+        # Fuji labelled Silverstone's result "Fuji"). A resumed chat's race retraction lets
+        # the model use these figures only for the same race, so a wrong label is worse
+        # than none.
         text = race_result_text(self.store, self.session_id)
-        return f"Session currently selected: {self.track}.\n{text}" if self.track else text
+        laps = self.store.session_laps(self.session_id) if self.session_id else []
+        track = laps[0].get("track") if laps else None
+        return f"Session track: {track}.\n{text}" if track else text
 
     def get_setup(self):
         if not self.setup:

@@ -850,20 +850,28 @@ def test_race_retraction_lets_get_race_result_speak_only_for_the_same_race():
     # different session is selected is where it is not. The retraction must allow the
     # first and refuse the second -- not blanket-forbid the tool (which discards the
     # correct result on the common path) nor blanket-direct the model to it.
-    out = scrub_stored_answer("you started **P18** and crossed the line **P18**", _BEFORE_67_FIX)
-    assert "only if it is that same race" in out
+    claim = "you started **P18** and crossed the line **P18**"
+    out = scrub_stored_answer(claim, _BEFORE_67_FIX, "Silverstone National Circuit")
+    assert "only if the track it names is Silverstone National Circuit" in out
     assert "do not attach its figures" not in out
+    # A row with no stored track still gets the condition, just without a name to match.
+    assert "only if it is that same race" in scrub_stored_answer(claim, _BEFORE_67_FIX)
 
 
-def test_get_race_result_names_the_selected_session_track(tmp_path, synthetic_lap):
-    # Without the track the model cannot tell whether the result describes the race an
-    # older answer in the chat was about -- the condition the retraction depends on.
-    ctx, _store, _ = _ctx(tmp_path, synthetic_lap)
-    ctx.session_id = "no-race-here"
-    assert ctx.track
+def test_get_race_result_names_the_track_of_the_session_it_reports(tmp_path, synthetic_lap):
+    # The label must come from the session the figures describe, not ctx.track: that
+    # follows the live game or the last capture, so reviewing one session while the game
+    # sits at another track labelled one track's result with the other's name -- a false
+    # fact stated as fact, the #67 class.
+    from simcoach.model_types import LapRecord
+    ctx, store, _ = _ctx(tmp_path, synthetic_lap)
+    store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "sel-1", "phase": "race",
+                            "timestamp": 5.0, "position": 4}))
+    ctx.session_id = "sel-1"
+    ctx.track = "Fuji Speedway"   # the live game, at a different track entirely
     out = ctx.get_race_result()
-    assert out.startswith(f"Session currently selected: {ctx.track}.")
-    assert "No race result recorded" in out
+    assert out.startswith(f"Session track: {synthetic_lap.track}.")
+    assert "Fuji" not in out
 
 
 @pytest.mark.parametrize("excerpt", [
