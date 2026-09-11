@@ -203,6 +203,28 @@ def test_adverse_camber_stays_a_penalty_so_the_fix_is_not_abs():
     assert abs(np.mean(v_adv) - expect_adv) < 0.05 * expect_adv
 
 
+def test_unknown_bank_stations_solve_as_flat_not_nan():
+    """#69: a rebuilt ribbon now writes bank as null where its samples never spanned
+    the width, and _place_corners hands that list straight to solve_corners. A NaN
+    station used to ride through the min() passes and poison the speed profile; it
+    has to read as flat instead, while measured stations keep their camber."""
+    left, right = _annulus()                       # a LEFT-hander
+    _, line = min_curvature_line(left, right, iterations=2000)
+    n = len(line)
+    sign = np.full(n, -1.0)
+    theta = np.radians(-15.0)                      # favourable on a left-hander
+    v_flat, _ = speed_profile(line, 1.5, 9.81, 14.0, 9.0)
+    v_fav, _ = speed_profile(line, 1.5, 9.81, 14.0, 9.0,
+                             bank=np.full(n, theta), turn_sign=sign)
+    bank = [theta] * n
+    for i in range(n // 2, n):
+        bank[i] = None                             # second half unmeasured
+    v, _ = speed_profile(line, 1.5, 9.81, 14.0, 9.0, bank=bank, turn_sign=sign)
+    assert np.all(np.isfinite(v))
+    assert np.mean(v[n // 2 + 5:n - 5]) < np.mean(v_fav[n // 2 + 5:n - 5])  # no camber credit
+    assert np.max(v) > np.max(v_flat)              # the measured half keeps its camber
+
+
 def test_flat_and_near_flat_banking_leave_the_profile_alone():
     left, right = _annulus()
     _, line = min_curvature_line(left, right, iterations=2000)

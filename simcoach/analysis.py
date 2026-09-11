@@ -404,9 +404,12 @@ def corner_geometry(path, dist, corners, *, width=None, bank=None, elev=None):
         if kmax > 1e-4:  # tightest point in the window; <1e-4 (~>10 km) = effectively straight
             m["radius_m"] = round(1.0 / kmax, 1)
         ai = at(c["apex_dist"])
-        if w is not None and ai < len(w):
+        # A null/NaN station is a ribbon bin whose samples never spanned the width
+        # (ribbon._MIN_SPREAD_M): unknown, so no metric -- and never a NaN, which
+        # _write_track_json refuses (allow_nan=False).
+        if w is not None and ai < len(w) and np.isfinite(w[ai]):
             m["width_m"] = round(float(w[ai]), 1)
-        if b is not None and ai < len(b):
+        if b is not None and ai < len(b) and np.isfinite(b[ai]):
             m["banking_deg"] = round(float(np.degrees(b[ai])), 1)
         if e is not None:
             si, ei = at(c["start_dist"]), at(c["end_dist"])

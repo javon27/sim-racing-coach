@@ -216,6 +216,28 @@ def _clean(v):
 
 
 _POS_CHANNELS = ("pos_x", "pos_y", "pos_z", "lap_distance")
+# What reconstruct_surface actually requires of a lap. pos_y is NOT in here: it is
+# optional there (it only fits BANK, which ribbon.py writes as unknown wherever the
+# samples lack lateral spread), so demanding it would reject usable laps.
+_REBUILD_CHANNELS = ("pos_x", "pos_z", "lap_distance")
+
+
+def _usable_cloud(ch: dict) -> bool:
+    """Will reconstruct_surface get >= 2 finite (x, z, d) samples out of this lap?
+
+    The ONE test behind both the /tracks count and what a rebuild consumes (#69), so a
+    badge can neither promise a lap the build then drops nor count one it should not:
+    a zero-length or all-NaN channel is refused here, not counted AND fed to the build.
+    """
+    try:
+        cols = [np.asarray(ch[c], dtype=float) for c in _REBUILD_CHANNELS]
+    except (KeyError, TypeError, ValueError):
+        return False
+    if any(a.ndim != 1 for a in cols):
+        return False
+    n = min(len(a) for a in cols)
+    x, z, d = (a[:n] for a in cols)
+    return int((np.isfinite(x) & np.isfinite(z) & np.isfinite(d)).sum()) >= 2
 
 
 def _save_cloud(path, laps) -> None:
@@ -359,6 +381,58 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         d = Path(store.data_dir) / "captures"
         files = list(d.glob("*.npz")) if d.exists() else []
         return max(files, key=lambda p: p.stat().st_mtime) if files else None
+
+    def _live_lap_paths() -> list[tuple[str, str, str]]:
+        # (slug, raw live name, telemetry_path) for every LIVE-captured lap, newest last.
+        #
+        # telemetry_path IS NOT NULL is the whole distinction: save_result_session rows
+        # are summary-only with no file, so a track with ~991 imported laps and no
+        # capture is correctly not buildable (#66). Slugged here because laps store the
+        # raw live name ("Paul Ricard - ELMS") while a map file is keyed by slug.
+        with store._lock:   # store.py shares one connection with the capture thread
+            rows = store.conn.execute(
+                "SELECT track, telemetry_path FROM laps "
+                "WHERE telemetry_path IS NOT NULL AND track IS NOT NULL "
+                "ORDER BY id").fetchall()
+        return [(track_slug(n), n, p) for n, p in rows if track_slug(n)]
+
+    def _rebuild_clouds(track: str, rows=None) -> tuple[list[dict], bool]:
+        # (laps, from_capture): EXACTLY the usable clouds a rebuild of `track` consumes.
+        # /tracks counts this and /mapcapture/rebuild builds from it, so the badge and
+        # the build cannot disagree (#69) -- e.g. a save-cloud capture of 2 laps beside 7
+        # live laps is "2", because the capture is what gets built.
+        #
+        # A purpose-built mapping capture WINS whenever there is one: its boundary passes
+        # cover the full width; racing laps only trace the line driven. Otherwise the
+        # position channels off the track's own LIVE laps' .npz files, in the same shape
+        # _load_cloud returns. Laps recorded before position capture landed (47 channels,
+        # no pos_*) are not usable and so are neither counted nor built from.
+        slug = track_slug(track)
+        if not slug:
+            # A map file name with nothing to slug ("---.json" dropped into app-data
+            # tracks/) has no capture and no laps. Count it as none -- _capture_path's
+            # writer guard would 400 the whole GET /tracks, the same one-bad-file-blanks-
+            # the-screen failure R1/R2 fixed for lap files.
+            return [], False
+        path = _capture_path(track)
+        if path.exists():
+            return [ch for ch in _load_cloud(path) if _usable_cloud(ch)], True
+        laps = []
+        for lap_slug, _name, p in (_live_lap_paths() if rows is None else rows):
+            if lap_slug != slug:
+                continue
+            try:
+                with np.load(p) as z:
+                    ch = {c: z[c] for c in _POS_CHANNELS if c in z.files}
+            except Exception as e:
+                # Skip THIS lap, never the listing or the rebuild. Not a narrow tuple: a
+                # zero-byte file raises EOFError and a corrupt member zlib.error, and
+                # either one used to 500 all of GET /tracks. Same stance as _load_cloud.
+                logging.getLogger(__name__).warning("skipping unreadable lap %s: %r", p, e)
+                continue
+            if _usable_cloud(ch):
+                laps.append(ch)
+        return laps, False
 
     def _track_file_data(track: str) -> dict:
         # Merged map dict: authoritative shipped geometry + the user's annotation
@@ -972,6 +1046,11 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             out["name"] = name
         if keep_ribbon:
             out["ribbon"] = keep_ribbon  # keep the reconstructed surface across edits
+        if existing.get("built_from"):
+            # An editor save (names, apexes, sections) keeps a map this app BUILT
+            # re-buildable from later laps. Dropping the mark here would make naming one
+            # corner on a lap-built map lock it against every future live-lap rebuild.
+            out["built_from"] = existing["built_from"]
         # Carry the authored notes overlay across a rebuild instead of wiping it (#37),
         # dropping only the per-corner notes whose keys no longer name a corner that
         # exists. `guard_corner_notes` owns that rule (and asks `note_key_binds` which
@@ -1126,16 +1205,47 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         for base in (bundled, user_dir):
             if base.exists():
                 slugs.update(p.stem for p in base.glob("*.json"))
+        # A track DRIVEN live but never mapped has no .json to glob, so it used to be
+        # absent from this list entirely -- and this screen is the only place a map gets
+        # built, so there was no entry point for exactly the tracks that need one (#69).
+        # Union it in, with the counts the Build action is gated on.
+        #
+        # `captures` is len(_rebuild_clouds): the laps a Build would actually consume,
+        # not laps that merely have a row or a file. Position capture landed partway
+        # through this store's history, so pre-position laps carry no pos_* at all --
+        # Sebring has 15 live laps and 0 usable, and a DB count there offered "Build map
+        # from 15 laps" that then 422'd with the very error #69 exists to remove.
+        #
+        # `live_laps` is the raw row count, so a row with captures 0 can still say WHY it
+        # is there and unbuildable ("none with position data") -- the driver needs to know
+        # those laps are unrecoverable and the track wants re-driving (#66).
+        #
+        # ponytail: loads every live lap's position channels on each open (the badge has
+        # to see zero-length/all-NaN arrays, which the zip directory alone cannot show).
+        # /tracks is opened by hand, not polled; cache on (telemetry_path, mtime) if the
+        # store grows enough for that to be felt.
+        rows = _live_lap_paths()
+        live: dict[str, int] = {}
+        names: dict[str, str] = {}
+        for slug, name, _p in rows:
+            live[slug] = live.get(slug, 0) + 1
+            names.setdefault(slug, name)
+        slugs.update(live)
         out = []
         for slug in sorted(slugs):
             merged = _track_file_data(slug)
             notes = merged.get("notes") or {}
             out.append({
                 "slug": slug,
-                "name": merged.get("name") or slug.replace("_", " ").title(),
+                # No map file yet -> the live name the laps were recorded under beats a
+                # title-cased slug ("Paul Ricard - ELMS" vs "Paul Ricard Elms").
+                "name": (merged.get("name") or names.get(slug)
+                         or slug.replace("_", " ").title()),
                 "has_map": bool(merged.get("path") or merged.get("corners")),
                 "has_notes": bool(notes.get("overview") or notes.get("corners")),
                 "user_edited": (user_dir / f"{slug}.json").exists(),
+                "captures": len(_rebuild_clouds(slug, rows)[0]),
+                "live_laps": live.get(slug, 0),
             })
         return out
 
@@ -1283,7 +1393,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # save, and save persists the raw cloud for later rebuilds.
         raw = [{c: r.channels[c] for c in _POS_CHANNELS if c in r.channels} for r in buf]
         app.state.last_ribbon = {"world": ribbon, "corners": corners, "sectors": sectors,
-                                 "sections": sections, "track": track, "laps": raw}
+                                 "sections": sections, "track": track, "laps": raw,
+                                 "built_from": "capture"}
         res = _clean(ribbon_to_screen(ribbon, corners, sectors,
                                       rotation=_track_rotation(track), sections=sections))
         res["track_name"] = _track_file_data(track).get("name") or track
@@ -1318,6 +1429,11 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             "length": world["dist"][-1] if world["dist"] else 0.0,
             "rotation": _track_rotation(track),  # preserve any existing rotation
         }
+        # Mark maps this app BUILT (from a capture or from driven laps). A live-lap rebuild
+        # may replace only a marked map's corners -- an unmarked map with corners is a
+        # curated layout (see mapcapture_rebuild).
+        if rib.get("built_from"):
+            out["built_from"] = rib["built_from"]
         # _write_track_json REPLACES the file, so the authored notes overlay has to be
         # carried forward here too -- same owner, same rule, as the editor's save.
         #
@@ -1387,13 +1503,36 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             track = tc[0]
         if not track:
             track = _live_track() or (app.state.last_ribbon or {}).get("track")
-        path = _capture_path(track) if track else _newest_capture()
-        if path is None or not path.exists():
-            raise HTTPException(422, "no saved capture available")
-        laps = _load_cloud(path)
+        if not track:
+            newest = _newest_capture()
+            if newest is None:
+                raise HTTPException(422, "no saved capture available")
+            track = newest.stem  # offline: take the track (slug) from the file name
+        rows = _live_lap_paths()
+        # No capture file -> the track's own live laps (#69): the reported case, 27 live
+        # laps and no captures/<slug>.npz, used to 422 here with no way forward.
+        laps, from_capture = _rebuild_clouds(track, rows)
+        existing_map = _track_file_data(track)
+        if (not from_capture and existing_map.get("corners")
+                and not existing_map.get("built_from")):
+            # Never rebuild a CURATED corner map from driven laps. Its corners are owned
+            # data (GP numbering, the names the knowledge notes key on); a solver rebuild
+            # saves "Turn 1..N" over them -- the repo file in dev, the coach's corner map in
+            # an installed build. Shipped Spa (no stored outline, #82) reached this through
+            # "Add map" -> "Rebuild from saved capture". Maps THIS route or a capture build
+            # produced carry `built_from`, so driving more laps still improves them; only a
+            # map with corners and no such mark (every shipped layout) is refused. A real
+            # mapping capture stays the explicit way to regenerate a curated layout.
+            raise HTTPException(422, "this track has a curated corner map; rebuilding it "
+                                     "from driven laps would replace its corners")
         if not laps:
-            raise HTTPException(422, "saved capture is unreadable")
-        track = track or path.stem  # offline: take the track (slug) from the file name
+            raise HTTPException(422, "saved capture is unreadable" if from_capture
+                                else "no saved capture available")
+        # Stage the live NAME the laps were recorded under when there is one, so Save
+        # names a new map "Silverstone National Circuit", not its slug. Same slug, so
+        # every slug-keyed lookup below is unchanged.
+        slug = track_slug(track)
+        track = next((n for s, n, _p in rows if s == slug), track)
         ribbon = reconstruct_surface(laps)
         if not ribbon:
             raise HTTPException(422, "saved capture lacks position telemetry")
@@ -1401,11 +1540,19 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         extras = _track_file_data(track)
         sectors = extras.get("sectors") or []
         sections = extras.get("sections") or []
+        # "laps": None -- a rebuild never (re)writes captures/<slug>.npz on Save. Its
+        # cloud is already on disk: the capture it read, or the live laps themselves.
+        # Freezing live laps into a capture made the capture WIN every later rebuild, so
+        # laps driven afterwards never reached the map while the badge counted them.
         app.state.last_ribbon = {"world": ribbon, "corners": corners, "sectors": sectors,
-                                 "sections": sections, "track": track, "laps": laps}
+                                 "sections": sections, "track": track, "laps": None,
+                                 "built_from": "capture" if from_capture else "live_laps"}
         res = _clean(ribbon_to_screen(ribbon, corners, sectors,
                                       rotation=_track_rotation(track), sections=sections))
         res["track_name"] = _track_file_data(track).get("name") or track
+        # How many laps back this geometry, so the driver knows before committing it:
+        # a map off 1-3 clouds is thin (#41's Imola sector splits rest on a single lap).
+        res["lap_count"] = len(laps)
         return res
 
     @app.get("/setup")
