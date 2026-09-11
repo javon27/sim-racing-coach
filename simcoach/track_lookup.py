@@ -13,6 +13,8 @@ import string
 import unicodedata
 from pathlib import Path
 
+from simcoach.analysis import CORNER_GEOMETRY_KEYS, measurable_geometry
+
 # Annotation fields a user may customize on a SHIPPED track (saved to app-data and
 # merged over the shipped map on read). Everything else — path/dist/edges/sectors
 # and other reconstructed geometry — is authoritative and ships with the app.
@@ -181,7 +183,22 @@ def load_map_data(
     ``tracks_dir``; the user's annotation overlay (corners/sections/rotation/notes) in
     ``user_dir`` is layered on top so a re-named/re-annotated shipped track keeps the
     app's layout while honouring the user's edits. An UNSHIPPED track (no shipped map)
-    falls back to the user's file as the whole map. Slug-built paths only — no traversal."""
+    falls back to the user's file as the whole map. Slug-built paths only — no traversal.
+
+    Per-corner geometry (CORNER_GEOMETRY_KEYS) lives INSIDE `corners`, so the overlay's
+    corner list does not get the last word on it (#75). Taking the list wholesale let a
+    driver's copy -- written by any save, even a rename -- pin the geometry that shipped
+    on the day they saved, so no re-bake (#73 radius, #74 elevation) could ever reach
+    them. Per overlay corner, matched on `corner_apex_key` (the same identity the editor's
+    carry-forward uses, so read and write agree on which corner a bake belongs to):
+      - a shipped corner at that apex: each metric the shipped corner holds as a
+        measurement wins; the overlay keeps only metrics the shipped one lacks.
+      - no shipped corner at that apex (the driver added it, or moved its apex): the
+        overlay's own geometry, which the editor measured at that apex when it saved.
+        A future SHIPPED re-map that moves an apex off its 1 dp value (a move of ~0.05 m
+        or more) likewise stops reaching existing copies: they keep their own geometry.
+      - a shipped corner the overlay deleted stays deleted: the overlay owns the SET.
+    """
     slug = track_slug(track_name)
     if not slug:
         return {}
@@ -195,6 +212,15 @@ def load_map_data(
     for k in _ANNOTATION_FIELDS:
         if k in user:
             merged[k] = user[k]
+    if isinstance(user.get("corners"), list) and isinstance(bundled.get("corners"), list):
+        by_apex = {key: c for c in bundled["corners"]
+                   if (key := corner_apex_key(c)) is not None}
+        corners = []
+        for c in user["corners"]:
+            s = by_apex.get(corner_apex_key(c), {})
+            geo = {k: s[k] for k in CORNER_GEOMETRY_KEYS if measurable_geometry(k, s.get(k))}
+            corners.append({**c, **geo} if geo else c)
+        merged["corners"] = corners
     return merged
 
 
