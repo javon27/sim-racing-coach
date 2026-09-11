@@ -36,7 +36,8 @@ def _client(tmp_path, monkeypatch, mem_keyring):
     results_dir.mkdir(parents=True)
     player_dir = lmu_dir / "player"
     player_dir.mkdir(parents=True)
-    (player_dir / "Settings.JSON").write_text(json.dumps({"Player Name": "Jayson G"}))
+    # Real Settings.JSON nests "Player Name" under "DRIVER" (issue #86).
+    (player_dir / "Settings.JSON").write_text(json.dumps({"DRIVER": {"Player Name": "Jayson G"}}))
     (results_dir / "race1.xml").write_text(_XML)
 
     monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path / "cfg"))

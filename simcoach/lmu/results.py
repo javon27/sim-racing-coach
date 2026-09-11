@@ -3,7 +3,8 @@
 Player identification: `isPlayer` is set for every driver in MP result files
 (useless). Instead, the result file names its own active profile via
 `<PlayerFile>` -> `UserData/player/{PlayerFile}.JSON` -> its "Player Name"
-field, matched against each `<Driver><Name>`. A config override
+field (nested under "DRIVER" in the real file; older/flat shapes are a
+fallback), matched against each `<Driver><Name>`. A config override
 (`lmu_player_name`) short-circuits this lookup. Never raises -- degrades to
 None on any missing file/field."""
 from __future__ import annotations
@@ -33,7 +34,10 @@ def player_name_for(result_root: ET.Element, player_dir: Path) -> str | None:
         profile = json.loads(
             (Path(player_dir) / f"{player_file.text.strip()}.JSON").read_text()
         )
-        name = profile.get("Player Name")
+        driver = profile.get("DRIVER")
+        name = (driver.get("Player Name") if isinstance(driver, dict) else None) or profile.get(
+            "Player Name"
+        )
         return name if name else None
     except (OSError, json.JSONDecodeError, AttributeError):
         return None
