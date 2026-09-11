@@ -62,15 +62,17 @@ def test_same_line_laps_give_unknown_width_and_bank():
     assert r["center"] and r["left"] and r["right"]     # the corridor is still drawn
 
 
-_TH = np.linspace(0.0, 2 * np.pi, 1200, endpoint=False)   # a CLOSED 628 m loop, like a
-                                                          # real track (a straight wraps
-                                                          # its ends into a false seam)
+_TH = np.linspace(0.0, 2 * np.pi, 1200, endpoint=False)   # a CLOSED 2.5 km loop, like a
+_R = 400.0                                                # real track: a straight wraps its
+                                                          # ends into a false seam, and half
+                                                          # a lap must exceed the 1 km a
+                                                          # spread has to be sustained over
 
 
 def _ring_lap(off, y=None):
-    # One lap of a radius-100 circle at lateral offset `off` (scalar or per-sample).
-    r = 100.0 + np.broadcast_to(np.asarray(off, dtype=float), _TH.shape)
-    ch = {"pos_x": r * np.cos(_TH), "pos_z": r * np.sin(_TH), "lap_distance": _TH * 100.0}
+    # One lap of a radius-400 circle at lateral offset `off` (scalar or per-sample).
+    r = _R + np.broadcast_to(np.asarray(off, dtype=float), _TH.shape)
+    ch = {"pos_x": r * np.cos(_TH), "pos_z": r * np.sin(_TH), "lap_distance": _TH * _R}
     if y is not None:
         ch["pos_y"] = np.broadcast_to(np.asarray(y, dtype=float), _TH.shape)
     return ch
@@ -107,6 +109,34 @@ def test_width_needs_the_edges_to_span_it_not_just_one_stray_lap():
     assert all(w is None for w in r["width"])            # and never written as a width
 
 
+def test_one_lap_straying_wide_is_not_a_width_even_over_hundreds_of_metres():
+    # Real Fuji Speedway, 17 racing laps and no edge laps: every stretch the per-bin gate
+    # let through was LOCAL. The longest ran 236 m, where one qualifying lap (7254) sat
+    # 24.8 m off the pack, and the save baked "width 26m, 2 deg banked" into two corners.
+    # Deliberate edge laps and mapping captures span the width for the whole lap instead
+    # (Spa, Laguna, Algarve: runs of 2311 m and up). Fixture: that exact excursion.
+    wide = (_TH > 1.0) & (_TH < 1.0 + 236.0 / _R)
+    laps = [_ring_lap(o, 3.0 + dy) for o, dy in ((-0.4, 0.0), (0.1, 0.06), (0.5, -0.05), (-0.2, 0.04))]
+    laps.append(_ring_lap(np.where(wide, 24.8, 0.0), np.where(wide, 2.0, 3.0)))
+    r = reconstruct_surface(laps, bins=120)
+    assert all(w is None for w in r["width"])
+    assert all(b is None for b in r["bank"])
+
+
+def test_sustained_spread_run_is_measured_around_the_closed_loop():
+    # A run through the start/finish line is ONE run: an edge-lap stretch straddling the
+    # line must not be split into two short pieces and thrown away.
+    from simcoach.ribbon import _sustained
+    seam = np.zeros(100, dtype=bool)
+    seam[:30] = True
+    seam[-30:] = True                                    # 60 bins, through S/F
+    assert _sustained(seam, 50).tolist() == seam.tolist()
+    mid = np.zeros(100, dtype=bool)
+    mid[40:70] = True                                    # 30 bins, mid-lap
+    assert not _sustained(mid, 50).any()
+    assert _sustained(np.ones(100, dtype=bool), 500).all()   # a whole lap always counts
+
+
 def test_reconstruct_surface_empty_is_empty():
     assert reconstruct_surface([{"lap_distance": np.arange(3.0)}]) == {}
 
@@ -121,7 +151,8 @@ def test_reconstruct_surface_stitches_sparse_seam():
         return {"pos_x": x, "pos_z": z, "lap_distance": x.copy()}
 
     r = reconstruct_surface([edge(1), edge(-1)], bins=50)
-    assert abs(r["width"][25] - 10.0) < 1.0   # mid-lap full width
+    assert abs(_sep(r)[25] - 10.0) < 1.0      # mid-lap full corridor (a 400 m loop is too
+                                              # short to sustain a WIDTH; the edges hold)
     # The stitch is of the EDGES (the seam's samples really converge, so its width is
     # gated to unknown). Smoothing alone already lifts the pinch to ~6.5 m on this
     # fixture, so the bound has to sit above that: stitched 8.3, unstitched 6.48. The old
@@ -146,7 +177,7 @@ def test_reconstruct_surface_keeps_narrow_midlap_corner():
     # old "< 0.75x" held either way; 0.25x separates them.
     sep = _sep(r)
     assert sep[25] < 0.25 * sep[10]
-    assert r["width"][10] > 5.0   # a straight bin keeps the full weave spread
+    assert sep[10] > 5.0          # a straight bin keeps the full weave spread
     assert r["width"][25] is None  # ...and one line through the corner measures no width
 
 

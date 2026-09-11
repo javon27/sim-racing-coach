@@ -213,10 +213,41 @@ def _lap_grid(x, z, d, max_len, bins):
 # Measured share of bins reaching 6 m: first 1-4 racing laps of Silverstone National/
 # Laguna/Algarve 0-6%; mapping captures (Laguna, Algarve, Monza, Bahrain, Le Mans)
 # 97-100%; Spa edge laps 100%. Gated on the spread itself, not on where the laps came
-# from, so racing laps that DO use the width (a long race stint) still count.
-# ponytail: peak-to-peak, so one lap running wide lends its bin a spread; a
-# percentile spread across laps is the upgrade if that shows up in saved maps.
+# from.
 _MIN_SPREAD_M = 6.0
+
+# ...and that spread has to be SUSTAINED along the track: a bin counts only inside a
+# closed-loop run of such bins at least this long. Per bin, peak-to-peak lets ONE lap
+# running wide lend its bins a spread: on 17 real Fuji racing laps (no edge laps) it let
+# 26% of bins through and baked "width 26m, 2 deg banked" into two corners, off a single
+# qualifying lap 24.8 m off the pack. Measured run lengths -- racing-line clouds are
+# local: Fuji 17 laps longest 236 m, Laguna 45 165 m, Algarve 19 148 m (Silverstone
+# National 17 has one 632 m run off two slow race laps); spanning clouds hold for the
+# whole lap: Spa 1 left + 1 right edge lap 6990 m, Laguna capture 3595 m, Algarve
+# capture 4362 m (+ a 260 m fragment). 1000 m sits in the widest gap between the two.
+_MIN_SPREAD_RUN_M = 1000.0
+
+
+def _sustained(mask: np.ndarray, min_bins: int) -> np.ndarray:
+    """`mask` with every True run shorter than `min_bins` cleared. Closed loop: a run
+    through the start/finish line is one run. An all-True mask is a whole lap and
+    always kept, even on a lap shorter than `min_bins`."""
+    if mask.all() or not mask.any():
+        return mask.copy()
+    start = int(np.argmin(mask))           # a False bin: rotate it first so no run wraps
+    m = np.roll(mask, -start)
+    out = np.zeros(len(m), dtype=bool)
+    i = 0
+    while i < len(m):
+        if not m[i]:
+            i += 1
+            continue
+        j = i
+        while j < len(m) and m[j]:
+            j += 1
+        out[i:j] = j - i >= min_bins
+        i = j
+    return np.roll(out, start)
 
 
 def _bank_per_bin(X, Z, Y, members, ctr_x, ctr_z, lat_x, lat_z, bins, w=_SMOOTH_W):
@@ -380,6 +411,9 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
     wid = np.where((spread >= _MIN_SPREAD_M) & (wid >= _MIN_SPREAD_M), wid, np.nan)
 
     bnk = _bank_per_bin(X, Z, Y, members, ctr_x, ctr_z, lat_x, lat_z, bins, w=sw)
+    run = max(1, int(np.ceil(_MIN_SPREAD_RUN_M * bins / max_len)))
+    wid = np.where(_sustained(np.isfinite(wid), run), wid, np.nan)
+    bnk = np.where(_sustained(np.isfinite(bnk), run), bnk, np.nan)
 
     def _round(a, n):  # non-finite -> 0.0, JSON-safe (edges/dist are always finite)
         return [round(float(v), n) if np.isfinite(v) else 0.0 for v in a]
