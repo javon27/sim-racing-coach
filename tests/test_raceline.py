@@ -275,8 +275,11 @@ def test_telem_calibration_reads_lmu_long_g_sign():
     # and a symmetric pair could not tell the two readings apart.
     from simcoach.raceline import CarParams, _calibrate
 
-    car = _calibrate(CarParams(), {"lat_g": np.array([1.8, -1.7]),
+    # lat_g's larger magnitude is on the NEGATIVE (right-hand) side, so a calibration
+    # that dropped np.abs() would read mu 1.7 instead of 1.8.
+    car = _calibrate(CarParams(), {"lat_g": np.array([1.7, -1.8]),
                                    "long_g": np.array([2.38, 0.4, -0.90, np.nan])})
+    assert abs(car.mu - 1.8) < 1e-9
     assert abs(car.a_brake - 2.38 * car.g) < 1e-9
     assert abs(car.a_accel - 0.90 * car.g) < 1e-9
     assert car.a_brake > car.a_accel   # a car brakes harder than it accelerates

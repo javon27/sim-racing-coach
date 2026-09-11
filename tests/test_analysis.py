@@ -18,6 +18,14 @@ def test_analyze_lap_metrics(synthetic_lap):
     # Trail braking is a per-corner reading, not a constant: the hairpin is braked
     # to its minimum, the sweeper released before turn-in.
     assert c1.trailbrake_overlap > c2.trailbrake_overlap
+    # Magnitudes of SIGNED channels, one corner of each hand (#70 red-team). lat_g is
+    # + in the left hairpin and - in the right sweeper, so a signed max(lat_g) reads
+    # 1.25 / 0.00 and max(-lat_g) 0.00 / 1.53 -- zeroing every corner of one hand.
+    assert abs(c1.peak_lat_g - 1.25) < 0.01 and abs(c2.peak_lat_g - 1.53) < 0.01
+    # track_edge and path_lateral carry the car's side, so the signed differences
+    # (edge - path_lat: -4.96 / -6.48; edge - |path_lat|: -9.20 / -11.44) would put
+    # every corner "past the edge". Only |edge| - |path_lat| gives the real gap.
+    assert abs(c1.track_edge_min - 0.31) < 0.01 and abs(c2.track_edge_min - 1.56) < 0.01
 
 
 def test_brake_point_found_when_braking_is_in_the_approach(synthetic_lap):

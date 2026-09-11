@@ -217,11 +217,15 @@ _DIST = list(np.linspace(0.0, 40.0, 40))
 _N = len(_DIST)
 
 
-def _edge_signals(steer_sign):
+# The same quarter-circle mirrored across x: a RIGHT turn.
+_RIGHT_CENTER = [[x, -z] for x, z in _LEFT_CENTER]
+
+
+def _edge_signals(steer_sign, lat_g=1.0):
     return {
         "lap_distance": np.array(_DIST),
         "steering": np.full(_N, steer_sign * 0.4),  # >0 right, <0 left (RIGHT_IS_POSITIVE)
-        "lat_g": np.full(_N, 1.0),                   # >0 -> left
+        "lat_g": np.full(_N, lat_g),                 # >0 -> left, <0 -> right
     }
 
 
@@ -230,6 +234,15 @@ def test_multi_signal_direction_agreement_is_high():
     d, conf = multi_signal_direction(_LEFT_CENTER, _DIST, 20.0,
                                      _edge_signals(-1), lap_length=40.0, half=0.3)
     assert d == "left" and conf == "high"
+
+
+def test_multi_signal_direction_agreement_is_high_for_a_right_turn():
+    # The mirror case (#70 red-team): a right turn reads NEGATIVE lat_g. The left-only
+    # test above cannot tell a vote on lat_g's sign from a vote on |lat_g|, which says
+    # "left" for every corner and flags every right-hander low-confidence.
+    d, conf = multi_signal_direction(_RIGHT_CENTER, _DIST, 20.0,
+                                     _edge_signals(+1, lat_g=-1.0), lap_length=40.0, half=0.3)
+    assert d == "right" and conf == "high"
 
 
 def test_multi_signal_direction_disagreement_is_low():
