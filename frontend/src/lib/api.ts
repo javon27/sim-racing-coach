@@ -577,6 +577,9 @@ export interface TrackRow {
   /** Live-captured lap rows. Exceeds `captures` for laps recorded before position
    *  capture existed (47 channels, no pos_*) -- they can never be rebuilt from. */
   live_laps: number;
+  /** A saved capture exists but yields no usable cloud (corrupt, or no lap with
+   *  position data). It blocks the build (captures 0) whatever live_laps holds (#84). */
+  capture_unreadable?: boolean;
 }
 
 export interface TrackNotes {

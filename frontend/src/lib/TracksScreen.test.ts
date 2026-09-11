@@ -477,3 +477,20 @@ test("a buildable track counts usable laps, not rows, and carries no elevation w
   expect(within(row).getByRole("button", { name: "Build map from 17 laps" })).toBeTruthy();
   expect(within(row).queryByText(/elevation/i)).toBeNull();
 });
+
+test("an unreadable saved capture is named, not blamed on laps that have position data", async () => {
+  // #84: a corrupt captures/<slug>.npz arrives as captures 0 beside 17 good live laps. The
+  // badge used to read "17 laps, none with position data" -- false. It must name the
+  // capture instead, and still offer no build (the server refuses to fall back).
+  vi.spyOn(api, "listTracks").mockResolvedValue([
+    {
+      slug: "fuji_speedway", name: "Fuji", has_map: false, has_notes: false,
+      user_edited: false, captures: 0, live_laps: 17, capture_unreadable: true,
+    },
+  ]);
+  render(TracksScreen);
+  const row = (await screen.findByText("Fuji")).closest("li")!;
+  expect(within(row).getByText("saved capture unreadable, 17 laps driven")).toBeTruthy();
+  expect(within(row).queryByText(/position data/)).toBeNull();
+  expect(within(row).queryByRole("button", { name: /build map/i })).toBeNull();
+});

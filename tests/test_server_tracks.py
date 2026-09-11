@@ -863,7 +863,8 @@ def test_get_tracks_mapped_track_row_shape_unchanged(tmp_path):
     rows = client.get("/tracks").json()
     row = next(t for t in rows if t["slug"] == "algarve_international_circuit")
     assert set(row) == {"slug", "name", "has_map", "has_notes", "user_edited",
-                        "captures", "live_laps"}
+                        "captures", "live_laps", "capture_unreadable"}
+    assert row["capture_unreadable"] is False
     assert row["has_map"] is True
     assert row["has_notes"] is False
     assert row["user_edited"] is False
@@ -1047,6 +1048,66 @@ def test_badge_counts_the_capture_a_build_uses_not_the_live_laps_beside_it(tmp_p
     row = _row(client)
     assert row["has_map"] is False and row["live_laps"] == 7
     assert row["captures"] == _rebuild(client)["lap_count"] == 2
+    assert row["capture_unreadable"] is False       # a capture that loads is not flagged
+
+
+def _unusable_capture(store, shape):
+    # captures/<slug>.npz that EXISTS and yields no usable cloud: garbage bytes (np.load
+    # fails -> _load_cloud []), or a real npz whose laps carry no position data.
+    from simcoach.server.app import _save_cloud
+    cap = Path(store.data_dir) / "captures" / f"{_SLUG}.npz"
+    if shape == "garbage":
+        cap.parent.mkdir(parents=True, exist_ok=True)
+        cap.write_bytes(b"not an npz")
+    else:
+        nan = np.full(2000, np.nan)
+        _save_cloud(cap, [{"pos_x": nan, "pos_z": nan, "lap_distance": nan}])
+        assert np.load(str(cap)).files                  # it really loads
+    return cap
+
+
+@pytest.mark.parametrize("shape", ["garbage", "no_usable_laps"])
+def test_an_unusable_capture_is_reported_not_blamed_on_the_live_laps(tmp_path, shape):
+    # #84: a capture that exists but yields nothing used to read as captures 0 beside
+    # live_laps 3 -- "3 laps, none with position data", which is false -- and the rebuild
+    # 422'd "saved capture is unreadable" with no way forward. Still refused (#69: a driver
+    # who asked for the capture must not silently get geometry off other data), but named.
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    for z in (-5.0, 5.0, 0.0):
+        _cloud_lap(store, z)
+    assert _rebuild(client)["lap_count"] == 3           # control: the live laps DO build
+    _unusable_capture(store, shape)
+
+    row = _row(client)
+    assert row["capture_unreadable"] is True
+    assert row["captures"] == 0 and row["live_laps"] == 3
+    r = client.post("/mapcapture/rebuild", json={"slug": _SLUG})
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"] == (f"the saved capture for this track can't be read "
+                                  f"({_SLUG}.npz); delete it to build from your 3 laps")
+
+
+@pytest.mark.parametrize("why", ["no_position_laps", "curated_map"])
+def test_an_unusable_capture_never_points_at_a_delete_that_cannot_build(tmp_path, why):
+    # "Delete it to build from your N laps" is only true when deleting it WOULD build: not
+    # when every live lap predates position capture, and not over a curated corner map,
+    # which a live-lap rebuild refuses. Those get the way out that does work.
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    if why == "no_position_laps":
+        _live_lap(store, _NAME, 4, pos=False)
+    else:
+        for z in (-5.0, 5.0, 0.0):
+            _cloud_lap(store, z)
+        (tmp_path / "tracks" / f"{_SLUG}.json").write_text(json.dumps({
+            "track": _SLUG, "corners": [{"number": 1, "name": "Copse", "direction": "right",
+                                         "start_dist": 100.0, "apex_dist": 150.0,
+                                         "end_dist": 200.0}]}), encoding="utf-8")
+    _unusable_capture(store, "garbage")
+    assert _row(client)["capture_unreadable"] is True
+    r = client.post("/mapcapture/rebuild", json={"slug": _SLUG})
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"] == (f"the saved capture for this track can't be read "
+                                  f"({_SLUG}.npz); use Generate map layout to record a new one")
 
 
 def test_live_lap_rebuild_does_not_freeze_a_capture_so_later_laps_reach_the_map(tmp_path):

@@ -167,8 +167,11 @@
   // ever be rebuilt from (Sebring: 15 live, 0 usable). Say that rather than hiding the
   // row: the driver needs to know those laps are unrecoverable and the track wants
   // re-driving (#66).
+  // An unreadable saved capture blocks the build whatever the laps hold, so it is named
+  // before the position-data reading, which would otherwise be false (#84).
   const coverage = (t: TrackRow): string =>
     t.captures > 0 ? lapWord(t.captures)
+    : t.capture_unreadable ? `saved capture unreadable${t.live_laps > 0 ? `, ${lapWord(t.live_laps)} driven` : ""}`
     : t.live_laps > 0 ? `${lapWord(t.live_laps)}, none with position data`
     : "";
 

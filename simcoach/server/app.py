@@ -383,7 +383,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 "ORDER BY id").fetchall()
         return [(track_slug(n), n, p) for n, p in rows if track_slug(n)]
 
-    def _rebuild_clouds(track: str, rows=None) -> tuple[list[dict], bool]:
+    def _rebuild_clouds(track: str, rows=None, *, capture: bool = True
+                        ) -> tuple[list[dict], bool]:
         # (laps, from_capture): EXACTLY the usable clouds a rebuild of `track` consumes.
         # /tracks counts this and /mapcapture/rebuild builds from it, so the badge and
         # the build cannot disagree (#69) -- e.g. a save-cloud capture of 2 laps beside 7
@@ -394,6 +395,11 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # position channels off the track's own LIVE laps' .npz files, in the same shape
         # _load_cloud returns. Laps recorded before position capture landed (47 channels,
         # no pos_*) are not usable and so are neither counted nor built from.
+        #
+        # ([], True) is its own state: a capture EXISTS and yields nothing (corrupt, or no
+        # usable lap in it). It still wins -- never a silent fall-back to other data (#69)
+        # -- so callers must name it, not read it as "no laps with position data" (#84).
+        # capture=False skips the capture, to count what deleting it would leave.
         slug = track_slug(track)
         if not slug:
             # A map file name with nothing to slug ("---.json" dropped into app-data
@@ -402,7 +408,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             # the-screen failure R1/R2 fixed for lap files.
             return [], False
         path = _capture_path(track)
-        if path.exists():
+        if capture and path.exists():
             return [ch for ch in _load_cloud(path) if _usable_cloud(ch)], True
         laps = []
         for lap_slug, _name, p in (_live_lap_paths() if rows is None else rows):
@@ -1324,6 +1330,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         for slug in sorted(slugs):
             merged = _track_file_data(slug)
             notes = merged.get("notes") or {}
+            clouds, from_capture = _rebuild_clouds(slug, rows)
             out.append({
                 "slug": slug,
                 # No map file yet -> the live name the laps were recorded under beats a
@@ -1333,8 +1340,11 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 "has_map": bool(merged.get("path") or merged.get("corners")),
                 "has_notes": bool(notes.get("overview") or notes.get("corners")),
                 "user_edited": (user_dir / f"{slug}.json").exists(),
-                "captures": len(_rebuild_clouds(slug, rows)[0]),
+                "captures": len(clouds),
                 "live_laps": live.get(slug, 0),
+                # A capture that exists and yields nothing blocks the build, so captures is
+                # 0 whatever the live laps hold: say so, never "none with position data" (#84).
+                "capture_unreadable": from_capture and not clouds,
             })
         return out
 
@@ -1593,8 +1603,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # laps and no captures/<slug>.npz, used to 422 here with no way forward.
         laps, from_capture = _rebuild_clouds(track, rows)
         existing_map = _track_file_data(track)
-        if (not from_capture and existing_map.get("corners")
-                and not existing_map.get("built_from")):
+        curated = bool(existing_map.get("corners") and not existing_map.get("built_from"))
+        if not from_capture and curated:
             # Never rebuild a CURATED corner map from driven laps. Its corners are owned
             # data (GP numbering, the names the knowledge notes key on); a solver rebuild
             # saves "Turn 1..N" over them -- the repo file in dev, the coach's corner map in
@@ -1605,9 +1615,17 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             # mapping capture stays the explicit way to regenerate a curated layout.
             raise HTTPException(422, "this track has a curated corner map; rebuilding it "
                                      "from driven laps would replace its corners")
+        if not laps and not from_capture:
+            raise HTTPException(422, "no saved capture available")
         if not laps:
-            raise HTTPException(422, "saved capture is unreadable" if from_capture
-                                else "no saved capture available")
+            # The capture exists and yields nothing. Still refused (#69), but name the file
+            # and the way out (#84). "Delete it" only where deleting it WOULD build: some
+            # usable live laps, and no curated map for the live-lap refusal above to hit.
+            n = 0 if curated else len(_rebuild_clouds(track, rows, capture=False)[0])
+            way_out = (f"delete it to build from your {n} lap{'' if n == 1 else 's'}" if n
+                       else "use Generate map layout to record a new one")
+            raise HTTPException(422, f"the saved capture for this track can't be read "
+                                     f"({_capture_path(track).name}); {way_out}")
         # Stage the live NAME the laps were recorded under when there is one, so Save
         # names a new map "Silverstone National Circuit", not its slug. Same slug, so
         # every slug-keyed lookup below is unchanged.
