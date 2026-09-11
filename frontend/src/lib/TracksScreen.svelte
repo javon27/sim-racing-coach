@@ -206,11 +206,16 @@
       notesRev = res.rev ?? null;
       saveStatus = "Saved.";
     } catch (e) {
-      // 409 stale / 428 no rev. Say so and leave the driver's edits exactly where they are;
-      // reloading replaces what they typed, so it is their click, never automatic.
-      if (/-> (409|428)\b/.test(String((e as Error)?.message ?? ""))) {
+      // 409 stale / 428 no rev. Say which, and leave the driver's edits exactly where they
+      // are; reloading replaces what they typed, so it is their click, never automatic.
+      const msg = String((e as Error)?.message ?? "");
+      if (/-> 409\b/.test(msg)) {
         notesStale = true;
         saveStatus = "Not saved: these notes changed since you opened them (a map save can move or drop notes). Your edits are still below; copy anything you need, then reload.";
+      } else if (/-> 428\b/.test(msg)) {
+        // No rev means the notes never loaded (notesRev is null) -- nothing changed on disk.
+        notesStale = true;
+        saveStatus = "Not saved: this track's notes didn't load, so the save can't be checked against what's on disk. Your edits are still below; copy anything you need, then reload.";
       } else {
         saveStatus = "Save failed.";
       }

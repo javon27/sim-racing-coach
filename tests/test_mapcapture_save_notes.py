@@ -89,13 +89,14 @@ def test_mapcapture_save_preserves_authored_notes(tmp_path):
     assert written["ribbon"]["width"]            # ...including the new surface
 
 
-def test_mapcapture_save_drops_the_note_of_a_corner_the_rebuild_moved(tmp_path, caplog):
+def test_mapcapture_save_drops_a_note_whose_nearest_corner_already_belongs_to_another(
+        tmp_path, caplog):
     # Was "drops corner notes when the corner count changes", which deleted EVERY
     # per-corner note whenever the solver found one more corner anywhere on the lap.
-    # Under #64 a note is dropped only when the corner it was written about is gone:
-    # here the rebuild keeps T1 at 20 m but finds nothing near 40 m (its other corners
-    # land at 70 m and 90 m, and T2's nearest counterpart is T1, already matched), so
-    # T2's note goes -- LOUDLY, with its text -- and T1's stays.
+    # What this pins: T2 (40 m) has no corner of its own after the rebuild. Its nearest
+    # new corner is T1 at 20 m, which T1's exact match already holds, so T2 has no second
+    # choice -- even though the rebuild's 70 m corner is within 50 m of it. T2's note goes,
+    # LOUDLY and with its text; T1's stays.
     app, client, tracks_dir = _client(tmp_path)
     assert _put_notes(client, {"1": "brake late",
                                "2": "the slow left hairpin - huge patience"}).status_code == 200

@@ -233,12 +233,14 @@ def _finite(value) -> float | None:
     return f if math.isfinite(f) else None
 
 
-def _corner_apexes(corners) -> list[tuple[str, float | None]]:
-    """(label, apex distance) per corner that has a designation. Corners arrive here from
-    arbitrary JSON, so anything that isn't a corner-shaped dict is skipped."""
+def _corner_apexes(corners) -> list[tuple[str, float | None, str]]:
+    """(label, apex distance, direction) per corner that has a designation; direction is
+    '' when the corner has none. Corners arrive here from arbitrary JSON, so anything that
+    isn't a corner-shaped dict is skipped."""
     if not isinstance(corners, list):
         return []
-    return [(lab, _finite(c.get("apex_dist"))) for c in corners
+    return [(lab, _finite(c.get("apex_dist")), str(c.get("direction") or "").lower())
+            for c in corners
             if isinstance(c, dict) and (lab := str(c.get("label") or c.get("number") or ""))]
 
 
@@ -248,6 +250,11 @@ def _corner_apexes(corners) -> list[tuple[str, float | None]]:
 # probe, 50 m kept the most notes with none misbound; 30 m dropped real matches on 6 of
 # the 11 tracks; requiring the old apex inside the new corner's window as well changed
 # nothing; window containment alone misbound a note on Bahrain Paddock.
+#   What a distance alone cannot tell apart is two neighbours drifting together (Bahrain
+# Endurance T7/T8, 50.2 m apart, both +30 m). Rule 2 below settles that with the corners'
+# own direction and by refusing any choice with a second candidate; on the red-team's
+# drift harness that took cross-corner misbinds from 0/5/16/92/258 to 0/0/1/4/9 at
+# 0/10/20/30/40 m of drift, with no note lost on any real rebuild.
 _SAME_CORNER_M = 50.0
 
 
@@ -262,13 +269,18 @@ def corner_identity_map(old_corners, new_corners) -> dict[str, str]:
          renumbered to 3,4,5,6 leave every apex where it was, so each note moves with
          its corner instead of rebinding to the corner two places up the lap. These
          claims are made first, so an exact match always beats a tolerant one.
-      2. For each old corner still unmatched: its nearest new corner, if that corner is
-         unclaimed, within _SAME_CORNER_M, and UNAMBIGUOUS -- no other new corner is as
-         near to it, and no other unmatched old corner is as near to that new one. A
+      2. For each old corner still unmatched: its nearest new corner that turns the same
+         way -- `direction` is computed geometry the map owns; a missing one never blocks
+         -- if that corner is unclaimed, within _SAME_CORNER_M, and UNAMBIGUOUS: it is the
+         only free same-way corner within reach, no other unmatched old corner nominates
+         it, and no other same-way unmatched old corner is at least as near to it. A
          rebuild moves every apex by tens of metres, and a curator drags one by a few;
          both stay the same corner. It also absorbs the 1 dp rounding boundary (100.04
          and 100.06 round apart). If the nearest corner already belongs to an exact
          match, there is no second choice: a corner whose own position is taken is gone.
+         Every nomination is made before any is accepted, so the result never depends on
+         the order corners are listed in: a check that ran in loop order let Bahrain
+         Endurance's T8 claim T7's corner after T7 had stood aside as ambiguous.
 
     Deliberately NOT here, because each was a misbind: a label match (#64 itself), and
     a match by position in lap order. Position ignored distance, so deleting a corner
@@ -283,13 +295,13 @@ def corner_identity_map(old_corners, new_corners) -> dict[str, str]:
     """
     old, new = _corner_apexes(old_corners), _corner_apexes(new_corners)
     by_apex: dict[float, int] = {}
-    for j, (_, apex) in enumerate(new):
+    for j, (_, apex, _) in enumerate(new):
         if apex is not None:
             by_apex.setdefault(round(apex, 1), j)
     out: dict[str, str] = {}
     claimed: set[int] = set()
     left = []
-    for i, (lab, apex) in enumerate(old):
+    for i, (lab, apex, _) in enumerate(old):
         j = by_apex.get(round(apex, 1)) if apex is not None else None
         if j is None or j in claimed:
             left.append(i)
@@ -301,20 +313,33 @@ def corner_identity_map(old_corners, new_corners) -> dict[str, str]:
         a, b = old[i][1], new[j][1]
         return abs(a - b) if a is not None and b is not None else math.inf
 
+    def same_way(i: int, j: int) -> bool:
+        a, b = old[i][2], new[j][2]
+        return not (a and b and a != b)
+
     # ponytail: straight-line lap distance, so a corner jittering across the S/F seam
     # (5 m vs length-3 m) finds no match and its note drops, loudly. Wrap needs the lap
     # length passed in -- add it if a shipped map ever has a corner on the seam.
-    for i in left:
-        if not new:
-            break
-        g = min(gap(i, j) for j in range(len(new)))
-        near = [j for j in range(len(new)) if gap(i, j) == g]
+    def nominee(i: int) -> int | None:
+        ways = [j for j in range(len(new)) if same_way(i, j)]
+        if not ways:
+            return None
+        g = min(gap(i, j) for j in ways)
+        near = [j for j in ways if gap(i, j) == g]
         if g > _SAME_CORNER_M or len(near) != 1 or near[0] in claimed:
-            continue
-        if any(gap(k, near[0]) <= g for k in left if k != i):
-            continue
-        claimed.add(near[0])
-        out.setdefault(old[i][0], new[near[0]][0])
+            return None                            # too far, a tie, or already someone's
+        if sum(1 for j in ways if j not in claimed and gap(i, j) <= _SAME_CORNER_M) > 1:
+            return None                            # two free corners it could be
+        return near[0]
+
+    # ponytail: O(leftovers^2); both sides are capped at 100 corners.
+    nominated = {i: nominee(i) for i in left}
+    for i, j in nominated.items():
+        if j is None or sum(1 for v in nominated.values() if v == j) > 1:
+            continue                               # nothing, or a corner two old ones want
+        if any(gap(k, j) <= gap(i, j) and same_way(k, j) for k in left if k != i):
+            continue                               # another is at least as near to it
+        out.setdefault(old[i][0], new[j][0])
     return out
 
 
@@ -400,7 +425,7 @@ def guard_corner_notes(slug: str, old_notes: dict | None, old_corners,
             "track %s: ignored a non-object `notes.corners` (%s, %d chars); per-corner "
             "notes must be an object keyed by corner label. Ignored: %.200r",
             slug, type(old).__name__, len(str(old)), old)
-    new_labels = {lab for lab, _ in _corner_apexes(new_corners)}
+    new_labels = {lab for lab, *_ in _corner_apexes(new_corners)}
     identity = corner_identity_map(old_corners, new_corners)
     moved: dict[str, str] = {}
     # By OLD key: which authored notes actually landed somewhere. Computing the drops by

@@ -11,6 +11,7 @@ from simcoach.track_lookup import (
     guard_corner_notes,
     load_track_knowledge,
     note_key_binds,
+    note_key_labels,
     resolve_track_map,
     track_slug,
 )
@@ -450,16 +451,64 @@ def test_a_deleted_corner_drops_its_own_note_and_only_its_own():
 def test_dragging_an_apex_keeps_the_note_on_that_corner():
     # The curator nudges every apex a little. No apex matches exactly any more, so each
     # corner is identified by its nearest counterpart within the tolerance -- an authored
-    # note must not evaporate because someone moved a marker a metre.
+    # note must not evaporate because someone moved a marker a few metres. Corners 100 m
+    # apart, as real ones are: at the 10 m spacing this used, every corner has two free
+    # candidates within 50 m, which is exactly the shape rule 2 now calls ambiguous.
     notes = guard_corner_notes(
         "algarve", {"corners": {"2": "late apex"}},
-        _at(("1", 10.0), ("2", 20.0), ("3", 30.0)),
-        _at(("1", 11.0), ("2", 22.0), ("3", 33.0)))
+        _at(("1", 100.0), ("2", 200.0), ("3", 300.0)),
+        _at(("1", 102.0), ("2", 204.0), ("3", 306.0)))
     assert notes["corners"] == {"2": "late apex"}
     # The 1 dp rounding boundary: 100.04 and 100.06 round apart, and are one corner.
     notes = guard_corner_notes("algarve", {"corners": {"7": "x"}},
                                _at(("7", 100.04)), _at(("7A", 100.06)))
     assert notes["corners"] == {"7A": "x"}
+
+
+def test_two_neighbours_drifting_together_never_swap_notes():
+    # Red-team, on Bahrain Endurance: T7 (a left, apex 2043.0) and T8 (a right, 2093.2) sit
+    # 50.2 m apart. A rebuild moves the same physical corner 25-49 m in lap distance, so
+    # shift both by +30/+35 m: T8's old apex is then 20 m from T7's NEW one. The rule on
+    # d53ae40 skipped T7 as ambiguous but let T8 claim T7's corner, so the left-hander was
+    # served "Right, tight infield..." as authored fact and T8 got nothing. Whatever the
+    # rule does with a contested corner, no note may land on a corner it was not written
+    # about -- with the labels kept, and with the lap renumbered around an added corner.
+    def corner(label, apex, direction):
+        return {"label": label, "apex_dist": apex, "direction": direction}
+
+    old = [corner("6", 1900.0, "right"), corner("7", 2043.0, "left"), corner("8", 2093.2, "right")]
+    notes = {"7": "T7: left", "8": "T8: right, tight infield. Brake early and straight"}
+    physical = {1900.0: "T6", 2073.0: "T7", 2128.2: "T8"}       # where each corner is NOW
+    layouts = {
+        "labels kept": [corner("6", 1900.0, "right"), corner("7", 2073.0, "left"),
+                        corner("8", 2128.2, "right")],
+        "positional relabel": [corner("6", 1500.0, "left"), corner("7", 1900.0, "right"),
+                               corner("8", 2073.0, "left"), corner("9", 2128.2, "right")],
+    }
+    for name, new in layouts.items():
+        got = (guard_corner_notes("bahrain_endurance_circuit", {"corners": dict(notes)},
+                                  old, new) or {}).get("corners", {})
+        for key, text in got.items():
+            served_on = {physical.get(c["apex_dist"]) for c in new
+                         if c["label"] in note_key_labels(key)}
+            assert served_on == {text[:2]}, (name, key, text, served_on)
+
+
+def test_a_corner_re_split_into_two_pieces():
+    # Chicane-split coverage, lost when the count-changes fixture had to move its corners
+    # apart. T3 (a left at 60 m) comes back from a rebuild as two pieces, both within 50 m.
+    # The contract: direction is the map's own computed geometry, so the piece that turns
+    # the same way gets the note -- even when the other piece is nearer. When both pieces
+    # turn the same way nothing says which one is the corner, so the note is dropped rather
+    # than guessed.
+    old = [{"label": "3", "apex_dist": 60.0, "direction": "left"}]
+    notes = {"corners": {"3": "the chicane"}}
+    left_and_right = [{"label": "3", "apex_dist": 55.0, "direction": "right"},
+                      {"label": "4", "apex_dist": 70.0, "direction": "left"}]
+    assert guard_corner_notes("t", notes, old, left_and_right)["corners"] == {"4": "the chicane"}
+    both_left = [{"label": "3", "apex_dist": 55.0, "direction": "left"},
+                 {"label": "4", "apex_dist": 70.0, "direction": "left"}]
+    assert guard_corner_notes("t", notes, old, both_left) is None
 
 
 def test_a_deleted_corner_and_an_added_one_never_bind_even_at_the_same_count():

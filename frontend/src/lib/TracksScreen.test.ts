@@ -349,3 +349,24 @@ test("a stale notes save keeps the driver's edits and offers an explicit reload"
   expect(screen.queryByRole("button", { name: /reload notes/i })).toBeNull();
   expect(screen.queryByText(/changed since you opened them/i)).toBeNull();
 });
+
+test("a save after the notes failed to load says so, not that they changed", async () => {
+  // A failed GET leaves no rev, so the server answers 428. Telling the driver the notes
+  // "changed since you opened them" would be false -- they never loaded. Edits still stay.
+  vi.spyOn(api, "getTrackMap").mockResolvedValue({});
+  vi.spyOn(api, "getTrackNotes").mockRejectedValueOnce(new Error("API request failed: GET /tracks/x/notes -> 500"));
+  const saveSpy = vi.spyOn(api, "saveNotes").mockRejectedValue(new Error(
+    "API request failed: PUT /tracks/algarve_international_circuit/notes -> 428: notes rev required"));
+  saveSpy.mockClear();
+  render(TracksScreen);
+  await fireEvent.click(await screen.findByText("Algarve"));
+  const overview = (await screen.findByLabelText(/overview/i)) as HTMLTextAreaElement;
+  await fireEvent.input(overview, { target: { value: "typed after a failed load" } });
+  await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+  expect(await screen.findByText(/notes didn't load/i)).toBeTruthy();
+  expect(screen.queryByText(/changed since you opened them/i)).toBeNull();
+  expect(saveSpy.mock.calls[0][3]).toBeNull();                      // really sent with no rev
+  expect((screen.getByLabelText(/overview/i) as HTMLTextAreaElement).value).toBe("typed after a failed load");
+  expect(screen.getByRole("button", { name: /reload notes/i })).toBeTruthy();
+});
