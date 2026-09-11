@@ -102,10 +102,14 @@ def test_width_needs_the_edges_to_span_it_not_just_one_stray_lap():
     # Real Algarve racing laps: the two BOUND laps (edges) sat ~2 m apart, and a third lap
     # running 7 m wide over a stretch lent those bins a spread the edges never had --
     # 97 bins passed on spread alone with a median width of 1.8 m.
-    wide = (_TH > 1.5) & (_TH < 1.9)
-    r = reconstruct_surface([_ring_lap(1.0), _ring_lap(-1.0), _ring_lap(np.where(wide, 7.0, 0.0))],
+    # The stray stretch is 1200 m, past the sustained-run length, so ONLY the edge-
+    # separation check can refuse it (a short one is already refused by the run rule,
+    # and then this test would pass with that check deleted). The stray lap sits at -2 m
+    # elsewhere so its mean stays inside the bound laps' and it is not picked as an edge.
+    wide = (_TH > 1.0) & (_TH < 1.0 + 1200.0 / _R)
+    r = reconstruct_surface([_ring_lap(2.5), _ring_lap(-2.5), _ring_lap(np.where(wide, 7.0, -2.0))],
                             bins=120)
-    assert np.all(_sep(r) < 3.0)                         # the bound-lap corridor is ~2 m
+    assert np.all(_sep(r) < 6.0)                         # the bound-lap corridor is ~5 m
     assert all(w is None for w in r["width"])            # and never written as a width
 
 
