@@ -33,7 +33,7 @@ from ..analysis import (
 )
 from ..car_lookup import resolve_car
 from ..car_notes import load_car_notes, load_setup_concepts
-from ..coach_tools import CoachContext
+from ..coach_tools import CoachContext, race_result_text, scrub_stored_answer
 from ..corners import CornerMap, in_window, validated_sectors
 from ..driver import DriverProfile
 from ..lmu.ingest import ingest_all
@@ -1612,7 +1612,15 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                         if row.get("question"):
                             history.append({"role": "user", "content": row["question"]})
                         if row.get("answer"):
-                            history.append({"role": "assistant", "content": row["answer"]})
+                            # scrub_stored_answer, not the raw row: an older answer can
+                            # assert a fabricated grip reading (#72) or a race start the
+                            # coach could not know (#67) as established fact, and
+                            # resuming the chat would re-feed it to the model as its own
+                            # prior reasoning.
+                            history.append({"role": "assistant",
+                                            "content": scrub_stored_answer(row["answer"],
+                                                                           row["ts"],
+                                                                           row.get("track"))})
                 except Exception:
                     history = []
 
@@ -1760,10 +1768,11 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         track, car = laps[0]["track"], laps[0]["car"]
 
         digest = [f"Session {session_id} -- track {track}, car {car}, {len(laps)} lap(s)."]
-        arc = app.state.store.session_position_arc(session_id)
-        if arc:
-            digest.append(f"Race arc: started P{arc['start']}, best P{arc['best']}, "
-                          f"worst P{arc['worst']}, finished P{arc['last']}.")
+        # Via the shared owner, never a local arc read: an unscoped session_position_arc
+        # here called the first captured lap of ANY phase a starting position, which is
+        # the #67 defect the coach tool was fixed for. One wording, one place.
+        race = race_result_text(app.state.store, session_id)
+        digest.append(race)
 
         cmap = _cmap_for_map(track)
         if cmap and cmap.corners:
@@ -1789,7 +1798,14 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 if m.get("question"):
                     digest.append(f"Driver asked: {m['question']}")
                 if m.get("answer"):
-                    digest.append(f"Coach answered: {m['answer'][:200]}")
+                    # Scrub the SLICE, not the answer: the retraction appends at the
+                    # end, so scrubbing first then truncating would drop the correction
+                    # and keep the fabricated claim. Scrubbing what actually reaches the
+                    # model is also exactly right -- a claim past char 200 never gets
+                    # there, so it needs no retraction (#72).
+                    digest.append("Coach answered: "
+                                  + scrub_stored_answer(m["answer"][:200], m["ts"],
+                                                        m.get("track")))
 
         system = (
             "You are distilling durable driver-profile observations from one session's "
