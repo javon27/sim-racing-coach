@@ -827,7 +827,7 @@ def test_mapcapture_save_writes_track_json(tmp_path):
     # Sim changed track between build and save -> save must use the BUILT track.
     app.state.latest = {"record": _edge("OtherTrack", 1, 100.0), "lap_id": 1}
     r = c.post("/mapcapture/save", json={}).json()
-    assert r == {"saved": True, "slug": "maptrack"}
+    assert r == {"saved": True, "slug": "maptrack", "dropped_notes": {}}
     saved = json.loads((tmp_path / "tracks" / "maptrack.json").read_text())
     assert "ribbon" in saved and "path" in saved and "path_dist" in saved
     # The saved file still loads as a corner map (back-compat with CornerMap.load).

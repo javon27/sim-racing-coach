@@ -349,7 +349,7 @@ def _rebound_key(key: str, targets: list[str], new_labels: set[str]) -> str | No
 
 
 def guard_corner_notes(slug: str, old_notes: dict | None, old_corners,
-                       new_corners) -> dict | None:
+                       new_corners, dropped_out: dict | None = None) -> dict | None:
     """Carry an authored `notes` overlay across a map rebuild (#37, #64).
 
     Per-corner notes name corners by LABEL, and a save can re-split a chicane,
@@ -380,6 +380,8 @@ def guard_corner_notes(slug: str, old_notes: dict | None, old_corners,
     reading. Both arms used to delete instead.
 
     Moves and drops are logged, with the dropped text, so the author can recover them.
+    Pass `dropped_out` to also receive the dropped notes (key -> text) -- the log is not
+    somewhere the driver looks, so the server hands them back in the save response.
 
     Returns the notes block to write, or None when it would be hollow. Shared by every
     writer of a track file -- the server's one `_write_track_json` and the
@@ -434,6 +436,8 @@ def guard_corner_notes(slug: str, old_notes: dict | None, old_corners,
             if new_key != key:
                 moved[key] = new_key
     dropped = {k: v for k, v in old_notes_by_key.items() if k not in landed}
+    if dropped_out is not None:
+        dropped_out.update(dropped)
     if moved:
         # Surfaced, not silent: this is authored prose being re-filed under a key the
         # author did not type. Keys only (values are unchanged and already on disk),

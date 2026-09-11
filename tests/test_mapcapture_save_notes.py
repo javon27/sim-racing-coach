@@ -282,6 +282,23 @@ def test_a_relabel_moves_the_notes_through_either_corner_writer_and_nothing_undo
         assert ctx._corner_note("6") == _PRIOR["3-4"], writer
 
 
+def test_every_writer_hands_the_dropped_notes_back_to_the_client(tmp_path):
+    # A drop that only reaches the log is a drop the driver never hears about. Every
+    # writer's response carries `dropped_notes` (key -> text): the two that rebuild the
+    # corner set report what they dropped -- here T4's note, its corner deleted -- and the
+    # two that never touch corners report nothing, in the same shape.
+    for writer, expected in (("editor", {"4": "T4 at 80 m"}), ("ribbon", {"4": "T4 at 80 m"}),
+                             ("rotation", {}), ("notes", {})):
+        app, client, tracks_dir = _client(tmp_path / writer, _LABELS)
+        assert _put_notes(client, {"1": "T1 at 20 m", "4": "T4 at 80 m"}).status_code == 200
+        r = _save_via(writer, app, client, _LABELS[:3])
+        assert r.status_code == 200, (writer, r.text)
+        assert r.json()["dropped_notes"] == expected, writer
+        kept = _written(tracks_dir)["notes"]["corners"]
+        assert kept.get("1") == "T1 at 20 m", writer            # a real save, not a no-op
+        assert ("4" in kept) == (not expected), writer          # reported iff it is gone
+
+
 def _disk(tracks_dir):
     return tracks_dir / f"{SLUG}.json"
 

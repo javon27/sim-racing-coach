@@ -292,7 +292,11 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             raise HTTPException(400, "invalid track")
         return p
 
-    def _write_track_json(track: str, out: dict) -> None:
+    def _write_track_json(track: str, out: dict) -> dict:
+        # Returns the authored per-corner notes this write dropped (key -> text), which
+        # every route hands back to the client: a drop that only reaches the log is a drop
+        # the driver never hears about.
+        #
         # THE one writer of a track JSON file, and therefore the one place the rules for
         # what may land in one live (#65). There used to be four writers and three
         # validators each wired to one of them: `_persist_map` validated sections,
@@ -312,7 +316,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         slug = track_slug(track)
         if not slug:
             raise HTTPException(400, "invalid track")
-        out = _validated_track_data(track, slug, out)
+        dropped: dict = {}
+        out = _validated_track_data(track, slug, out, dropped)
         user_dir, bundled = _map_dirs()
         target = _in(bundled if _curating() else user_dir, slug)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -326,6 +331,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             if os.path.exists(tmp):
                 os.unlink(tmp)
             raise
+        return dropped
 
     def _capture_path(track: str) -> Path:
         # Raw point cloud lives in app-data (store.data_dir), NOT the shipped tracks
@@ -346,7 +352,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         user_dir, bundled = _map_dirs()
         return load_map_data(track, str(bundled), str(user_dir))
 
-    def _validated_track_data(track: str, slug: str, out: dict) -> dict:
+    def _validated_track_data(track: str, slug: str, out: dict, dropped: dict) -> dict:
         """Everything that must be true of a track JSON, applied to what a writer is
         about to persist. Called only from `_write_track_json`, so every writer gets it
         (#65) -- do not call it from a route, and do not write around it.
@@ -386,7 +392,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             out["corners"] = [_clean_corner_geometry(slug, c) for c in out["corners"]]
         if "notes" not in out:
             notes = guard_corner_notes(slug, existing.get("notes"),
-                                       existing.get("corners"), out.get("corners"))
+                                       existing.get("corners"), out.get("corners"), dropped)
             if notes:
                 out["notes"] = notes
         return out
@@ -995,11 +1001,13 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # No `notes` key, deliberately: _write_track_json carries the authored overlay
         # across a rebuild (#37/#64) for every writer, so passing one here would be the
         # caller opting OUT of the guard that exists for this exact path.
-        _write_track_json(track, out)
+        dropped = _write_track_json(track, out)
         # Invalidate cmap + canonical caches so the next GET returns the new
         # canonical map (now frozen into the file).
         _invalidate_canon(track)
-        return _canonical_map(track, car, force=False)
+        # A copy: _canonical_map's result is the cached object, and the drops are this
+        # save's, not the map's.
+        return {**_canonical_map(track, car, force=False), "dropped_notes": dropped}
 
     @app.put("/laps/{lap_id}/map")
     def save_lap_map(lap_id: int, body: dict = Body(...)):
@@ -1113,9 +1121,9 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         if not data:
             raise HTTPException(404, "no track file to annotate")
         data["notes"] = notes
-        _write_track_json(track, data)
+        dropped = _write_track_json(track, data)    # always {}: the caller's notes are kept
         _invalidate_canon(track)                    # same cache-clear as PUT /laps/{id}/map
-        return {"ok": True}
+        return {"ok": True, "dropped_notes": dropped}
 
     @app.get("/tracks/{slug}/notes")
     def get_notes(slug: str):
@@ -1177,9 +1185,9 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             if secs and "sections" not in data:
                 data["sections"] = secs
         data["rotation"] = degrees % 360.0
-        _write_track_json(track, data)
+        dropped = _write_track_json(track, data)
         _invalidate_canon(track)
-        return _canonical_map(track, car, force=False)
+        return {**_canonical_map(track, car, force=False), "dropped_notes": dropped}
 
     @app.post("/laps/{lap_id}/rotation")
     def set_rotation(lap_id: int, body: dict = Body(...)):
@@ -1338,13 +1346,13 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # yield zero solver corners and this route still has a job to do (it exists to
         # persist the reconstructed SURFACE -- see test_mapcapture_save_writes_track_json),
         # and zero new corners cannot rebind a note to the wrong corner.
-        _write_track_json(track, out)
+        dropped = _write_track_json(track, out)
         # Persist the raw point cloud (app-data, not the repo tracks dir) so the
         # ribbon can be rebuilt after algorithm changes with no re-drive.
         if rib.get("laps"):
             _save_cloud(_capture_path(track), rib["laps"])
         _invalidate_canon(track)
-        return {"saved": True, "slug": track_slug(track)}
+        return {"saved": True, "slug": track_slug(track), "dropped_notes": dropped}
 
     @app.post("/mapcapture/save-cloud")
     def mapcapture_save_cloud(body: dict = Body(...)):
