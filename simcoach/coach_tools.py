@@ -271,8 +271,8 @@ _STORED_ANSWER_RETRACTIONS = (
       "first lap capture happened to record, already underway and never the grid slot, "
       "and \"no incidents\" meant none were visible to it, not that none happened. Treat "
       "both as unverified and do not repeat the earlier figures. get_race_result "
-      "reports the CURRENT session, which may not be the race this answer was about, "
-      "so do not attach its figures to that earlier race.]")),
+      "reports the session currently selected in the app and names its track: use its "
+      "figures for the race this answer was about only if it is that same race.]")),
 )
 
 
@@ -763,7 +763,11 @@ class CoachContext:
         return "\n".join(lines) if lines else "No fuel/energy data captured for this lap."
 
     def get_race_result(self):
-        return race_result_text(self.store, self.session_id)
+        # Name the track. A resumed chat's race retraction (scrub_stored_answer) lets the
+        # model use these figures for an earlier race only when it is the same race, and
+        # the result text alone carries nothing that says which race it describes.
+        text = race_result_text(self.store, self.session_id)
+        return f"Session currently selected: {self.track}.\n{text}" if self.track else text
 
     def get_setup(self):
         if not self.setup:

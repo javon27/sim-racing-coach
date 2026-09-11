@@ -307,6 +307,33 @@ def test_ws_coach_retracts_a_fabricated_grip_claim_in_resumed_history(tmp_path):
     assert store.chat_messages("c1")[0]["answer"] == poisoned
 
 
+def test_ws_coach_retracts_every_matching_turn_not_just_the_first(tmp_path):
+    # A real chat (2ae96c) carries grip claims in two separate answers. Every other test
+    # has one matching row per chat, so "retract only the first match" passed them all.
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    fake = FakeModel(reply="Third answer.")
+    app = create_app(store, Coach(fake))
+    first = "Min grip 0.00 through the exit -- the rear was already gone."
+    second = ("TC hammers in at 48% and grip drops to **0.00** -- that's the rear "
+              "letting go completely.")
+    store.save_chat("c1", "s1", "trk", "car", None, "why the snap?", first, None)
+    store.save_chat("c1", "s1", "trk", "car", None, "and on exit?", second, None)
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "third question", "chat_id": "c1"})
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"):
+                break
+
+    sent = [m["content"] for m in fake.last_messages]
+    for phrase in ("already gone", "letting go completely"):
+        carried = [m for m in sent if phrase in m]
+        assert carried, f"answer containing {phrase!r} was not threaded"
+        assert all("Disregard it" in m for m in carried), f"{phrase!r} reached the model unretracted"
+
+
 def test_ws_coach_leaves_ordinary_grip_prose_alone(tmp_path):
     # GUARD against over-matching. The authored driving prose in simcoach/knowledge/*.md
     # and simcoach/cars/*.json is full of legitimate uses of "grip", and it reaches the

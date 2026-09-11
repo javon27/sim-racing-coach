@@ -844,6 +844,28 @@ def test_scrub_retracts_a_race_start_claim_only_before_the_fix(excerpt):
     assert scrub_stored_answer(excerpt, _AFTER_67_FIX) == excerpt
 
 
+def test_race_retraction_lets_get_race_result_speak_only_for_the_same_race():
+    # Resuming from the Sessions screen re-opens a chat in its OWN session, where
+    # get_race_result is the true result for that race; continuing an old chat while a
+    # different session is selected is where it is not. The retraction must allow the
+    # first and refuse the second -- not blanket-forbid the tool (which discards the
+    # correct result on the common path) nor blanket-direct the model to it.
+    out = scrub_stored_answer("you started **P18** and crossed the line **P18**", _BEFORE_67_FIX)
+    assert "only if it is that same race" in out
+    assert "do not attach its figures" not in out
+
+
+def test_get_race_result_names_the_selected_session_track(tmp_path, synthetic_lap):
+    # Without the track the model cannot tell whether the result describes the race an
+    # older answer in the chat was about -- the condition the retraction depends on.
+    ctx, _store, _ = _ctx(tmp_path, synthetic_lap)
+    ctx.session_id = "no-race-here"
+    assert ctx.track
+    out = ctx.get_race_result()
+    assert out.startswith(f"Session currently selected: {ctx.track}.")
+    assert "No race result recorded" in out
+
+
 @pytest.mark.parametrize("excerpt", [
     # Authored-style grip prose: a blanket "grip" filter would gut knowledge/ and cars/.
     "You ran out of front grip on entry; the mechanical grip balance is rearward.",
