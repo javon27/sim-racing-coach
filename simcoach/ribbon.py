@@ -204,11 +204,27 @@ def _lap_grid(x, z, d, max_len, bins):
     return _fill_nan(ex, period=bins), _fill_nan(ez, period=bins)
 
 
+# The lateral range (metres) a bin's samples must span before WIDTH or BANK is
+# estimated there; below it both are written as unknown (None). Laps on one racing
+# line never supply that range at any lap count, and a fit across ~1 m of them is
+# noise: on real Silverstone National clouds the old >1e-6 m test saved max bank 48 deg
+# off 1 elevation lap and 21 deg off 3, and a 4-lap build saved a median width of
+# 1.4 m -- both reaching the coach as owned fact via corner_geometry (#69).
+# Measured share of bins reaching 6 m: first 1-4 racing laps of Silverstone National/
+# Laguna/Algarve 0-6%; mapping captures (Laguna, Algarve, Monza, Bahrain, Le Mans)
+# 97-100%; Spa edge laps 100%. Gated on the spread itself, not on where the laps came
+# from, so racing laps that DO use the width (a long race stint) still count.
+# ponytail: peak-to-peak, so one lap running wide lends its bin a spread; a
+# percentile spread across laps is the upgrade if that shows up in saved maps.
+_MIN_SPREAD_M = 6.0
+
+
 def _bank_per_bin(X, Z, Y, members, ctr_x, ctr_z, lat_x, lat_z, bins, w=_SMOOTH_W):
     """Cross-slope angle per bin from ALL samples: fit pos_y vs lateral offset.
     Positive = the +lateral side is higher; +lateral is the driver's LEFT (#58),
     so positive = banked for a right-hander and negative = banked for a
-    left-hander (rig-validated, 9756b65; matches reconstruct_ribbon)."""
+    left-hander (rig-validated, 9756b65; matches reconstruct_ribbon).
+    NaN (unknown) where the elevation samples span < _MIN_SPREAD_M laterally."""
     bnk = np.full(bins, np.nan)
     for b in range(bins):
         mm = members[b]
@@ -216,9 +232,12 @@ def _bank_per_bin(X, Z, Y, members, ctr_x, ctr_z, lat_x, lat_z, bins, w=_SMOOTH_
             continue
         off = (X[mm] - ctr_x[b]) * lat_x[b] + (Z[mm] - ctr_z[b]) * lat_z[b]
         yb, fin = Y[mm], np.isfinite(Y[mm])
-        if fin.sum() >= 2 and np.ptp(off[fin]) > 1e-6:
+        if fin.sum() >= 2 and np.ptp(off[fin]) >= _MIN_SPREAD_M:
             bnk[b] = np.arctan(np.polyfit(off[fin], yb[fin], 1)[0])
-    return _smooth(_fill_nan(bnk, period=bins), w)
+    known = np.isfinite(bnk)
+    out = _smooth(_fill_nan(bnk, period=bins), w)
+    out[~known] = np.nan    # smoothing may borrow from neighbours, never invent a bin
+    return out
 
 
 def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
@@ -350,18 +369,30 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
     ctr_x, ctr_z = (lx + rx) / 2.0, (lz + rz) / 2.0
     lat_x, lat_z = _lateral(ctr_x, ctr_z)
     wid = np.hypot(lx - rx, lz - rz)
+    # Same gate as bank, over ALL samples (width needs no pos_y): the drawn edges stay
+    # (the editor and the corner solver need a corridor), but a width the samples never
+    # spanned is not written as a measurement. The EDGE separation must clear it too:
+    # the bound-lap branch takes width from two laps, and a third lap straying wide
+    # lends the bin a spread those two never had (real Algarve racing laps: 97 bins
+    # passed on spread alone with a median width of 1.8 m).
+    off = (X - ctr_x[bi]) * lat_x[bi] + (Z - ctr_z[bi]) * lat_z[bi]
+    spread = np.array([np.ptp(off[mm]) if mm.size else 0.0 for mm in members])
+    wid = np.where((spread >= _MIN_SPREAD_M) & (wid >= _MIN_SPREAD_M), wid, np.nan)
 
     bnk = _bank_per_bin(X, Z, Y, members, ctr_x, ctr_z, lat_x, lat_z, bins, w=sw)
 
-    def _round(a, n):  # non-finite (e.g. bank with no elevation) -> 0.0, JSON-safe
+    def _round(a, n):  # non-finite -> 0.0, JSON-safe (edges/dist are always finite)
         return [round(float(v), n) if np.isfinite(v) else 0.0 for v in a]
+
+    def _known(a, n):  # width/bank: non-finite is UNKNOWN -> null, never 0.0 (= flat)
+        return [round(float(v), n) if np.isfinite(v) else None for v in a]
 
     return {
         "left": [list(p) for p in zip(_round(lx, 2), _round(lz, 2))],
         "right": [list(p) for p in zip(_round(rx, 2), _round(rz, 2))],
         "center": [list(p) for p in zip(_round(ctr_x, 2), _round(ctr_z, 2))],
-        "width": _round(wid, 2),
-        "bank": _round(bnk, 4),
+        "width": _known(wid, 2),
+        "bank": _known(bnk, 4),
         "dist": _round(dist_grid, 2),
     }
 

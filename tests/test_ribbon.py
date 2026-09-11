@@ -39,9 +39,72 @@ def test_reconstruct_surface_bank_from_cross_slope():
     assert abs(r["bank"][mid]) > 0.05      # detects the cross-slope
 
 
+def _sep(r):
+    # Drawn edge separation per bin -- the corridor, independent of the width GATE.
+    return np.hypot(*(np.array(r["left"]) - np.array(r["right"])).T)
+
+
 def test_reconstruct_surface_single_pass_no_crash():
     r = reconstruct_surface([_pass(0.0, 0.0)], bins=50)
-    assert r["center"] and all(w == 0.0 for w in r["width"])  # degenerate width, no crash
+    # One line spans no width: UNKNOWN, not a measured 0 m (#69). No crash either.
+    assert r["center"] and all(w is None for w in r["width"])
+    assert all(b is None for b in r["bank"])
+
+
+def test_same_line_laps_give_unknown_width_and_bank():
+    # #69: real racing laps sit within ~1 m of one line and their pos_y differs by a few
+    # cm lap to lap. The old >1e-6 m test fitted a slope across that 1 m -- tens of
+    # degrees of "banking" -- and wrote the 1 m envelope as the track width.
+    laps = [_pass(z, y) for z, y in ((-0.4, 3.00), (0.1, 3.06), (0.5, 2.95), (-0.2, 3.04))]
+    r = reconstruct_surface(laps, bins=50)
+    assert all(w is None for w in r["width"])
+    assert all(b is None for b in r["bank"])
+    assert r["center"] and r["left"] and r["right"]     # the corridor is still drawn
+
+
+_TH = np.linspace(0.0, 2 * np.pi, 1200, endpoint=False)   # a CLOSED 628 m loop, like a
+                                                          # real track (a straight wraps
+                                                          # its ends into a false seam)
+
+
+def _ring_lap(off, y=None):
+    # One lap of a radius-100 circle at lateral offset `off` (scalar or per-sample).
+    r = 100.0 + np.broadcast_to(np.asarray(off, dtype=float), _TH.shape)
+    ch = {"pos_x": r * np.cos(_TH), "pos_z": r * np.sin(_TH), "lap_distance": _TH * 100.0}
+    if y is not None:
+        ch["pos_y"] = np.broadcast_to(np.asarray(y, dtype=float), _TH.shape)
+    return ch
+
+
+def test_edge_lap_bins_estimate_racing_line_bins_do_not():
+    # One cloud, both regimes -- the shape of the Spa edge-lap session: edge laps hug
+    # +-5 m over the first half, then all three laps share one line (jittering ~0.3 m,
+    # pos_y a few cm apart) over the second. Cross-slope 0.05 m/m. Magnitude only: the
+    # sign convention is pinned by the #58 tests below.
+    first = _TH < np.pi
+
+    def lap(edge, jitter, dy):
+        off = np.where(first, edge, jitter)
+        return _ring_lap(off, 0.05 * off + np.where(first, 0.0, dy))
+
+    r = reconstruct_surface([lap(5.0, 0.3, 0.04), lap(-5.0, -0.3, -0.03), lap(0.0, 0.0, 0.0)],
+                            bins=120)
+    for i in range(15, 45):                              # well inside the edge-lap half
+        assert abs(r["width"][i] - 10.0) < 1.0
+        assert abs(abs(r["bank"][i]) - np.arctan(0.05)) < 0.01
+    for i in range(75, 105):                             # well inside the one-line half
+        assert r["width"][i] is None and r["bank"][i] is None
+
+
+def test_width_needs_the_edges_to_span_it_not_just_one_stray_lap():
+    # Real Algarve racing laps: the two BOUND laps (edges) sat ~2 m apart, and a third lap
+    # running 7 m wide over a stretch lent those bins a spread the edges never had --
+    # 97 bins passed on spread alone with a median width of 1.8 m.
+    wide = (_TH > 1.5) & (_TH < 1.9)
+    r = reconstruct_surface([_ring_lap(1.0), _ring_lap(-1.0), _ring_lap(np.where(wide, 7.0, 0.0))],
+                            bins=120)
+    assert np.all(_sep(r) < 3.0)                         # the bound-lap corridor is ~2 m
+    assert all(w is None for w in r["width"])            # and never written as a width
 
 
 def test_reconstruct_surface_empty_is_empty():
@@ -59,8 +122,9 @@ def test_reconstruct_surface_stitches_sparse_seam():
 
     r = reconstruct_surface([edge(1), edge(-1)], bins=50)
     assert abs(r["width"][25] - 10.0) < 1.0   # mid-lap full width
-    assert r["width"][0] > 5.0                # seam bin stitched, not the ~0 crossing
-    assert r["width"][-1] > 5.0
+    sep = _sep(r)                             # the stitch is of the EDGES; the seam's
+    assert sep[0] > 5.0                       # samples really converge, so its width is
+    assert sep[-1] > 5.0                      # gated to unknown (asserted separately)
 
 
 def test_reconstruct_surface_keeps_narrow_midlap_corner():
@@ -75,8 +139,10 @@ def test_reconstruct_surface_keeps_narrow_midlap_corner():
     r = reconstruct_surface([pass_(o) for o in (-4.0, -1.0, 2.0, 5.0)], bins=50)
     # Stitch stays seam-only: the mid narrow bin is NOT widened to the ~9 median
     # (smoothing softens the sharp dip, but it's still clearly narrower).
-    assert r["width"][25] < 0.75 * r["width"][10]
+    sep = _sep(r)
+    assert sep[25] < 0.75 * sep[10]
     assert r["width"][10] > 5.0   # a straight bin keeps the full weave spread
+    assert r["width"][25] is None  # ...and one line through the corner measures no width
 
 
 def _turns_deg(path):
