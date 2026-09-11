@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getLapMap, type TrackMap } from "./api";
-  import { nearestDistIndex, nearestPathIndex, layoutLabels, localOutward, type LabelItem, type PlacedLabel } from "./TrackMapEditor.svelte";
+  import { nearestDistIndex, nearestPathIndex, layoutLabels, localOutward, startMarker, type LabelItem, type PlacedLabel } from "./TrackMapEditor.svelte";
   import { CLASS_COLOR } from "./live";
   import { attachWheelZoom, attachPan, type Box } from "./mapzoom";
 
@@ -93,13 +93,7 @@
 
   // Start/finish is the first path sample (lap_distance ~0); heading a few % in
   // gives the driving direction for the arrow.
-  const startDir = $derived.by(() => {
-    if (!map || map.path.length < 2) return null;
-    const [x0, y0] = map.path[0];
-    const j = Math.min(map.path.length - 1, Math.max(1, Math.round(map.path.length * 0.04)));
-    const [xj, yj] = map.path[j];
-    return { x0, y0, xj, yj, ang: Math.atan2(yj - y0, xj - x0) };
-  });
+  const startDir = $derived(map ? startMarker(map.path) : null);
 
   // Perpendicular tick across the racing line = the start/finish line.
   function sfBar(x: number, y: number, ang: number, h: number) {
@@ -174,7 +168,7 @@
         stroke-linecap="round"
       />
       {#if startDir}
-        {@const b = sfBar(startDir.x0, startDir.y0, startDir.ang, su * 0.03)}
+        {@const b = sfBar(startDir.x0, startDir.y0, startDir.sfAng, su * 0.03)}
         <line x1={b.x1} y1={b.y1} x2={b.x2} y2={b.y2} stroke="var(--text)" stroke-width={su * 0.008} />
         <polygon points={arrow(startDir.xj, startDir.yj, startDir.ang, su * 0.05, su * 0.028)} fill="var(--text)" />
         <text class="sf" x={startDir.x0} y={startDir.y0 - su * 0.04} font-size={su * 0.032} fill="var(--text)" text-anchor="middle">S/F</text>

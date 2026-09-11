@@ -16,6 +16,40 @@
   }
 
   // Index of the dist[] entry closest to a target lap_distance.
+  // Start/finish marker geometry, shared by every map view. S/F is path[0]; its bar is
+  // perpendicular to the LOCAL tangent there. The heading arrow sits a fixed fraction of
+  // the drawing's size down the line (not a fraction of the path's point count) and
+  // points along the local tangent. The old construction put the arrow at 4% of the
+  // points and aimed it along the chord from S/F: on Spa that is ~280 m in, exactly on
+  // La Source, with the chord cutting across the hairpin.
+  export function startMarker(path: [number, number][]) {
+    const n = path.length;
+    if (n < 2) return null;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [x, y] of path) {
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+    const target = Math.max(maxX - minX, maxY - minY) * 0.08;
+    let j = 1;
+    let acc = Math.hypot(path[1][0] - path[0][0], path[1][1] - path[0][1]);
+    while (acc < target && j < n - 1) {
+      j++;
+      acc += Math.hypot(path[j][0] - path[j - 1][0], path[j][1] - path[j - 1][1]);
+    }
+    const [x0, y0] = path[0];
+    const [xj, yj] = path[j];
+    const [ax, ay] = path[j - 1];
+    const [bx, by] = path[Math.min(j + 1, n - 1)];
+    return {
+      x0, y0, xj, yj,
+      sfAng: Math.atan2(path[1][1] - y0, path[1][0] - x0),
+      ang: Math.atan2(by - ay, bx - ax),
+    };
+  }
+
   export function nearestDistIndex(dist: number[], target: number): number {
     let best = 0;
     let bestD = Infinity;
@@ -387,13 +421,7 @@
   });
   const ru = $derived(ribbon ? Math.max(ribbon.width, ribbon.height) : 100);
   const rpad = $derived(ru * 0.09);
-  const ribbonStart = $derived.by(() => {
-    if (!ribbon || ribbon.center.length < 2) return null;
-    const [x0, y0] = ribbon.center[0];
-    const j = Math.min(ribbon.center.length - 1, Math.max(1, Math.round(ribbon.center.length * 0.04)));
-    const [xj, yj] = ribbon.center[j];
-    return { x0, y0, xj, yj, ang: Math.atan2(yj - y0, xj - x0) };
-  });
+  const ribbonStart = $derived(ribbon ? startMarker(ribbon.center) : null);
 
   // Open with the SAVED map (avg=0) — the frozen/canonical ribbon if one exists.
   // The fresh re-average/rebuild path is only "(Re)generate map layout" (mapcapture).
@@ -586,14 +614,8 @@
   const cornerLabels = $derived(laidOut.corners);
   const sectionLabels = $derived(laidOut.sections);
 
-  // S/F marker + heading arrow, same construction as TrackMap.svelte.
-  const startDir = $derived.by(() => {
-    if (!map || map.path.length < 2) return null;
-    const [x0, y0] = map.path[0];
-    const j = Math.min(map.path.length - 1, Math.max(1, Math.round(map.path.length * 0.04)));
-    const [xj, yj] = map.path[j];
-    return { x0, y0, xj, yj, ang: Math.atan2(yj - y0, xj - x0) };
-  });
+  // S/F marker + heading arrow: the shared startMarker, same as TrackMap.svelte.
+  const startDir = $derived(map ? startMarker(map.path) : null);
   function sfBar(x: number, y: number, ang: number, h: number) {
     const px = -Math.sin(ang), py = Math.cos(ang);
     return { x1: x + px * h, y1: y + py * h, x2: x - px * h, y2: y - py * h };
@@ -872,7 +894,7 @@
               stroke-dasharray="{ru * 0.02} {ru * 0.02}"
             />
             {#if ribbonStart}
-              {@const b = sfBar(ribbonStart.x0, ribbonStart.y0, ribbonStart.ang, ru * 0.03)}
+              {@const b = sfBar(ribbonStart.x0, ribbonStart.y0, ribbonStart.sfAng, ru * 0.03)}
               <line x1={b.x1} y1={b.y1} x2={b.x2} y2={b.y2} stroke="var(--text)" stroke-width={ru * 0.008} />
               <polygon points={arrow(ribbonStart.xj, ribbonStart.yj, ribbonStart.ang, ru * 0.05, ru * 0.028)} fill="var(--text)" />
               <text class="sf" x={ribbonStart.x0} y={ribbonStart.y0 - ru * 0.04} font-size={ru * 0.032} fill="var(--text)" text-anchor="middle">S/F</text>
@@ -941,7 +963,7 @@
               {/if}
             {/each}
             {#if startDir}
-              {@const b = sfBar(startDir.x0, startDir.y0, startDir.ang, su * 0.03)}
+              {@const b = sfBar(startDir.x0, startDir.y0, startDir.sfAng, su * 0.03)}
               <line x1={b.x1} y1={b.y1} x2={b.x2} y2={b.y2} stroke="var(--text)" stroke-width={su * 0.008} />
               <polygon points={arrow(startDir.xj, startDir.yj, startDir.ang, su * 0.05, su * 0.028)} fill="var(--text)" />
               <text class="sf" x={startDir.x0} y={startDir.y0 - su * 0.04} font-size={su * 0.032} fill="var(--text)" text-anchor="middle">S/F</text>
@@ -1014,6 +1036,9 @@
                   <button type="button" onclick={rebuildGen}>Rebuild from saved capture</button>
                 {/if}
               </div>
+            {/if}
+            {#if corners.length === 0}
+              <p class="hint">No corners mapped for this track yet.</p>
             {/if}
             <ul class="corners">
               {#each corners as c, i (c.number)}
