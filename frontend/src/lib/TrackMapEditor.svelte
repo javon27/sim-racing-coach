@@ -357,9 +357,12 @@
       genPhase = "preview";
     } catch (e) {
       genPhase = "off";
-      genErr = String(e).includes("422")
+      // The server's reason when it sent one (request() appends "-> 422: <detail>"), e.g. an
+      // unreadable capture's path and the way out (#84); the hint is only the fallback.
+      const detail = /-> 422: (.+)/.exec(String(e))?.[1];
+      genErr = detail ?? (String(e).includes("422")
         ? "No saved capture for this track — use Generate map layout to record one."
-        : "Rebuild failed.";
+        : "Rebuild failed.");
     }
   }
 
