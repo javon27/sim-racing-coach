@@ -6,6 +6,7 @@ missing/unreadable results dir."""
 from __future__ import annotations
 
 import logging
+import os
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -27,7 +28,10 @@ def _resolve_names(results_dir: Path, player_dir: Path | None) -> set[str]:
     except Exception:
         names = set()
     if player_dir is not None:
-        for f in sorted(results_dir.glob("*.xml")):
+        # The NEWEST readable log only. Every log names the active profile (<PlayerFile> is
+        # 'Settings' in all 1,406 readable real ones), so reading on whenever that profile
+        # doesn't resolve re-parsed the whole directory: 3 s, on every 30 s poll (#81).
+        for f in sorted(results_dir.glob("*.xml"), reverse=True):
             try:
                 race_results = ET.parse(f).getroot().find("RaceResults")
             except Exception:
@@ -37,7 +41,7 @@ def _resolve_names(results_dir: Path, player_dir: Path | None) -> set[str]:
             seed = player_name_for(race_results, player_dir)
             if seed:
                 names.add(seed.strip().lower())
-                break
+            break
     return names
 
 
@@ -73,16 +77,25 @@ def ingest_all(store, userdata_dir=None, player_names=None, limit=None, unmatche
     if not names:
         return summary
 
-    files = sorted(results_dir.glob("*.xml"))
+    try:
+        # scandir, not glob + stat(): on Windows the listing already carries each mtime --
+        # 2 ms for the real 1,407 logs against 83 ms, and identical values (#81). While LMU
+        # still holds a log open, that listed mtime can lag; the worst case is one idempotent
+        # re-import once the handle closes and the mtime moves.
+        with os.scandir(results_dir) as it:
+            entries = sorted((e for e in it if e.name.lower().endswith(".xml")), key=lambda e: e.name)
+    except OSError:
+        return summary
     if limit is not None:
-        files = files[:limit]
+        entries = entries[:limit]
 
     ingested = store.ingested_files()
     names_key = frozenset(names)
-    for f in files:
+    for entry in entries:
+        f = Path(entry.path)
         summary["scanned"] += 1
         try:
-            mtime = f.stat().st_mtime
+            mtime = entry.stat().st_mtime
         except OSError:
             summary["errors"] += 1
             continue

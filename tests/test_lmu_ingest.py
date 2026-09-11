@@ -95,6 +95,29 @@ def test_ingest_all_no_results_dir_returns_zero_summary(tmp_path, monkeypatch):
     assert summary == {"scanned": 0, "imported": 0, "skipped": 0, "unmatched": 0, "errors": 0}
 
 
+def test_player_name_lookup_parses_only_the_newest_readable_log(tmp_path, monkeypatch):
+    """Every log names the same active profile, so one readable log settles it. Reading on
+    when the profile didn't resolve re-parsed all ~1,400 real logs: 3 s, every poll (#81)."""
+    monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path / "cfg"))
+    userdata = _make_userdata(tmp_path)
+    (userdata / "player" / "Settings.JSON").unlink()   # the profile name can't be resolved
+    results = userdata / "Log" / "Results"
+    full = _XML.format(name="Jayson G")
+    (results / "race3.xml").write_text(full)
+    (results / "race4.xml").write_text(full[: len(full) // 2])   # LMU still writing it
+    parsed = []
+    real = ingest.ET.parse
+
+    def spy(source, *a, **k):
+        parsed.append(os.path.basename(source))
+        return real(source, *a, **k)
+
+    monkeypatch.setattr(ingest.ET, "parse", spy)
+
+    assert ingest._resolve_names(results, userdata / "player") == set()
+    assert parsed == ["race4.xml", "race3.xml"]
+
+
 # --- poll_results (#81) ----------------------------------------------------------------
 # Driven with an injected sleep that runs one step per 30 s gap, so no test really waits.
 
