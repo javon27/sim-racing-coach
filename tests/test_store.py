@@ -1,4 +1,5 @@
 import sqlite3
+import sys
 import threading
 
 import numpy as np
@@ -1631,6 +1632,10 @@ def test_v16_migration_replaces_a_corrupt_leftover_backup(tmp_path, synthetic_la
         b.close()
 
 
+@pytest.mark.skipif(sys.platform != "win32",
+                    reason="Windows os.replace refuses a read-only target; POSIX rename(2) "
+                           "replaces it whenever the directory is writable, so there is no "
+                           "failure to fall back from")
 def test_v16_migration_keeps_its_backup_beside_a_read_only_leftover(tmp_path, synthetic_lap,
                                                                     caplog):
     """os.replace cannot overwrite a read-only file on Windows, so a read-only leftover
