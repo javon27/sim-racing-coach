@@ -494,3 +494,16 @@ test("an unreadable saved capture is named, not blamed on laps that have positio
   expect(within(row).queryByText(/position data/)).toBeNull();
   expect(within(row).queryByRole("button", { name: /build map/i })).toBeNull();
 });
+
+test("an unreadable saved capture with no live laps says only that", async () => {
+  // Nothing driven to count: exactly the capture state, never ", 0 laps driven".
+  vi.spyOn(api, "listTracks").mockResolvedValue([
+    {
+      slug: "fuji_speedway", name: "Fuji", has_map: true, has_notes: false,
+      user_edited: false, captures: 0, live_laps: 0, capture_unreadable: true,
+    },
+  ]);
+  render(TracksScreen);
+  const row = (await screen.findByText("Fuji")).closest("li")!;
+  expect(within(row).getByText("saved capture unreadable")).toBeTruthy();   // exact text
+});

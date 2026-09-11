@@ -1075,16 +1075,21 @@ def test_an_unusable_capture_is_reported_not_blamed_on_the_live_laps(tmp_path, s
     client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
     for z in (-5.0, 5.0, 0.0):
         _cloud_lap(store, z)
+    # Plus 2 laps with no position data: N in "build from your N laps" is what a build
+    # would consume (3), never the live row count (5).
+    _live_lap(store, _NAME, 2, pos=False)
     assert _rebuild(client)["lap_count"] == 3           # control: the live laps DO build
-    _unusable_capture(store, shape)
+    cap = _unusable_capture(store, shape)
 
     row = _row(client)
     assert row["capture_unreadable"] is True
-    assert row["captures"] == 0 and row["live_laps"] == 3
+    assert row["captures"] == 0 and row["live_laps"] == 5
     r = client.post("/mapcapture/rebuild", json={"slug": _SLUG})
     assert r.status_code == 422, r.text
+    # The FULL path: an installed build keeps it under %APPDATA%, which a bare file name
+    # gives the driver no way to find.
     assert r.json()["detail"] == (f"the saved capture for this track can't be read "
-                                  f"({_SLUG}.npz); delete it to build from your 3 laps")
+                                  f"({cap}); delete it to build from your 3 laps")
 
 
 @pytest.mark.parametrize("why", ["no_position_laps", "curated_map"])
@@ -1102,12 +1107,12 @@ def test_an_unusable_capture_never_points_at_a_delete_that_cannot_build(tmp_path
             "track": _SLUG, "corners": [{"number": 1, "name": "Copse", "direction": "right",
                                          "start_dist": 100.0, "apex_dist": 150.0,
                                          "end_dist": 200.0}]}), encoding="utf-8")
-    _unusable_capture(store, "garbage")
+    cap = _unusable_capture(store, "garbage")
     assert _row(client)["capture_unreadable"] is True
     r = client.post("/mapcapture/rebuild", json={"slug": _SLUG})
     assert r.status_code == 422, r.text
     assert r.json()["detail"] == (f"the saved capture for this track can't be read "
-                                  f"({_SLUG}.npz); use Generate map layout to record a new one")
+                                  f"({cap}); use Generate map layout to record a new one")
 
 
 def test_live_lap_rebuild_does_not_freeze_a_capture_so_later_laps_reach_the_map(tmp_path):

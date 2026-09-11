@@ -525,6 +525,22 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     expect(await screen.findByText(/no saved capture for this track/i)).toBeTruthy();
   });
 
+  it("Rebuild shows the server's 422 detail, not the no-capture hint, when it sends one", async () => {
+    // #84: an unreadable capture 422s with its path and the way out. The editor is the only
+    // route to a rebuild, and the old hint ("No saved capture") contradicted the badge.
+    const detail = "the saved capture for this track can't be read "
+      + "(C:\\Users\\d\\AppData\\Roaming\\SimCoach\\telemetry\\captures\\fuji_speedway.npz); "
+      + "delete it to build from your 17 laps";
+    vi.mocked(rebuildFromCapture).mockRejectedValue(
+      new Error(`API request failed: POST /mapcapture/rebuild -> 422: ${detail}`));
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+
+    await fireEvent.click(screen.getByText("Rebuild from saved capture"));
+    expect(await screen.findByText(detail)).toBeTruthy();
+    expect(screen.queryByText(/no saved capture for this track/i)).toBeNull();
+  });
+
   // Regression: on a fresh/unmapped session (lapId=null) starting a capture must
   // NOT be torn down by the teardown effect — it used to cancelGen() the instant
   // genPhase became "capturing", killing the capture and leaking laps to the store.

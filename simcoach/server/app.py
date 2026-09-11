@@ -1625,7 +1625,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             way_out = (f"delete it to build from your {n} lap{'' if n == 1 else 's'}" if n
                        else "use Generate map layout to record a new one")
             raise HTTPException(422, f"the saved capture for this track can't be read "
-                                     f"({_capture_path(track).name}); {way_out}")
+                                     f"({_capture_path(track)}); {way_out}")
         # Stage the live NAME the laps were recorded under when there is one, so Save
         # names a new map "Silverstone National Circuit", not its slug. Same slug, so
         # every slug-keyed lookup below is unchanged.
