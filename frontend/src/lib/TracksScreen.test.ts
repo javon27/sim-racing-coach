@@ -302,5 +302,50 @@ test("save sends the edited notes for the selected track", async () => {
     "algarve_international_circuit",
     "Algarve",
     expect.objectContaining({ overview: "fast flowing circuit" }),
+    null,                                     // the mocked load carried no rev
   );
+});
+
+test("save sends back the rev the notes were loaded with, then the rev the save returned", async () => {
+  vi.spyOn(api, "getTrackNotes").mockResolvedValue({
+    overview: "", corners: {}, reference_times: {}, source: "", rev: "rev-loaded",
+  });
+  vi.spyOn(api, "getTrackMap").mockResolvedValue({});
+  const saveSpy = vi.spyOn(api, "saveNotes")
+    .mockResolvedValue({ ok: true, rev: "rev-saved", dropped_notes: {} });
+  saveSpy.mockClear();                        // the spy is shared with earlier tests
+  render(TracksScreen);
+  await fireEvent.click(await screen.findByText("Algarve"));
+  await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await vi.waitFor(() => expect(saveSpy).toHaveBeenCalledTimes(1));
+  expect(saveSpy.mock.calls[0][3]).toBe("rev-loaded");
+  await screen.findByText("Saved.");
+  await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await vi.waitFor(() => expect(saveSpy).toHaveBeenCalledTimes(2));
+  expect(saveSpy.mock.calls[1][3]).toBe("rev-saved");
+});
+
+test("a stale notes save keeps the driver's edits and offers an explicit reload", async () => {
+  // The server refuses a save made from notes a map save has since re-keyed (409). The
+  // screen must say so WITHOUT replacing what the driver typed -- reloading discards it,
+  // so it is a button, never automatic -- and the reload must really refetch.
+  vi.spyOn(api, "getTrackMap").mockResolvedValue({});
+  vi.spyOn(api, "getTrackNotes")
+    .mockResolvedValueOnce({ overview: "as loaded", corners: {}, reference_times: {}, source: "", rev: "r1" })
+    .mockResolvedValueOnce({ overview: "as re-keyed on disk", corners: {}, reference_times: {}, source: "", rev: "r2" });
+  vi.spyOn(api, "saveNotes").mockRejectedValue(new Error(
+    "API request failed: PUT /tracks/algarve_international_circuit/notes -> 409: these notes changed since they were loaded"));
+  render(TracksScreen);
+  await fireEvent.click(await screen.findByText("Algarve"));
+  const overview = (await screen.findByDisplayValue("as loaded")) as HTMLTextAreaElement;
+  await fireEvent.input(overview, { target: { value: "my unsaved edit" } });
+  await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+  expect(await screen.findByText(/changed since you opened them/i)).toBeTruthy();
+  expect((screen.getByLabelText(/overview/i) as HTMLTextAreaElement).value).toBe("my unsaved edit");
+
+  await fireEvent.click(screen.getByRole("button", { name: /reload notes/i }));
+  expect(await screen.findByDisplayValue("as re-keyed on disk")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /reload notes/i })).toBeNull();
+  expect(screen.queryByText(/changed since you opened them/i)).toBeNull();
 });

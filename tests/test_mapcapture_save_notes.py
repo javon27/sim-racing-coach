@@ -60,7 +60,7 @@ def _ribbon(labels):
 
 def _put_notes(client, corners):
     return client.put(f"/tracks/{SLUG}/notes", json={
-        "track": TRACK,
+        "track": TRACK, "rev": client.get(f"/tracks/{SLUG}/notes").json()["rev"],
         "notes": {"overview": "rhythm track", "corners": corners,
                   "reference_times": {"GT3": "1:32.500"}, "source": "me"}})
 
@@ -234,7 +234,8 @@ def _save_via(writer, app, client, labels):
     assert writer == "notes"
     # What the Tracks screen does: read the whole notes object, PUT it straight back.
     got = client.get(f"/tracks/{SLUG}/notes").json()
-    return client.put(f"/tracks/{SLUG}/notes", json={"track": TRACK, "notes": got})
+    return client.put(f"/tracks/{SLUG}/notes",
+                      json={"track": TRACK, "notes": got, "rev": got["rev"]})
 
 
 def test_all_four_writers_keep_the_same_notes_across_a_no_op_save(tmp_path):

@@ -5,6 +5,7 @@ the docs/openapi surface. Reuses store/coach/analysis unchanged."""
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import math
@@ -1072,6 +1073,21 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                  "source": str(draft.get("source", ""))}
         return {"draft": draft}
 
+    def _notes_rev(track: str) -> str:
+        # Revision of what a client holding the notes was looking at: the stored notes
+        # AND the corner labels they are keyed to. PUT /notes writes its body verbatim --
+        # it has to, it is the author typing -- so a copy loaded before a map save that
+        # re-keyed the notes (#64) would put every old key back, and the old keys match
+        # the new labels, so nothing even flags them as orphans. A relabel that moved no
+        # note still changes what a key means, hence the labels.
+        data = _track_file_data(track)
+        corners = data.get("corners")
+        labels = [str(c.get("label") or c.get("number")) for c in corners
+                  if isinstance(c, dict)] if isinstance(corners, list) else []
+        blob = json.dumps({"notes": data.get("notes"), "labels": labels},
+                          sort_keys=True, default=str)
+        return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
     @app.put("/tracks/{slug}/notes")
     def save_notes(slug: str, body: dict = Body(...)):
         # Persist human-edited/reviewed notes onto the map file's overlay (shipped
@@ -1120,10 +1136,21 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         data = dict(_track_file_data(track))       # merged shipped+overlay
         if not data:
             raise HTTPException(404, "no track file to annotate")
+        # REQUIRED, not optional: an optional check leaves every client that omits it free
+        # to write stale keys back. 428 when absent, 409 when stale -- the client refetches
+        # and tells the driver; it never retries blind.
+        # ponytail: check-then-write, not atomic; both sides are one person's clicks on a
+        # localhost sidecar. A per-track lock if a second writer ever appears.
+        rev = body.get("rev")
+        if not isinstance(rev, str):
+            raise HTTPException(428, "notes rev required: load the notes first and send back their rev")
+        if rev != _notes_rev(track):
+            raise HTTPException(409, "these notes changed since they were loaded (a map save "
+                                     "can move or drop notes); reload them before saving")
         data["notes"] = notes
         dropped = _write_track_json(track, data)    # always {}: the caller's notes are kept
         _invalidate_canon(track)                    # same cache-clear as PUT /laps/{id}/map
-        return {"ok": True, "dropped_notes": dropped}
+        return {"ok": True, "rev": _notes_rev(track), "dropped_notes": dropped}
 
     @app.get("/tracks/{slug}/notes")
     def get_notes(slug: str):
@@ -1136,7 +1163,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         return {"overview": str(raw.get("overview", "")),
                 "corners": {str(k): str(v) for k, v in (raw.get("corners") or {}).items()},
                 "reference_times": {str(k): str(v) for k, v in (raw.get("reference_times") or {}).items()},
-                "source": str(raw.get("source", ""))}
+                "source": str(raw.get("source", "")),
+                "rev": _notes_rev(slug)}   # send it back with PUT; see _notes_rev
 
     @app.get("/tracks")
     def list_tracks():

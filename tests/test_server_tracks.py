@@ -76,7 +76,7 @@ def test_draft_notes_bad_model_json_502(tmp_path):
 def test_put_notes_persists_and_reads_back(tmp_path):
     client, _ = _make_client_with_fake_model(tmp_path, model_reply="{}")
     r = client.put("/tracks/algarve_international_circuit/notes", json={
-        "track": "Algarve International Circuit",
+        "track": "Algarve International Circuit", "rev": _rev(client),
         "notes": {"overview": "rhythm", "corners": {"1": "brake late"}, "source": "me"}})
     assert r.status_code == 200 and r.json()["ok"] is True
     # A fresh GET of the track's map data now carries the notes overlay.
@@ -94,7 +94,7 @@ def test_get_tracks_lists_coverage(tmp_path):
 def test_put_notes_reference_times_roundtrip(tmp_path):
     client, _ = _make_client_with_fake_model(tmp_path, model_reply="{}")
     r = client.put("/tracks/algarve_international_circuit/notes", json={
-        "track": "Algarve International Circuit",
+        "track": "Algarve International Circuit", "rev": _rev(client),
         "notes": {"overview": "x", "reference_times": {"GT3": "1:32.500"}}})
     assert r.status_code == 200
     written = json.loads((tmp_path / "tracks" / "algarve_international_circuit.json").read_text())
@@ -105,14 +105,18 @@ def test_get_notes_no_notes_returns_empty_shape(tmp_path):
     client, _ = _make_client_with_fake_model(tmp_path, model_reply="{}")
     r = client.get("/tracks/algarve_international_circuit/notes")
     assert r.status_code == 200
-    assert r.json() == {"overview": "", "corners": {}, "reference_times": {}, "source": ""}
+    assert {k: v for k, v in r.json().items() if k != "rev"} == {
+        "overview": "", "corners": {}, "reference_times": {}, "source": ""}
+    assert isinstance(r.json()["rev"], str)
 
 
 def test_get_notes_missing_track_returns_empty_shape(tmp_path):
     client, _ = _make_client_with_fake_model(tmp_path, model_reply="{}")
     r = client.get("/tracks/nonexistent_track_xyz/notes")
     assert r.status_code == 200
-    assert r.json() == {"overview": "", "corners": {}, "reference_times": {}, "source": ""}
+    assert {k: v for k, v in r.json().items() if k != "rev"} == {
+        "overview": "", "corners": {}, "reference_times": {}, "source": ""}
+    assert isinstance(r.json()["rev"], str)
 
 
 def test_track_map_by_slug_no_path_returns_empty(tmp_path):
@@ -186,9 +190,14 @@ def _written(tracks_dir):
     return json.loads((tracks_dir / "algarve_international_circuit.json").read_text())
 
 
+def _rev(client):
+    """The notes rev PUT /notes requires -- what the Tracks screen got when it loaded them."""
+    return client.get("/tracks/algarve_international_circuit/notes").json()["rev"]
+
+
 def _put_notes(client, corners):
     return client.put("/tracks/algarve_international_circuit/notes", json={
-        "track": "Algarve International Circuit",
+        "track": "Algarve International Circuit", "rev": _rev(client),
         "notes": {"overview": "rhythm track", "corners": corners,
                   "reference_times": {"GT3": "1:32.500"}, "source": "me"}})
 
@@ -539,9 +548,9 @@ def test_save_track_map_has_notes_false_once_only_orphans_remained(tmp_path):
     # The Tracks screen must not keep claiming a track has notes when every
     # authored per-corner note was dropped as unbindable.
     client, tracks_dir = _client_with_frozen_path(tmp_path)
-    client.put("/tracks/algarve_international_circuit/notes", json={
-        "track": "Algarve International Circuit",
-        "notes": {"overview": "", "corners": {"1": "brake late"}}})
+    assert client.put("/tracks/algarve_international_circuit/notes", json={
+        "track": "Algarve International Circuit", "rev": _rev(client),
+        "notes": {"overview": "", "corners": {"1": "brake late"}}}).status_code == 200
     assert client.get("/tracks").json()[0]["has_notes"] is True
     # Both new corners more than 50 m from the old apex (50 m), so '1' has no counterpart.
     assert client.put("/tracks/algarve_international_circuit/map", json={"corners": [
@@ -568,14 +577,54 @@ def test_track_rotation_by_slug_persists(tmp_path):
 
 def test_put_then_get_notes_roundtrip(tmp_path):
     client, _ = _make_client_with_fake_model(tmp_path, model_reply="{}")
-    client.put("/tracks/algarve_international_circuit/notes", json={
-        "track": "Algarve International Circuit",
+    assert client.put("/tracks/algarve_international_circuit/notes", json={
+        "track": "Algarve International Circuit", "rev": _rev(client),
         "notes": {"overview": "rhythm track", "corners": {"1": "brake late"},
-                   "reference_times": {"GT3": "1:32.500"}, "source": "me"}})
+                   "reference_times": {"GT3": "1:32.500"}, "source": "me"}}).status_code == 200
     r = client.get("/tracks/algarve_international_circuit/notes")
     assert r.status_code == 200
-    assert r.json() == {"overview": "rhythm track", "corners": {"1": "brake late"},
-                         "reference_times": {"GT3": "1:32.500"}, "source": "me"}
+    assert {k: v for k, v in r.json().items() if k != "rev"} == {
+        "overview": "rhythm track", "corners": {"1": "brake late"},
+        "reference_times": {"GT3": "1:32.500"}, "source": "me"}
+
+
+def test_a_notes_save_needs_the_rev_the_notes_were_loaded_with(tmp_path):
+    # PUT /notes writes its body verbatim, so it must know the body is not stale. No rev
+    # is refused (428), a wrong one is refused (409), neither writes anything, and a good
+    # save hands back the rev to send next time.
+    client, tracks_dir = _client_with_frozen_path(tmp_path)
+    assert _put_notes(client, {"1": "brake late"}).status_code == 200
+    before = _written(tracks_dir)
+    body = {"track": "Algarve International Circuit",
+            "notes": {"overview": "an edit", "corners": {}}}
+    url = "/tracks/algarve_international_circuit/notes"
+    assert client.put(url, json=body).status_code == 428
+    assert client.put(url, json={**body, "rev": "0" * 16}).status_code == 409
+    assert _written(tracks_dir) == before
+    r = client.put(url, json={**body, "rev": _rev(client)})
+    assert r.status_code == 200, r.text
+    assert r.json()["rev"] == _rev(client)
+    assert _written(tracks_dir)["notes"]["overview"] == "an edit"
+
+
+def test_a_stale_tracks_screen_cannot_put_re_keyed_notes_back(tmp_path):
+    # Red-team #3 through the real routes: the Tracks screen loads the notes, the map
+    # editor (a modal on that same screen) relabels every corner +2 and the note moves
+    # with its corner, then the screen saves the copy it loaded before -- with an
+    # unrelated overview edit. That used to put the old key back, where it names the
+    # first two corners of the lap as authored fact, with no orphan warning (the old key
+    # matches the new labels). Refused now, and the moved note stays where it is.
+    client, tracks_dir = _client_with_frozen_path(tmp_path)
+    assert _put_map(client, [("1", 20.0), ("2", 40.0), ("3", 60.0), ("4", 80.0)]).status_code == 200
+    assert _put_notes(client, {"3-4": "THE LAST CHICANE"}).status_code == 200
+    held = client.get("/tracks/algarve_international_circuit/notes").json()
+    assert _put_map(client, [("3", 20.0), ("4", 40.0), ("5", 60.0), ("6", 80.0)]).status_code == 200
+    assert _written(tracks_dir)["notes"]["corners"] == {"5-6": "THE LAST CHICANE"}
+    held["overview"] = "an unrelated edit"
+    r = client.put("/tracks/algarve_international_circuit/notes", json={
+        "track": "Algarve International Circuit", "notes": held, "rev": held["rev"]})
+    assert r.status_code == 409, r.text
+    assert _written(tracks_dir)["notes"]["corners"] == {"5-6": "THE LAST CHICANE"}
 
 
 def test_save_track_map_bakes_geometry_and_digest_uses_it(tmp_path):
@@ -682,7 +731,7 @@ def test_put_notes_refuses_an_oversized_notes_document(tmp_path):
     # full per-note cap plus overview and source at theirs. A round 64,000 would refuse it.
     ceiling = {str(n): "x" * 2000 for n in range(1, 31)}
     r = client.put("/tracks/algarve_international_circuit/notes", json={
-        "track": "Algarve International Circuit",
+        "track": "Algarve International Circuit", "rev": _rev(client),
         "notes": {"overview": "o" * 2000, "corners": ceiling,
                   "reference_times": {}, "source": "s" * 2000}})
     assert r.status_code == 200, r.text
