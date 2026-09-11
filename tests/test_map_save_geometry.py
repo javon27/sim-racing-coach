@@ -199,11 +199,12 @@ def test_every_shipped_radius_is_measured_on_its_own_corner_window(slug):
     RADIUS ONLY, deliberately, and the other three are not oversights. width_m and
     banking_deg are read at the APEX index, and #30 moved no apex (all 169 corners still
     match on apex_dist across 35254d5), so they cannot have gone stale this way.
-    elev_delta_m CAN and DID -- it reads the window ends, and all 169 stored values are
-    reproduced exactly by the pre-#30 windows, so 59 of them describe a window that no
-    longer exists. It is not checked here because the elevation profile is derived from
-    app-data captures that are not in the repo, so there is nothing to compare against;
-    re-baking those is its own reviewable commit, like this one."""
+    elev_delta_m CAN and DID -- it reads the window ends, and all 169 stored values were
+    reproduced exactly by the pre-#30 windows, so 59 of them described a window that no
+    longer existed; #74 re-baked those from the current windows (`--only=elev_delta_m`).
+    It is not checked here because the elevation profile is derived from app-data
+    captures that are not in the repo, so there is nothing to compare against -- a
+    future window edit needs that elevation re-bake too, and nothing here will notice."""
     d = _shipped(slug)
     # Positional probe, as _persist_map does: corner_geometry keys its result on label,
     # so two corners sharing one would collapse into a single entry.

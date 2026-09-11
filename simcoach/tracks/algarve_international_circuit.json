@@ -111,7 +111,7 @@
       "radius_m": 42.3,
       "width_m": 12.5,
       "banking_deg": 2.4,
-      "elev_delta_m": -2.7
+      "elev_delta_m": -2.8
     },
     {
       "number": 8,
@@ -175,7 +175,7 @@
       "radius_m": 31.7,
       "width_m": 12.4,
       "banking_deg": 2.2,
-      "elev_delta_m": -6.5
+      "elev_delta_m": -6.3
     },
     {
       "number": 12,
