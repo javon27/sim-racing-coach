@@ -13,7 +13,7 @@ import {
   saveMapCloud,
   getTrackMap,
 } from "./api";
-import TrackMapEditor, { nearestPathIndex, nearestDistIndex, layoutLabels, wrapLabel, localOutward, type LabelItem } from "./TrackMapEditor.svelte";
+import TrackMapEditor, { nearestPathIndex, nearestDistIndex, layoutLabels, wrapLabel, localOutward, startMarker, type LabelItem } from "./TrackMapEditor.svelte";
 
 vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
@@ -84,6 +84,39 @@ describe("localOutward", () => {
   });
   it("reports ~zero curvature on a straight", () => {
     expect(localOutward([[0, 0], [10, 0], [20, 0]], 1, 1).curv).toBeLessThan(1e-6);
+  });
+});
+
+describe("startMarker", () => {
+  it("aims the heading arrow along the track where it sits, not along the chord from S/F", () => {
+    // A short start straight into a right-angle bend (Spa's La Source is 278 m in).
+    // The arrow lands past the bend; it must point along the track there (north), where
+    // the old chord from S/F pointed diagonally across the corner.
+    const path: [number, number][] = [[0, 0], [10, 0], [20, 0]];
+    for (let y = 10; y <= 980; y += 10) path.push([20, y]);
+    const m = startMarker(path)!;
+    expect(m.ang).toBeCloseTo(Math.PI / 2, 9);
+    expect(m.sfAng).toBeCloseTo(0, 9); // the S/F bar is square to the start straight
+  });
+
+  it("places the arrow by distance along the drawing, not by how densely the path is sampled", () => {
+    // The same L-shaped track sampled coarsely and finely on its first leg. By point count
+    // (the old rule) the arrow moves with the sampling; by distance it stays at 8% of the
+    // drawing's extent, to within one sample.
+    const build = (step: number) => {
+      const p: [number, number][] = [];
+      for (let x = 0; x <= 2000; x += step) p.push([x, 0]);
+      for (let y = 100; y <= 2000; y += 100) p.push([2000, y]);
+      return p;
+    };
+    for (const step of [100, 5]) {
+      const m = startMarker(build(step))!;
+      expect(Math.abs(m.xj - 2000 * 0.08)).toBeLessThanOrEqual(step);
+    }
+  });
+
+  it("returns null for a path too short to have a direction", () => {
+    expect(startMarker([[0, 0]])).toBeNull();
   });
 });
 
