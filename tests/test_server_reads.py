@@ -991,8 +991,147 @@ def test_mapcapture_rebuild_corrupt_capture_is_422(tmp_path):
     c = _tc(app)
     c.post("/mapcapture/build", json={})
     c.post("/mapcapture/save", json={})
-    (tmp_path / "data" / "captures" / "maptrack.npz").write_bytes(b"not an npz")  # corrupt
+    # The store must HOLD live laps for this track, or this test cannot tell a REFUSAL
+    # from simply having nothing to fall back to -- setting map_buffer directly never
+    # persists a lap, so it used to pass under both readings.
+    for zsign in (1, -1, 1):
+        store.save(_edge("MapTrack", zsign, 100.0))
+    cap = tmp_path / "data" / "captures" / "maptrack.npz"
+    cap.unlink()
+    r = c.post("/mapcapture/rebuild", json={"slug": "maptrack"})
+    assert r.status_code == 200, r.text          # those live laps ARE reachable...
+    assert r.json()["lap_count"] == 3
+    # ...so the 422 below is the corrupt capture being refused, not an empty store. A
+    # driver who asked for that artifact must not silently get geometry off other data.
+    cap.write_bytes(b"not an npz")                                          # corrupt
     assert c.post("/mapcapture/rebuild", json={}).status_code == 422  # clean 422, not 500
+
+
+# --- rebuild falls back to a track's own live laps (#69) --------------------------------
+# captures/<slug>.npz is written only by a mapping capture, so a track driven normally --
+# 27 live laps of Silverstone National, point clouds on disk -- had no rebuildable cloud
+# and 422'd with nothing to do but re-drive boundary passes. The per-lap .npz always
+# carried pos_x/pos_z/lap_distance; only this path never read them.
+
+def test_mapcapture_rebuild_falls_back_to_live_laps_of_that_track(tmp_path):
+    app, store = _map_app(tmp_path)
+    c = _tc(app)
+    assert not (tmp_path / "data" / "captures").exists()      # no mapping capture at all
+    for zsign in (1, -1, 1):
+        store.save(_edge("Silverstone National Circuit", zsign, 100.0))
+    r = c.post("/mapcapture/rebuild", json={"slug": "silverstone_national_circuit"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["center"]) > 1                            # a real reconstructed line
+    assert body["lap_count"] == 3                             # and it says what backs it
+    # The built ribbon is staged for the EXISTING save route -- no second writer -- under
+    # the live name the laps were recorded with, so the new map is named for the track.
+    assert app.state.last_ribbon["track"] == "Silverstone National Circuit"
+    assert c.post("/mapcapture/save", json={}).json()["saved"] is True
+    saved = tmp_path / "tracks" / "silverstone_national_circuit.json"
+    assert json.loads(saved.read_text())["name"] == "Silverstone National Circuit"  # not the slug
+    # Marked as built from driven laps, so driving more laps can rebuild it again.
+    assert json.loads(saved.read_text())["built_from"] == "live_laps"
+
+
+def test_a_lap_built_map_stays_rebuildable_after_an_editor_save(tmp_path):
+    # The driver builds a map from driven laps, names a corner in the editor, drives more
+    # laps and rebuilds. The editor save must keep the built_from mark -- without it, the
+    # named corner would make the map look curated and every later rebuild would 422.
+    app, store = _map_app(tmp_path)
+    c = _tc(app)
+    slug = "silverstone_national_circuit"
+    for zsign in (1, -1, 1):
+        store.save(_edge("Silverstone National Circuit", zsign, 100.0))
+    assert c.post("/mapcapture/rebuild", json={"slug": slug}).status_code == 200
+    assert c.post("/mapcapture/save", json={}).json()["saved"] is True
+    f = tmp_path / "tracks" / f"{slug}.json"
+    length = json.loads(f.read_text())["length"]
+    r = c.put(f"/tracks/{slug}/map", json={"corners": [
+        {"number": 1, "name": "Copse", "apex_dist": length / 2,
+         "start_dist": length * 0.3, "end_dist": length * 0.7}]})
+    assert r.status_code == 200, r.text
+    saved = json.loads(f.read_text())
+    assert saved["corners"] and saved.get("built_from") == "live_laps"
+    for zsign in (-1, 1):
+        store.save(_edge("Silverstone National Circuit", zsign, 100.0))
+    r2 = c.post("/mapcapture/rebuild", json={"slug": slug})
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["lap_count"] == 5
+
+
+def test_mapcapture_rebuild_never_replaces_a_curated_corner_map_from_live_laps(tmp_path):
+    # Shipped Spa has 18 curated, named corners in GP numbering but no stored outline
+    # (#82), so the Tracks screen offered "Add map" -> "Rebuild from saved capture". The
+    # live-lap fallback then rebuilt it from 6 driven laps and Save wrote 22 "Turn N"
+    # solver corners over it -- in dev the repo file itself. A map with corners and no
+    # `built_from` mark is curated: refuse, and leave the file exactly as it was.
+    app, store = _map_app(tmp_path)
+    c = _tc(app)
+    tracks = tmp_path / "tracks"
+    tracks.mkdir(parents=True, exist_ok=True)
+    curated = tracks / "silverstone_national_circuit.json"
+    curated.write_text(json.dumps({"track": "silverstone_national_circuit", "corners": [
+        {"number": 1, "name": "Copse", "direction": "right",
+         "start_dist": 100.0, "apex_dist": 150.0, "end_dist": 200.0}]}), encoding="utf-8")
+    before = curated.read_bytes()
+    for zsign in (1, -1, 1):
+        store.save(_edge("Silverstone National Circuit", zsign, 100.0))
+    r = c.post("/mapcapture/rebuild", json={"slug": "silverstone_national_circuit"})
+    assert r.status_code == 422, r.text
+    assert "curated corner map" in r.json()["detail"]
+    assert app.state.last_ribbon is None                 # nothing staged for a Save to write
+    assert curated.read_bytes() == before
+
+
+def test_mapcapture_rebuild_fallback_ignores_result_log_laps(tmp_path):
+    # Spa: ~991 imported laps, zero clouds. telemetry_path is NULL on every one, so
+    # there is nothing to reconstruct and the refusal must stand.
+    app, store = _map_app(tmp_path)
+    c = _tc(app)
+    for n in range(3):
+        _result_log_lap(store, track="Circuit de Spa-Francorchamps", session_id=f"race-{n}")
+    # Control: a DIFFERENT track's live laps exist, so a fallback that ignored the slug
+    # would happily rebuild Spa out of them.
+    for zsign in (1, -1):
+        store.save(_edge("Silverstone National Circuit", zsign, 100.0))
+    r = c.post("/mapcapture/rebuild", json={"slug": "circuit_de_spa_francorchamps"})
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"] == "no saved capture available"
+    assert not (tmp_path / "tracks" / "circuit_de_spa_francorchamps.json").exists()
+
+
+def test_mapcapture_rebuild_prefers_the_real_capture_over_live_laps(tmp_path):
+    # A mapping capture's boundary passes cover the full WIDTH; racing laps only trace
+    # the line driven. When both exist the purpose-built artifact has to win.
+    app, store = _map_app(tmp_path)
+    app.state.latest = {"record": _edge("MapTrack", 1, 100.0), "lap_id": 0}
+    app.state.map_buffer = [_edge("MapTrack", 1, 100.0), _edge("MapTrack", -1, 100.0)]
+    c = _tc(app)
+    c.post("/mapcapture/build", json={})
+    c.post("/mapcapture/save", json={})              # writes captures/maptrack.npz (2 laps)
+    app.state.last_ribbon = None
+    for zsign in (1, -1, 1, -1, 1):                  # 5 live laps, a different count
+        store.save(_edge("MapTrack", zsign, 100.0))
+    r = c.post("/mapcapture/rebuild", json={"slug": "maptrack"})
+    assert r.status_code == 200, r.text
+    assert r.json()["lap_count"] == 2                # the capture's 2, not the store's 5
+
+
+def test_mapcapture_rebuild_fallback_skips_unreadable_laps(tmp_path):
+    # A laps row can outlive its file, and a file can be truncated by a crash mid-write.
+    # Skip that lap, don't fail the whole rebuild -- and don't 500 either.
+    app, store = _map_app(tmp_path)
+    c = _tc(app)
+    ids = [store.save(_edge("Silverstone National Circuit", z, 100.0))
+           for z in (1, -1, 1, -1)]
+    gone = Path(store.data_dir) / f"{ids[0]}.npz"
+    assert gone.exists()
+    gone.unlink()                                            # OSError on np.load
+    (Path(store.data_dir) / f"{ids[1]}.npz").write_bytes(b"PK\x03\x04 truncated")  # BadZipFile
+    r = c.post("/mapcapture/rebuild", json={"slug": "silverstone_national_circuit"})
+    assert r.status_code == 200, r.text
+    assert r.json()["lap_count"] == 2          # 4 rows, 2 readable -- and it says 2
 
 
 def test_mapping_laps_persisted_tagged_and_excluded_from_best(tmp_path):

@@ -129,7 +129,10 @@ def speed_profile(line, mu, g, a_brake, a_accel, bank=None, turn_sign=None):
         tan_t = np.zeros(n)
     else:
         tan_t = np.tan(np.asarray(bank, dtype=float))
-        if not np.any(tan_t[np.isfinite(tan_t)]):     # every station 0 or non-finite
+        # An unknown station (null/NaN: ribbon bins the samples never spanned) is
+        # solved as flat. Left as NaN it poisons v through the min() passes.
+        tan_t[~np.isfinite(tan_t)] = 0.0
+        if not np.any(tan_t):                          # every station 0 or non-finite
             tan_t = np.zeros(n)                       # flat: nothing to sign
         elif turn_sign is None:
             raise ValueError(
@@ -262,7 +265,14 @@ def _corner_window(kappa, apex, n, max_half):
 
 
 def _calibrate(car, telem):
-    """Calibrate mu/a_brake/a_accel from observed telemetry peaks (g-unit channels)."""
+    """Calibrate mu/a_brake/a_accel from observed telemetry peaks (g-unit channels).
+
+    long_g follows LMU's mLocalAccel.z: POSITIVE under braking, negative under
+    acceleration. Measured on real stored laps (#70): median +1.26..+1.71 g with
+    brake > 0.5, -0.22..-0.54 g at full throttle. This used to read +long_g as
+    acceleration, which on a real lap swaps the two limits -- a GT3 "accelerating"
+    at ~2.4 g and braking at ~0.9 g. Latent only because the one production caller
+    (server `_place_corners`) passes no telem."""
     lat = np.abs(np.asarray(telem.get("lat_g", []), dtype=float))
     lon = np.asarray(telem.get("long_g", []), dtype=float)
     lat = lat[np.isfinite(lat)]
@@ -272,9 +282,9 @@ def _calibrate(car, telem):
     a_brake = car.a_brake
     if lon.size:
         if lon.max() > 0:
-            a_accel = float(lon.max()) * car.g       # peak +long_g (g) -> m/s^2
+            a_brake = float(lon.max()) * car.g       # peak +long_g (g) = deceleration
         if lon.min() < 0:
-            a_brake = float(-lon.min()) * car.g      # peak -long_g (g) -> m/s^2
+            a_accel = float(-lon.min()) * car.g      # peak -long_g (g) = acceleration
     return replace(car, mu=mu, a_brake=a_brake, a_accel=a_accel)
 
 

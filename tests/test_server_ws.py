@@ -271,6 +271,129 @@ def test_ws_coach_threads_prior_chat_history(tmp_path):
     assert contents.index("first question") < contents.index("second question")
 
 
+def test_ws_coach_retracts_a_fabricated_grip_claim_in_resumed_history(tmp_path):
+    # #72: four answers already in the driver's store assert "min grip reading 0.00"
+    # as established fact. mGripFract is never populated by the game (flat 0.0 across
+    # 173/173 captured laps, 5 cars), so the claim is false -- and resuming the chat
+    # re-feeds it to the model as its OWN prior reasoning, which is harder to discount
+    # than a raw number would be.
+    #
+    # Filtered on read, never on disk: the stored row and the UI keep what the coach
+    # actually said. Only the model's copy carries the retraction.
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    fake = FakeModel(reply="Second answer.")
+    app = create_app(store, Coach(fake))
+    poisoned = ("That's a lockup -- min grip reading 0.00 there confirms the tires "
+                "weren't gripping at all through that phase.")
+    store.save_chat("c1", "s1", "trk", "car", None, "why did I lock up?", poisoned, None)
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "second question", "chat_id": "c1"})
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"):
+                break
+
+    sent = [m["content"] for m in fake.last_messages]
+    # A phrase only the stored answer has -- "min grip" is also in the retraction's own
+    # text, so an answer REPLACED by the retraction would satisfy that.
+    carried = [m for m in sent if "weren't gripping at all" in m]
+    assert carried, "the prior answer should still be threaded, not dropped"
+    assert all("fabricated" in m and "Disregard it" in m for m in carried), \
+        f"the grip claim reached the model unretracted: {carried}"
+    # ...and the stored record is untouched: rewriting the driver's own conversation
+    # history would be a worse wrong than leaving a bad number in it.
+    assert store.chat_messages("c1")[0]["answer"] == poisoned
+
+
+def test_ws_coach_retracts_every_matching_turn_not_just_the_first(tmp_path):
+    # A real chat (2ae96c) carries grip claims in two separate answers. Every other test
+    # has one matching row per chat, so "retract only the first match" passed them all.
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    fake = FakeModel(reply="Third answer.")
+    app = create_app(store, Coach(fake))
+    first = "Min grip 0.00 through the exit -- the rear was already gone."
+    second = ("TC hammers in at 48% and grip drops to **0.00** -- that's the rear "
+              "letting go completely.")
+    store.save_chat("c1", "s1", "trk", "car", None, "why the snap?", first, None)
+    store.save_chat("c1", "s1", "trk", "car", None, "and on exit?", second, None)
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "third question", "chat_id": "c1"})
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"):
+                break
+
+    sent = [m["content"] for m in fake.last_messages]
+    for phrase in ("already gone", "letting go completely"):
+        carried = [m for m in sent if phrase in m]
+        assert carried, f"answer containing {phrase!r} was not threaded"
+        assert all("Disregard it" in m for m in carried), f"{phrase!r} reached the model unretracted"
+
+
+def test_ws_coach_leaves_ordinary_grip_prose_alone(tmp_path):
+    # GUARD against over-matching. The authored driving prose in simcoach/knowledge/*.md
+    # and simcoach/cars/*.json is full of legitimate uses of "grip", and it reaches the
+    # model through other tools; a blanket filter on the word would gut it. Only the
+    # specific fabricated metric is matched.
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    fake = FakeModel(reply="Second answer.")
+    app = create_app(store, Coach(fake))
+    legit = "You ran out of front grip on entry; the mechanical grip balance is rearward."
+    store.save_chat("c1", "s1", "trk", "car", None, "why understeer?", legit, None)
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "second question", "chat_id": "c1"})
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"):
+                break
+
+    assert legit in [m["content"] for m in fake.last_messages]
+
+
+def test_ws_coach_retracts_a_pre_fix_race_start_but_not_a_post_fix_one(tmp_path):
+    # #67 residue. Before the fix merged, get_race_result could not reach the result log
+    # for a live session and never had the grid slot, so the coach told a driver who
+    # started P9 and finished P18 with 15 incidents "you started P18 ... No incidents".
+    # That answer (the store's own text and timestamp) re-enters a resumed chat. After
+    # the fix the coach legitimately says "Started P9 on the grid" -- which the same
+    # pattern matches, so only the written-before cutoff can tell the two apart.
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    fake = FakeModel(reply="Third answer.")
+    app = create_app(store, Coach(fake))
+    before = ("That one's tough to sugarcoat -- you started **P18** and crossed the line "
+              "**P18**. No incidents or penalties logged.")
+    after = "You started P9 on the grid and finished P18, with 15 incidents logged."
+    store.save_chat("c1", "s1", "trk", "car", None, "how did that race go?", before, None,
+                    ts=1789018942.56)
+    store.save_chat("c1", "s1", "trk", "car", None, "and now?", after, None,
+                    ts=1789057327.0)
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "third question", "chat_id": "c1"})
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"):
+                break
+
+    sent = [m["content"] for m in fake.last_messages]
+    carried = [m for m in sent if "tough to sugarcoat" in m]
+    assert len(carried) == 1, f"the pre-fix answer should be threaded once: {sent}"
+    assert carried[0].startswith(before) and "never the grid slot" in carried[0], \
+        f"the pre-fix start claim reached the model unretracted: {carried}"
+    # The retraction names the stored row's own track, so "use get_race_result only for
+    # the same race" is a comparison the model can actually make.
+    assert "only if the track it names is trk" in carried[0], carried[0]
+    assert after in sent, "a post-fix answer must reach the model exactly as said"
+    assert store.chat_messages("c1")[0]["answer"] == before
+
+
 def test_ws_coach_no_history_for_new_chat(tmp_path):
     # A brand-new chat (no chat_id) threads no history -> just the question.
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))

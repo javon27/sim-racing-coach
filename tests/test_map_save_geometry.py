@@ -51,7 +51,34 @@ def _baked_maps() -> list[str]:
     return out
 
 
-BAKED_MAPS = _baked_maps()
+# PINNED, not derived. Every per-map test below parametrizes over this, and a list
+# derived from the data itself means a map that loses its path or all of its geometry
+# silently drops out of the parametrization -- its tests stop being collected instead of
+# failing, which is the regression they exist to catch. Derived vs pinned is compared in
+# test_the_pinned_baked_map_list_is_what_ships, which also forces a newly baked map to be
+# added here rather than shipping unguarded.
+BAKED_MAPS = [
+    "algarve_international_circuit",
+    "autodromo_enzo_e_dino_ferrari",
+    "autodromo_jose_carlos_pace",
+    "autodromo_nazionale_monza",
+    "bahrain_endurance_circuit",
+    "bahrain_international_circuit",
+    "bahrain_outer_circuit",
+    "bahrain_paddock_circuit",
+    "circuit_de_la_sarthe",
+    "monza_curva_grande_circuit",
+    "weathertech_raceway_laguna_seca",
+]
+
+
+def test_the_pinned_baked_map_list_is_what_ships():
+    """Both directions. A pinned map missing from the data lost its path or its whole bake;
+    a baked map missing from the pin ships with none of the per-map guards run on it."""
+    derived = _baked_maps()
+    assert derived == BAKED_MAPS, (
+        f"lost path/geometry: {sorted(set(BAKED_MAPS) - set(derived))}; "
+        f"baked but not pinned: {sorted(set(derived) - set(BAKED_MAPS))}")
 
 
 def _self_save(tmp_path: Path, slug: str) -> tuple[dict, dict]:
@@ -92,7 +119,11 @@ def _geometry_delta(before: dict, after: dict) -> list[str]:
 def test_self_saving_a_shipped_map_leaves_its_geometry_alone(tmp_path, slug):
     """Per-map, the way promote_map.py reports its byte-fidelity check. Before the fix
     this failed on 7 of the 11 maps: radius_m moved on 18 corners, and Laguna lost all
-    24 of its width_m/banking_deg values outright."""
+    24 of its width_m/banking_deg values outright. Those 18 radii have since been
+    re-baked (#73), so today only the width/banking and elev_delta_m halves of this
+    would still catch a re-derivation -- see
+    test_a_save_carries_a_stored_radius_forward_instead_of_re_deriving_it for the radius
+    half, which now needs a divergent fixture to mean anything."""
     before, after = _self_save(tmp_path, slug)
     delta = _geometry_delta(before, after)
     assert delta == [], f"{slug}: save rewrote baked geometry: {delta}"
@@ -107,17 +138,24 @@ def test_self_saving_a_shipped_map_changes_nothing_at_all(tmp_path, slug):
     assert after == before, f"{slug}: save was not a no-op"
 
 
-def test_imola_t13_keeps_its_baked_radius_across_a_save(tmp_path):
-    """The headline case, pinned by VALUE so a regression names the corner: Imola T13's
-    baked radius is 67.7 m. Re-deriving it from the corner's current window measures
-    322.1 m -- a 4.8x change the curator never asked for, on a corner the coach
-    describes to the driver in metres."""
-    before, after = _self_save(tmp_path, IMOLA)
-    t13_before = next(c for c in before["corners"] if str(c["label"]) == "13")
-    t13_after = next(c for c in after["corners"] if str(c["label"]) == "13")
-    assert t13_before["radius_m"] == 67.7          # what ships
-    assert t13_after["radius_m"] == 67.7           # what a save must leave behind
-    assert t13_after["radius_m"] != 322.1          # the re-derived value, for the record
+def test_a_save_carries_a_stored_radius_forward_instead_of_re_deriving_it(tmp_path):
+    """#62's headline case, kept DISCRIMINATING after #73 re-baked the shipped radii.
+
+    It used to read straight off the shipped file: Imola T13 stored 67.7 m and its own
+    window measured 322.1 m, so a save that re-derived was visible as a 4.8x change on a
+    corner the coach describes to the driver in metres. #73 re-baked T13 to the 322.1 its
+    window measures, so stored and re-derived now AGREE on every shipped corner and no
+    shipped corner can tell carry-forward from re-derivation apart any more.
+
+    So the fixture puts the historical stale value back on disk. 67.7 is measurable
+    (finite, positive), so the carry-forward must hand it back untouched; re-deriving
+    returns 322.1. Without a divergent stored value this assertion is worth nothing --
+    do not "simplify" it back to reading the shipped file."""
+    stale = [dict(c, radius_m=67.7) if str(c["label"]) == "13" else dict(c)
+             for c in _shipped(IMOLA)["corners"]]
+    after = {str(c["label"]): c for c in _editor_save(tmp_path, IMOLA, stale, on_disk=stale)}
+    assert after["13"]["radius_m"] == 67.7    # carried, not re-measured
+    assert after["13"]["radius_m"] != 322.1   # what re-deriving would have written
 
 
 def test_laguna_keeps_its_point_cloud_width_and_banking_across_a_save(tmp_path):
@@ -134,52 +172,78 @@ def test_laguna_keeps_its_point_cloud_width_and_banking_across_a_save(tmp_path):
     assert (corkscrew["width_m"], corkscrew["banking_deg"]) == (9.4, 4.1)
 
 
-def test_the_shipped_radius_is_the_preclamp_window_bleed_not_the_corner(tmp_path):
-    """WHICH VALUE IS CORRECT, pinned so the question cannot be silently re-answered.
+@pytest.mark.parametrize("slug", BAKED_MAPS)
+def test_every_shipped_radius_is_measured_on_its_own_corner_window(slug):
+    """#73's guard: a stored `radius_m` must be reproducible from the SAME file's frozen
+    path and that corner's CURRENT window.
 
-    The shipped radii were baked in 1559297 against the PRE-CLAMP corner windows, which
-    were WIDER than today's and reached into the neighbouring corner. 35254d5 (#30)
-    narrowed them and did not re-bake. `corner_geometry` reports the TIGHTEST point in
-    the window, so what the stale value captured is the NEIGHBOUR'S radius.
+    Those are two pieces of committed data that can silently drift apart, and did. The
+    radii were baked in 1559297 against windows wider than the corner; 35254d5 (#30)
+    then narrowed 69 corner windows across 11 maps and did not re-bake. Because
+    `corner_geometry` returns the TIGHTEST point in the window, an over-wide window can
+    only ever report a radius at or below the true one -- so for months the coach told
+    the driver a fast corner was a slow one, through geometry_clause (#35), as owned
+    fact: 18 corners across 7 maps, worst Bahrain Endurance T13 at 40.8 m stored against
+    340.7 m measured (8.3x).
 
-    On 13 of the 18 drifting corners those wide windows are exactly `_persist_map`'s own
-    `pad = max(20.0, length * 0.025)` default -- which is why this test DERIVES the pad
-    from the map's own length below rather than hardcoding 122.4. Do NOT "tidy" it into
-    `mapbuild._WIN_M`: that is 55.0 and always has been, it is not where these came
-    from, and substituting it turns this test red over a bug that does not exist.
+    Any future window edit not followed by
+    `python scripts/backfill_corner_geometry.py --only=radius_m` turns this red.
 
-    Imola T13 is the proof: its stored 67.7 m is exactly what T12's own window measures,
-    and T13's pre-clamp window reaches back over T12's apex. Measured on T13's own
-    window it is 322.1 m. So the SHIPPED value is the stale one -- but a save is still
-    the wrong place to correct it (backfill_corner_geometry.py is, under #73), which is
-    why the fix preserves a value this test shows to be wrong.
-    """
+    Radius depends only on the path, so this needs no capture, no ribbon and no lap
+    store -- it is checkable from the repo alone, which is why it is a test rather than
+    something only the curator's machine can run.
+
+    RADIUS ONLY, deliberately, and the other three are not oversights. width_m and
+    banking_deg are read at the APEX index, and #30 moved no apex (all 169 corners still
+    match on apex_dist across 35254d5), so they cannot have gone stale this way.
+    elev_delta_m CAN and DID -- it reads the window ends, and all 169 stored values are
+    reproduced exactly by the pre-#30 windows, so 59 of them describe a window that no
+    longer exists. It is not checked here because the elevation profile is derived from
+    app-data captures that are not in the repo, so there is nothing to compare against;
+    re-baking those is its own reviewable commit, like this one."""
+    d = _shipped(slug)
+    # Positional probe, as _persist_map does: corner_geometry keys its result on label,
+    # so two corners sharing one would collapse into a single entry.
+    geo = corner_geometry(d["path"], d["path_dist"],
+                          [dict(c, label=str(i)) for i, c in enumerate(d["corners"])])
+    drift = [f"T{c.get('label')}: stored {c.get('radius_m')} vs measured "
+             f"{geo[str(i)].get('radius_m')}"
+             for i, c in enumerate(d["corners"])
+             if c.get("radius_m") != geo[str(i)].get("radius_m")]
+    assert drift == [], f"{slug}: {len(drift)} stale baked radius/radii: {drift}"
+
+
+def test_imola_t13s_old_radius_was_its_neighbours_measured_through_a_pre_clamp_window():
+    """WHICH VALUE IS CORRECT, pinned so the question cannot be silently re-answered --
+    it was already answered backwards once. #62 was filed on the premise that the editor
+    had corrupted a good bake; the opposite was true, and #73 re-baked accordingly.
+
+    Imola T13 shipped 67.7 m. That number is not T13: it is exactly what T12's own
+    window measures. T13's PRE-CLAMP window -- `_persist_map`'s own
+    `pad = max(20.0, length * 0.025)` either side of the apex -- reaches back over T12's
+    apex at 2846.3 and reproduces the old 67.7 exactly, which is where it came from.
+    Measured on T13's own window it is 322.1 m, and that is what ships now.
+
+    This test DERIVES the pad from the map's own length rather than hardcoding 122.4. Do
+    NOT "tidy" it into `mapbuild._WIN_M`: that is 55.0 and always has been, it is not
+    where these came from, and substituting it turns this test red over a bug that does
+    not exist. (The pad accounts for 13 of the 18; the other 5 are asymmetric spans from
+    some earlier writer, so the provable claim is only "wider windows that reached into
+    the neighbour".)"""
     d = _shipped(IMOLA)
     path, dist = d["path"], d["path_dist"]
-    rib = d.get("ribbon") or {}
     by_label = {str(c["label"]): c for c in d["corners"]}
     t12, t13 = by_label["12"], by_label["13"]
-    assert t13["radius_m"] == 67.7 == t12["radius_m"]  # the duplicate is the fingerprint
 
-    now = corner_geometry(path, dist, d["corners"], width=rib.get("width"),
-                          bank=rib.get("bank"))
-    # T12's current window measures the 67.7 m that T13 has stored; T13's measures 322.1.
-    assert now["12"]["radius_m"] == 67.7
-    assert now["13"]["radius_m"] == 322.1
+    assert t13["radius_m"] == 322.1, "T13's own window, re-baked under #73"
+    assert t12["radius_m"] == 67.7, "never drifted, and the source of T13's old value"
 
-    # And T13's PRE-CLAMP window -- _persist_map's own pad either side of the apex,
-    # which swallows T12's apex at 2846.3 -- reproduces the stored 67.7 exactly. That
-    # is where it came from.
     pad = max(20.0, d["length"] * 0.025)
     assert round(pad, 1) == 122.4, "Imola's editor-default pad"
     pre = dict(t13, start_dist=t13["apex_dist"] - pad, end_dist=t13["apex_dist"] + pad)
-    assert pre["start_dist"] < t12["apex_dist"] < pre["end_dist"]
-    assert corner_geometry(path, dist, [pre])["13"]["radius_m"] == 67.7
-
-    # The error is ONE-DIRECTIONAL, which is why #73 matters: a superset window's max
-    # curvature is >= the subset's, so shipped <= recomputed on every drifting corner
-    # -- the coach always calls a fast corner a slow one, never the reverse.
-    assert all(c["radius_m"] <= now[str(c["label"])]["radius_m"] for c in d["corners"])
+    assert pre["start_dist"] < t12["apex_dist"] < pre["end_dist"], "swallows T12's apex"
+    # And so it measures T12's radius, not T13's -- the old stored value, to 1 dp.
+    assert corner_geometry(path, dist, [pre])["13"]["radius_m"] == t12["radius_m"] == 67.7
 
 
 def test_a_corner_with_no_baked_geometry_still_gets_it_computed(tmp_path):
@@ -212,14 +276,20 @@ def test_a_corner_with_no_baked_geometry_still_gets_it_computed(tmp_path):
 # of these fails on a label key, and the insert one fails WORSE on a number key.
 
 
-def _editor_save(tmp_path, slug, corners, strip_notes=True):
+def _editor_save(tmp_path, slug, corners, strip_notes=True, on_disk=None):
     """Save `corners` against a tmp copy of a shipped map, as the editor's PUT does.
-    Returns the corners written to disk."""
+    Returns the corners written to disk.
+
+    `on_disk` replaces the STORED corners before the save, for the cases where what the
+    carry-forward reads has to differ from what ships (a hand-edited map, or the pre-#73
+    stale bake)."""
     tracks = tmp_path / "tracks"
     tracks.mkdir(parents=True, exist_ok=True)
     d = _shipped(slug)
     if strip_notes:
         d = {k: v for k, v in d.items() if k != "notes"}  # notes carry is #37's rule
+    if on_disk is not None:
+        d = {**d, "corners": on_disk}
     (tracks / f"{slug}.json").write_text(json.dumps(d), encoding="utf-8")
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     app = create_app(store, Coach(FakeModel("{}")), tracks_dir=str(tracks))

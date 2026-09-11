@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 
 import numpy as np
+import pytest
 from fastapi.testclient import TestClient
 
 import simcoach
@@ -12,6 +13,7 @@ from simcoach.coach import Coach
 from simcoach.coach_tools import CoachContext
 from simcoach.corners import CornerMap
 from simcoach.model.fake import FakeModel
+from simcoach.model_types import LapRecord
 from simcoach.server.app import create_app
 from simcoach.store import LapStore
 
@@ -89,6 +91,19 @@ def test_get_tracks_lists_coverage(tmp_path):
     client, _ = _make_client_with_fake_model(tmp_path, model_reply="{}")
     rows = client.get("/tracks").json()
     assert any(t["slug"] == "algarve_international_circuit" and t["has_map"] for t in rows)
+
+
+def test_get_tracks_survives_a_map_file_name_with_nothing_to_slug(tmp_path):
+    # A map file whose name slugs to "" ("---.json" in app-data tracks/) used to make the
+    # capture lookup raise 400 for the WHOLE listing -- one odd file blanking the Tracks
+    # screen, the same failure class as a corrupt lap file. It must count as no captures.
+    client, _ = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    user_tracks = tmp_path / "data" / "tracks"
+    user_tracks.mkdir(parents=True, exist_ok=True)
+    (user_tracks / "---.json").write_text("{}", encoding="utf-8")
+    r = client.get("/tracks")
+    assert r.status_code == 200, r.text
+    assert any(t["slug"] == "algarve_international_circuit" for t in r.json())
 
 
 def test_put_notes_reference_times_roundtrip(tmp_path):
@@ -783,3 +798,310 @@ def test_dropped_note_log_is_bounded(tmp_path, caplog):
     assert len(msg) < 10_000, f"warning record is {len(msg)} chars"   # was the whole ~62 KB
     assert "dropped 28 authored" in msg           # the exact count still reported
     assert '"10": "note 10 ' in msg               # and a sample is still recoverable
+
+
+# --- /tracks lists driven-but-unmapped tracks (#69) + capture coverage (#66) ----------
+
+def _live_lap(store, name: str, n: int = 1, *, pos: bool = True, pos_y: bool = True) -> None:
+    # A LIVE-captured lap: store.save writes the .npz and sets telemetry_path, which is
+    # what separates a re-processable lap from a result-log import.
+    #
+    # pos=False is a PRE-POSITION lap, the shape this store really holds for laps recorded
+    # before position capture landed: a real .npz with real channels and no pos_* at all.
+    # It can never be rebuilt from, so it must not count toward the build gate.
+    # pos_y=False is the other real shape: position but no elevation.
+    for _ in range(n):
+        ch = {"lap_distance": np.array([0.0, 1.0]), "speed": np.array([100.0, 100.0])}
+        if pos:
+            ch["pos_x"] = np.array([0.0, 1.0])
+            ch["pos_z"] = np.array([0.0, 0.0])
+            if pos_y:
+                ch["pos_y"] = np.array([0.0, 0.0])
+        store.save(LapRecord("lmu", name, "Oreca 07", 60.0, True, 0.0, ch))
+
+
+def _result_lap(store, name: str, n: int = 1) -> None:
+    # A result-log import: summary row, telemetry_path NULL, no point cloud. Inserted
+    # directly so the test asserts on the column list_tracks actually reads.
+    for _ in range(n):
+        store.conn.execute(
+            "INSERT INTO laps (ts, sim, track, car, lap_time, valid, telemetry_path) "
+            "VALUES (0, 'lmu', ?, 'Oreca 07', 100.0, 1, NULL)", (name,))
+    store.conn.commit()
+
+
+def test_get_tracks_lists_driven_track_with_no_map_file(tmp_path):
+    # The #69 case: laps driven live, point clouds on disk, no <slug>.json -- the row has
+    # to exist (it is the only place a map can be built) with has_map False.
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    _live_lap(store, "Silverstone National Circuit", 3)
+    rows = client.get("/tracks").json()
+    row = next(t for t in rows if t["slug"] == "silverstone_national_circuit")
+    assert row["has_map"] is False
+    assert row["captures"] == 3                  # not 0, and not collapsed to a bool
+    assert row["name"] == "Silverstone National Circuit"
+    assert row["has_notes"] is False and row["user_edited"] is False
+
+
+def test_get_tracks_result_log_only_track_is_not_buildable(tmp_path):
+    # Spa's 991 imported laps carry no cloud: a big lap count must NOT make a track look
+    # buildable. The live track in the same store is the positive control -- without it
+    # this test would also pass if the union were dropped entirely.
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    _result_lap(store, "Circuit de Spa-Francorchamps", 991)
+    _live_lap(store, "Silverstone National Circuit", 2)
+    slugs = [t["slug"] for t in client.get("/tracks").json()]
+    assert "silverstone_national_circuit" in slugs          # control: the union works
+    assert "circuit_de_spa_francorchamps" not in slugs      # the claim
+
+
+def test_get_tracks_mapped_track_row_shape_unchanged(tmp_path):
+    # A track with a map file keeps the row it always had, and gains `captures` as an
+    # int. Asserted as an exact key set so a renamed/dropped field is caught here.
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    _result_lap(store, "Algarve International Circuit", 40)
+    rows = client.get("/tracks").json()
+    row = next(t for t in rows if t["slug"] == "algarve_international_circuit")
+    assert set(row) == {"slug", "name", "has_map", "has_notes", "user_edited",
+                        "captures", "live_laps"}
+    assert row["has_map"] is True
+    assert row["has_notes"] is False
+    assert row["user_edited"] is False
+    assert row["captures"] == 0        # 40 result laps are not captures
+    assert row["live_laps"] == 0
+
+
+def test_get_tracks_driven_mapped_track_listed_once_with_count(tmp_path):
+    # The union must dedupe: a track that has BOTH a map file and live laps is one row
+    # carrying the count, never two rows.
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    _live_lap(store, "Algarve International Circuit", 5)
+    rows = [t for t in client.get("/tracks").json()
+            if t["slug"] == "algarve_international_circuit"]
+    assert len(rows) == 1
+    assert rows[0]["has_map"] is True and rows[0]["captures"] == 5
+
+
+def test_get_tracks_sums_captures_across_raw_names_of_one_slug(tmp_path):
+    # Live names differ by championship suffix ("- ELMS") while track_slug collapses them
+    # to one file/slug. The count is per SLUG, so 2 + 3 is one row of 5, not a row of 3
+    # that silently drops the other session.
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    _live_lap(store, "Paul Ricard", 2)
+    _live_lap(store, "Paul Ricard - ELMS", 3)
+    rows = [t for t in client.get("/tracks").json() if t["slug"] == "paul_ricard"]
+    assert len(rows) == 1
+    assert rows[0]["captures"] == 5
+
+
+def test_get_tracks_counts_only_laps_whose_npz_really_has_position(tmp_path):
+    # THE dead-button bug. Position capture landed partway through this store's history,
+    # so pre-position laps are real .npz files with real channels and no pos_* at all.
+    # A row-count badge made Sebring (15 live, 0 usable) offer "Build map from 15 laps",
+    # which then 422'd -- the very error #69 exists to remove. `captures` is the gate and
+    # must count USABLE laps; `live_laps` keeps the row explainable.
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    _live_lap(store, "Sebring International Raceway", 15, pos=False)
+    _live_lap(store, "Silverstone National Circuit", 4, pos=False)
+    _live_lap(store, "Silverstone National Circuit", 3)          # 7 rows, 3 usable
+    rows = client.get("/tracks").json()
+
+    sebring = next(t for t in rows if t["slug"] == "sebring_international_raceway")
+    assert sebring["live_laps"] == 15      # the row exists, and explains itself...
+    assert sebring["captures"] == 0        # ...but offers nothing to build from
+
+    silver = next(t for t in rows if t["slug"] == "silverstone_national_circuit")
+    assert silver["live_laps"] == 7
+    assert silver["captures"] == 3         # the usable subset, not the row count
+
+
+def test_get_tracks_counts_laps_without_pos_y_as_buildable(tmp_path):
+    # pos_y only feeds banking, which ribbon.py now writes as unknown wherever the cloud
+    # lacks lateral spread -- so a lap without elevation is still one a Build consumes.
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    _live_lap(store, "Monza Curva Grande Circuit", 4, pos_y=False)
+    _live_lap(store, "Monza Curva Grande Circuit", 1)            # 5 usable, 1 with pos_y
+    _live_lap(store, "Paul Ricard", 3, pos_y=False)              # 3 usable, 0 with pos_y
+    rows = client.get("/tracks").json()
+
+    monza = next(t for t in rows if t["slug"] == "monza_curva_grande_circuit")
+    assert monza["captures"] == 5           # pos_y is NOT required to rebuild
+
+    ricard = next(t for t in rows if t["slug"] == "paul_ricard")
+    assert ricard["captures"] == 3
+
+
+def test_get_tracks_counts_survive_a_deleted_npz(tmp_path):
+    # A laps row can outlive its file. That lap is unusable, but it is still a live row.
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    _live_lap(store, "Silverstone National Circuit", 3)
+    (Path(store.data_dir) / "1.npz").unlink()
+    row = next(t for t in client.get("/tracks").json()
+               if t["slug"] == "silverstone_national_circuit")
+    assert row["live_laps"] == 3
+    assert row["captures"] == 2
+
+
+# --- #69 round 2: bad files, badge == build, no frozen capture, the width/bank gate ----
+
+_SLUG = "silverstone_national_circuit"
+_NAME = "Silverstone National Circuit"
+
+
+def _cloud_lap(store, zoff=0.0, y=None, *, n=2000):
+    # A 400 m straight LIVE lap at lateral offset `zoff`, dense enough (5 samples per
+    # 0.8 m rebuild bin) that every bin holds a sample of every lap. `y` = its pos_y.
+    x = np.linspace(0.0, 400.0, n)
+    ch = {"pos_x": x, "pos_z": np.full(n, float(zoff)), "lap_distance": x.copy(),
+          "speed": np.full(n, 100.0)}
+    if y is not None:
+        ch["pos_y"] = np.full(n, float(y))
+    return store.save(LapRecord("lmu", _NAME, "Oreca 07", 60.0, True, 0.0, ch))
+
+
+def _row(client):
+    r = client.get("/tracks")
+    assert r.status_code == 200, r.text
+    return next(t for t in r.json() if t["slug"] == _SLUG)
+
+
+def _rebuild(client):
+    r = client.post("/mapcapture/rebuild", json={"slug": _SLUG})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _corrupt_member(raw: bytes) -> bytes:
+    # Damage pos_x's DEFLATE stream while the zip directory stays intact, so np.load
+    # opens the file and the failure only surfaces reading the member: zlib.error.
+    import io
+    import zipfile
+    zi = zipfile.ZipFile(io.BytesIO(raw)).getinfo("pos_x.npy")
+    body = zi.header_offset + 30 + len(zi.filename) + len(zi.extra)
+    out = bytearray(raw)
+    for i in range(body + zi.compress_size // 4, body + zi.compress_size // 4 + 64):
+        out[i] ^= 0xFF
+    return bytes(out)
+
+
+@pytest.mark.parametrize("shape", ["zero_byte", "truncated", "corrupt_member"])
+def test_one_bad_lap_file_neither_blanks_tracks_nor_fails_rebuild(tmp_path, caplog, shape):
+    # R1/R2: GET /tracks is the Tracks screen's ONLY data source. A zero-byte .npz raises
+    # EOFError and a corrupt member zlib.error -- neither was in the caught tuple, so one
+    # bad file 500'd the whole screen. It must skip that lap, log it, and carry on.
+    import zipfile
+    import zlib
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    ids = [_cloud_lap(store, z) for z in (-5.0, 5.0, 0.0)]
+    bad = Path(store.data_dir) / f"{ids[2]}.npz"
+    raw = bad.read_bytes()
+    bad.write_bytes({"zero_byte": b"", "truncated": raw[: len(raw) // 2],
+                     "corrupt_member": _corrupt_member(raw)}[shape])
+    expect = {"zero_byte": EOFError, "truncated": zipfile.BadZipFile,
+              "corrupt_member": zlib.error}[shape]
+    with pytest.raises(expect), np.load(str(bad)) as z:   # the file really IS that shape
+        z["pos_x"]
+
+    with caplog.at_level(logging.WARNING, logger="simcoach.server.app"):
+        row = _row(client)
+    assert row["live_laps"] == 3
+    assert row["captures"] == 2                       # the bad lap is skipped, not fatal
+    assert f"{ids[2]}.npz" in caplog.text             # ...and said so
+    assert _rebuild(client)["lap_count"] == 2         # the build skips the same lap
+
+
+@pytest.mark.parametrize("shape", ["object_array", "zero_length", "all_nan"])
+def test_badge_count_equals_build_count_for_unusable_lap_shapes(tmp_path, shape):
+    # R3(b)/(c): the badge used to count a lap from its channel NAMES. A pickled object
+    # array was counted then skipped by the build; zero-length and all-NaN arrays were
+    # counted AND handed to the build. One function now decides both.
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    ids = [_cloud_lap(store, z) for z in (-5.0, 5.0, 0.0)]
+    x = np.linspace(0.0, 400.0, 2000)
+    nan = np.full(2000, np.nan)
+    arrays = {
+        "object_array": {"pos_x": np.array([None] * 2000, dtype=object),
+                         "pos_z": x * 0.0, "lap_distance": x},
+        "zero_length": {"pos_x": np.array([]), "pos_z": np.array([]),
+                        "lap_distance": np.array([])},
+        "all_nan": {"pos_x": nan, "pos_z": nan, "lap_distance": nan},
+    }[shape]
+    with open(Path(store.data_dir) / f"{ids[2]}.npz", "wb") as f:
+        np.savez(f, **arrays)
+    row = _row(client)
+    assert row["live_laps"] == 3
+    assert row["captures"] == _rebuild(client)["lap_count"] == 2
+
+
+def test_badge_counts_the_capture_a_build_uses_not_the_live_laps_beside_it(tmp_path):
+    # R3(a): /mapcapture/save-cloud writes captures/<slug>.npz and NO map JSON. The row
+    # read "Build map from 7 laps" while the build (capture wins) used the capture's 2.
+    from simcoach.server.app import _save_cloud
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    for z in (-5.0, 5.0, 0.0, 1.0, -1.0, 2.0, -2.0):
+        _cloud_lap(store, z)
+    x = np.linspace(0.0, 400.0, 2000)
+    _save_cloud(Path(store.data_dir) / "captures" / f"{_SLUG}.npz",
+                [{"pos_x": x, "pos_z": np.full(2000, s * 6.0), "lap_distance": x}
+                 for s in (1, -1)])
+    row = _row(client)
+    assert row["has_map"] is False and row["live_laps"] == 7
+    assert row["captures"] == _rebuild(client)["lap_count"] == 2
+
+
+def test_live_lap_rebuild_does_not_freeze_a_capture_so_later_laps_reach_the_map(tmp_path):
+    # Save after a live-lap rebuild used to write captures/<slug>.npz from those laps.
+    # A capture WINS every later rebuild, so 3 more laps showed as "7" on the row and the
+    # rebuild still used the frozen 4: more driving never improved the map.
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    for z in (-5.0, 5.0, 0.0, 1.0):
+        _cloud_lap(store, z)
+    assert _rebuild(client)["lap_count"] == 4
+    assert client.post("/mapcapture/save", json={}).json()["saved"] is True
+    assert (tmp_path / "tracks" / f"{_SLUG}.json").exists()           # the map was saved
+    assert not (Path(store.data_dir) / "captures" / f"{_SLUG}.npz").exists()
+
+    for z in (-1.0, 2.0, -2.0):
+        _cloud_lap(store, z)
+    assert _row(client)["captures"] == 7
+    assert _rebuild(client)["lap_count"] == 7                          # all of them
+
+
+def _save_and_bake(client, tmp_path):
+    # Rebuild -> Save -> an editor save (PUT) that bakes per-corner geometry off the
+    # stored ribbon: the exact path by which ribbon width/bank reach geometry_clause.
+    _rebuild(client)
+    assert client.post("/mapcapture/save", json={}).json()["saved"] is True
+    f = tmp_path / "tracks" / f"{_SLUG}.json"
+    ribbon = json.loads(f.read_text())["ribbon"]
+    r = client.put(f"/tracks/{_SLUG}/map", json={"corners": [
+        {"number": 1, "apex_dist": 200.0, "start_dist": 150.0, "end_dist": 250.0}]})
+    assert r.status_code == 200, r.text                # a NaN bake would 500 here
+    return ribbon, json.loads(f.read_text())["corners"][0]
+
+
+def test_same_line_laps_save_width_and_bank_as_unknown_and_bake_none(tmp_path):
+    # Real racing-lap shape: 4 laps within ~1 m of one line, pos_y differing by a few cm
+    # lap to lap. The old >1e-6 m gate fitted a slope across that 1 m (Silverstone:
+    # 14.6-48.4 deg) and saved width ~1.4 m, which the editor save then BAKED into the
+    # corner and geometry_clause read out as fact.
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    for z, y in ((-0.4, 3.00), (0.1, 3.06), (0.5, 2.95), (-0.2, 3.04)):
+        _cloud_lap(store, z, y)
+    ribbon, c1 = _save_and_bake(client, tmp_path)
+    assert set(ribbon["width"]) == {None}
+    assert set(ribbon["bank"]) == {None}
+    assert "width_m" not in c1 and "banking_deg" not in c1
+
+
+def test_edge_laps_save_and_bake_a_real_width_and_bank(tmp_path):
+    # Positive control for the test above, same route: laps spanning the width (edges
+    # at +-5 m on a 0.05 cross-slope) DO produce width and bank, so the gate is not
+    # simply "always unknown". On a pass along +x, +lateral is +z (#58).
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    for z in (-5.0, 0.0, 5.0):
+        _cloud_lap(store, z, 3.0 + 0.05 * z)
+    ribbon, c1 = _save_and_bake(client, tmp_path)
+    assert None not in ribbon["width"][20:-20] and None not in ribbon["bank"][20:-20]
+    assert abs(c1["width_m"] - 10.0) < 1.0
+    assert abs(c1["banking_deg"] - np.degrees(np.arctan(0.05))) < 0.3

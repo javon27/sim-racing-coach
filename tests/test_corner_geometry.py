@@ -35,6 +35,30 @@ def test_width_bank_elevation_sampled():
     assert abs(g["1"]["elev_delta_m"] - 1.0) < 0.1  # ~+1 m over the 100 m window (uphill)
 
 
+def test_unknown_width_and_bank_stations_emit_no_metric():
+    # #69: ribbon.py writes width/bank as null where its samples never spanned the width.
+    # corner_geometry must OMIT those metrics -- not bake NaN (which _write_track_json
+    # refuses) and not 0 -- while a corner whose apex sits on a measured station keeps
+    # them. geometry_clause then has nothing to say about width or camber.
+    import json
+    path, dist = _circle(50.0)
+    n = len(path)
+    width = [12.0] * n
+    bank = [np.radians(3.0)] * n
+    for i in range(40, 80):                          # unmeasured stretch around 50 m
+        width[i] = None
+        bank[i] = None
+    corners = [{"label": "1", "start_dist": 30.0, "apex_dist": 50.0, "end_dist": 70.0},
+               {"label": "2", "start_dist": 120.0, "apex_dist": 150.0, "end_dist": 180.0}]
+    g = corner_geometry(path, dist, corners, width=width, bank=bank)
+    assert "width_m" not in g["1"] and "banking_deg" not in g["1"]
+    assert g["2"]["width_m"] == 12.0 and g["2"]["banking_deg"] == 3.0
+    json.dumps(g, allow_nan=False)                   # bakeable
+    clause = geometry_clause(g["1"], "left")
+    assert "width" not in clause and "banked" not in clause and "camber" not in clause
+    assert "radius ~50m" in clause                   # the measured metric still renders
+
+
 def test_downhill_is_negative_delta():
     path, dist = _circle(50.0)
     elev = [-d * 0.02 for d in dist]                # drops 2 cm per m
