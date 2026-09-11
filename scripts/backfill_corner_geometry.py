@@ -16,10 +16,10 @@ re-bake stays a diff a reviewer can read by eye -- which is how owned corner dat
 supposed to change. #73 used `--only=radius_m`: 35254d5 (#30) narrowed 69 corner windows
 across 11 maps without re-baking, which staled `radius_m` on 18 corners, and baking
 everything would have put 59 `elev_delta_m` changes in the same commit. Those are NOT
-noise -- elev_delta_m reads the same window ends and is stale for the same reason (all
-169 stored values replay exactly from the pre-#30 windows) -- they are a second re-bake
-that deserves its own reviewed commit. width_m/banking_deg read the APEX, which #30 did
-not move, so they were never affected.
+noise -- elev_delta_m reads the same window ends and was stale for the same reason (all
+169 stored values replayed exactly from the pre-#30 windows) -- so they got their own
+reviewed commit, #74's `--only=elev_delta_m`. width_m/banking_deg read the APEX, which
+#30 did not move, so they were never affected.
 """
 from __future__ import annotations
 
@@ -189,10 +189,10 @@ def main(argv):
     argument it cannot act on exactly as typed.
 
     The argv parse used to be the unguarded half: `--onyl=radius_m` or an empty
-    `--only=` fell back to baking EVERY metric (on the curator's machine, a radius-only
-    re-bake that also rewrites 59 elev_delta_m values; anywhere else, one that deletes
-    elev_delta_m from all 169 corners), and `--only radius_m` read `radius_m` as a slug
-    and did nothing without saying so."""
+    `--only=` fell back to baking EVERY metric (on the curator's machine before #74, a
+    radius-only re-bake that also rewrote 59 elev_delta_m values; anywhere else, one
+    that deletes elev_delta_m from all 169 corners), and `--only radius_m` read
+    `radius_m` as a slug and did nothing without saying so."""
     slugs, keys = [], []
     for a in argv:
         if not a.startswith("-"):
