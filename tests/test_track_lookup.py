@@ -448,16 +448,30 @@ def test_a_deleted_corner_drops_its_own_note_and_only_its_own():
 
 
 def test_dragging_an_apex_keeps_the_note_on_that_corner():
-    # The curator nudges a corner's apex in the editor. No apex matches any more, so
-    # identity falls through to lap POSITION -- which is why the fallback exists: an
-    # authored note must not evaporate because someone moved a marker a metre. It is a
-    # position match, not a label match, so a relabel cannot ride on it (the test above
-    # shows a same-count relabel still moves the key).
+    # The curator nudges every apex a little. No apex matches exactly any more, so each
+    # corner is identified by its nearest counterpart within the tolerance -- an authored
+    # note must not evaporate because someone moved a marker a metre.
     notes = guard_corner_notes(
         "algarve", {"corners": {"2": "late apex"}},
         _at(("1", 10.0), ("2", 20.0), ("3", 30.0)),
         _at(("1", 11.0), ("2", 22.0), ("3", 33.0)))
     assert notes["corners"] == {"2": "late apex"}
+    # The 1 dp rounding boundary: 100.04 and 100.06 round apart, and are one corner.
+    notes = guard_corner_notes("algarve", {"corners": {"7": "x"}},
+                               _at(("7", 100.04)), _at(("7A", 100.06)))
+    assert notes["corners"] == {"7A": "x"}
+
+
+def test_a_deleted_corner_and_an_added_one_never_bind_even_at_the_same_count():
+    # Review blocker 2, unit shape: T4 at 40 m deleted, a corner added at 200 m, labels
+    # otherwise untouched -- the corner count does not change. The position rule this
+    # replaced handed T4's note to a live corner. T4's nearest counterpart is T3, which
+    # its own exact match already holds, so T4 has none and its note is dropped.
+    notes = guard_corner_notes(
+        "algarve", {"corners": {"4": "T4 at 40 m, deleted"}},
+        _at(("1", 10.0), ("2", 20.0), ("3", 30.0), ("4", 40.0)),
+        _at(("0", 200.0), ("1", 10.0), ("2", 20.0), ("3", 30.0)))
+    assert notes is None
 
 
 def test_notes_are_carried_verbatim_when_either_side_has_no_corners():

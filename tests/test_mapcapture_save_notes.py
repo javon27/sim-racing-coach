@@ -93,13 +93,15 @@ def test_mapcapture_save_drops_the_note_of_a_corner_the_rebuild_moved(tmp_path, 
     # Was "drops corner notes when the corner count changes", which deleted EVERY
     # per-corner note whenever the solver found one more corner anywhere on the lap.
     # Under #64 a note is dropped only when the corner it was written about is gone:
-    # here the rebuild keeps T1 at 20 m but finds nothing at 40 m (its corners land at
-    # 45 m and 60 m), so T2's note goes -- LOUDLY, with its text -- and T1's stays.
+    # here the rebuild keeps T1 at 20 m but finds nothing near 40 m (its other corners
+    # land at 70 m and 90 m, and T2's nearest counterpart is T1, already matched), so
+    # T2's note goes -- LOUDLY, with its text -- and T1's stays.
     app, client, tracks_dir = _client(tmp_path)
     assert _put_notes(client, {"1": "brake late",
                                "2": "the slow left hairpin - huge patience"}).status_code == 200
     rib = _ribbon(["1", "2", "3"])
-    rib["corners"][1]["apex_dist"], rib["corners"][2]["apex_dist"] = 45.0, 60.0
+    for c, apex in zip(rib["corners"][1:], (70.0, 90.0)):
+        c.update(apex_dist=apex, start_dist=apex - 10.0, end_dist=apex + 10.0, apexes=[apex])
     app.state.last_ribbon = rib
 
     with caplog.at_level(logging.WARNING, logger="simcoach.track_lookup"):
