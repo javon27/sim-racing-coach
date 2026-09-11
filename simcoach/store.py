@@ -1408,6 +1408,12 @@ class LapStore:
             ).fetchone()
             return row is not None
 
+    def ingested_files(self) -> set[tuple[str, float]]:
+        """Every imported (path, mtime), in one query. The result-log poller (#81) scans
+        ~1,400 files every 30 s; an is_ingested() lookup per file was most of its cost."""
+        with self._lock:
+            return set(self.conn.execute("SELECT path, mtime FROM ingested_files"))
+
     def mark_ingested(self, path: str, mtime: float) -> None:
         with self._lock, self.conn:
             self.conn.execute(
