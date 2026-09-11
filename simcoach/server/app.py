@@ -407,10 +407,16 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # position channels off the track's own LIVE laps' .npz files, in the same shape
         # _load_cloud returns. Laps recorded before position capture landed (47 channels,
         # no pos_*) are not usable and so are neither counted nor built from.
+        slug = track_slug(track)
+        if not slug:
+            # A map file name with nothing to slug ("---.json" dropped into app-data
+            # tracks/) has no capture and no laps. Count it as none -- _capture_path's
+            # writer guard would 400 the whole GET /tracks, the same one-bad-file-blanks-
+            # the-screen failure R1/R2 fixed for lap files.
+            return [], False
         path = _capture_path(track)
         if path.exists():
             return [ch for ch in _load_cloud(path) if _usable_cloud(ch)], True
-        slug = track_slug(track)
         laps = []
         for lap_slug, _name, p in (_live_lap_paths() if rows is None else rows):
             if lap_slug != slug:

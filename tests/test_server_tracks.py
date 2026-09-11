@@ -93,6 +93,19 @@ def test_get_tracks_lists_coverage(tmp_path):
     assert any(t["slug"] == "algarve_international_circuit" and t["has_map"] for t in rows)
 
 
+def test_get_tracks_survives_a_map_file_name_with_nothing_to_slug(tmp_path):
+    # A map file whose name slugs to "" ("---.json" in app-data tracks/) used to make the
+    # capture lookup raise 400 for the WHOLE listing -- one odd file blanking the Tracks
+    # screen, the same failure class as a corrupt lap file. It must count as no captures.
+    client, _ = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    user_tracks = tmp_path / "data" / "tracks"
+    user_tracks.mkdir(parents=True, exist_ok=True)
+    (user_tracks / "---.json").write_text("{}", encoding="utf-8")
+    r = client.get("/tracks")
+    assert r.status_code == 200, r.text
+    assert any(t["slug"] == "algarve_international_circuit" for t in r.json())
+
+
 def test_put_notes_reference_times_roundtrip(tmp_path):
     client, _ = _make_client_with_fake_model(tmp_path, model_reply="{}")
     r = client.put("/tracks/algarve_international_circuit/notes", json={
