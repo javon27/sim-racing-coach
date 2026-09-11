@@ -47,7 +47,7 @@ from simcoach.corners import (
     validated_sections,
     validated_sectors,
 )
-from simcoach.track_lookup import guard_corner_notes, track_slug
+from simcoach.track_lookup import fill_blank_labels, guard_corner_notes, track_slug
 from simcoach.trackmap import direction_from_path
 
 TRACKS_DIR = Path("simcoach/tracks")
@@ -132,7 +132,7 @@ def _validated_corners(data: dict, length: float) -> list[dict]:
                                f"be a finite number (a length also > 0)")
         out.append({**c,
                     "number": number,
-                    "label": str(c.get("label") or number)[:8],
+                    "label": str(c.get("label") or "")[:8],   # blank: filled in promote()
                     "name": str(c.get("name") or f"Turn {number}")[:80],
                     "direction": direction_from_path(path, dist, apex),
                     "start_dist": round(start, 1), "apex_dist": round(apex, 1),
@@ -238,6 +238,12 @@ def promote(src: Path | str, tracks_dir: Path | str = TRACKS_DIR, *,
                 f"promoting would reformat the file. Fix _serialize first.")
 
     corners = _validated_corners(data, length)
+    try:
+        # The editor's rule, from the same owner (#79): both maps' notes are carried
+        # below, so both reserve labels.
+        fill_blank_labels(corners, shipped, data)
+    except ValueError as e:
+        raise PromoteError(str(e)) from None
     # Bake the window clamp into the file, as mapbuild does before writing a new map:
     # CornerMap.load re-clamps on read, so an unclamped file would look fine through
     # the app and only show up in the on-disk regression test.
