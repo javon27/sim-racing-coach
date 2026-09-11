@@ -1,7 +1,9 @@
 # tests/test_server_tracks.py
 import json
 import logging
+import random
 import shutil
+import string
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +18,7 @@ from simcoach.model.fake import FakeModel
 from simcoach.model_types import LapRecord
 from simcoach.server.app import create_app
 from simcoach.store import LapStore
+from simcoach.track_lookup import note_key_binds
 
 
 def _seed_track(tracks_dir: Path, slug: str = "algarve_international_circuit") -> None:
@@ -466,6 +469,75 @@ def test_a_range_note_naming_only_deleted_corners_is_dropped_not_rebound(tmp_pat
     assert "the corners they name no longer exist" in caplog.text
 
 
+def _labels(tracks_dir):
+    return [c["label"] for c in _written(tracks_dir)["corners"]]
+
+
+def test_a_blank_label_added_after_a_delete_never_duplicates_a_curator_label(tmp_path):
+    # #79, the editor's delete+add. Deleting T3 makes renumber() shift T4/T5 down to
+    # numbers 3/4, but their labels stay "4"/"5". A corner added at 90 m is then number 4
+    # with a blank label. The server filled that blank with str(number), a second "4".
+    client, tracks_dir = _client_with_frozen_path(tmp_path)
+    assert _put_map(client, [(str(n), 20.0 * n) for n in range(1, 6)]).status_code == 200
+    _put_notes(client, {"2": "T2 note", "4": "T4 note", "5": "T5 note"})
+    r = _put_map(client, [("1", 20.0), ("2", 40.0), ("4", 80.0), ("", 90.0), ("5", 100.0)])
+    assert r.status_code == 200, r.text
+    assert _labels(tracks_dir) == ["1", "2", "4", "4A", "5"]   # curator labels as sent
+    # The curator's corners keep their notes, and the new corner gets none of them.
+    assert _written(tracks_dir)["notes"]["corners"] == {
+        "2": "T2 note", "4": "T4 note", "5": "T5 note"}
+    assert r.json()["dropped_notes"] == {}
+    cmap = CornerMap.load(str(tracks_dir / "algarve_international_circuit.json"))
+    assert [c.apex_dist for c in cmap.corners if c.label == "4"] == [80.0]   # one T4
+    ctx = CoachContext(store=None, cmap=cmap, track="Algarve", car="GT3")
+    assert ctx._corner_note("4") == "T4 note"
+    assert ctx._corner_note("4A") is None
+
+
+def test_a_blank_label_does_not_join_a_range_note_about_other_corners(tmp_path):
+    # T4 is deleted, and a corner added at 95 m takes its number. No corner is labelled
+    # "4" any more, but '3-5' still names it. Filling "4" would put the new corner inside
+    # a note written about T3-T5, and the guard would narrow that note to T3, so T5 loses
+    # it. Old T4 (40 m) is 55 m from the new corner, beyond the 50 m same-corner
+    # tolerance, so the outcome does not depend on the computed directions.
+    client, tracks_dir = _client_with_frozen_path(tmp_path)
+    assert _put_map(client, [("1", 10.0), ("2", 20.0), ("3", 30.0), ("4", 40.0),
+                             ("5", 110.0)]).status_code == 200
+    _put_notes(client, {"3-5": "the complex"})
+    r = _put_map(client, [("1", 10.0), ("2", 20.0), ("3", 30.0), ("", 95.0), ("5", 110.0)])
+    assert r.status_code == 200, r.text
+    assert _labels(tracks_dir) == ["1", "2", "3", "4A", "5"]
+    assert _written(tracks_dir)["notes"]["corners"] == {"3-5": "the complex"}
+
+
+def test_a_label_less_resave_keeps_number_labels_and_their_notes(tmp_path):
+    # A blank label on a corner that has not moved still means "use the number". The
+    # corner's own notes must not reserve its number away from it, or a re-save without
+    # labels would relabel every noted corner 'NA' and move every note.
+    client, tracks_dir = _client_with_frozen_path(tmp_path)
+    assert client.put("/tracks/algarve_international_circuit/map",
+                      json={"corners": _four_corners()}).status_code == 200
+    _put_notes(client, {"1": "brake late", "2-4": "the fast left-right-left"})
+    r = client.put("/tracks/algarve_international_circuit/map",
+                   json={"corners": [dict(c, label="") for c in _four_corners()]})
+    assert r.status_code == 200, r.text
+    assert _labels(tracks_dir) == ["1", "2", "3", "4"]
+    assert _written(tracks_dir)["notes"]["corners"] == {
+        "1": "brake late", "2-4": "the fast left-right-left"}
+
+
+def test_a_blank_label_with_no_free_candidate_is_refused_not_guessed(tmp_path):
+    # "2" belongs to a curator corner and notes name "2A".."2Z", so no label is free.
+    # The save must return a 422 asking for a label, not a 500 or a duplicate.
+    client, tracks_dir = _client_with_frozen_path(tmp_path)
+    assert _put_map(client, [("1", 20.0), ("2", 40.0), ("3", 60.0)]).status_code == 200
+    _put_notes(client, {f"2{ch}": "x" for ch in string.ascii_uppercase})
+    before = _written(tracks_dir)
+    r = _put_map(client, [("1", 20.0), ("", 30.0), ("2", 40.0), ("3", 60.0)])
+    assert r.status_code == 422 and "give it a label" in r.text, r.text
+    assert _written(tracks_dir) == before
+
+
 def test_save_track_map_accepts_corner_labels_int_cannot_parse(tmp_path):
     # A corner label is a FREE-TEXT box in the map editor (TrackMapEditor.svelte) and
     # the endpoint only truncates it, so typing '²' U+00B2 is a pure-UI action. '²',
@@ -557,6 +629,52 @@ def test_self_save_of_shipped_imola_keeps_every_authored_note(tmp_path):
     # from the note loss, fixed in #62, so the carve-out is gone and the whole map
     # round-trips. tests/test_map_save_geometry.py owns that rule across every map.
     assert after == before
+
+
+def test_editor_delete_and_blank_add_never_duplicates_a_label_on_shipped_maps(tmp_path):
+    # #79's red-team probe, sampled. On every shipped map with notes: delete a corner, add
+    # a blank-label corner near another, renumber by lap order as the editor does, and
+    # save. Edit 1 is fixed and collides on main (delete T1, add 20 m past T4: the new
+    # corner is number 4 next to the curator's "4"). Edit 2 is a seeded random pick.
+    shipped = Path(simcoach.__file__).parent / "tracks"
+    rng = random.Random(79)
+    saved = []
+    for src in sorted(shipped.glob("*.json")):
+        data = json.loads(src.read_text(encoding="utf-8"))
+        corners = data.get("corners") or []
+        if not ((data.get("notes") or {}).get("corners") and data.get("path")):
+            continue
+        length = data["path_dist"][-1]
+        edits = [(0, 3, 20.0), (rng.randrange(len(corners)), rng.randrange(len(corners)),
+                                rng.choice((-35.0, -20.0, 20.0, 35.0)))]
+        for n, (i, j, off) in enumerate(edits):
+            apex = round(min(max(corners[j]["apex_dist"] + off, 0.0), length), 1)
+            sent = sorted([dict(c) for k, c in enumerate(corners) if k != i]
+                          + [{"label": "", "name": "", "apex_dist": apex}],
+                          key=lambda c: c["apex_dist"])
+            for num, c in enumerate(sent, 1):
+                c["number"] = num
+            tracks_dir = tmp_path / f"{src.stem}-{n}"
+            tracks_dir.mkdir()
+            shutil.copy(src, tracks_dir / src.name)
+            store = LapStore(str(tracks_dir / "c.sqlite"), str(tracks_dir / "data"))
+            client = TestClient(create_app(store, Coach(FakeModel("{}")),
+                                           tracks_dir=str(tracks_dir)),
+                                base_url="http://127.0.0.1")
+            r = client.put(f"/tracks/{src.stem}/map", json={"corners": sent})
+            assert r.status_code == 200, (src.stem, i, j, off, r.text)
+            after = json.loads((tracks_dir / src.name).read_text(encoding="utf-8"))
+            labels = [c["label"] for c in after["corners"]]
+            assert len(set(labels)) == len(labels), (src.stem, i, j, off, labels)
+            # Curator labels untouched (by apex), and every note kept still names a corner.
+            by_apex = {c["apex_dist"]: c["label"] for c in after["corners"]}
+            assert all(by_apex[round(c["apex_dist"], 1)] == c["label"]
+                       for c in sent if c["label"]), (src.stem, labels)
+            for key in (after.get("notes") or {}).get("corners") or {}:
+                assert note_key_binds(key, set(labels)), (src.stem, key)
+            saved.append(src.stem)
+    assert {"weathertech_raceway_laguna_seca", "bahrain_international_circuit",
+            "algarve_international_circuit"} <= set(saved), "fixture lost the reported maps"
 
 
 def test_save_track_map_has_notes_false_once_only_orphans_remained(tmp_path):

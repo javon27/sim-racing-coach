@@ -9,6 +9,7 @@ import json
 import logging
 import math
 import re
+import string
 import unicodedata
 from pathlib import Path
 
@@ -389,6 +390,55 @@ def _rebound_key(key: str, targets: list[str], new_labels: set[str]) -> str | No
         return targets[0]
     candidate = f"{targets[0]}-{targets[-1]}"
     return candidate if note_key_labels(candidate)[1:] == targets else targets[0]
+
+
+def fill_blank_labels(corners: list[dict], *old_maps) -> None:
+    """Give each corner whose `label` is blank one that is unique on the map (#79).
+
+    The editor's "add corner" sends an empty label. Both writers used to fill it with
+    `str(number)`. But `number` is positional, so after a renumber that string is often
+    a label a curator-set corner already holds. Two corners sharing a label bind notes
+    ambiguously, `get_corner` can resolve to the wrong one, and the coach names both the
+    same.
+
+    Rule, in lap order: the first of `N`, `NA` .. `NZ` (N = the corner's number; `8A` is
+    how a split corner is designated) that
+      - no other corner on the map is labelled, and
+      - no per-corner note key of `old_maps` names (via `note_key_labels`, so a range
+        '3-5' reserves '4'). Otherwise the new corner would silently join a note written
+        about other corners, and the guard would have to narrow that note to fit.
+    Exception: a candidate the SAME-APEX corner of an old map already answered to stays
+    usable. A blank on an unmoved corner means "use the number", as it always has, so its
+    own notes must not push it to 'NA'.
+
+    Only blank labels are touched. A label the curator set is never changed, even when
+    it duplicates another. Refusing those is a separate call. Raises ValueError when
+    all 27 candidates are taken, so the caller can ask for a label instead of guessing.
+    """
+    taken = {c["label"] for c in corners if c["label"]}
+    reserved: set[str] = set()
+    kept: set[tuple[float, str]] = set()
+    for m in old_maps:
+        if not isinstance(m, dict):
+            continue
+        notes = m.get("notes")
+        keys = notes.get("corners") if isinstance(notes, dict) else None
+        if isinstance(keys, dict):
+            reserved.update(lab for k in keys for lab in note_key_labels(k))
+        kept.update((round(apex, 1), lab) for lab, apex, _ in _corner_apexes(m.get("corners"))
+                    if apex is not None)
+    for c in corners:
+        if c["label"]:
+            continue
+        n, apex = c["number"], corner_apex_key(c)
+        for cand in (s[:8] for s in (str(n), *(f"{n}{ch}" for ch in string.ascii_uppercase))):
+            if cand not in taken and (cand not in reserved or (apex, cand) in kept):
+                c["label"] = cand
+                taken.add(cand)
+                break
+        else:
+            raise ValueError(f"corner {n}: no free label ({n}, {n}A..{n}Z are all taken "
+                             f"by other corners or notes); give it a label")
 
 
 def guard_corner_notes(slug: str, old_notes: dict | None, old_corners,

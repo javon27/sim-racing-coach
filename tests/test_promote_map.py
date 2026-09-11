@@ -207,6 +207,16 @@ def test_range_keyed_note_survives_a_same_count_promote(tmp_path):
     assert written["notes"]["corners"] == {"2-3": "one flowing complex", "1": "brake late"}
 
 
+def test_a_blank_label_is_filled_uniquely_not_with_a_number_another_corner_holds(tmp_path):
+    """#79, the promote writer. Corner 2's label is blank, and corner 3 is the curator's
+    "2". str(number) would ship two "2"s, so the blank gets the next free variant."""
+    data = _map()
+    data["corners"][1]["label"] = ""
+    data["corners"][2]["label"] = "2"
+    written = json.loads(promote(_src(tmp_path, data), _tracks(tmp_path)).read_text("utf-8"))
+    assert [c["label"] for c in written["corners"]] == ["1", "2A", "2"]
+
+
 @pytest.mark.parametrize("sections", [
     [{"name": "x", "start_dist": 900.0, "end_dist": 100.0}],     # #65's table, row by row
     [{"name": "x", "start_dist": 0.0, "end_dist": 99999.0}],

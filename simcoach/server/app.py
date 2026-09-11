@@ -45,6 +45,7 @@ from ..ribbon import multi_signal_direction, reconstruct_surface, ribbon_to_scre
 from ..tiers import adjustable_from_setup, legal_adjustments
 from ..track_lookup import (
     corner_apex_key,
+    fill_blank_labels,
     guard_corner_notes,
     load_map_data,
     track_slug,
@@ -966,7 +967,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             except (KeyError, TypeError, ValueError):
                 raise HTTPException(422, "corner requires integer number and numeric apex_dist")
             name = str(c.get("name") or f"Turn {number}")[:80]  # cap: owned data + coach prompt
-            label = str(c.get("label") or number)[:8]  # displayed designation ("8A")
+            label = str(c.get("label") or "")[:8]  # displayed designation ("8A"); blank filled below
             if not math.isfinite(apex) or not (0.0 <= apex <= length):
                 raise HTTPException(422, f"corner {number}: apex_dist out of range")
             if number in seen_numbers:
@@ -1004,6 +1005,10 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 "end_dist": round(end, 1), "apexes": apexes,
             })
         corners.sort(key=lambda c: c["apex_dist"])
+        try:
+            fill_blank_labels(corners, existing)   # unique, never str(number) blindly (#79)
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
 
         # `sectors`/`sections` are validated by _write_track_json, the one writer, along
         # with every other writer's (#65) -- the same owners (`validated_sectors` /
@@ -1066,12 +1071,10 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # radius. Exact at the 1 dp boundary (+0.049 keeps the bake, +0.05 re-measures).
         rib_w = keep_ribbon.get("width") if isinstance(keep_ribbon, dict) else None
         rib_b = keep_ribbon.get("bank") if isinstance(keep_ribbon, dict) else None
-        # corner_geometry keys its result by label, and two corners can arrive sharing
-        # one: the editor's "add corner" sends an empty label and the server fills it
-        # with a positional number an existing corner may already hold. Address the
-        # result positionally so a duplicate label cannot collapse two corners into one.
-        # (That duplicate label still gets WRITTEN -- only `number` is checked unique,
-        # at the top of this function. Separate defect, not this one's to fix.)
+        # corner_geometry keys its result by label, and two corners can still share one:
+        # fill_blank_labels makes an auto-filled label unique (#79), but a label the
+        # curator TYPED is never renamed, so two typed alike still arrive alike. Address
+        # the result positionally so a duplicate label cannot collapse two corners into one.
         probe = [dict(c, label=str(i)) for i, c in enumerate(corners)]
         geo = corner_geometry(path, dist, probe, width=rib_w, bank=rib_b)
         prior = {corner_apex_key(pc): pc for pc in (existing.get("corners") or [])}
