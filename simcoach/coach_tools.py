@@ -270,8 +270,9 @@ _STORED_ANSWER_RETRACTIONS = (
       "before the coach could read the race's result log: its \"start\" was only the "
       "first lap capture happened to record, already underway and never the grid slot, "
       "and \"no incidents\" meant none were visible to it, not that none happened. Treat "
-      "both as unverified, call get_race_result for the real grid slot, finish and "
-      "incidents, and do not repeat the earlier figures.]")),
+      "both as unverified and do not repeat the earlier figures. get_race_result "
+      "reports the CURRENT session, which may not be the race this answer was about, "
+      "so do not attach its figures to that earlier race.]")),
 )
 
 
