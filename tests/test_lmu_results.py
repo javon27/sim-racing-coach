@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from simcoach.lmu import results
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "lmu_results" / "sample_race.xml"
@@ -120,6 +122,28 @@ def test_parse_result_reads_offline_from_a_lone_isplayer(tmp_path):
     assert session is not None
     assert session.online is False
     assert session.grid_position == 9 and session.position == 18
+
+
+@pytest.mark.parametrize("tag, m_session", [("Practice1", 1), ("Qualify1", 5),
+                                            ("Warmup", 9), ("Race1", 10)])
+def test_result_log_phase_matches_live_capture_phase(tmp_path, tag, m_session):
+    """Live capture and result-log import must name a session phase identically. The
+    live/result dedupe matches phase exactly, and "qualify" vs live's "qualifying" inserted
+    every qualifying result lap as a duplicate of its live twin (#88) -- 3 on one Fuji
+    session, 11 already in the driver's store. Pinned against smm.session_phase itself, so
+    a rename on EITHER side fails here."""
+    from simcoach.lmu.smm import session_phase
+    xml = tmp_path / "s.xml"
+    xml.write_text(
+        "<rFactorXML><RaceResults><DateTime>1789017807</DateTime>"
+        "<TrackCourse>Fuji Speedway</TrackCourse>"
+        f"<{tag}><Stream/>"
+        "<Driver><Name>Jayson G</Name><VehName>Car #1</VehName><isPlayer>1</isPlayer>"
+        "<Lap num=\"1\">104.5</Lap></Driver>"
+        f"</{tag}></RaceResults></rFactorXML>")
+    session = results.parse_result(xml, "Jayson G")
+    assert session is not None
+    assert session.session_type == session_phase(m_session)
 
 
 def test_parse_result_returns_none_when_player_absent():

@@ -75,6 +75,17 @@ class ResultSession:
 
 _SESSION_TAG_RE = re.compile(r"^(Practice|Qualify|Warmup|Race)\d*$")
 
+# Result-log session elements are "Practice1", "Qualify1", "Warmup", "Race1"; live capture
+# (smm.session_phase) names the same phases "practice", "qualifying", "warmup", "race". The
+# live/result lap dedupe matches phase exactly, so the bare tag's "qualify" inserted every
+# qualifying result lap as a duplicate of its live twin (#88). Map to live capture's names.
+_RESULT_TAG_PHASE = {"qualify": "qualifying"}
+
+
+def _session_phase(tag: str) -> str:
+    raw = re.sub(r"\d+$", "", tag).lower()
+    return _RESULT_TAG_PHASE.get(raw, raw)
+
 
 def _to_float(text: str | None) -> float | None:
     try:
@@ -199,7 +210,7 @@ def parse_result(path, player_names: str | Iterable[str]) -> ResultSession | Non
             car=driver.findtext("VehName"),
             car_class=driver.findtext("CarClass"),
             date_ts=date_ts,
-            session_type=re.sub(r"\d+$", "", session_elem.tag).lower(),
+            session_type=_session_phase(session_elem.tag),
             position=_to_int(driver.findtext("Position")),
             class_position=_to_int(driver.findtext("ClassPosition")),
             grid_position=_to_int(driver.findtext("GridPos")),
