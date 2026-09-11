@@ -91,12 +91,24 @@ def test_coach_shows_delta_with_reference(synthetic_lap):
     from simcoach.coach import Coach
     from simcoach.corners import CornerMap
     from simcoach.analysis import analyze_lap
+    import dataclasses
+
     cmap = CornerMap.load("simcoach/tracks/test_track.json")
-    a = analyze_lap(synthetic_lap, cmap, reference=synthetic_lap)
+    # A DISTINCT best lap, 5 km/h faster through T1 and identical through T2. With
+    # synthetic_lap as its own reference every delta was 0.0, so "+0.0 km/h" appeared
+    # whichever corner the numbers came from (#70 review).
+    d = synthetic_lap.channels["lap_distance"]
+    faster_t1 = synthetic_lap.channels["speed"] + 5.0 * ((d >= 800) & (d <= 1200))
+    best = dataclasses.replace(synthetic_lap, channels={**synthetic_lap.channels,
+                                                        "speed": faster_t1})
+    a = analyze_lap(synthetic_lap, cmap, reference=best)
     c = Coach(FakeModel(reply="ok"))
     _, user_content = c.build_prompt(a, "test_car", "where am I losing time?")
-    assert "vs best" in user_content
-    assert "+0.0 km/h" in user_content or "-0.0 km/h" in user_content
+    lines = user_content.splitlines()
+    t1 = next(line for line in lines if line.startswith("T1 "))
+    t2 = next(line for line in lines if line.startswith("T2 "))
+    assert "min vs best: -5.0 km/h" in t1     # the delta is on the corner it belongs to
+    assert "min vs best: +0.0 km/h" in t2
 
 
 def test_coach_no_delta_without_reference(synthetic_lap):
