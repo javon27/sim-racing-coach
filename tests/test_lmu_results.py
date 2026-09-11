@@ -23,6 +23,21 @@ def _write_profile(player_dir, data):
 
 
 def test_player_name_resolves_from_player_file(tmp_path):
+    """Real Settings.JSON nests "Player Name" under "DRIVER" (confirmed against a
+    live install, issue #86). A flat top-level value that DIFFERS from the nested
+    one is included so a regression to the old flat-only lookup fails here."""
+    root = results.ET.fromstring(_SAMPLE_XML)
+    player_dir = tmp_path / "player"
+    _write_profile(
+        player_dir,
+        {"DRIVER": {"Player Name": "Jayson G", "Team": "Iron Dames"}, "Player Name": "Wrong Flat Name"},
+    )
+
+    assert results.player_name_for(root, player_dir) == "Jayson G"
+
+
+def test_player_name_falls_back_to_flat_shape(tmp_path):
+    """Older/flat Settings.JSON shapes (no DRIVER nesting) still resolve."""
     root = results.ET.fromstring(_SAMPLE_XML)
     player_dir = tmp_path / "player"
     _write_profile(player_dir, {"Player Name": "Jayson G"})
