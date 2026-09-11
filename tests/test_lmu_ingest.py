@@ -40,7 +40,12 @@ def _make_userdata(tmp_path, matched_name="Jayson G", other_name="Someone Else")
     results_dir.mkdir(parents=True)
     player_dir = userdata / "player"
     player_dir.mkdir(parents=True)
-    (player_dir / "Settings.JSON").write_text(json.dumps({"Player Name": matched_name}))
+    # Real Settings.JSON nests "Player Name" under "DRIVER" (issue #86). The flat
+    # top-level key is set to a DIFFERENT name so a flat-first regression would
+    # match the wrong driver (or none) instead of `matched_name`.
+    (player_dir / "Settings.JSON").write_text(
+        json.dumps({"DRIVER": {"Player Name": matched_name}, "Player Name": other_name})
+    )
     (results_dir / "race1.xml").write_text(_XML.format(name=matched_name))
     (results_dir / "race2.xml").write_text(_XML.format(name=other_name))
     return userdata
