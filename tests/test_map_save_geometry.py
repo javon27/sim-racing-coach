@@ -23,11 +23,14 @@ from simcoach.analysis import (
     CORNER_GEOMETRY_KEYS,
     SIGNED_GEOMETRY_KEYS,
     corner_geometry,
+    geometry_clause,
 )
 from simcoach.coach import Coach
+from simcoach.corners import CornerMap
 from simcoach.model.fake import FakeModel
 from simcoach.server.app import create_app
 from simcoach.store import LapStore
+from simcoach.track_lookup import load_map_data
 
 SHIPPED = Path(simcoach.__file__).resolve().parent / "tracks"
 IMOLA = "autodromo_enzo_e_dino_ferrari"
@@ -516,3 +519,124 @@ def test_a_legitimately_zero_banking_is_still_carried(tmp_path):
     # Carried as stored, NOT recomputed from the ribbon (which would give -0.0 / absent).
     assert after["13"]["banking_deg"] == 0.0
     assert after["13"]["elev_delta_m"] == 0.0
+
+
+# --- Installed build: the app-data copy annotates the shipped map, it is not geometry (#75).
+#
+# A frozen build writes every save to app-data, and the read used to take that copy's
+# `corners` wholesale -- geometry included. So a driver who once renamed a corner kept the
+# geometry that shipped that day, forever, and each later save wrote it back. The fixtures
+# pin values where the two readings DIFFER: the stale bake an older copy holds (Imola T13
+# radius 67.7 pre-#73, elevation 14.1 pre-#74) against the re-baked build's (322.1, 9.4).
+# The re-baked elevation is set explicitly, so this does not depend on #74 having landed.
+
+STALE_T13 = {"radius_m": 67.7, "elev_delta_m": 14.1}
+REBAKED_T13 = {"radius_m": 322.1, "elev_delta_m": 9.4}
+T13_NOTE = "lift, don't brake"
+
+
+def _installed(tmp_path, monkeypatch):
+    """A frozen build with the re-baked Imola in its bundle, and the driver's app-data copy
+    from an older build: T5 renamed, a note on T13, and T13 still holding the stale bake.
+    Returns (client, bundled_dir, user_dir)."""
+    monkeypatch.setattr(app_module.sys, "frozen", True, raising=False)
+    shipped = _shipped(IMOLA)
+    shipped["corners"] = [dict(c, **REBAKED_T13) if str(c["label"]) == "13" else c
+                          for c in shipped["corners"]]
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    (bundled / f"{IMOLA}.json").write_text(json.dumps(shipped), encoding="utf-8")
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    user = Path(store.data_dir) / "tracks"
+    user.mkdir(parents=True)
+    corners = [dict(c, **STALE_T13) if str(c["label"]) == "13"
+               else dict(c, name="Driver's Five") if str(c["label"]) == "5"
+               else c for c in shipped["corners"]]
+    notes = {**shipped["notes"], "corners": {**shipped["notes"]["corners"], "13": T13_NOTE}}
+    # What an installed save writes: the whole merged map, corners and all.
+    (user / f"{IMOLA}.json").write_text(
+        json.dumps({**shipped, "corners": corners, "notes": notes}), encoding="utf-8")
+    client = TestClient(create_app(store, Coach(FakeModel("{}")), tracks_dir=str(bundled)),
+                        base_url="http://127.0.0.1")
+    return client, bundled, user
+
+
+def _t13(corners):
+    return next(c for c in corners if str(c["label"]) == "13")
+
+
+def test_installed_read_takes_geometry_from_shipped_and_annotations_from_the_copy(
+        tmp_path, monkeypatch):
+    """#75's probe: the merged read gave T13 radius 67.7 and the coach said "radius ~68m"."""
+    _, bundled, user = _installed(tmp_path, monkeypatch)
+    merged = load_map_data(IMOLA, str(bundled), str(user))
+    by = {str(c["label"]): c for c in merged["corners"]}
+    assert {k: by["13"][k] for k in REBAKED_T13} == REBAKED_T13
+    assert by["5"]["name"] == "Driver's Five"
+    assert merged["notes"]["corners"]["13"] == T13_NOTE
+    # What the coach is told, through the CornerMap the sidecar's resolver builds.
+    clause = geometry_clause(CornerMap.from_data(merged).geometry["13"], by["13"]["direction"])
+    assert clause.startswith("radius ~322m, uphill 9m"), clause
+
+
+@pytest.mark.parametrize("save", ["editor", "rotation"])
+def test_an_installed_save_does_not_write_the_stale_bake_back(tmp_path, monkeypatch, save):
+    """The second half of #75: the next save re-wrote the stale values through the
+    carry-forward. After a save, the copy must hold the shipped bake -- and a LATER re-bake
+    must still reach the read, so the copy's values are never what the driver is told."""
+    client, bundled, user = _installed(tmp_path, monkeypatch)
+    shipped_bytes = (bundled / f"{IMOLA}.json").read_bytes()
+    if save == "editor":
+        got = client.get(f"/tracks/{IMOLA}/map")
+        assert got.status_code == 200, got.text
+        r = client.put(f"/tracks/{IMOLA}/map", json=got.json())
+    else:
+        r = client.post(f"/tracks/{IMOLA}/rotation", json={"degrees": 30})
+    assert r.status_code == 200, r.text
+    assert (bundled / f"{IMOLA}.json").read_bytes() == shipped_bytes, "premise: installed"
+
+    copy = json.loads((user / f"{IMOLA}.json").read_text(encoding="utf-8"))
+    by = {str(c["label"]): c for c in copy["corners"]}
+    assert {k: by["13"][k] for k in REBAKED_T13} == REBAKED_T13, "stale bake written back"
+    assert by["5"]["name"] == "Driver's Five"
+    assert copy["notes"]["corners"]["13"] == T13_NOTE
+
+    # The build after that re-bakes T13 again; the copy on disk is not consulted for it.
+    shipped = json.loads(shipped_bytes)
+    shipped["corners"] = [dict(c, radius_m=301.0, elev_delta_m=8.8) if str(c["label"]) == "13"
+                          else c for c in shipped["corners"]]
+    (bundled / f"{IMOLA}.json").write_text(json.dumps(shipped), encoding="utf-8")
+    t13 = _t13(load_map_data(IMOLA, str(bundled), str(user))["corners"])
+    assert (t13["radius_m"], t13["elev_delta_m"]) == (301.0, 8.8)
+
+
+def test_the_copy_owns_its_corner_set_and_only_fills_metrics_shipped_lacks(tmp_path):
+    """The three cases the merge has to decide, matched on apex (the carry-forward's key):
+      (a) no shipped corner at the copy's apex -- added, or its apex moved -- keeps the
+          copy's own geometry, which the editor measured at THAT apex when it saved;
+      (b) a shipped corner the copy deleted stays deleted: the copy owns the corner set;
+      (c) a metric the shipped corner has no measurement for comes from the copy, while
+          the metrics it does have still win."""
+    shipped = _shipped(IMOLA)
+    s = {str(c["label"]): c for c in shipped["corners"]}
+    shipped["corners"] = [{k: v for k, v in c.items() if k != "banking_deg"}
+                          if str(c["label"]) == "1" else c for c in shipped["corners"]]
+    added = {"number": 2, "label": "1A", "name": "Added", "start_dist": 300.0,
+             "apex_dist": 353.3, "end_dist": 400.0, "apexes": [353.3],
+             "radius_m": 55.5, "width_m": 7.7}
+    moved = dict(s["12"], apex_dist=s["12"]["apex_dist"] + 5.0, radius_m=99.9)
+    overlay = [dict(s["1"], radius_m=999.0, banking_deg=2.5), added,
+               *(moved if lab == "12" else c for lab, c in s.items() if lab not in ("1", "2"))]
+    bundled, user = tmp_path / "bundled", tmp_path / "user"
+    bundled.mkdir()
+    user.mkdir()
+    (bundled / f"{IMOLA}.json").write_text(json.dumps(shipped), encoding="utf-8")
+    (user / f"{IMOLA}.json").write_text(json.dumps({**shipped, "corners": overlay}),
+                                        encoding="utf-8")
+    by = {str(c["label"]): c for c in load_map_data(IMOLA, str(bundled), str(user))["corners"]}
+
+    assert "2" not in by and len(by) == len(overlay)                       # (b)
+    assert (by["1A"]["radius_m"], by["1A"]["width_m"]) == (55.5, 7.7)      # (a) added
+    assert by["12"]["radius_m"] == 99.9 != s["12"]["radius_m"]             # (a) apex moved
+    assert by["1"]["radius_m"] == s["1"]["radius_m"] == 535.0              # shipped wins...
+    assert by["1"]["banking_deg"] == 2.5                                   # (c) ...not absent

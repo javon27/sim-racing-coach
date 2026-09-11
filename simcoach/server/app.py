@@ -1077,6 +1077,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # the result positionally so a duplicate label cannot collapse two corners into one.
         probe = [dict(c, label=str(i)) for i, c in enumerate(corners)]
         geo = corner_geometry(path, dist, probe, width=rib_w, bank=rib_b)
+        # `existing` is the MERGED read, so on an installed build a corner that ships
+        # carries the SHIPPED bake here, never the app-data copy's older one (#75).
         prior = {corner_apex_key(pc): pc for pc in (existing.get("corners") or [])}
         for i, c in enumerate(corners):
             baked = prior.get(corner_apex_key(c), {})
