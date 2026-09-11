@@ -152,14 +152,6 @@
     t.captures > 0 ? lapWord(t.captures)
     : t.live_laps > 0 ? `${lapWord(t.live_laps)}, none with position data`
     : "";
-  // Banking is fitted from pos_y across the WIDTH. Measured on real Silverstone clouds:
-  // 0 elevation laps -> bank is 0.0 in all 500 bins (asserts FLAT, doesn't omit); 1 lap
-  // -> +0.31/-0.85 against a true +0.033/-0.027, ~25x, because one racing line gives the
-  // fit no lateral spread. Both numbers are measured, not a derived threshold -- warn at
-  // exactly those two and stay quiet otherwise.
-  const elevationWarning = (t: TrackRow): string =>
-    t.captures === 0 || t.elevation_laps > 1 ? ""
-    : t.elevation_laps === 0 ? "no elevation" : "elevation from 1 lap";
 
   // The build action is just "select it, then open the map editor" -- the editor already
   // owns the rebuild-from-saved-capture -> save pair (POST /mapcapture/rebuild + /save).
@@ -238,7 +230,6 @@
                 <span class="badge" class:good={t.has_notes}>{t.has_notes ? "notes" : "no notes"}</span>
                 <span class="badge">{t.user_edited ? "edited" : "shipped"}</span>
                 {#if coverage(t)}<span class="badge">{coverage(t)}</span>{/if}
-                {#if elevationWarning(t)}<span class="badge warn">{elevationWarning(t)}</span>{/if}
               </span>
             </button>
             {#if !t.has_map && t.captures > 0}
@@ -422,10 +413,6 @@
     color: var(--good);
     border-color: var(--good);
     background: var(--good-soft);
-  }
-  .badge.warn {
-    color: var(--bad, #e66);
-    border-color: var(--bad, #e66);
   }
   .build {
     width: 100%;

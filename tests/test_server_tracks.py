@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 
 import numpy as np
+import pytest
 from fastapi.testclient import TestClient
 
 import simcoach
@@ -692,13 +693,12 @@ def test_get_tracks_mapped_track_row_shape_unchanged(tmp_path):
     rows = client.get("/tracks").json()
     row = next(t for t in rows if t["slug"] == "algarve_international_circuit")
     assert set(row) == {"slug", "name", "has_map", "has_notes", "user_edited",
-                        "captures", "live_laps", "elevation_laps"}
+                        "captures", "live_laps"}
     assert row["has_map"] is True
     assert row["has_notes"] is False
     assert row["user_edited"] is False
     assert row["captures"] == 0        # 40 result laps are not captures
     assert row["live_laps"] == 0
-    assert row["elevation_laps"] == 0
 
 
 def test_get_tracks_driven_mapped_track_listed_once_with_count(tmp_path):
@@ -745,23 +745,20 @@ def test_get_tracks_counts_only_laps_whose_npz_really_has_position(tmp_path):
     assert silver["captures"] == 3         # the usable subset, not the row count
 
 
-def test_get_tracks_counts_elevation_laps_separately(tmp_path):
-    # Banking is fitted from pos_y across the width. Measured on real Silverstone clouds:
-    # 0 elevation laps -> bank 0.0 in every bin (asserts FLAT), 1 -> ~25x the true
-    # magnitude off a single line. So a usable lap is not automatically an elevating one.
+def test_get_tracks_counts_laps_without_pos_y_as_buildable(tmp_path):
+    # pos_y only feeds banking, which ribbon.py now writes as unknown wherever the cloud
+    # lacks lateral spread -- so a lap without elevation is still one a Build consumes.
     client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
     _live_lap(store, "Monza Curva Grande Circuit", 4, pos_y=False)
-    _live_lap(store, "Monza Curva Grande Circuit", 1)            # 5 usable, 1 elevating
-    _live_lap(store, "Paul Ricard", 3, pos_y=False)              # 3 usable, 0 elevating
+    _live_lap(store, "Monza Curva Grande Circuit", 1)            # 5 usable, 1 with pos_y
+    _live_lap(store, "Paul Ricard", 3, pos_y=False)              # 3 usable, 0 with pos_y
     rows = client.get("/tracks").json()
 
     monza = next(t for t in rows if t["slug"] == "monza_curva_grande_circuit")
-    assert monza["captures"] == 5           # pos_y is NOT required to rebuild...
-    assert monza["elevation_laps"] == 1     # ...but its absence is reported
+    assert monza["captures"] == 5           # pos_y is NOT required to rebuild
 
     ricard = next(t for t in rows if t["slug"] == "paul_ricard")
     assert ricard["captures"] == 3
-    assert ricard["elevation_laps"] == 0
 
 
 def test_get_tracks_counts_survive_a_deleted_npz(tmp_path):
@@ -773,4 +770,168 @@ def test_get_tracks_counts_survive_a_deleted_npz(tmp_path):
                if t["slug"] == "silverstone_national_circuit")
     assert row["live_laps"] == 3
     assert row["captures"] == 2
-    assert row["elevation_laps"] == 2
+
+
+# --- #69 round 2: bad files, badge == build, no frozen capture, the width/bank gate ----
+
+_SLUG = "silverstone_national_circuit"
+_NAME = "Silverstone National Circuit"
+
+
+def _cloud_lap(store, zoff=0.0, y=None, *, n=2000):
+    # A 400 m straight LIVE lap at lateral offset `zoff`, dense enough (5 samples per
+    # 0.8 m rebuild bin) that every bin holds a sample of every lap. `y` = its pos_y.
+    x = np.linspace(0.0, 400.0, n)
+    ch = {"pos_x": x, "pos_z": np.full(n, float(zoff)), "lap_distance": x.copy(),
+          "speed": np.full(n, 100.0)}
+    if y is not None:
+        ch["pos_y"] = np.full(n, float(y))
+    return store.save(LapRecord("lmu", _NAME, "Oreca 07", 60.0, True, 0.0, ch))
+
+
+def _row(client):
+    r = client.get("/tracks")
+    assert r.status_code == 200, r.text
+    return next(t for t in r.json() if t["slug"] == _SLUG)
+
+
+def _rebuild(client):
+    r = client.post("/mapcapture/rebuild", json={"slug": _SLUG})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _corrupt_member(raw: bytes) -> bytes:
+    # Damage pos_x's DEFLATE stream while the zip directory stays intact, so np.load
+    # opens the file and the failure only surfaces reading the member: zlib.error.
+    import io
+    import zipfile
+    zi = zipfile.ZipFile(io.BytesIO(raw)).getinfo("pos_x.npy")
+    body = zi.header_offset + 30 + len(zi.filename) + len(zi.extra)
+    out = bytearray(raw)
+    for i in range(body + zi.compress_size // 4, body + zi.compress_size // 4 + 64):
+        out[i] ^= 0xFF
+    return bytes(out)
+
+
+@pytest.mark.parametrize("shape", ["zero_byte", "truncated", "corrupt_member"])
+def test_one_bad_lap_file_neither_blanks_tracks_nor_fails_rebuild(tmp_path, caplog, shape):
+    # R1/R2: GET /tracks is the Tracks screen's ONLY data source. A zero-byte .npz raises
+    # EOFError and a corrupt member zlib.error -- neither was in the caught tuple, so one
+    # bad file 500'd the whole screen. It must skip that lap, log it, and carry on.
+    import zipfile
+    import zlib
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    ids = [_cloud_lap(store, z) for z in (-5.0, 5.0, 0.0)]
+    bad = Path(store.data_dir) / f"{ids[2]}.npz"
+    raw = bad.read_bytes()
+    bad.write_bytes({"zero_byte": b"", "truncated": raw[: len(raw) // 2],
+                     "corrupt_member": _corrupt_member(raw)}[shape])
+    expect = {"zero_byte": EOFError, "truncated": zipfile.BadZipFile,
+              "corrupt_member": zlib.error}[shape]
+    with pytest.raises(expect), np.load(str(bad)) as z:   # the file really IS that shape
+        z["pos_x"]
+
+    with caplog.at_level(logging.WARNING, logger="simcoach.server.app"):
+        row = _row(client)
+    assert row["live_laps"] == 3
+    assert row["captures"] == 2                       # the bad lap is skipped, not fatal
+    assert f"{ids[2]}.npz" in caplog.text             # ...and said so
+    assert _rebuild(client)["lap_count"] == 2         # the build skips the same lap
+
+
+@pytest.mark.parametrize("shape", ["object_array", "zero_length", "all_nan"])
+def test_badge_count_equals_build_count_for_unusable_lap_shapes(tmp_path, shape):
+    # R3(b)/(c): the badge used to count a lap from its channel NAMES. A pickled object
+    # array was counted then skipped by the build; zero-length and all-NaN arrays were
+    # counted AND handed to the build. One function now decides both.
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    ids = [_cloud_lap(store, z) for z in (-5.0, 5.0, 0.0)]
+    x = np.linspace(0.0, 400.0, 2000)
+    nan = np.full(2000, np.nan)
+    arrays = {
+        "object_array": {"pos_x": np.array([None] * 2000, dtype=object),
+                         "pos_z": x * 0.0, "lap_distance": x},
+        "zero_length": {"pos_x": np.array([]), "pos_z": np.array([]),
+                        "lap_distance": np.array([])},
+        "all_nan": {"pos_x": nan, "pos_z": nan, "lap_distance": nan},
+    }[shape]
+    with open(Path(store.data_dir) / f"{ids[2]}.npz", "wb") as f:
+        np.savez(f, **arrays)
+    row = _row(client)
+    assert row["live_laps"] == 3
+    assert row["captures"] == _rebuild(client)["lap_count"] == 2
+
+
+def test_badge_counts_the_capture_a_build_uses_not_the_live_laps_beside_it(tmp_path):
+    # R3(a): /mapcapture/save-cloud writes captures/<slug>.npz and NO map JSON. The row
+    # read "Build map from 7 laps" while the build (capture wins) used the capture's 2.
+    from simcoach.server.app import _save_cloud
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    for z in (-5.0, 5.0, 0.0, 1.0, -1.0, 2.0, -2.0):
+        _cloud_lap(store, z)
+    x = np.linspace(0.0, 400.0, 2000)
+    _save_cloud(Path(store.data_dir) / "captures" / f"{_SLUG}.npz",
+                [{"pos_x": x, "pos_z": np.full(2000, s * 6.0), "lap_distance": x}
+                 for s in (1, -1)])
+    row = _row(client)
+    assert row["has_map"] is False and row["live_laps"] == 7
+    assert row["captures"] == _rebuild(client)["lap_count"] == 2
+
+
+def test_live_lap_rebuild_does_not_freeze_a_capture_so_later_laps_reach_the_map(tmp_path):
+    # Save after a live-lap rebuild used to write captures/<slug>.npz from those laps.
+    # A capture WINS every later rebuild, so 3 more laps showed as "7" on the row and the
+    # rebuild still used the frozen 4: more driving never improved the map.
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    for z in (-5.0, 5.0, 0.0, 1.0):
+        _cloud_lap(store, z)
+    assert _rebuild(client)["lap_count"] == 4
+    assert client.post("/mapcapture/save", json={}).json()["saved"] is True
+    assert (tmp_path / "tracks" / f"{_SLUG}.json").exists()           # the map was saved
+    assert not (Path(store.data_dir) / "captures" / f"{_SLUG}.npz").exists()
+
+    for z in (-1.0, 2.0, -2.0):
+        _cloud_lap(store, z)
+    assert _row(client)["captures"] == 7
+    assert _rebuild(client)["lap_count"] == 7                          # all of them
+
+
+def _save_and_bake(client, tmp_path):
+    # Rebuild -> Save -> an editor save (PUT) that bakes per-corner geometry off the
+    # stored ribbon: the exact path by which ribbon width/bank reach geometry_clause.
+    _rebuild(client)
+    assert client.post("/mapcapture/save", json={}).json()["saved"] is True
+    f = tmp_path / "tracks" / f"{_SLUG}.json"
+    ribbon = json.loads(f.read_text())["ribbon"]
+    r = client.put(f"/tracks/{_SLUG}/map", json={"corners": [
+        {"number": 1, "apex_dist": 200.0, "start_dist": 150.0, "end_dist": 250.0}]})
+    assert r.status_code == 200, r.text                # a NaN bake would 500 here
+    return ribbon, json.loads(f.read_text())["corners"][0]
+
+
+def test_same_line_laps_save_width_and_bank_as_unknown_and_bake_none(tmp_path):
+    # Real racing-lap shape: 4 laps within ~1 m of one line, pos_y differing by a few cm
+    # lap to lap. The old >1e-6 m gate fitted a slope across that 1 m (Silverstone:
+    # 14.6-48.4 deg) and saved width ~1.4 m, which the editor save then BAKED into the
+    # corner and geometry_clause read out as fact.
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    for z, y in ((-0.4, 3.00), (0.1, 3.06), (0.5, 2.95), (-0.2, 3.04)):
+        _cloud_lap(store, z, y)
+    ribbon, c1 = _save_and_bake(client, tmp_path)
+    assert set(ribbon["width"]) == {None}
+    assert set(ribbon["bank"]) == {None}
+    assert "width_m" not in c1 and "banking_deg" not in c1
+
+
+def test_edge_laps_save_and_bake_a_real_width_and_bank(tmp_path):
+    # Positive control for the test above, same route: laps spanning the width (edges
+    # at +-5 m on a 0.05 cross-slope) DO produce width and bank, so the gate is not
+    # simply "always unknown". On a pass along +x, +lateral is +z (#58).
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    for z in (-5.0, 0.0, 5.0):
+        _cloud_lap(store, z, 3.0 + 0.05 * z)
+    ribbon, c1 = _save_and_bake(client, tmp_path)
+    assert None not in ribbon["width"][20:-20] and None not in ribbon["bank"][20:-20]
+    assert abs(c1["width_m"] - 10.0) < 1.0
+    assert abs(c1["banking_deg"] - np.degrees(np.arctan(0.05))) < 0.3

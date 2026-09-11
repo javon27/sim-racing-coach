@@ -478,22 +478,13 @@
   let trackName = $state("");
   const nameEditable = $derived(!!(map?.curating || (map && !map.shipped)));
 
-  // What backs the ribbon about to be saved. Banking is fitted from pos_y ACROSS THE
-  // WIDTH, so the elevation subset matters on its own: measured on real Silverstone
-  // clouds, 0 elevation laps gives bank 0.0 in all 500 bins (the saved map asserts FLAT
-  // rather than omitting), and 1 lap gives +0.31/-0.85 against a true +0.033/-0.027 --
-  // ~25x, because a single racing line gives the fit no lateral spread. Both cases are
-  // measured; anything above 1 says nothing.
-  const elevationWarn = $derived(
-    ribbon?.lap_count != null && (ribbon.elevation_count ?? 0) < 2);
+  // What backs the ribbon about to be saved. No elevation-lap warning: width/banking
+  // are gated server-side on the cloud's real lateral spread (ribbon._MIN_SPREAD_M) and
+  // saved as unknown without it, so a lap count says nothing about whether they are
+  // right -- the old "< 2 elevation laps" warning fired where they were closest.
   const provenance = $derived.by(() => {
     const n = ribbon?.lap_count;
-    if (!n) return "";
-    const base = `from ${n} lap${n === 1 ? "" : "s"}`;
-    const e = ribbon?.elevation_count ?? 0;
-    if (e === 0) return `${base} · no elevation, banking will read flat`;
-    if (e === 1) return `${base} · elevation from 1 lap, banking unreliable`;
-    return base;
+    return n ? `from ${n} lap${n === 1 ? "" : "s"}` : "";
   });
 
   // Path slice + midpoint for a named section span (start_dist..end_dist).
@@ -1098,9 +1089,8 @@
           {#if genPhase === "preview"}
             {#if provenance}
               <!-- Say what backs the geometry before it is committed: a map off 1-3
-                   laps is thin (#41's Imola sector splits rest on a single lap), and
-                   banking off 0 or 1 elevation lap is wrong rather than merely thin. -->
-              <span class="lapcount" class:warn={elevationWarn}>{provenance}</span>
+                   laps is thin (#41's Imola sector splits rest on a single lap). -->
+              <span class="lapcount">{provenance}</span>
             {/if}
             <button type="button" class="primary" disabled={saving} onclick={saveGen}>
               {saving ? "Saving…" : "Save ribbon"}
@@ -1159,9 +1149,6 @@
     font-family: var(--mono);
     font-size: 11px;
     color: var(--faint);
-  }
-  .lapcount.warn {
-    color: var(--bad, #e66);
   }
   header h2 {
     margin: 0;

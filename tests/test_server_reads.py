@@ -1024,10 +1024,12 @@ def test_mapcapture_rebuild_falls_back_to_live_laps_of_that_track(tmp_path):
     body = r.json()
     assert len(body["center"]) > 1                            # a real reconstructed line
     assert body["lap_count"] == 3                             # and it says what backs it
-    # The built ribbon is staged for the EXISTING save route -- no second writer.
-    assert app.state.last_ribbon["track"] == "silverstone_national_circuit"
+    # The built ribbon is staged for the EXISTING save route -- no second writer -- under
+    # the live name the laps were recorded with, so the new map is named for the track.
+    assert app.state.last_ribbon["track"] == "Silverstone National Circuit"
     assert c.post("/mapcapture/save", json={}).json()["saved"] is True
-    assert (tmp_path / "tracks" / "silverstone_national_circuit.json").exists()
+    saved = tmp_path / "tracks" / "silverstone_national_circuit.json"
+    assert json.loads(saved.read_text())["name"] == "Silverstone National Circuit"  # not the slug
 
 
 def test_mapcapture_rebuild_fallback_ignores_result_log_laps(tmp_path):

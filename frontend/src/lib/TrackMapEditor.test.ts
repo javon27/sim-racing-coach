@@ -446,45 +446,16 @@ describe("TrackMapEditor — (re)generate map layout", () => {
   it("Rebuild says how many laps back the geometry, before Save", async () => {
     // A map off 1-3 clouds is thin (#41), and the rebuild may be falling back to the
     // track's own live laps -- the driver has to see the count before committing it.
-    vi.mocked(rebuildFromCapture).mockResolvedValue({
-      ...ribbonFix, lap_count: 3, elevation_count: 3,
-    });
+    vi.mocked(rebuildFromCapture).mockResolvedValue({ ...ribbonFix, lap_count: 3 });
     render(TrackMapEditor, { props: { lapId: 7, open: true } });
     await screen.findByText("First");
 
     await fireEvent.click(screen.getByText("Rebuild from saved capture"));
     const footer = (await screen.findByText("Save ribbon")).closest("footer")!;
     expect(footer.textContent).toContain("from 3 laps");
-    expect(footer.textContent).not.toMatch(/elevation/i);   // 3 is enough, stay quiet
-  });
-
-  it("Rebuild warns when no lap carries elevation", async () => {
-    // ribbon.py rounds a non-finite bank to 0.0, so a map saved with no pos_y asserts
-    // FLAT in all 500 bins rather than omitting banking. Measured, not assumed.
-    vi.mocked(rebuildFromCapture).mockResolvedValue({
-      ...ribbonFix, lap_count: 4, elevation_count: 0,
-    });
-    render(TrackMapEditor, { props: { lapId: 7, open: true } });
-    await screen.findByText("First");
-
-    await fireEvent.click(screen.getByText("Rebuild from saved capture"));
-    const footer = (await screen.findByText("Save ribbon")).closest("footer")!;
-    expect(footer.textContent).toContain("from 4 laps");
-    expect(footer.textContent).toContain("banking will read flat");
-  });
-
-  it("Rebuild warns when only one lap carries elevation", async () => {
-    // One racing line gives the across-the-width fit no lateral spread: measured at
-    // +0.31/-0.85 against a true +0.033/-0.027 on real Silverstone clouds.
-    vi.mocked(rebuildFromCapture).mockResolvedValue({
-      ...ribbonFix, lap_count: 5, elevation_count: 1,
-    });
-    render(TrackMapEditor, { props: { lapId: 7, open: true } });
-    await screen.findByText("First");
-
-    await fireEvent.click(screen.getByText("Rebuild from saved capture"));
-    const footer = (await screen.findByText("Save ribbon")).closest("footer")!;
-    expect(footer.textContent).toContain("elevation from 1 lap");
+    // No elevation-lap warning: width/banking are gated server-side on real lateral
+    // spread, so a lap count says nothing about whether they are right (#69).
+    expect(footer.textContent).not.toMatch(/elevation|banking/i);
   });
 
   it("Rebuild omits the lap count when the server didn't send one", async () => {

@@ -375,9 +375,6 @@ export interface RibbonPreview {
   /** Rebuild only: how many point clouds this geometry was reconstructed from. Shown
    *  before Save, because a map off 1-3 laps is thin and the driver should know. */
   lap_count?: number;
-  /** Rebuild only: of those, how many carried pos_y. At 0 the saved banking is a flat
-   *  0.0 everywhere; at 1 it is fitted off one racing line and reads ~25x too large. */
-  elevation_count?: number;
 }
 
 // Driver-input traces for the Pit Wall graphs (#21). Already resampled onto a
@@ -573,15 +570,13 @@ export interface TrackRow {
   has_map: boolean;
   has_notes: boolean;
   user_edited: boolean;
-  /** Laps whose .npz actually holds the channels a rebuild needs. This is the build
-   *  gate: 0 means there is nothing to rebuild from, whatever live_laps says. */
+  /** Exactly the clouds a Build would consume (the track's saved capture if it has
+   *  one, else its usable live laps). This is the build gate: 0 means nothing to
+   *  rebuild from, whatever live_laps says. */
   captures: number;
   /** Live-captured lap rows. Exceeds `captures` for laps recorded before position
    *  capture existed (47 channels, no pos_*) -- they can never be rebuilt from. */
   live_laps: number;
-  /** Of `captures`, how many carry pos_y. Below 2 the banking fit is unusable:
-   *  0 makes ribbon.py report every bin as flat, 1 fits noise off a single line. */
-  elevation_laps: number;
 }
 
 export interface TrackNotes {
