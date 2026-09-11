@@ -954,7 +954,7 @@ def test_save_result_session_keeps_laps_from_an_unrelated_stint(tmp_path, synthe
     _capture_live_race(s, synthetic_lap)
 
     # Same lap times, but a qualifying stint, a different car, and a session a week later.
-    s.save_result_session(_silverstone_result(session_type="qualify"), session_id="q")
+    s.save_result_session(_silverstone_result(session_type="qualifying"), session_id="q")
     s.save_result_session(_silverstone_result(car="Other Team #5:WEC"), session_id="other-car")
     s.save_result_session(_silverstone_result(date_ts=_RACE_TS + 7 * 86400), session_id="next-week")
 
@@ -1216,7 +1216,9 @@ def test_save_result_session_does_not_raid_a_sibling_session(tmp_path):
 # --- v15 -> v16: clean the duplicates already in the db (issue #71) ------------
 # The rows the pre-#68 ingest left behind. These tests build that state the way the
 # old code did -- a raw INSERT per XML lap, no dedupe -- then stamp the db v15 and
-# reopen it, so they exercise the MIGRATION and not save_result_session's skip.
+# reopen it, so they exercise the MIGRATION and not save_result_session's skip. Since
+# #88 the cleanup runs inside the v17 step (one pass, after the qualifying rename), so a
+# db opened from v15 is backed up to `.pre-v17.bak`.
 # Live laps from _capture_live_race carry NULL sectors (the fixture sets none): the real
 # shape of a lap whose sector split failed, which is what the sector merge exists for.
 
@@ -1349,7 +1351,7 @@ def test_v16_migration_keeps_result_rows_with_no_live_twin(tmp_path, synthetic_l
     _capture_live_race(s, synthetic_lap)
     decoy = _RESULT_TIMES_ALL_TIMED + [99.999]
     early = _RACE_TS - 60
-    _insert_result_laps_unconditionally(s, decoy, "q", phase="qualify", ts=early)
+    _insert_result_laps_unconditionally(s, decoy, "q", phase="qualifying", ts=early)
     _insert_result_laps_unconditionally(s, decoy, "other-car", car="Other Team #5:WEC",
                                         ts=early)
     _insert_result_laps_unconditionally(s, decoy, "other-track",
@@ -1544,7 +1546,7 @@ def test_v16_migration_backs_up_the_db_before_deleting(tmp_path, synthetic_lap):
     s2 = _stamp_v15_and_reopen(s, db, data)
 
     assert s2.conn.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 9
-    bak = tmp_path / "c.sqlite.pre-v16.bak"
+    bak = tmp_path / "c.sqlite.pre-v17.bak"
     assert bak.is_file()
     b = sqlite3.connect(bak)
     try:
@@ -1567,7 +1569,7 @@ def test_v16_migration_writes_no_backup_when_nothing_is_a_duplicate(tmp_path, sy
 
     assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert len(s2.session_lap_ids("lone")) == 1
-    assert not (tmp_path / "c.sqlite.pre-v16.bak").exists()
+    assert not (tmp_path / "c.sqlite.pre-v17.bak").exists()
 
 
 @pytest.mark.parametrize("start", [15, 14])
@@ -1586,8 +1588,9 @@ def test_v16_migration_leaves_the_db_alone_when_the_backup_cannot_be_written(
     s = LapStore(db, data)
     _capture_live_race(s, synthetic_lap)
     _insert_result_laps_unconditionally(s, _RESULT_TIMES_ALL_TIMED, _RESULT_SID)
-    blocker = tmp_path / "c.sqlite.pre-v16.bak.blocked.tmp"
-    blocker.mkdir()                                   # sqlite cannot open a directory
+    blockers = [tmp_path / "c.sqlite.pre-v17.bak.blocked.tmp"]   # sqlite can't open a dir
+    for blocker in blockers:
+        blocker.mkdir()
     s.conn.execute(f"PRAGMA user_version = {start}")
     s.conn.commit()
     s.conn.close()
@@ -1600,14 +1603,15 @@ def test_v16_migration_leaves_the_db_alone_when_the_backup_cannot_be_written(
     assert "could not write the backup" in caplog.text
     s2.conn.close()
 
-    blocker.rmdir()
+    for blocker in blockers:
+        blocker.rmdir()
     s3 = LapStore(db, data)                           # the retry
     assert s3.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert s3.conn.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 9
 
 
 def test_v16_migration_replaces_a_corrupt_leftover_backup(tmp_path, synthetic_lap):
-    """A leftover `.pre-v16.bak` that is not a database used to fail the backup on EVERY
+    """A leftover `.pre-v17.bak` that is not a database used to fail the backup on EVERY
     launch: the store stayed v15, nothing was logged, and the cleanup never ran. The
     backup now goes to a fresh temp name and is moved into place, so the cleanup completes
     and a valid backup replaces the bad file -- with no temp file left behind."""
@@ -1616,14 +1620,14 @@ def test_v16_migration_replaces_a_corrupt_leftover_backup(tmp_path, synthetic_la
     s = LapStore(db, data)
     _capture_live_race(s, synthetic_lap)
     _insert_result_laps_unconditionally(s, _RESULT_TIMES_ALL_TIMED, _RESULT_SID)
-    bak = tmp_path / "c.sqlite.pre-v16.bak"
+    bak = tmp_path / "c.sqlite.pre-v17.bak"
     bak.write_bytes(b"not a database" * 1000)
 
     s2 = _stamp_v15_and_reopen(s, db, data)
 
     assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert s2.conn.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 9
-    assert sorted(p.name for p in tmp_path.glob("c.sqlite.pre-v16.bak*")) == [bak.name]
+    assert sorted(p.name for p in tmp_path.glob("c.sqlite.pre-v17.bak*")) == [bak.name]
     b = sqlite3.connect(bak)
     try:
         assert b.execute("PRAGMA user_version").fetchone()[0] == 15
@@ -1650,7 +1654,7 @@ def test_v16_migration_keeps_its_backup_beside_a_read_only_leftover(tmp_path, sy
     s = LapStore(db, data)
     _capture_live_race(s, synthetic_lap)
     _insert_result_laps_unconditionally(s, _RESULT_TIMES_ALL_TIMED, _RESULT_SID)
-    bak = tmp_path / "c.sqlite.pre-v16.bak"
+    bak = tmp_path / "c.sqlite.pre-v17.bak"
     bak.write_bytes(b"not a database" * 1000)
     bak.chmod(stat.S_IREAD)
 
@@ -1660,7 +1664,7 @@ def test_v16_migration_keeps_its_backup_beside_a_read_only_leftover(tmp_path, sy
     assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert s2.conn.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 9
     assert bak.read_bytes() == b"not a database" * 1000
-    (kept,) = tmp_path.glob("c.sqlite.pre-v16.bak.*.tmp")
+    (kept,) = tmp_path.glob("c.sqlite.pre-v17.bak.*.tmp")
     assert "could not replace" in caplog.text and kept.name in caplog.text
     b = sqlite3.connect(kept)
     try:
@@ -1719,7 +1723,7 @@ def test_v16_backup_on_a_db_older_than_v15_does_not_hang(tmp_path, synthetic_lap
     assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert s2.conn.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 9
     assert s2.is_ingested("some/old.xml", 1.0) is False
-    assert (tmp_path / "c.sqlite.pre-v16.bak").is_file()
+    assert (tmp_path / "c.sqlite.pre-v17.bak").is_file()
 
 
 def test_v16_migration_does_not_empty_a_race_whose_outcome_cannot_be_linked(tmp_path,
@@ -1781,6 +1785,188 @@ def test_v16_cleanup_leaves_the_same_rows_as_ingesting_with_the_skip(tmp_path, s
     # Not vacuous: both sides actually merged, and both actually dropped the duplicates.
     assert sum(r[10] is not None for r in rows if r[9] == "live") == 3
     assert sum(r[9] == "result" for r in rows) == (1 if None in times else 0)
+
+
+# --- v16 -> v17: one spelling for the qualifying phase (issue #88) -------------
+# Result-log import stored "qualify" (the XML tag) while live capture stores
+# "qualifying", so the lap matcher -- which compares phase exactly -- never paired a
+# qualifying result lap with its live twin. These build the state the pre-fix parser
+# left, stamp the db v16, and reopen it.
+
+_QUALI_SID = "2026_09_10_23_10_00-12Q1"
+
+
+def _stamp_v16_and_reopen(s, db, data_dir):
+    s.conn.execute("PRAGMA user_version = 16")
+    s.conn.commit()
+    s.conn.close()
+    from simcoach.store import LapStore
+    return LapStore(db, data_dir)
+
+
+def _capture_live_qualifying(s, synthetic_lap):
+    """The Silverstone stint, captured as a QUALIFYING session -- spelled the way live
+    capture (smm.session_phase) actually stores it."""
+    _capture_live_race(s, synthetic_lap)
+    s.conn.execute("UPDATE laps SET phase = 'qualifying' WHERE source = 'live'")
+    s.conn.commit()
+
+
+def _phases(s):
+    return {t: sorted({r[0] for r in s.conn.execute(f"SELECT phase FROM {t}")})
+            for t in ("laps", "race_sessions")}
+
+
+def test_v17_migration_renames_qualify_and_removes_the_duplicates_it_hid(tmp_path,
+                                                                        synthetic_lap):
+    """A qualifying stint captured live AND imported by the pre-fix parser: 19 rows for a
+    10-lap session, invisible to v16 because the two sides spelled the phase differently.
+    v17 renames the result side and re-runs the cleanup, which now pairs them: the 9
+    duplicates go, the lap live capture missed stays, sectors merge all or nothing, and a
+    qualifying log nobody captured live is renamed but kept whole."""
+    from simcoach.store import SCHEMA_VERSION, LapStore, _duplicate_result_lap_pairs
+    db, data = str(tmp_path / "c.sqlite"), str(tmp_path / "telem")
+    s = LapStore(db, data)
+    _capture_live_qualifying(s, synthetic_lap)
+    t = _RESULT_TIMES   # t[1] is the untimed lap live capture missed
+    none, s1_only = (None, None, None), (32.662, None, None)
+
+    def short(lt):
+        return _full_sectors(lt - 0.02)
+
+    secs = [_full_sectors(t[0]), none, short(t[2]), none, _full_sectors(t[4]), s1_only,
+            short(t[6]), none, _full_sectors(t[8]), s1_only]
+    _insert_result_laps_unconditionally(s, t, _QUALI_SID, phase="qualify", sectors=secs)
+    _insert_result_laps_unconditionally(s, [101.5, 102.25, 103.0], "lone-q", phase="qualify",
+                                        ts=_RACE_TS - 7 * 86400)
+    assert _duplicate_result_lap_pairs(s.conn) == []   # the premise: v16 cannot see them
+
+    s2 = _stamp_v16_and_reopen(s, db, data)
+
+    assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    assert _phases(s2) == {"laps": ["qualifying"], "race_sessions": ["qualifying"]}
+    assert s2.conn.execute(
+        "SELECT lap_time FROM laps WHERE session_id = ?", (_QUALI_SID,)).fetchall() == [(None,)]
+    assert len(s2.session_lap_ids("lone-q")) == 3
+    # Live laps in capture order are t[0], t[2..9]: complete sets that add up merged
+    # (t[0], t[4], t[8]); 20 ms short, s1-only and empty ones did not.
+    assert _live_sectors(s2) == [_full_sectors(t[0]), none, none, _full_sectors(t[4]), none,
+                                 none, none, _full_sectors(t[8]), none]
+
+
+def test_reimporting_a_pre_fix_qualifying_log_after_v17_inserts_nothing(tmp_path):
+    """Ingest dedupes a file against its OWN earlier rows by phase too. A log imported by
+    the pre-fix parser holds "qualify" rows while the fixed parser says "qualifying", so
+    any re-import -- a moved Steam library, a respelt folder, a cleared ingested_files --
+    inserted the whole file again: result<->result copies no cleanup removes (4 -> 8 rows
+    for one real log, 1,287 across the results dir). After v17 it inserts nothing."""
+    import dataclasses
+    from pathlib import Path
+
+    from simcoach.lmu.results import parse_result
+    from simcoach.store import LapStore
+    fixture = Path(__file__).parent / "fixtures" / "lmu_results" / "sample_race.xml"
+    xml = tmp_path / f"{_QUALI_SID}.xml"
+    xml.write_text(fixture.read_text(encoding="utf-8").replace("<Race>", "<Qualify>")
+                   .replace("</Race>", "</Qualify>"), encoding="utf-8")
+    rs = parse_result(xml, "Jayson G")
+    assert rs.session_type == "qualifying" and len(rs.laps) == 3   # the premise
+    db, data = str(tmp_path / "c.sqlite"), str(tmp_path / "telem")
+    s = LapStore(db, data)
+    s.save_result_session(dataclasses.replace(rs, session_type="qualify"),   # pre-fix import
+                          session_id=xml.stem)
+    q = "SELECT id, phase, lap_time FROM laps ORDER BY id"
+    before = [(i, "qualifying", lt) for i, _, lt in s.conn.execute(q).fetchall()]
+
+    s2 = _stamp_v16_and_reopen(s, db, data)
+    s2.save_result_session(parse_result(xml, "Jayson G"), session_id=xml.stem)
+
+    assert s2.conn.execute(q).fetchall() == before
+
+
+def test_v17_migration_backs_up_first_and_a_rerun_changes_nothing(tmp_path, synthetic_lap):
+    """The backup is the PRE-rename store: still v16, still spelling "qualify", still
+    holding the duplicates. A second run finds no stray spelling and no duplicate, so it
+    changes no row and writes no second backup."""
+    from simcoach.store import LapStore
+    db, data = str(tmp_path / "c.sqlite"), str(tmp_path / "telem")
+    s = LapStore(db, data)
+    _capture_live_qualifying(s, synthetic_lap)
+    _insert_result_laps_unconditionally(s, _RESULT_TIMES, _QUALI_SID, phase="qualify")
+
+    s2 = _stamp_v16_and_reopen(s, db, data)
+
+    bak = tmp_path / "c.sqlite.pre-v17.bak"
+    assert bak.is_file()
+    b = sqlite3.connect(bak)
+    try:
+        assert b.execute("PRAGMA user_version").fetchone()[0] == 16
+        assert b.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 19
+        assert b.execute("SELECT COUNT(*) FROM laps WHERE phase = 'qualify'").fetchone()[0] == 10
+    finally:
+        b.close()
+    q = "SELECT * FROM laps ORDER BY id"
+    after = s2.conn.execute(q).fetchall()
+    assert len(after) == 10
+    written = bak.stat().st_mtime_ns
+
+    s3 = _stamp_v16_and_reopen(s2, db, data)
+
+    assert s3.conn.execute(q).fetchall() == after
+    assert bak.stat().st_mtime_ns == written
+    assert sorted(p.name for p in tmp_path.glob("c.sqlite.pre-v1*")) == [bak.name]
+
+
+def test_v17_migration_writes_no_backup_when_nothing_needs_renaming_or_removing(
+        tmp_path, synthetic_lap):
+    """No stray spelling and no duplicate: no backup beside the store, and no change."""
+    from simcoach.store import SCHEMA_VERSION, LapStore
+    db, data = str(tmp_path / "c.sqlite"), str(tmp_path / "telem")
+    s = LapStore(db, data)
+    _capture_live_qualifying(s, synthetic_lap)
+    _insert_result_laps_unconditionally(s, [99.999], "lone-p", phase="practice")
+    q = "SELECT * FROM laps ORDER BY id"
+    before = s.conn.execute(q).fetchall()
+
+    s2 = _stamp_v16_and_reopen(s, db, data)
+
+    assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    assert s2.conn.execute(q).fetchall() == before
+    assert not list(tmp_path.glob("c.sqlite.pre-v17.bak*"))
+
+
+def test_v17_migration_renames_nothing_when_the_backup_cannot_be_written(
+        tmp_path, synthetic_lap, monkeypatch, caplog):
+    """The rename is a change too, so without a backup it must not happen either: the
+    store keeps v16, its "qualify" rows and its duplicates, a warning is logged, and the
+    next open retries."""
+    import logging
+    import types
+
+    import simcoach.store as store_mod
+    from simcoach.store import SCHEMA_VERSION, LapStore
+    monkeypatch.setattr(store_mod, "uuid4", lambda: types.SimpleNamespace(hex="blocked"))
+    db, data = str(tmp_path / "c.sqlite"), str(tmp_path / "telem")
+    s = LapStore(db, data)
+    _capture_live_qualifying(s, synthetic_lap)
+    _insert_result_laps_unconditionally(s, _RESULT_TIMES, _QUALI_SID, phase="qualify")
+    blocker = tmp_path / "c.sqlite.pre-v17.bak.blocked.tmp"
+    blocker.mkdir()                                   # sqlite cannot open a directory
+
+    with caplog.at_level(logging.WARNING, logger="simcoach.store"):
+        s2 = _stamp_v16_and_reopen(s, db, data)
+
+    assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == 16
+    assert s2.conn.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 19
+    assert s2.conn.execute(
+        "SELECT COUNT(*) FROM laps WHERE phase = 'qualify'").fetchone()[0] == 10
+    assert "could not write the backup" in caplog.text
+    s2.conn.close()
+
+    blocker.rmdir()
+    s3 = LapStore(db, data)                           # the retry
+    assert s3.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    assert s3.conn.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 10
 
 
 def test_lap_time_tolerance_does_not_merge_distinct_laps(tmp_path, synthetic_lap):

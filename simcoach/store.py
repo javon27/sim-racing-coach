@@ -76,7 +76,7 @@ def _session_base(sid: str) -> str:
     """The (track, car, mode) base of a session id, dropping any ~<instance> suffix."""
     return sid.split(_SESSION_SEP, 1)[0]
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
@@ -353,6 +353,21 @@ def _duplicate_result_lap_pairs(conn: sqlite3.Connection) -> list[tuple]:
     return pairs
 
 
+def _drop_duplicate_result_laps(conn: sqlite3.Connection, pairs: list[tuple]) -> None:
+    """Remove the result rows _duplicate_result_lap_pairs found, first offering each one's
+    sectors to the live twin it paired with (_BACKFILL_SECTORS_SQL decides whether)."""
+    conn.executemany(_BACKFILL_SECTORS_SQL, [
+        {"id": live_id, "s1": s1, "s2": s2, "s3": s3} for _, live_id, s1, s2, s3 in pairs])
+    conn.executemany("DELETE FROM laps WHERE id = ?", [(p[0],) for p in pairs])
+
+
+# Every `laps` column _duplicate_result_lap_pairs reads. A migration step that runs it
+# is guarded on all of them: v7 only adds s1-s3 when `laps` exists, and some tests build
+# a bare `laps` of two columns -- nothing to clean in such a db anyway.
+_CLEANUP_COLUMNS = frozenset({"id", "source", "telemetry_path", "track", "car", "phase", "ts",
+                              "lap_time", "session_id", "s1", "s2", "s3"})
+
+
 def _decode(tc):
     """Decode a tool_calls JSON column, returning the raw string (not None) if
     a row is corrupted so the corruption stays visible instead of vanishing."""
@@ -386,7 +401,7 @@ class LapStore:
         # to the cumulative migrations, which are all idempotent and handle it correctly.
         has_tables = self.conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' LIMIT 1").fetchone() is not None
-        stamp = SCHEMA_VERSION   # lowered only by a step that must retry next open (v16)
+        stamp = SCHEMA_VERSION   # lowered only by a step that must retry next open (v16+)
         if current_version == 0 and not has_tables:
             self.conn.executescript(_SCHEMA)
         else:
@@ -514,77 +529,109 @@ class LapStore:
                 # 10-lap race -- so anything that COUNTS is wrong while anything that
                 # averages still looks right. _duplicate_result_lap_pairs says what is
                 # never removed; _BACKFILL_SECTORS_SQL merges the one field a result copy
-                # can hold alone onto its live twin before the copy goes. Idempotent: a
-                # second run finds those rows gone and matches nothing.
+                # can hold alone onto its live twin before the copy goes.
                 #
                 # DELETE, not a `source='duplicate'` mark: session_laps, session_lap_ids
                 # and the Sessions list do not filter on source, so a staged row would
                 # still be listed and counted -- the #71 symptom itself.
                 #
-                # Guarded on every column the matcher READS, not just on the table
-                # existing like the v6/v9 steps: v7 only adds s1-s3 when `laps` exists,
-                # and some tests build a bare `laps` of two columns. Nothing to clean in
-                # such a db anyway.
+                #
+                # The cleanup itself now runs inside the v17 step below -- ONCE, after v17
+                # renames the qualifying phase. Running it here and again there gave a db
+                # opened from v15 two passes, and a pass has no memory of which live laps an
+                # earlier one used: a live lap whose twin the first pass removed is free
+                # again, so a second file's same-time row paired with it and went too --
+                # the only copy of that lap (the two-races test caught exactly this).
+                pass
+            if current_version < 17:
+                # v16 -> v17: one spelling for the qualifying phase (#88). Live capture
+                # stores "qualifying"; result-log import stored the XML tag, "qualify".
+                # The lap matcher compares phase exactly, so no qualifying result lap ever
+                # paired with its live twin: ingest inserted each one as a duplicate, and
+                # v16 could not see them (11 on the real store). The parser now says
+                # "qualifying"; this renames the rows stored before it, in `laps` and
+                # `race_sessions`, then re-runs v16's cleanup, which can now pair them.
+                #
+                # The rename is also what makes RE-importing a pre-fix log harmless.
+                # Ingest dedupes a file against its own earlier rows by phase as well, so
+                # without it every such log would be inserted again (4 -> 8 rows for one
+                # real log, 1,287 across the results dir): result<->result copies that no
+                # cleanup removes, since it only pairs a result row with a live one.
+                #
+                # Backed up before ANY change -- the rename included -- and only when
+                # there is one to make; the rename, the cleanup and the version bump then
+                # commit together. The re-run also picks up duplicates v16 spared as
+                # unreachable whose race identity a later ingest has since filled in.
+                #
+                # This is also v16's cleanup for a db older than v16 (see above), so such a
+                # db gets ONE pass. A db already at v16 gets a second, which cannot know the
+                # live laps v16 used: a live lap whose twin v16 removed is free again, and a
+                # different file's row within 1 ms of it would now pair with it and go. That
+                # needs two files of one track/car/phase within 6 h holding laps within 1 ms
+                # of each other. Measured on the real store against its pre-v16 backup: no
+                # v17 pair reuses a live lap v16 paired (v16 102 pairs, v17 29, overlap 0).
                 cols = {r[1] for r in self.conn.execute("PRAGMA table_info(laps)")}
-                has_race_sessions = self.conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type = 'table' "
-                    "AND name = 'race_sessions'").fetchone() is not None
-                pairs = (_duplicate_result_lap_pairs(self.conn) if has_race_sessions and {
-                    "id", "source", "telemetry_path", "track", "car", "phase", "ts",
-                    "lap_time", "session_id", "s1", "s2", "s3"} <= cols else [])
-                if pairs:
-                    # Back up first -- this runs unprompted on app launch -- and only when
-                    # something is about to be removed. backup() against an open WRITE
-                    # transaction on its own connection retries SQLITE_LOCKED forever
-                    # (measured: still hung after 10 s), and an older db arrives here with
-                    # earlier steps' writes uncommitted, so commit those first. Safe: each
-                    # earlier step is idempotent and user_version is not bumped yet, so a
-                    # crash after this commit only re-runs them. The backfill, the DELETE
-                    # and the version bump below still commit together, as one.
-                    #
-                    # Written to a fresh temp name and MOVED into place. Backing up
-                    # straight onto `.pre-v16.bak` failed on every launch forever when a
-                    # leftover there was unusable (corrupt, truncated, read-only): each
-                    # open stayed v15, silently. A leftover os.replace cannot overwrite
-                    # (read-only) keeps this run's backup at its temp name instead -- a
-                    # valid backup still exists before anything is deleted.
-                    #
-                    # Known and pre-existing, not specific to this step: if another
-                    # process holds the db at launch, backup() or the writes below fail
-                    # with "database is locked"; nothing past the old version is stamped,
-                    # and the next open retries.
-                    if self.conn.in_transaction:
-                        self.conn.commit()
-                    bak = f"{db_path}.pre-v16.bak"
-                    tmp = f"{bak}.{uuid4().hex}.tmp"
-                    log = logging.getLogger(__name__)
-                    try:
-                        with closing(sqlite3.connect(tmp)) as dst:
-                            self.conn.backup(dst)
-                    except sqlite3.Error:
-                        with suppress(OSError):
-                            os.remove(tmp)
-                        log.warning("v16 duplicate-lap cleanup skipped: could not write the "
-                                    "backup %s; will retry on the next open", tmp,
-                                    exc_info=True)
-                        # No backup, no delete. Keep the version this db OPENED at, so
-                        # the next open retries -- never a hard-coded number, which a
-                        # later step's failure would inherit and mark this one done.
-                        stamp = current_version
-                    else:
-                        try:
-                            os.replace(tmp, bak)
-                        except OSError:
-                            log.warning("could not replace %s; this run's pre-v16 backup is "
-                                        "kept at %s", bak, tmp, exc_info=True)
-                        self.conn.executemany(_BACKFILL_SECTORS_SQL, [
-                            {"id": live_id, "s1": s1, "s2": s2, "s3": s3}
-                            for _, live_id, s1, s2, s3 in pairs])
-                        self.conn.executemany("DELETE FROM laps WHERE id = ?",
-                                              [(p[0],) for p in pairs])
+                rs_cols = {r[1] for r in self.conn.execute("PRAGMA table_info(race_sessions)")}
+                if _CLEANUP_COLUMNS <= cols and "phase" in rs_cols:
+                    stray = self.conn.execute(
+                        "SELECT EXISTS (SELECT 1 FROM laps WHERE phase = 'qualify') "
+                        "OR EXISTS (SELECT 1 FROM race_sessions WHERE phase = 'qualify')"
+                    ).fetchone()[0]
+                    if stray or _duplicate_result_lap_pairs(self.conn):
+                        if self._back_up_before_cleanup(db_path, 17):
+                            for table in ("laps", "race_sessions"):
+                                self.conn.execute(f"UPDATE {table} SET phase = 'qualifying' "
+                                                  "WHERE phase = 'qualify'")
+                            _drop_duplicate_result_laps(
+                                self.conn, _duplicate_result_lap_pairs(self.conn))
+                        else:
+                            stamp = current_version   # nothing renamed or removed; retry
         if current_version != stamp:
             self.conn.execute(f"PRAGMA user_version = {stamp}")
         self.conn.commit()
+
+    def _back_up_before_cleanup(self, db_path: str, version: int) -> bool:
+        """Copy the store to `<db>.pre-v<version>.bak` before a migration step changes rows
+        it cannot give back. True when a valid backup now exists; False -- logged -- when
+        none could be written, in which case the step must change nothing.
+
+        Only called when there IS something to change: this runs unprompted on app launch.
+        backup() against an open WRITE transaction on its own connection retries
+        SQLITE_LOCKED forever (measured: still hung after 10 s), and an older db arrives
+        here with earlier steps' writes uncommitted, so those are committed first. Safe:
+        each earlier step is idempotent and user_version is not bumped yet, so a crash after
+        this commit only re-runs them. The step's own changes and the version bump still
+        commit together, after this returns.
+
+        Written to a fresh temp name and MOVED into place. Backing up straight onto the
+        `.bak` failed on every launch forever when a leftover there was unusable (corrupt,
+        truncated, read-only): each open stayed on the old version, silently. A leftover
+        os.replace cannot overwrite (read-only, on Windows) keeps this run's backup at its
+        temp name instead -- a valid backup still exists before anything changes.
+
+        Known and pre-existing, not specific to this: if another process holds the db at
+        launch, backup() or the step's writes fail with "database is locked"; nothing past
+        the old version is stamped, and the next open retries."""
+        if self.conn.in_transaction:
+            self.conn.commit()
+        bak = f"{db_path}.pre-v{version}.bak"
+        tmp = f"{bak}.{uuid4().hex}.tmp"
+        log = logging.getLogger(__name__)
+        try:
+            with closing(sqlite3.connect(tmp)) as dst:
+                self.conn.backup(dst)
+        except sqlite3.Error:
+            with suppress(OSError):
+                os.remove(tmp)
+            log.warning("v%d migration skipped: could not write the backup %s; will retry "
+                        "on the next open", version, tmp, exc_info=True)
+            return False
+        try:
+            os.replace(tmp, bak)
+        except OSError:
+            log.warning("could not replace %s; this run's pre-v%d backup is kept at %s",
+                        bak, version, tmp, exc_info=True)
+        return True
 
     def _resolve_session_instance(self, base: str, ts: float) -> str:
         """Map a deterministic base id to the right weekend instance: reuse the
