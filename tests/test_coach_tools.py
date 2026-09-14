@@ -848,6 +848,49 @@ def test_get_time_loss_is_honest_without_a_reference(tmp_path, synthetic_lap):
     assert "reference" in ctx.get_time_loss().lower()
 
 
+# --- get_lap_summary leads with the time-loss ranking (#102) ------------------
+
+def test_get_lap_summary_leads_with_the_ranking_and_the_worst_corner_first(tmp_path, synthetic_lap):
+    ctx, _ = _time_loss_ctx(tmp_path, synthetic_lap)   # loses time only in T1
+    out = ctx.get_lap_summary("latest")
+    first_line = out.splitlines()[0]
+    assert "Net" in first_line and "-" in first_line
+    assert out.index("T1 Left Hairpin") < out.index("T2 Right Sweeper")
+    assert "\N{BLACK UP-POINTING TRIANGLE}" in out   # the top-loss corner is marked
+
+
+def test_get_lap_summary_reorders_the_worst_corner_ahead_of_track_order(tmp_path, synthetic_lap):
+    # T1 is first in track order; make T2 -- not T1 -- the one losing time, so
+    # reordering (not track order) is what puts it first.
+    import dataclasses
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+
+    def clone(lap_time, slow_in_t2=False):
+        ch = {k: v.copy() for k, v in synthetic_lap.channels.items()}
+        if slow_in_t2:
+            d = ch["lap_distance"]
+            ch["speed"][(d >= 2100) & (d <= 2300)] = 15.0
+        return dataclasses.replace(synthetic_lap, lap_time=lap_time, channels=ch,
+                                   session_id="s2--online", phase="race", timestamp=lap_time)
+
+    store.save(clone(90.0))
+    cur = clone(95.0, slow_in_t2=True)
+    cur_id = store.save(cur)
+    ctx = CoachContext(store, record=cur, lap_id=cur_id, cmap=cmap, track=cur.track,
+                       car=cur.car, session_id="s2--online", on_track=True)
+
+    out = ctx.get_lap_summary("latest")
+    assert out.splitlines()[0].startswith("Net")
+    assert out.index("T2 Right Sweeper") < out.index("T1 Left Hairpin")
+
+
+def test_get_lap_summary_unchanged_without_a_reference(tmp_path, synthetic_lap):
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)    # only one lap stored -- no reference
+    out = ctx.get_lap_summary("latest")
+    assert out.splitlines()[0] == "Corner facts (authoritative, from telemetry):"
+
+
 def test_get_time_loss_refuses_to_compare_a_lap_to_itself(tmp_path, synthetic_lap):
     ctx, _ = _time_loss_ctx(tmp_path, synthetic_lap)
     # 'best' as the subject lap would otherwise be compared against itself.

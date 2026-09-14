@@ -233,12 +233,25 @@ def format_tire_report(analysis, units: str = "metric") -> str | None:
     return out
 
 
-def format_lap_facts(analysis, units: str = "metric") -> str:
-    """The full per-corner table + tire report for one lap."""
+def format_lap_facts(analysis, units: str = "metric", corner_order=None, top_loss=None) -> str:
+    """The full per-corner table + tire report for one lap.
+
+    `corner_order` (optional): explicit corner_no ordering, for a caller that wants
+    the worst time-loss corners surfaced first (#102) instead of track order (the
+    default). `top_loss` (optional): corner_no's to flag with a leading marker.
+    """
     lines = ["Corner facts (authoritative, from telemetry):"]
     if analysis.has_reference:
         lines.append("Deltas below are vs the driver's best lap on this track/car.")
-    lines += [format_corner_line(cm, units) for cm in analysis.corners]
+    by_no = {cm.corner_no: cm for cm in analysis.corners}
+    order = corner_order if corner_order is not None else list(by_no)
+    top_loss = top_loss or set()
+    for no in order:
+        cm = by_no.get(no)
+        if cm is None:
+            continue
+        mark = "\N{BLACK UP-POINTING TRIANGLE} " if no in top_loss else ""
+        lines.append(mark + format_corner_line(cm, units))
     coast = getattr(analysis, "coast_total", None)
     if coast and coast[0] > _COAST_REPORT_S:
         lines.append(f"Coasting this lap: {coast[0]:.1f} s ({coast[1]:.0f} m) with "

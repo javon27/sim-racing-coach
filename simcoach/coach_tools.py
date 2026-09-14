@@ -608,7 +608,21 @@ class CoachContext:
         if self.cmap is None:
             return "No corner map for this track yet — can't break the lap into corners."
         analysis = self._analysis_for(record, lap_id)
-        return format_lap_facts(analysis, self.units)
+        # #102: lead with the time-loss ranking (and surface its worst corners
+        # first below) whenever a reference resolves -- a flat table buries the
+        # finding the driver actually needs 15-30 lines down.
+        ref, ref_label = self._reference_lap(record, lap_id, "best")
+        buckets = time_loss_buckets(record, ref, self.cmap) if ref is not None else None
+        if not buckets:
+            return format_lap_facts(analysis, self.units)
+        by_label = {f"T{cm.label or cm.corner_no} {cm.name}".strip(): cm.corner_no
+                    for cm in analysis.corners}
+        losses = sorted((b for b in buckets if b["kind"] == "corner" and b["delta"] > 0),
+                        key=lambda b: -b["delta"])[:3]
+        top = [by_label[b["label"]] for b in losses if b["label"] in by_label]
+        order = top + [cm.corner_no for cm in analysis.corners if cm.corner_no not in top]
+        body = format_lap_facts(analysis, self.units, corner_order=order, top_loss=set(top))
+        return format_time_loss(buckets, ref_label) + "\n\n" + body
 
     def _reference_lap(self, record, lap_id, reference="best"):
         """(record, label) for a time-loss comparison, or (None, label).
