@@ -35,6 +35,30 @@ def test_width_bank_elevation_sampled():
     assert abs(g["1"]["elev_delta_m"] - 1.0) < 0.1  # ~+1 m over the 100 m window (uphill)
 
 
+def test_unknown_width_and_bank_stations_emit_no_metric():
+    # #69: ribbon.py writes width/bank as null where its samples never spanned the width.
+    # corner_geometry must OMIT those metrics -- not bake NaN (which _write_track_json
+    # refuses) and not 0 -- while a corner whose apex sits on a measured station keeps
+    # them. geometry_clause then has nothing to say about width or camber.
+    import json
+    path, dist = _circle(50.0)
+    n = len(path)
+    width = [12.0] * n
+    bank = [np.radians(3.0)] * n
+    for i in range(40, 80):                          # unmeasured stretch around 50 m
+        width[i] = None
+        bank[i] = None
+    corners = [{"label": "1", "start_dist": 30.0, "apex_dist": 50.0, "end_dist": 70.0},
+               {"label": "2", "start_dist": 120.0, "apex_dist": 150.0, "end_dist": 180.0}]
+    g = corner_geometry(path, dist, corners, width=width, bank=bank)
+    assert "width_m" not in g["1"] and "banking_deg" not in g["1"]
+    assert g["2"]["width_m"] == 12.0 and g["2"]["banking_deg"] == 3.0
+    json.dumps(g, allow_nan=False)                   # bakeable
+    clause = geometry_clause(g["1"], "left")
+    assert "width" not in clause and "banked" not in clause and "camber" not in clause
+    assert "radius ~50m" in clause                   # the measured metric still renders
+
+
 def test_downhill_is_negative_delta():
     path, dist = _circle(50.0)
     elev = [-d * 0.02 for d in dist]                # drops 2 cm per m
@@ -61,11 +85,51 @@ def test_wraparound_window():
 
 
 def test_geometry_clause_renders_present_metrics_only():
-    c = geometry_clause({"radius_m": 35.0, "elev_delta_m": -6.0, "width_m": 12.0, "banking_deg": 2.0})
+    c = geometry_clause(
+        {"radius_m": 35.0, "elev_delta_m": -6.0, "width_m": 12.0, "banking_deg": 2.0}, "right")
     assert "radius ~35m" in c
     assert "downhill 6m" in c
     assert "width 12m" in c
-    assert "banking" in c
-    assert geometry_clause({}) == ""                # nothing supplied -> empty
-    up = geometry_clause({"elev_delta_m": 4.0, "banking_deg": 0.4})
-    assert "uphill 4m" in up and "banking" not in up  # sign + sub-threshold dropped
+    assert "banked" in c
+    assert geometry_clause({}, "left") == ""         # nothing supplied -> empty
+    up = geometry_clause({"elev_delta_m": 4.0, "banking_deg": 0.4}, "left")
+    assert "uphill 4m" in up                          # sign kept
+    assert "banked" not in up and "camber" not in up   # sub-threshold dropped
+
+
+def test_banking_sign_plus_direction_decides_banked_vs_off_camber():
+    """Issue #35: banking_deg's sign is rig-validated as the corner direction the
+    cross-slope favours (9756b65: negative = left, positive = right). So the SAME
+    slope is banked for one direction and off-camber for the other -- abs() threw
+    that away and told the driver an off-camber corner was helping them."""
+    def clause(bk, direction):
+        return geometry_clause({"banking_deg": bk}, direction)
+
+    # sign matches the corner direction -> the slope favours the turn
+    assert "3\N{DEGREE SIGN} banked" == clause(-3.0, "left")
+    assert "3\N{DEGREE SIGN} banked" == clause(3.0, "right")
+    # sign opposes the corner direction -> the track falls away from the turn
+    assert "3\N{DEGREE SIGN} off-camber" == clause(3.0, "left")
+    assert "3\N{DEGREE SIGN} off-camber" == clause(-3.0, "right")
+    # magnitude is always unsigned in the text; never a bare "banking" label
+    for bk in (-3.0, 3.0):
+        for d in ("left", "right"):
+            assert "-3" not in clause(bk, d)
+            assert "banking" not in clause(bk, d)
+
+
+def test_banking_omitted_when_direction_unknown():
+    """Without the corner's direction the slope cannot be called banked or
+    off-camber, and guessing is the #35 defect. Say nothing instead."""
+    assert geometry_clause({"radius_m": 35.0, "banking_deg": 4.0}, None) == "radius ~35m"
+
+
+def test_la_sarthe_t2_reads_off_camber():
+    """The real regression case: La Sarthe T2 is a left-hander with positive
+    (right-favouring) banking, i.e. off-camber. It must not read as banked."""
+    import json
+    with open("simcoach/tracks/circuit_de_la_sarthe.json", encoding="utf-8") as f:
+        d = json.load(f)
+    t2 = next(c for c in d["corners"] if str(c.get("label") or c.get("number")) == "2")
+    assert t2["direction"] == "left" and t2["banking_deg"] > 0
+    assert "off-camber" in geometry_clause(t2, t2["direction"])

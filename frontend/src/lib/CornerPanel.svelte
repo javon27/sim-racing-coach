@@ -59,9 +59,14 @@
 
   // brake_point/apex_dist are absolute lap-distances; show the brake point the way
   // the coach does — metres BEFORE the apex — not the raw distance from S/F.
+  // null means the driver never braked here, and it MUST be checked before the
+  // subtraction: `apex_dist - null` is apex_dist in JS, so guarding on the result
+  // being positive would print the apex distance as if it were a brake figure.
+  // A negative brake_point is not that case — it is a corner braking across the S/F
+  // line, and it yields a correct (larger) metres-before-apex.
   function brakeBeforeApex(c: CornerMetrics): string {
-    const d = c.apex_dist - c.brake_point;
-    return d > 0 ? `${d.toFixed(0)}m` : "—";
+    if (c.brake_point === null || c.brake_point === undefined) return "—";
+    return `${(c.apex_dist - c.brake_point).toFixed(0)}m`;
   }
 </script>
 

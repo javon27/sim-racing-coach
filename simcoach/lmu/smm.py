@@ -219,10 +219,19 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
       lat_g = mLocalAccel.x / 9.80665 (x is lateral in local vehicle coords);
         long_g = mLocalAccel.z / 9.80665 (z is longitudinal; braking/accel).
       tire/brake temps: Kelvin -> Celsius (-273.15).
+      elapsed_time / lap_start_et: mElapsedTime / mLapStartET, seconds, as-is;
+        time_into_lap = their difference (seconds into the current lap).
+      abs_map/tc_map/tc_slip_map/tc_cut_map/motor_map/migration/
+        front_antisway/rear_antisway (+ each _max): cockpit map indices, uint8
+        as-is -> float. Ordinals, not physical values. MEANING UNVERIFIED.
+      rear_brake_bias: mRearBrakeBias, raw, no conversion. SCALE UNVERIFIED
+        (fraction vs percent).
       per-wheel [fl,fr,rl,rr]: wheel_rot (mRotation, rad/s -- lockup ~ 0 while
-        moving), brake_temp, brake_press (mBrakePressure), grip (mGripFract,
-        0..1), tire_load (mTireLoad, N), tire_press (mPressure, kPa), tire_wear
-        (mWear, 0..1). gear/rpm/abs_active/tc_active read as-is.
+        moving), brake_temp, brake_press (mBrakePressure), tire_press
+        (mPressure, kPa), tire_wear (mWear, 0..1). gear/rpm/abs_active/tc_active
+        read as-is. grip (mGripFract) and tire_load (mTireLoad) are captured raw
+        but NEVER POPULATED BY LMU -- rig-confirmed flat 0.0 always (#43); no
+        coach output reads them, see the comment at the capture site.
       virtual_energy / soc / battery_charge: read as-is, no unit conversion --
         all three are already fractions/percent-scale per the struct fields
         (mVirtualEnergy, mSoC, mBatteryChargeFraction), unlike fuel (liters)
@@ -237,6 +246,20 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
         "lat_g": telem.mLocalAccel.x / 9.80665,
         "long_g": telem.mLocalAccel.z / 9.80665,
         "lap_distance": lap_dist,
+        # In-lap time axis (issue #38). lap_distance comes off the SCORING struct
+        # and only advances at ~5 Hz, so integrating delta-t as ds/(v/3.6) is
+        # coarse -- measured net-delta error median 0.206 s, max 1.212 s. These
+        # two fields are declared on TelemInfoV01, the same struct as mLocalVel,
+        # so they are EXPECTED to be per-poll fresh at ~50 Hz -- INFERRED FROM
+        # STRUCT MEMBERSHIP, NOT MEASURED (they appear in no capture yet). The
+        # first rig lap after this lands confirms or refutes it.
+        # time_into_lap is stored purely for ergonomics -- lap_start_et is itself
+        # per-sample, so elapsed_time - lap_start_et at read time is element-wise
+        # identical. It is NOT monotonic either way: samples carrying the next
+        # lap's mLapStartET drop back toward zero at the seam.
+        "elapsed_time": telem.mElapsedTime,
+        "lap_start_et": telem.mLapStartET,
+        "time_into_lap": telem.mElapsedTime - telem.mLapStartET,
         # World position for the track-map outline. x/z = horizontal plane;
         # y = elevation (banking, hills) for elevation-aware maps / 3D replay.
         # Appended raw even if non-finite -- the map builder filters.
@@ -247,6 +270,41 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
         "rpm": telem.mEngineRPM,
         "abs_active": 1.0 if telem.mABSActive else 0.0,
         "tc_active": 1.0 if telem.mTCActive else 0.0,
+        # Cockpit-adjustable map INDICES + their ceilings (issues #33, #38).
+        # Distinct from abs_active/tc_active above, which are engagement flags.
+        # WHAT THESE HOLD IS INFERRED FROM NAME AND SHAPE, NOT MEASURED: the
+        # struct declares each as a current+ceiling uint8 pair, the same shape as
+        # the garage payload's value/maxValue, and the first four line up
+        # one-to-one with the garage keys VM_ANTILOCKBRAKESYSTEMMAP,
+        # VM_TRACTIONCONTROLMAP, ...POWERCUTMAP and ...SLIPANGLEMAP -- which is
+        # why the aid ones are named after those keys. Whether they carry the
+        # LIVE on-track index (the real fix for #33, where the coach currently
+        # hedges the garage value in the prompt), the garage value, or something
+        # else is unknown; the first rig lap after this lands settles it.
+        # Captured now regardless: a lap driven without them can never get them back.
+        "abs_map": float(telem.mABS),
+        "abs_map_max": float(telem.mABSMax),
+        "tc_map": float(telem.mTC),
+        "tc_map_max": float(telem.mTCMax),
+        "tc_slip_map": float(telem.mTCSlip),
+        "tc_slip_map_max": float(telem.mTCSlipMax),
+        "tc_cut_map": float(telem.mTCCut),
+        "tc_cut_map_max": float(telem.mTCCutMax),
+        "motor_map": float(telem.mMotorMap),
+        "motor_map_max": float(telem.mMotorMapMax),
+        "migration": float(telem.mMigration),
+        "migration_max": float(telem.mMigrationMax),
+        "front_antisway": float(telem.mFrontAntiSway),
+        "front_antisway_max": float(telem.mFrontAntiSwayMax),
+        "rear_antisway": float(telem.mRearAntiSway),
+        "rear_antisway_max": float(telem.mRearAntiSwayMax),
+        # Brake bias, the other cockpit dial the garage payload can disagree with
+        # (VM_BRAKE_BALANCE, rendered front:rear e.g. "51.5:48.5"). Unlike the
+        # uint8 indices above this is a plain double in the offset-anchored region
+        # with unambiguous rF2 semantics, so it is the field most likely to settle
+        # the brake-balance half of #33. Stored raw, no conversion: the scale
+        # (fraction ~0.485 vs percent ~48.5) is INFERRED, NOT MEASURED.
+        "rear_brake_bias": telem.mRearBrakeBias,
         "fuel": telem.mFuel,
         "virtual_energy": telem.mVirtualEnergy,
         "soc": telem.mSoC,
@@ -256,6 +314,13 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
         w = wheels[i]
         sample[f"tire_temp_{name}"] = w.mTemperature[1] - 273.15
         sample[f"tire_press_{name}"] = w.mPressure
+        # #43: mTireLoad and mGripFract are never populated by LMU -- rig-confirmed
+        # flat 0.0 across 4479 frames (hard braking + a deliberate slide) and swept
+        # 157/157 stored laps on 5 cars. No coach output is derived from either.
+        # Capture raw anyway and report nothing: it costs nothing, and if a future
+        # LMU build ever fills them in, the stored clouds become useful
+        # retroactively without re-driving. Do not remove this as "dead code" --
+        # it is deliberately unused, not forgotten.
         sample[f"tire_load_{name}"] = w.mTireLoad
         sample[f"tire_wear_{name}"] = w.mWear
         sample[f"grip_{name}"] = w.mGripFract
@@ -511,10 +576,111 @@ class LmuSource:
     RuntimeError immediately rather than yielding garbage.
     """
 
-    def __init__(self, poll_hz: float = 50.0):
+    def __init__(self, poll_hz: float = 50.0, now_fn=time.time):
         self.poll_hz = poll_hz
+        # Injectable so tests can drive the "is this lap freshly timed" commit
+        # decision at controlled instants instead of racing a real writer thread's
+        # sleep-based cadence against this thread's own poll_hz sleep -- see
+        # _poll_once, which is the single-step unit both laps() and tests use.
+        self._now = now_fn
+        # A "session" is one (track, car, online|offline) combo with a stable,
+        # deterministic id -- all sim phases merge, and the id survives sidecar
+        # restarts. mSession still gives the per-lap phase label.
+        self._reset()
+
+    def _reset(self) -> None:
+        """(Re)initialise per-capture-run state. Called from __init__ AND from the
+        top of laps() -- callers (simcoach/app.py's run_repl) reuse ONE LmuSource
+        across LMU drop/reconnect cycles via `while True: for lap in source.laps()`,
+        and a generator's local variables would reset on each such call but instance
+        attributes would not. Without this, a reconnect mid-lap resumes with the
+        pre-drop buffer still attached: stale _prev_dist can read as a finish-line
+        wrap and stale _committed_time can let it commit as a real lap the car never
+        finished."""
+        # Buffer the in-progress lap; only COMMIT it when the car genuinely crosses
+        # the finish line (a downward lap-distance wrap) AND the sim posted a fresh
+        # lap time for it. A teleport, pit exit, pause, or out-lap wraps the distance
+        # too but posts no new time -- those buffers are discarded, so half-driven /
+        # frozen / abandoned laps never reach the store or the coach.
+        self._channels: dict[str, list[float]] = {}
+        self._prev_dist: float | None = None
+        self._committed_time: float | None = None
+        # Per-lap mCurrentSector sample, parallel to channels["lap_distance"];
+        # forward changes become the sector boundaries at commit (see
+        # sector_boundary_dists / sector_bounds_from).
+        self._sector_seq: list[int] = []
+
+    def _poll_once(self, telemetry_name: str, scoring_name: str):
+        """One read-and-decide step: read the current telemetry/scoring snapshot,
+        update the in-progress lap buffer, and return a committed LapRecord if this
+        read crossed the finish line with a fresh time (else None).
+
+        Pulled out of laps() as its own unit so tests can call it directly, once per
+        write(), with no thread/sleep involved -- the flakiness this replaced came
+        from two real OS threads racing sleep-based cadences under system load, not
+        from anything about the decision logic itself.
+        """
+        telem = read_consistent(telemetry_name, rF2Telemetry)
+        scoring = read_consistent(scoring_name, rF2Scoring)
+
+        player = _find_player(scoring)
+        vt = _find_telem_by_id(telem, player.mID) if player is not None else None
+        if player is None or vt is None:
+            return None
+
+        record = None
+        dist = player.mLapDist
+        # Finish line / lap boundary: lap distance jumped backward a long way.
+        if self._prev_dist is not None and dist < self._prev_dist - _LAP_WRAP_M:
+            lap_time = player.mLastLapTime
+            # Commit ONLY a completed, freshly-timed lap. A teleport/exit/out-lap
+            # also wraps here but carries a stale or sentinel (<=0) lap time.
+            if self._channels and lap_time > 0 and lap_time != self._committed_time:
+                track = vt.mTrackName.decode(errors="replace")
+                car = vt.mVehicleName.decode(errors="replace")
+                phase = session_phase(scoring.mScoringInfo.mSession)
+                session_id = session_id_for(track, car, _is_online(scoring))
+                sectors = compute_sectors(
+                    player.mLastSector1, player.mLastSector2, lap_time
+                )
+                position = player_position(player.mPlace)
+                lap_dists = self._channels.get("lap_distance") or []
+                lap_len = max(lap_dists or [0.0])
+                sector_bounds = sector_bounds_from(
+                    sector_boundary_dists(lap_dists, self._sector_seq), lap_len
+                )
+                record = build_lap_record(
+                    sim="lmu", track=track, car=car, lap_time=lap_time,
+                    invalidated=vt.mLapInvalidated, timestamp=self._now(),
+                    channels=self._channels, phase=phase, session_id=session_id,
+                    sectors=sectors, position=position, sector_bounds=sector_bounds,
+                )
+                if record is not None:
+                    self._committed_time = lap_time
+            self._channels = {}  # start the next lap fresh (committed or discarded)
+            self._sector_seq = []
+
+        sample = sample_from_telem(vt, dist)
+        # Track-width usage lives on SCORING, not telemetry: path_lateral is the
+        # car's own lateral offset from the racing line's centre path, taken at the
+        # car's CENTRE (not its outer wheels); track_edge is that SAME centre path's
+        # offset to the track edge on the car's side (~= half the track width there)
+        # -- NOT the car's distance to the edge.
+        # Distance-to-edge = |track_edge| - |path_lateral|, computed downstream
+        # in analysis.py where both channels are available together.
+        # PENDING LIVE VALIDATION: mPathLateral/mTrackEdge units + sign.
+        sample["path_lateral"] = player.mPathLateral
+        sample["track_edge"] = player.mTrackEdge
+        for k, v in sample.items():
+            self._channels.setdefault(k, []).append(v)
+        self._prev_dist = dist
+        # mCurrentSector lives on the TELEM struct (vt), not scoring.
+        self._sector_seq.append(int(vt.mCurrentSector))  # parallel to lap_distance
+
+        return record
 
     def laps(self) -> Iterator[LapRecord]:
+        self._reset()  # a reused instance must not resume a prior run's buffer
         try:
             telemetry_name, handle = open_first_available(
                 TELEMETRY_CANDIDATES, C.sizeof(rF2Telemetry)
@@ -531,75 +697,8 @@ class LmuSource:
             ) from exc
 
         period = 1.0 / self.poll_hz
-        # Buffer the in-progress lap; only COMMIT it when the car genuinely crosses
-        # the finish line (a downward lap-distance wrap) AND the sim posted a fresh
-        # lap time for it. A teleport, pit exit, pause, or out-lap wraps the distance
-        # too but posts no new time — those buffers are discarded, so half-driven /
-        # frozen / abandoned laps never reach the store or the coach.
-        channels: dict[str, list[float]] = {}
-        prev_dist: float | None = None
-        committed_time: float | None = None
-        # Per-lap mCurrentSector sample, parallel to channels["lap_distance"];
-        # forward changes become the sector boundaries at commit (see
-        # sector_boundary_dists / sector_bounds_from).
-        sector_seq: list[int] = []
-        # A "session" is one (track, car, online|offline) combo with a stable,
-        # deterministic id -- all sim phases merge, and the id survives sidecar
-        # restarts. mSession still gives the per-lap phase label.
-
         while True:
-            telem = read_consistent(telemetry_name, rF2Telemetry)
-            scoring = read_consistent(scoring_name, rF2Scoring)
-
-            player = _find_player(scoring)
-            vt = _find_telem_by_id(telem, player.mID) if player is not None else None
-            if player is None or vt is None:
-                time.sleep(period)
-                continue
-
-            dist = player.mLapDist
-            # Finish line / lap boundary: lap distance jumped backward a long way.
-            if prev_dist is not None and dist < prev_dist - _LAP_WRAP_M:
-                lap_time = player.mLastLapTime
-                # Commit ONLY a completed, freshly-timed lap. A teleport/exit/out-lap
-                # also wraps here but carries a stale or sentinel (<=0) lap time.
-                if channels and lap_time > 0 and lap_time != committed_time:
-                    track = vt.mTrackName.decode(errors="replace")
-                    car = vt.mVehicleName.decode(errors="replace")
-                    phase = session_phase(scoring.mScoringInfo.mSession)
-                    session_id = session_id_for(track, car, _is_online(scoring))
-                    sectors = compute_sectors(
-                        player.mLastSector1, player.mLastSector2, lap_time
-                    )
-                    position = player_position(player.mPlace)
-                    lap_dists = channels.get("lap_distance") or []
-                    lap_len = max(lap_dists or [0.0])
-                    sector_bounds = sector_bounds_from(
-                        sector_boundary_dists(lap_dists, sector_seq), lap_len
-                    )
-                    record = build_lap_record(
-                        sim="lmu", track=track, car=car, lap_time=lap_time,
-                        invalidated=vt.mLapInvalidated, timestamp=time.time(),
-                        channels=channels, phase=phase, session_id=session_id,
-                        sectors=sectors, position=position, sector_bounds=sector_bounds,
-                    )
-                    if record is not None:
-                        committed_time = lap_time
-                        yield record
-                channels = {}  # start the next lap fresh (committed or discarded)
-                sector_seq = []
-
-            sample = sample_from_telem(vt, dist)
-            # Track-width usage lives on SCORING, not telemetry: lateral offset from
-            # the racing line and distance to the nearest track edge (m). Low
-            # |track_edge| = running to the edge / using all the track.
-            # PENDING LIVE VALIDATION: mPathLateral/mTrackEdge units + sign.
-            sample["path_lateral"] = player.mPathLateral
-            sample["track_edge"] = player.mTrackEdge
-            for k, v in sample.items():
-                channels.setdefault(k, []).append(v)
-            prev_dist = dist
-            # mCurrentSector lives on the TELEM struct (vt), not scoring.
-            sector_seq.append(int(vt.mCurrentSector))  # parallel to lap_distance
-
+            record = self._poll_once(telemetry_name, scoring_name)
+            if record is not None:
+                yield record
             time.sleep(period)

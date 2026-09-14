@@ -11,7 +11,10 @@ def test_ask_agentic_stream_passes_events_and_dispatches(tmp_path):
                             tool_script=[("get_corner", {"corner": "1"})]))
     events = list(coach.ask_agentic_stream(ctx, "where do I lose time?", car="C"))
     assert {"type": "tool", "name": "get_corner", "input": {"corner": "1"}} in events
-    assert events[-1] == {"type": "text", "text": "Brake later into 1."}
+    texts = [e for e in events if e["type"] == "text"]
+    assert texts[-1] == {"type": "text", "text": "Brake later into 1."}
+    # usage rides through the coach untouched (the server sums it)
+    assert [e for e in events if e["type"] == "usage"]
     # dispatch records dicts (verified against CoachContext.dispatch), not tuples:
     assert {"name": "get_corner", "input": {"corner": "1"}} in ctx.tool_calls
 

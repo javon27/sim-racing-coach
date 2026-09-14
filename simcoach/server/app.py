@@ -5,6 +5,7 @@ the docs/openapi surface. Reuses store/coach/analysis unchanged."""
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import math
@@ -13,7 +14,6 @@ import sys
 import tempfile
 import threading
 import time
-import urllib.parse
 from dataclasses import asdict
 from pathlib import Path
 
@@ -24,40 +24,153 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from .. import config, logging_setup, paths, secrets
-from ..analysis import analyze_lap, corner_geometry, geometry_clause
+from ..analysis import (
+    CORNER_GEOMETRY_KEYS,
+    analyze_lap,
+    corner_geometry,
+    geometry_clause,
+    input_traces,
+    measurable_geometry,
+)
 from ..car_lookup import resolve_car
 from ..car_notes import load_car_notes, load_setup_concepts
-from ..coach_tools import CoachContext
-from ..corners import CornerMap, in_window
+from ..coach_tools import CoachContext, race_result_text, scrub_stored_answer
+from ..corners import CornerMap, in_window, validated_sections, validated_sectors
 from ..driver import DriverProfile
 from ..lmu.ingest import ingest_all
+from ..model.base import TokenUsage
 from ..model.factory import CoachUserError, make_model
+from ..pricing import estimate_chat_cost
 from ..ribbon import multi_signal_direction, reconstruct_surface, ribbon_to_screen
 from ..tiers import adjustable_from_setup, legal_adjustments
-from ..track_lookup import load_map_data, track_slug
+from ..track_lookup import (
+    corner_apex_key,
+    fill_blank_labels,
+    guard_corner_notes,
+    load_map_data,
+    track_slug,
+)
 from ..trackmap import average_racing_line, build_track_map, direction_from_path
 
 # Shipped corner-map dir, resolved off the package (not cwd) so it's correct
 # wherever the sidecar is launched from. simcoach/server/app.py -> simcoach/tracks.
 _DEFAULT_TRACKS_DIR = Path(__file__).resolve().parent.parent / "tracks"
+
+# Bounds for `PUT /tracks/{slug}/notes`, the one endpoint on the notes path that had
+# none: every field there is free text that gets persisted verbatim into the track file
+# and carried across every later map save. The numbers are the ones this path already
+# uses rather than a new scheme -- 100 is the corner cap in `_persist_map`, 80 is its
+# corner-name cap. _MAX_NOTE_CHARS is ~300 words: 2.5x the 120-word overview budget and
+# 6x the 50-word per-corner budget the drafting prompt states, so it cannot clip prose
+# authored to spec. Over-limit input is REJECTED, never truncated -- silently shortening
+# authored notes is the class of bug this path just got fixed for.
+_MAX_NOTE_KEYS = 100
+_MAX_NOTE_KEY_CHARS = 80
+_MAX_NOTE_CHARS = 2000
+
+# DOCUMENT cap, on top of the per-field ones, because 200 fields that each pass their own
+# cap still landed a 5 MB body on disk -- 2.5x the single-field abuse the caps above were
+# added to stop, just spread across 100 corner keys + 100 reference times -- and every
+# later map save re-read and re-wrote it. The per-field caps stay: they name the offending
+# field, which one document cap cannot.
+#
+# BYTES of `json.dumps(notes)` -- the same serializer, with the same ensure_ascii=True,
+# that _write_track_json uses, so the quantity enforced here is the quantity that lands on
+# disk. Measuring the unescaped string instead would bound CODE POINTS, and an astral char
+# escapes to 12 bytes: an all-emoji payload measured 62,367 code points, passed, and wrote
+# 744,367 bytes. Escaped JSON is pure ASCII, so one char is one byte and the cap holds
+# whatever the encoding -- at the limit the notes block on disk is ~64.5 KB of ASCII prose
+# and ~64.2 KB of emoji (the extra over the cap is indent=2 whitespace).
+#
+# The number is the intended ceiling MEASURED, not rounded: the largest shipped map has 30
+# corners, so 30 notes at the full 2000-char per-note cap plus overview and source at
+# theirs serialises to exactly 64,357 bytes. (The raw content is 64,000 -- quoting, keys,
+# colons and commas are the other 357, which is why the constant is not a round number.
+# Stating 64,000 would have refused the very document the derivation is built from.)
+# For scale, the biggest `notes` block in simcoach/tracks/*.json today is 4,412 bytes
+# (longest single note 289, longest overview 706, most corner keys 24; shipped notes are
+# pure ASCII, so escaping does not move that number), making this ~14.6x the real worst
+# case. The per-FIELD caps still count code points, which is what the editor shows the
+# author -- on astral text the UI's UTF-16 count and those caps disagree, accepted, and
+# this cap is what bounds the consequence.
+_MAX_NOTES_DOC_BYTES = 64_357
+
+
+def _usage_view(agg: dict) -> dict:
+    """Shape a LapStore.chat_usage() aggregate for the wire: the four buckets +
+    total + message count, the estimated $, and whether that $ is the whole story.
+
+    The core owns the arithmetic (pricing lives in simcoach.pricing) — the UI only
+    formats what it's given. `by_model` stays server-side; the client has no use for
+    the breakdown, only for the one number and the completeness flag.
+
+    A chat with any pre-v12/NULL-usage row (`null_usage_rows`) is never "complete" —
+    those rows billed real money that COALESCEs to 0, so a chat that is ALL such rows
+    must not read as a genuinely-zero-cost, fully-priced chat."""
+    usage = {k: agg.get(k, 0) for k in
+             ("input", "output", "cache_read", "cache_write", "total", "messages")}
+    cost, complete = estimate_chat_cost(agg.get("by_model") or {})
+    if agg.get("null_usage_rows"):
+        complete = False
+    return {"usage": usage, "cost": cost, "cost_complete": complete}
 _CLEAN_LAP_RATIO = 1.07  # keep laps within +7% of the track/car best (drop in/out/off laps)
 _MAP_BUFFER_MAX = 8      # cap mapping-mode buffer (need only 2 edges; keep last N)
 
-ALLOWED_HOSTS = {"127.0.0.1", "localhost"}  # port stripped before compare
+# Host-header allowlist (port stripped before compare) -- AND an input to
+# ALLOWED_ORIGINS below, which is a cross product of these hostnames with our two
+# local ports. Adding a hostname here to accept a new Host therefore also grants
+# it two ORIGINS, widening the CSRF guard without anyone editing it: adding
+# "tauri.localhost" (plausible -- it is already an allowed origin host) would
+# auto-admit http://tauri.localhost:5173 and :8765. Widen this set deliberately.
+ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
 REST_PROBE_TTL = 2.0  # s: liveness probe rate cap so /status polling can't hammer LMU's REST
+SIDECAR_PORT = 8765   # the port simcoach/server/__main__.py serves on (it imports this)
+VITE_DEV_PORT = 5173  # `npm run dev` / src-tauri/tauri.conf.json devUrl
 FRONTEND_ORIGINS = ["http://localhost:5173", "http://tauri.localhost"]
-ALLOWED_ORIGIN_HOSTS = ALLOWED_HOSTS | {"tauri.localhost"}
+
+# FULL origins (scheme + host + port), never bare hostnames. Comparing the
+# hostname alone let ANY app on ANY localhost port through the guard (#60) --
+# another local dev server, or an XSS in one, could drive every guarded route,
+# which is exactly what the guard exists to stop. Three sources, no invention:
+#   - FRONTEND_ORIGINS: the Vite dev origin (src-tauri/tauri.conf.json devUrl)
+#     and the Windows Tauri webview origin.
+#   - "tauri://localhost", the webview origin Tauri uses on macOS/Linux. NOT a
+#     new permission: the old hostname-only compare accepted it (hostname
+#     "localhost"), so dropping it here would lock the app's own webview out of
+#     its own sidecar on those platforms. #54 tracks the wider cross-platform
+#     origin question and stays untouched -- FRONTEND_ORIGINS (the CORS list) is
+#     deliberately NOT changed here.
+#   - our two local ports (sidecar + Vite dev) under BOTH names ALLOWED_HOSTS
+#     accepts as a Host. 127.0.0.1 and localhost are the same machine and the
+#     same server: accepting Host "localhost:8765" while refusing Origin
+#     "http://localhost:8765" would be incoherent, and the same argument applies
+#     to the dev port -- hence the cross product rather than four literals, so
+#     the host list and the port list cannot drift apart.
+# Deliberately dropped vs the old behaviour: "https://tauri.localhost" and every
+# other scheme on these hostnames. Nothing serves them; the old guard only let
+# them through because it never looked past the hostname.
+# NOT auto-widened: if Vite falls back to 5174 (5173 already taken) or you use
+# `vite preview` on 4173, that origin is refused with a 403 -- add the port here
+# deliberately. Allowing a range would hand the guard back to any local app.
+ALLOWED_ORIGINS = set(FRONTEND_ORIGINS) | {"tauri://localhost"} | {
+    f"http://{h}:{p}" for h in ALLOWED_HOSTS for p in (SIDECAR_PORT, VITE_DEV_PORT)
+}
 
 
 def _bad_origin(origin: str | None) -> bool:
-    """True if a browser Origin is present AND its host isn't allowed. A missing
-    Origin (native/Tauri client, or a non-browser client) is allowed — only a
-    browser sets Origin, and that's the cross-site-WS vector we're blocking.
-    Port-blind by design (any localhost port is fine for a local desktop app)."""
+    """True if a browser Origin is present AND isn't an exact ALLOWED_ORIGINS
+    match. A missing Origin (native/Tauri client, or a non-browser client) is
+    allowed — only a browser sets Origin, and that's the cross-site-WS/CSRF
+    vector we're blocking; no browser omits Origin on a mutating request.
+
+    Compares scheme+host+port, not just the host (#60). Exact string match after
+    lowercasing: scheme and host are case-insensitive, and a browser never sends
+    a path, a trailing slash, or an explicit default port on an Origin — so
+    anything that isn't the literal allowed origin is refused. That also refuses
+    "null", "file://" and bare "http://[::1]" for free, as before."""
     if not origin:
         return False
-    host = (urllib.parse.urlparse(origin).hostname or "").lower()
-    return host not in ALLOWED_ORIGIN_HOSTS
+    return origin.lower() not in ALLOWED_ORIGINS
 
 
 def _clean(v):
@@ -73,6 +186,28 @@ def _clean(v):
 
 
 _POS_CHANNELS = ("pos_x", "pos_y", "pos_z", "lap_distance")
+# What reconstruct_surface actually requires of a lap. pos_y is NOT in here: it is
+# optional there (it only fits BANK, which ribbon.py writes as unknown wherever the
+# samples lack lateral spread), so demanding it would reject usable laps.
+_REBUILD_CHANNELS = ("pos_x", "pos_z", "lap_distance")
+
+
+def _usable_cloud(ch: dict) -> bool:
+    """Will reconstruct_surface get >= 2 finite (x, z, d) samples out of this lap?
+
+    The ONE test behind both the /tracks count and what a rebuild consumes (#69), so a
+    badge can neither promise a lap the build then drops nor count one it should not:
+    a zero-length or all-NaN channel is refused here, not counted AND fed to the build.
+    """
+    try:
+        cols = [np.asarray(ch[c], dtype=float) for c in _REBUILD_CHANNELS]
+    except (KeyError, TypeError, ValueError):
+        return False
+    if any(a.ndim != 1 for a in cols):
+        return False
+    n = min(len(a) for a in cols)
+    x, z, d = (a[:n] for a in cols)
+    return int((np.isfinite(x) & np.isfinite(z) & np.isfinite(d)).sum()) >= 2
 
 
 def _save_cloud(path, laps) -> None:
@@ -181,7 +316,22 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             raise HTTPException(400, "invalid track")
         return p
 
-    def _write_track_json(track: str, out: dict) -> None:
+    def _write_track_json(track: str, out: dict) -> dict:
+        # Returns the authored per-corner notes this write dropped (key -> text), which
+        # every route hands back to the client: a drop that only reaches the log is a drop
+        # the driver never hears about.
+        #
+        # THE one writer of a track JSON file, and therefore the one place the rules for
+        # what may land in one live (#65). There used to be four writers and three
+        # validators each wired to one of them: `_persist_map` validated sections,
+        # sectors and the notes overlay, and the other three wrote whatever they were
+        # handed -- which is how POST /mapcapture/save silently deleted every authored
+        # note for a track (30,445 bytes / 135 notes across the shipped maps were one
+        # "Save ribbon" away), and how an unvalidated `sections` span could commit a map
+        # that CornerMap.from_data refuses to open, killing the track for every client.
+        # A shared validator only two of four writers call is a half-done
+        # centralisation; validate HERE, where nothing can write around it.
+        #
         # Atomic write (unique tmp + os.replace) so a crash mid-write never leaves a
         # partial file. Dev (running from source) curates the shipped maps in the repo
         # tracks dir; an installed build writes to app-data — its bundled dir is
@@ -190,6 +340,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         slug = track_slug(track)
         if not slug:
             raise HTTPException(400, "invalid track")
+        dropped: dict = {}
+        out = _validated_track_data(track, slug, out, dropped)
         user_dir, bundled = _map_dirs()
         target = _in(bundled if _curating() else user_dir, slug)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -203,6 +355,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             if os.path.exists(tmp):
                 os.unlink(tmp)
             raise
+        return dropped
 
     def _capture_path(track: str) -> Path:
         # Raw point cloud lives in app-data (store.data_dir), NOT the shipped tracks
@@ -217,33 +370,136 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         files = list(d.glob("*.npz")) if d.exists() else []
         return max(files, key=lambda p: p.stat().st_mtime) if files else None
 
+    def _live_lap_paths() -> list[tuple[str, str, str]]:
+        # (slug, raw live name, telemetry_path) for every LIVE-captured lap, newest last.
+        #
+        # telemetry_path IS NOT NULL is the whole distinction: save_result_session rows
+        # are summary-only with no file, so a track with ~991 imported laps and no
+        # capture is correctly not buildable (#66). Slugged here because laps store the
+        # raw live name ("Paul Ricard - ELMS") while a map file is keyed by slug.
+        with store._lock:   # store.py shares one connection with the capture thread
+            rows = store.conn.execute(
+                "SELECT track, telemetry_path FROM laps "
+                "WHERE telemetry_path IS NOT NULL AND track IS NOT NULL "
+                "ORDER BY id").fetchall()
+        return [(track_slug(n), n, p) for n, p in rows if track_slug(n)]
+
+    def _rebuild_clouds(track: str, rows=None, *, capture: bool = True
+                        ) -> tuple[list[dict], bool]:
+        # (laps, from_capture): EXACTLY the usable clouds a rebuild of `track` consumes.
+        # /tracks counts this and /mapcapture/rebuild builds from it, so the badge and
+        # the build cannot disagree (#69) -- e.g. a save-cloud capture of 2 laps beside 7
+        # live laps is "2", because the capture is what gets built.
+        #
+        # A purpose-built mapping capture WINS whenever there is one: its boundary passes
+        # cover the full width; racing laps only trace the line driven. Otherwise the
+        # position channels off the track's own LIVE laps' .npz files, in the same shape
+        # _load_cloud returns. Laps recorded before position capture landed (47 channels,
+        # no pos_*) are not usable and so are neither counted nor built from.
+        #
+        # ([], True) is its own state: a capture EXISTS and yields nothing (corrupt, or no
+        # usable lap in it). It still wins -- never a silent fall-back to other data (#69)
+        # -- so callers must name it, not read it as "no laps with position data" (#84).
+        # capture=False skips the capture, to count what deleting it would leave.
+        slug = track_slug(track)
+        if not slug:
+            # A map file name with nothing to slug ("---.json" dropped into app-data
+            # tracks/) has no capture and no laps. Count it as none -- _capture_path's
+            # writer guard would 400 the whole GET /tracks, the same one-bad-file-blanks-
+            # the-screen failure R1/R2 fixed for lap files.
+            return [], False
+        path = _capture_path(track)
+        if capture and path.exists():
+            return [ch for ch in _load_cloud(path) if _usable_cloud(ch)], True
+        laps = []
+        for lap_slug, _name, p in (_live_lap_paths() if rows is None else rows):
+            if lap_slug != slug:
+                continue
+            try:
+                with np.load(p) as z:
+                    ch = {c: z[c] for c in _POS_CHANNELS if c in z.files}
+            except Exception as e:
+                # Skip THIS lap, never the listing or the rebuild. Not a narrow tuple: a
+                # zero-byte file raises EOFError and a corrupt member zlib.error, and
+                # either one used to 500 all of GET /tracks. Same stance as _load_cloud.
+                logging.getLogger(__name__).warning("skipping unreadable lap %s: %r", p, e)
+                continue
+            if _usable_cloud(ch):
+                laps.append(ch)
+        return laps, False
+
     def _track_file_data(track: str) -> dict:
         # Merged map dict: authoritative shipped geometry + the user's annotation
         # overlay (corners/sections/rotation). {} if we have neither. Never raises.
         user_dir, bundled = _map_dirs()
         return load_map_data(track, str(bundled), str(user_dir))
 
-    def _clean_sections(raw, length: float) -> list:
-        # Validate/normalize a client sections array: [{name,kind,start_dist,end_dist}]
-        # with 0<=start<end<=length. 422 on anything malformed.
-        if raw is None:
-            return []
-        if not isinstance(raw, list):
-            raise HTTPException(422, "sections must be a list")
-        out = []
-        for s in raw:
-            if not isinstance(s, dict):
-                raise HTTPException(422, "each section must be an object")
-            try:
-                sd, ed = float(s["start_dist"]), float(s["end_dist"])
-            except (KeyError, TypeError, ValueError):
-                raise HTTPException(422, "section requires numeric start_dist/end_dist")
-            if not (math.isfinite(sd) and math.isfinite(ed) and 0.0 <= sd < ed <= length):
-                raise HTTPException(422, "section span must satisfy 0 <= start < end <= length")
-            out.append({"name": str(s.get("name", ""))[:60],
-                        "kind": str(s.get("kind", "section"))[:16],
-                        "start_dist": round(sd, 1), "end_dist": round(ed, 1)})
+    def _validated_track_data(track: str, slug: str, out: dict, dropped: dict) -> dict:
+        """Everything that must be true of a track JSON, applied to what a writer is
+        about to persist. Called only from `_write_track_json`, so every writer gets it
+        (#65) -- do not call it from a route, and do not write around it.
+
+        Refuses (422) what would commit a map the app cannot open: `CornerMap.from_data`
+        raises on a bad `sections` span, so an unvalidated one kills the track for every
+        client, and `sectors` reach the client as-is (strings and `true` both used to
+        land in a shipped file). Per-corner geometry is DROPPED rather than refused:
+        it is derived, re-bakeable data, and a string in `radius_m` is a crash in
+        `geometry_clause` on the coach's next answer -- refusing would make the editor
+        the only way to fix a file the editor then cannot save.
+
+        The authored `notes` overlay is carried across the rewrite unless the caller
+        passes its own (only `PUT /tracks/{slug}/notes` does -- it IS the author typing,
+        including keys that name no corner yet, which the Tracks screen surfaces). So a
+        writer that rebuilds a track file gets the guard for free, and one that seeds its
+        payload from `_track_file_data` keeps what was already there.
+        """
+        existing = _track_file_data(track)
+        out = dict(out)
+        length = out.get("length") or out.get("length_m")
+        if not measurable_geometry("length", length):
+            # No usable length to bound a span against (a corner-less ribbon save writes
+            # 0.0). Shape, type and ordering still hold; only the upper bound relaxes.
+            length = math.inf
+        try:
+            sectors = validated_sectors(out.get("sectors") or [], length)
+            sections = validated_sections(out.get("sections"), length)
+        except (TypeError, ValueError) as e:
+            raise HTTPException(422, str(e)) from None
+        # Only write the key back if it was there or has content: a validated empty list
+        # is not a reason to add `"sections": []` to a file that never had one.
+        for key, value in (("sectors", sectors), ("sections", sections)):
+            if key in out or value:
+                out[key] = value
+        if isinstance(out.get("corners"), list):
+            out["corners"] = [_clean_corner_geometry(slug, c) for c in out["corners"]]
+        if "notes" not in out:
+            notes = guard_corner_notes(slug, existing.get("notes"),
+                                       existing.get("corners"), out.get("corners"), dropped)
+            if notes:
+                out["notes"] = notes
         return out
+
+    def _clean_corner_geometry(slug: str, corner: dict) -> dict:
+        # Strip a baked per-corner metric that isn't a finite number of the right sign.
+        # `measurable_geometry` is the same owner the save path uses to decide whether a
+        # stored metric is a measurement (#62), so "what may be written" and "what may be
+        # carried forward" cannot disagree. A string radius loads fine and then raises
+        # `Unknown format code 'f'` inside geometry_clause -- on the coach's answer, far
+        # from the save that wrote it, and no test over the shipped maps caught it.
+        if not isinstance(corner, dict):
+            return corner
+        bad = [k for k in CORNER_GEOMETRY_KEYS
+               if k in corner and not measurable_geometry(k, corner[k])]
+        if not bad:
+            return corner
+        # Types, not values: the value is junk by definition, and a str() of it is
+        # unbounded input on its way into a log line.
+        logging.getLogger(__name__).warning(
+            "track %s corner %.40s: dropped unusable baked geometry %s; each must be a "
+            "finite number (a length also > 0).",
+            slug, str(corner.get("label") or corner.get("number")),
+            {k: type(corner[k]).__name__ for k in bad})
+        return {k: v for k, v in corner.items() if k not in bad}
 
     def _track_rotation(track: str) -> float:
         # Per-track display rotation (degrees), 0 if unset/invalid (back-compat).
@@ -328,17 +584,29 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 return True
         return False
 
+    def _frozen_outline(track: str):
+        # The outline stored in the track file as (path, path_dist), else ([], []).
+        data = _track_file_data(track)
+        p, pd = data.get("path"), data.get("path_dist")
+        if isinstance(p, list) and isinstance(pd, list) and p and len(p) == len(pd):
+            return p, pd
+        return [], []
+
     def _canonical_outline(track: str, car: str, force_avg: bool):
         # The track's canonical (path_world, dist): frozen file path first (unless
         # forcing a re-average), else averaged over the track+car's own pos laps,
         # else ([], []). The map is per-track owned data, NOT the selected lap.
         if not force_avg:
-            data = _track_file_data(track)
-            p, pd = data.get("path"), data.get("path_dist")
-            if isinstance(p, list) and isinstance(pd, list) and p and len(p) == len(pd):
+            p, pd = _frozen_outline(track)
+            if p:
                 return p, pd
         laps = _clean_lap_channels(track, car)
-        return average_racing_line(laps) if laps else ([], [])
+        if laps:
+            return average_racing_line(laps)
+        # Nothing to re-average (a result-log session has no telemetry at all, #28):
+        # fall back to the frozen layout rather than returning {}, which the UI
+        # reports as "no saved layout" for a track that demonstrably has one.
+        return _frozen_outline(track)
 
     def _has_canonical(track: str, car: str) -> bool:
         if not track:
@@ -374,9 +642,52 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             app.state.canon[(track, car)] = payload
         return payload
 
+    def _map_payload(track: str, car: str, force: bool = False) -> dict:
+        # What every map GET returns: the canonical map plus what the editor needs around
+        # it. {} stays {} (the pane's "no map yet").
+        m = _canonical_map(track, car, force)
+        if m:
+            # The game's real S1/S2 boundaries (if any lap captured them) so the
+            # editor can seed sector splits at the true positions, not thirds.
+            # `shipped`: the geometry is a built-in the user may annotate but not rebuild.
+            # `curating`: dev (source) build — layout tools + the track name are editable.
+            # `track_name`: stored display-name override, else the live/canonical name.
+            m = {**m, "detected_sectors": store.sector_bounds(track, car) or [],
+                 "shipped": _is_shipped(track), "curating": _curating(),
+                 "track_name": _track_file_data(track).get("name") or track}
+        return m
+
+    def _slug_map_key(slug: str) -> tuple[str, str]:
+        # The (track, car) a slug's map is drawn from. Normally (slug, ""): a stored outline
+        # needs no car. A track file with corners and NO stored outline (shipped Spa
+        # predates them, #82) has nothing to draw by slug -- laps are stored under the live
+        # name + car -- so borrow exactly what /laps/{id}/map draws for that track: the
+        # clean laps of the car driven there MOST RECENTLY (highest lap id), or of the next
+        # most recent car if that one has no clean position lap. Corners still come from
+        # the file, and nothing is written.
+        # No corners, no fallback: a driven-but-unmapped track keeps {} so the Tracks
+        # screen still offers "Build map" (#69) rather than a corner-less outline.
+        if _frozen_outline(slug)[0] or not _track_file_data(slug).get("corners"):
+            return slug, ""
+        with store._lock:   # store.py shares one connection with the capture thread
+            rows = store.conn.execute(
+                "SELECT track, car FROM laps WHERE telemetry_path IS NOT NULL "
+                "AND track IS NOT NULL AND car IS NOT NULL "
+                "GROUP BY track, car ORDER BY MAX(id) DESC").fetchall()
+        for track, car in rows:
+            if track_slug(track) == slug and _canonical_map(track, car, force=False):
+                return track, car
+        return slug, ""
+
     def _invalidate_canon(track: str) -> None:
-        app.state.cmaps.pop(track, None)
-        for key in [k for k in app.state.canon if k[0] == track]:
+        # By SLUG, not by the string the caller holds: one track is cached under its live
+        # name (lap routes, the coach) AND under its slug (Tracks screen), and a write
+        # through either route has to clear both -- the slug route's map can now be the
+        # live-name-keyed entry (#82), which a slug-only pop left stale until restart.
+        slug = track_slug(track)
+        for key in [k for k in app.state.cmaps if track_slug(k) == slug]:
+            app.state.cmaps.pop(key, None)
+        for key in [k for k in app.state.canon if track_slug(k[0]) == slug]:
             app.state.canon.pop(key, None)
 
     def _ensure_rest():
@@ -420,13 +731,34 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         latest = app.state.latest
         return latest["record"].track if latest is not None else None
 
+    # add_middleware inserts at index 0, so this call must come BEFORE _host_guard
+    # below to make _host_guard the OUTERMOST middleware -- it sees OPTIONS
+    # preflights before CORSMiddleware does. Security doesn't depend on the
+    # ordering (either order refuses), but the insert-at-0 semantics are easy to
+    # get backwards in a later tidy-up.
     app.add_middleware(CORSMiddleware, allow_origins=FRONTEND_ORIGINS,
                         allow_methods=["*"], allow_headers=["*"])
 
     @app.middleware("http")
     async def _host_guard(request: Request, call_next):
+        # Also the CSRF guard for every HTTP route, and the only one that doesn't
+        # depend on a library default. CORSMiddleware decides whether the browser
+        # hands the RESPONSE back to script -- a CORS-simple request is sent and
+        # EXECUTED regardless, so CORS can never prevent a side effect. Refusing a
+        # disallowed Origin here can. Deliberately NOT filtered to mutating
+        # methods: any request that CARRIES a disallowed Origin (all mutating
+        # methods, plus a cors-mode GET) has no legitimate caller and is refused.
+        # BUT a browser does not attach Origin to a no-cors GET -- <img>,
+        # <script>, <link>, <iframe>, and top-level navigation all send none --
+        # so this guard does NOT stop a same-window `<img src="/setup">`-style
+        # read; _bad_origin sees no Origin and allows it through by design (a
+        # MISSING Origin must stay allowed so native/Tauri and non-browser
+        # clients work). That used to matter because GET /setup wrote to the DB
+        # (save_session_setup); fixed by #51 -- persistence now lives behind
+        # POST /setup/capture, so a no-Origin GET here is read-only and has no
+        # side effect for this guard to miss.
         host = (request.headers.get("host") or "").split(":")[0].lower()
-        if host not in ALLOWED_HOSTS:
+        if host not in ALLOWED_HOSTS or _bad_origin(request.headers.get("origin")):
             return JSONResponse({"detail": "forbidden host"}, status_code=403)
         return await call_next(request)
 
@@ -504,8 +836,13 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     def lap_analysis(lap_id: int):
         try:
             rec = store.load(lap_id)
-        except (KeyError, FileNotFoundError):
+        except KeyError:
             raise HTTPException(404, "lap not found")
+        except FileNotFoundError:
+            # The lap exists; it just has no channels to analyze (imported from a
+            # result log). Saying "lap not found" sent the user hunting for a lap
+            # that is sitting right there in the session list.
+            raise HTTPException(404, "lap has no telemetry to analyze")
         cmap = _map_for(rec.track)
         if cmap is None:
             raise HTTPException(404, "no corner map")
@@ -524,22 +861,15 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # The map is the track's CANONICAL layout, the same for every lap -- the
         # lap_id only selects the track (+car). avg=0: frozen file, else averaged
         # over the track's own pos laps (cached). avg=1: force a fresh re-average
-        # (editor, to pick up newly-driven laps before re-freezing).
-        try:
-            rec = store.load(lap_id)
-        except (KeyError, FileNotFoundError):
+        # (editor, to pick up newly-driven laps before re-freezing). Only the
+        # track/car strings are needed (not the lap's own telemetry), so an older
+        # session imported from a result log (no telemetry_path) still resolves
+        # an already-mapped track's frozen layout.
+        tc = store.lap_track_car(lap_id)
+        if tc is None:
             raise HTTPException(404, "lap not found")
-        m = _canonical_map(rec.track, rec.car, force=bool(avg))
-        if m:
-            # The game's real S1/S2 boundaries (if any lap captured them) so the
-            # editor can seed sector splits at the true positions, not thirds.
-            # `shipped`: the geometry is a built-in the user may annotate but not rebuild.
-            # `curating`: dev (source) build — layout tools + the track name are editable.
-            # `track_name`: stored display-name override, else the live/canonical name.
-            m = {**m, "detected_sectors": store.sector_bounds(rec.track, rec.car) or [],
-                 "shipped": _is_shipped(rec.track), "curating": _curating(),
-                 "track_name": _track_file_data(rec.track).get("name") or rec.track}
-        return m
+        track, car = tc
+        return _map_payload(track, car, force=bool(avg))
 
     @app.get("/track/map")
     def track_map():
@@ -553,29 +883,52 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             live = None
         if not live or not live.get("track"):
             return {}
-        track, car = live["track"], live["car"]
-        m = _canonical_map(track, car, force=False)
-        if m:
-            m = {**m, "detected_sectors": store.sector_bounds(track, car) or [],
-                 "shipped": _is_shipped(track), "curating": _curating(),
-                 "track_name": _track_file_data(track).get("name") or track}
-        return m
+        return _map_payload(live["track"], live["car"])
+
+    @app.get("/track/inputs")
+    def track_inputs():
+        # Driver-input traces (throttle/brake/steering) for the Pit Wall graphs (#21):
+        # the LAST completed lap and the current track/car BEST, both resampled onto
+        # the same uniform lap_distance grid so they overlay directly.
+        #
+        # UI-ONLY. This is raw ~50 Hz telemetry, downsampled here in the sidecar (not
+        # in the Svelte component) and returned to the chart. It never enters a coach
+        # prompt -- the model only ever sees the per-corner summary.
+        #
+        # Keyed on the LIVE track like /track/map: a practice session has no completed
+        # lap_id to route through /laps/{id}/..., and `status()` already owns the
+        # "latest capture still matches the live session" staleness check.
+        st = status()
+        if not st["track"]:
+            return {"last": None, "best": None}
+        latest = app.state.latest if st["lap_id"] is not None else None
+
+        def _trace(rec, lap_id):
+            tr = input_traces(rec)
+            if not tr:
+                return None  # imported/result-log lap: no channels to draw
+            return {**tr, "lap_id": lap_id, "lap_time": rec.lap_time}
+
+        last = _trace(latest["record"], st["lap_id"]) if latest else None
+        best_rec = store.best_lap(st["track"], st["car"])
+        # `best_lap` returns a record, not its id, so identity is by capture timestamp
+        # (unique per lap). Same lap -> don't draw the identical trace twice.
+        same = (latest is not None and best_rec is not None
+                and best_rec.timestamp == latest["record"].timestamp)
+        best = None if (best_rec is None or same) else _trace(best_rec, None)
+        return {"last": last, "best": best}
 
     @app.get("/tracks/{slug}/map")
     def track_map_by_slug(slug: str):
         # The track's canonical map keyed on its slug -- for the Tracks screen, which
         # selects a track without any completed lap_id to route through /laps/{id}/map.
         # Track files are slug-keyed (same as the notes endpoints), and a shipped
-        # layout carries a frozen path, so no car is needed to build it. {} -> the
+        # layout carries a frozen path, so no car is needed to build it -- and one without
+        # (shipped Spa) borrows its driven laps' outline, see _slug_map_key. {} -> the
         # pane shows "no map yet" (a user track with no driven lap).
         if track_slug(slug) != slug:
             raise HTTPException(400, "invalid slug")
-        m = _canonical_map(slug, "", force=False)
-        if m:
-            m = {**m, "detected_sectors": store.sector_bounds(slug, "") or [],
-                 "shipped": _is_shipped(slug), "curating": _curating(),
-                 "track_name": _track_file_data(slug).get("name") or slug}
-        return m
+        return _map_payload(*_slug_map_key(slug))
 
     def _persist_map(track: str, car: str, body: dict) -> dict:
         # SAVE the editor's corner map + sectors as shipped owned data. Direction
@@ -620,7 +973,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             except (KeyError, TypeError, ValueError):
                 raise HTTPException(422, "corner requires integer number and numeric apex_dist")
             name = str(c.get("name") or f"Turn {number}")[:80]  # cap: owned data + coach prompt
-            label = str(c.get("label") or number)[:8]  # displayed designation ("8A")
+            label = str(c.get("label") or "")[:8]  # displayed designation ("8A"); blank filled below
             if not math.isfinite(apex) or not (0.0 <= apex <= length):
                 raise HTTPException(422, f"corner {number}: apex_dist out of range")
             if number in seen_numbers:
@@ -658,20 +1011,14 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 "end_dist": round(end, 1), "apexes": apexes,
             })
         corners.sort(key=lambda c: c["apex_dist"])
-
-        sectors = body.get("sectors") or []
-        if not isinstance(sectors, list):
-            raise HTTPException(422, "sectors must be a list")
         try:
-            sectors = [float(s) for s in sectors]
-        except (TypeError, ValueError):
-            raise HTTPException(422, "sectors must be numbers")
-        if any(not math.isfinite(s) or not (0.0 < s < length) for s in sectors):
-            raise HTTPException(422, "sector splits must be within (0, length)")
-        if any(a >= b for a, b in zip(sectors, sectors[1:])):
-            raise HTTPException(422, "sector splits must be strictly increasing")
+            fill_blank_labels(corners, existing)   # unique, never str(number) blindly (#79)
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
 
-        sections = _clean_sections(body.get("sections"), length)
+        # `sectors`/`sections` are validated by _write_track_json, the one writer, along
+        # with every other writer's (#65) -- the same owners (`validated_sectors` /
+        # `validated_sections`), the same 422, one call site.
 
         # Optional display-name override. Not an annotation-merge field, so an
         # end-user's app-data copy can't rename a shipped track (its read still takes
@@ -680,28 +1027,83 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         name = (new_name.strip()[:80] if isinstance(new_name, str) and new_name.strip()
                 else _track_file_data(track).get("name"))
 
-        # Bake per-corner geometry: radius from the path, width/banking from the
-        # ribbon (index-aligned with the frozen path) when present. Elevation needs
-        # pos_y we don't have on a corner/label edit -> carry forward any baked value.
+        # Per-corner geometry is OWNED, BAKED data (scripts/backfill_corner_geometry.py),
+        # not a save-time derivation. CARRY THE EXISTING BAKE FORWARD UNTOUCHED and
+        # compute only the metrics a corner has none of -- one the curator just added.
+        # Re-deriving what is already baked rewrote it silently, two ways (#62):
+        #
+        #  - radius_m. The shipped radii were baked in 1559297 against the PRE-CLAMP
+        #    corner windows, which were WIDER than today's and reached into the
+        #    neighbouring corner. 35254d5 (#30) narrowed them and did not re-bake, so a
+        #    stored radius was the tightest point of a window that no longer existed --
+        #    and corner_geometry reports the tightest point, so what it captured was the
+        #    NEIGHBOUR's. Recomputing here therefore CHANGED the value: 18 corners
+        #    across 7 shipped maps moved, Imola T13 67.7 -> 322.1 m (4.8x) on a save
+        #    whose only intended change was a corner NAME. radius_m reaches the driver
+        #    as owned fact through geometry_clause (#35), so that was a 2nd-gear corner
+        #    described as a sweeper.
+        #      Where those wide windows came from: on 13 of the 18 they are exactly
+        #    THIS function's own `pad = max(20.0, length * 0.025)` default a few dozen
+        #    lines up (Imola 4897.57 m -> 122.4; Laguna 3586.2 -> 89.7); the other 5
+        #    are asymmetric spans from some earlier writer. NOT mapbuild's _WIN_M,
+        #    which is 55.0 and always has been -- do not "correct" the numbers here to
+        #    it. So the editor baked against its own over-wide default and #30 then
+        #    narrowed it.
+        #  - width_m/banking_deg. Laguna's came from the point cloud, not from a stored
+        #    ribbon (d69d5ec), so this path has no source for them and dropped all 24.
+        #
+        # Re-baking is a deliberate curator commit with a reviewable diff (that is what
+        # backfill_corner_geometry.py is for), never a side effect of clicking Save.
+        # NOTE this only stopped the save path CHANGING the values; the 18 stale radii
+        # themselves were re-baked under #73 (`--only=radius_m`), so stored and
+        # recomputed now agree on every shipped corner and this is a no-op for radius_m
+        # today. It stays because it is what makes the NEXT window edit safe -- #30
+        # narrowed 69 windows across 11 maps without re-baking and nothing noticed for
+        # months. The guard that would notice now is
+        # test_every_shipped_radius_is_measured_on_its_own_corner_window.
+        #
+        # Matched on APEX DISTANCE -- not label, not number. Both of those are things
+        # the editor rewrites out from under the curator: `label` is the free-text box
+        # they type in (TrackMapEditor's `lbl-in`), and `number` is reassigned
+        # POSITIONALLY by its renumber() on every insert. Keying on either hands a
+        # corner the bake measured at a different corner. Measured on Imola: renaming
+        # label "13" to "13A" loses T13's whole bake under a label key; inserting one
+        # corner makes 1 corner inherit a neighbour's geometry under a label key and 18
+        # under a number key, against 0 under an apex key. The apex is WHERE THE METRIC
+        # WAS MEASURED, so it is the only identity that means "the same corner".
+        #   Corollary, deliberate: MOVING an apex does drop that corner's bake and
+        # re-measure it. That is the curator changing the geometry, in a diff they can
+        # see -- and it means any corner they reposition self-heals its stale #73
+        # radius. Exact at the 1 dp boundary (+0.049 keeps the bake, +0.05 re-measures).
         rib_w = keep_ribbon.get("width") if isinstance(keep_ribbon, dict) else None
         rib_b = keep_ribbon.get("bank") if isinstance(keep_ribbon, dict) else None
-        geo = corner_geometry(path, dist, corners, width=rib_w, bank=rib_b)
-        prior = {str(pc.get("label") or pc.get("number")): pc
-                 for pc in (existing.get("corners") or [])}
-        for c in corners:
-            lab = str(c.get("label") or c.get("number"))
-            c.update(geo.get(lab, {}))
-            ped = prior.get(lab, {}).get("elev_delta_m")
-            if ped is not None:
-                c["elev_delta_m"] = ped
+        # corner_geometry keys its result by label, and two corners can still share one:
+        # fill_blank_labels makes an auto-filled label unique (#79), but a label the
+        # curator TYPED is never renamed, so two typed alike still arrive alike. Address
+        # the result positionally so a duplicate label cannot collapse two corners into one.
+        probe = [dict(c, label=str(i)) for i, c in enumerate(corners)]
+        geo = corner_geometry(path, dist, probe, width=rib_w, bank=rib_b)
+        # `existing` is the MERGED read, so on an installed build a corner that ships
+        # carries the SHIPPED bake here, never the app-data copy's older one (#75).
+        prior = {corner_apex_key(pc): pc for pc in (existing.get("corners") or [])}
+        for i, c in enumerate(corners):
+            baked = prior.get(corner_apex_key(c), {})
+            for k in CORNER_GEOMETRY_KEYS:
+                # elev_delta_m is never in `geo` here (no pos_y on a corner/label edit),
+                # so for it this is the carry-forward it always was.
+                v = baked.get(k)
+                if not measurable_geometry(k, v):
+                    v = geo.get(str(i), {}).get(k)
+                if v is not None:
+                    c[k] = v
 
         out = {
             "track": track_slug(track),
             "corners": corners,
             "path": path,
             "path_dist": dist,
-            "sectors": sectors,
-            "sections": sections,
+            "sectors": body.get("sectors") or [],
+            "sections": body.get("sections"),
             "length": length,
             "rotation": _track_rotation(track),  # preserve existing rotation
         }
@@ -709,19 +1111,30 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             out["name"] = name
         if keep_ribbon:
             out["ribbon"] = keep_ribbon  # keep the reconstructed surface across edits
-        _write_track_json(track, out)
+        if existing.get("built_from"):
+            # An editor save (names, apexes, sections) keeps a map this app BUILT
+            # re-buildable from later laps. Dropping the mark here would make naming one
+            # corner on a lap-built map lock it against every future live-lap rebuild.
+            out["built_from"] = existing["built_from"]
+        # No `notes` key, deliberately: _write_track_json carries the authored overlay
+        # across a rebuild (#37/#64) for every writer, so passing one here would be the
+        # caller opting OUT of the guard that exists for this exact path.
+        dropped = _write_track_json(track, out)
         # Invalidate cmap + canonical caches so the next GET returns the new
         # canonical map (now frozen into the file).
         _invalidate_canon(track)
-        return _canonical_map(track, car, force=False)
+        # A copy: _canonical_map's result is the cached object, and the drops are this
+        # save's, not the map's.
+        return {**_canonical_map(track, car, force=False), "dropped_notes": dropped}
 
     @app.put("/laps/{lap_id}/map")
     def save_lap_map(lap_id: int, body: dict = Body(...)):
-        try:
-            rec = store.load(lap_id)
-        except (KeyError, FileNotFoundError):
+        # Only the lap's track/car, not its telemetry (#28) -- editing an imported
+        # session's layout is a legitimate flow, same as reading it.
+        tc = store.lap_track_car(lap_id)
+        if tc is None:
             raise HTTPException(404, "lap not found")
-        return _persist_map(rec.track, rec.car, body)
+        return _persist_map(tc[0], tc[1], body)
 
     @app.put("/tracks/{slug}/map")
     def save_track_map(slug: str, body: dict = Body(...)):
@@ -729,6 +1142,19 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # lap required (a shipped track edits its frozen ribbon path directly).
         if track_slug(slug) != slug:
             raise HTTPException(400, "invalid slug")
+        if not _frozen_outline(slug)[0] and _track_file_data(slug).get("corners"):
+            # Corners with no stored outline (shipped Spa, #82): any outline this screen
+            # shows is BORROWED from driven laps. Saving would store their average and
+            # re-derive every curated corner's direction from it -- on shipped Spa that
+            # flips T19 Bus Stop right -> left and drops the file's provenance notes.
+            # Baking an outline into owned data is a reviewed commit, not a side effect of
+            # renaming a corner. (Without this the save still wrote nothing -- laps are
+            # keyed by live name + car, not slug -- but 422'd "no clean laps" under a map
+            # drawn from clean laps.) Decided from the FILE, never by building its map: a
+            # file the map can't be built from must stay saveable (the editor fixes it).
+            raise HTTPException(422, "this track's map file has no stored outline (any "
+                                     "outline shown is drawn from your laps), so its map "
+                                     "can't be saved from here yet")
         return _persist_map(slug, "", body)
 
     @app.post("/tracks/{slug}/draft-notes")
@@ -751,7 +1177,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             lab = c.label or c.number
             line = (f"T{lab} {c.name}: {c.direction}, "
                     f"apex@{c.apex_dist:.0f}m, span {c.start_dist:.0f}-{c.end_dist:.0f}m")
-            clause = geometry_clause(file_corners.get(str(lab), {}))
+            clause = geometry_clause(file_corners.get(str(lab), {}), c.direction)
             if clause:
                 line += ", " + clause
             digest_lines.append(line)
@@ -777,6 +1203,21 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                  "source": str(draft.get("source", ""))}
         return {"draft": draft}
 
+    def _notes_rev(track: str) -> str:
+        # Revision of what a client holding the notes was looking at: the stored notes
+        # AND the corner labels they are keyed to. PUT /notes writes its body verbatim --
+        # it has to, it is the author typing -- so a copy loaded before a map save that
+        # re-keyed the notes (#64) would put every old key back, and the old keys match
+        # the new labels, so nothing even flags them as orphans. A relabel that moved no
+        # note still changes what a key means, hence the labels.
+        data = _track_file_data(track)
+        corners = data.get("corners")
+        labels = [str(c.get("label") or c.get("number")) for c in corners
+                  if isinstance(c, dict)] if isinstance(corners, list) else []
+        blob = json.dumps({"notes": data.get("notes"), "labels": labels},
+                          sort_keys=True, default=str)
+        return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
     @app.put("/tracks/{slug}/notes")
     def save_notes(slug: str, body: dict = Body(...)):
         # Persist human-edited/reviewed notes onto the map file's overlay (shipped
@@ -785,17 +1226,61 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         if track_slug(track) != slug:
             raise HTTPException(400, "slug/track mismatch")
         raw = body.get("notes") or {}
-        notes = {"overview": str(raw.get("overview", "")),
-                 "corners": {str(k): str(v) for k, v in (raw.get("corners") or {}).items()},
-                 "reference_times": {str(k): str(v) for k, v in (raw.get("reference_times") or {}).items()},
-                 "source": str(raw.get("source", ""))}
+
+        def _text(value: object, field: str) -> str:
+            s = str(value)
+            if len(s) > _MAX_NOTE_CHARS:
+                raise HTTPException(422, f"{field} exceeds {_MAX_NOTE_CHARS} characters")
+            return s
+
+        def _text_map(value: object, field: str) -> dict[str, str]:
+            # A non-dict REFUSES, never coerces to empty: this write REPLACES the notes
+            # already on disk, so accepting `corners: [["1", "brake late"]]` as {} would
+            # return 200 and wipe authored prose. (The same shape on the map-promotion
+            # path is correctly coerced -- there a malformed `corners` never held notes,
+            # so nothing is lost. The question is always what is on the other side.)
+            if value is not None and not isinstance(value, dict):
+                raise HTTPException(422, f"{field} must be an object")
+            items = list(value.items()) if isinstance(value, dict) else []
+            if len(items) > _MAX_NOTE_KEYS:
+                raise HTTPException(422, f"too many {field} (max {_MAX_NOTE_KEYS})")
+            out = {}
+            for k, v in items:
+                k = str(k)
+                if len(k) > _MAX_NOTE_KEY_CHARS:
+                    raise HTTPException(
+                        422, f"{field} key exceeds {_MAX_NOTE_KEY_CHARS} characters")
+                out[k] = _text(v, f"{field} note")
+            return out
+
+        notes = {"overview": _text(raw.get("overview", ""), "overview"),
+                 "corners": _text_map(raw.get("corners"), "corner notes"),
+                 "reference_times": _text_map(raw.get("reference_times"), "reference times"),
+                 "source": _text(raw.get("source", ""), "source")}
+        # Serialised exactly as _write_track_json will serialise it, so this measures the
+        # bytes that land on disk. Checked after the per-field caps so an over-limit field
+        # still gets its own named error.
+        if len(json.dumps(notes)) > _MAX_NOTES_DOC_BYTES:
+            raise HTTPException(
+                422, f"notes document exceeds {_MAX_NOTES_DOC_BYTES} bytes")
         data = dict(_track_file_data(track))       # merged shipped+overlay
         if not data:
             raise HTTPException(404, "no track file to annotate")
+        # REQUIRED, not optional: an optional check leaves every client that omits it free
+        # to write stale keys back. 428 when absent, 409 when stale -- the client refetches
+        # and tells the driver; it never retries blind.
+        # ponytail: check-then-write, not atomic; both sides are one person's clicks on a
+        # localhost sidecar. A per-track lock if a second writer ever appears.
+        rev = body.get("rev")
+        if not isinstance(rev, str):
+            raise HTTPException(428, "notes rev required: load the notes first and send back their rev")
+        if rev != _notes_rev(track):
+            raise HTTPException(409, "these notes changed since they were loaded (a map save "
+                                     "can move or drop notes); reload them before saving")
         data["notes"] = notes
-        _write_track_json(track, data)
+        dropped = _write_track_json(track, data)    # always {}: the caller's notes are kept
         _invalidate_canon(track)                    # same cache-clear as PUT /laps/{id}/map
-        return {"ok": True}
+        return {"ok": True, "rev": _notes_rev(track), "dropped_notes": dropped}
 
     @app.get("/tracks/{slug}/notes")
     def get_notes(slug: str):
@@ -808,7 +1293,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         return {"overview": str(raw.get("overview", "")),
                 "corners": {str(k): str(v) for k, v in (raw.get("corners") or {}).items()},
                 "reference_times": {str(k): str(v) for k, v in (raw.get("reference_times") or {}).items()},
-                "source": str(raw.get("source", ""))}
+                "source": str(raw.get("source", "")),
+                "rev": _notes_rev(slug)}   # send it back with PUT; see _notes_rev
 
     @app.get("/tracks")
     def list_tracks():
@@ -819,16 +1305,51 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         for base in (bundled, user_dir):
             if base.exists():
                 slugs.update(p.stem for p in base.glob("*.json"))
+        # A track DRIVEN live but never mapped has no .json to glob, so it used to be
+        # absent from this list entirely -- and this screen is the only place a map gets
+        # built, so there was no entry point for exactly the tracks that need one (#69).
+        # Union it in, with the counts the Build action is gated on.
+        #
+        # `captures` is len(_rebuild_clouds): the laps a Build would actually consume,
+        # not laps that merely have a row or a file. Position capture landed partway
+        # through this store's history, so pre-position laps carry no pos_* at all --
+        # Sebring has 15 live laps and 0 usable, and a DB count there offered "Build map
+        # from 15 laps" that then 422'd with the very error #69 exists to remove.
+        #
+        # `live_laps` is the raw row count, so a row with captures 0 can still say WHY it
+        # is there and unbuildable ("none with position data") -- the driver needs to know
+        # those laps are unrecoverable and the track wants re-driving (#66).
+        #
+        # ponytail: loads every live lap's position channels on each open (the badge has
+        # to see zero-length/all-NaN arrays, which the zip directory alone cannot show).
+        # /tracks is opened by hand, not polled; cache on (telemetry_path, mtime) if the
+        # store grows enough for that to be felt.
+        rows = _live_lap_paths()
+        live: dict[str, int] = {}
+        names: dict[str, str] = {}
+        for slug, name, _p in rows:
+            live[slug] = live.get(slug, 0) + 1
+            names.setdefault(slug, name)
+        slugs.update(live)
         out = []
         for slug in sorted(slugs):
             merged = _track_file_data(slug)
             notes = merged.get("notes") or {}
+            clouds, from_capture = _rebuild_clouds(slug, rows)
             out.append({
                 "slug": slug,
-                "name": merged.get("name") or slug.replace("_", " ").title(),
+                # No map file yet -> the live name the laps were recorded under beats a
+                # title-cased slug ("Paul Ricard - ELMS" vs "Paul Ricard Elms").
+                "name": (merged.get("name") or names.get(slug)
+                         or slug.replace("_", " ").title()),
                 "has_map": bool(merged.get("path") or merged.get("corners")),
                 "has_notes": bool(notes.get("overview") or notes.get("corners")),
                 "user_edited": (user_dir / f"{slug}.json").exists(),
+                "captures": len(clouds),
+                "live_laps": live.get(slug, 0),
+                # A capture that exists and yields nothing blocks the build, so captures is
+                # 0 whatever the live laps hold: say so, never "none with position data" (#84).
+                "capture_unreadable": from_capture and not clouds,
             })
         return out
 
@@ -857,18 +1378,18 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             if secs and "sections" not in data:
                 data["sections"] = secs
         data["rotation"] = degrees % 360.0
-        _write_track_json(track, data)
+        dropped = _write_track_json(track, data)
         _invalidate_canon(track)
-        return _canonical_map(track, car, force=False)
+        return {**_canonical_map(track, car, force=False), "dropped_notes": dropped}
 
     @app.post("/laps/{lap_id}/rotation")
     def set_rotation(lap_id: int, body: dict = Body(...)):
-        # Body required -> preflight (CSRF), like the mapcapture routes.
-        try:
-            rec = store.load(lap_id)
-        except (KeyError, FileNotFoundError):
+        # Body required -> preflight (CSRF), like the mapcapture routes. Track/car
+        # only, not telemetry (#28) -- see save_lap_map.
+        tc = store.lap_track_car(lap_id)
+        if tc is None:
             raise HTTPException(404, "lap not found")
-        return _persist_rotation(rec.track, rec.car, body)
+        return _persist_rotation(tc[0], tc[1], body)
 
     @app.post("/tracks/{slug}/rotation")
     def set_track_rotation(slug: str, body: dict = Body(...)):
@@ -926,9 +1447,13 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             })
         return out
 
-    # Body(...) forces an application/json content-type, so these bodyless POSTs
-    # stop being CORS "simple requests" -- the browser must preflight, which the
-    # origin allowlist blocks (CSRF guard for the mapping-mode toggle).
+    # CSRF guard for the mutating POSTs: requiring Body(...) means the only
+    # content-type that reaches the handler is application/json, which is NOT a
+    # CORS "simple request" -- the browser must preflight, and the origin
+    # allowlist blocks that. NOTE this depends on FastAPI's strict_content_type
+    # default (0.132+), which is why pyproject pins fastapi>=0.132: on older
+    # FastAPI a body with an ABSENT content-type is still parsed as JSON, and an
+    # absent content-type IS CORS-simple, so the guard silently does nothing.
     @app.post("/mapcapture/start")
     def mapcapture_start(body: dict = Body(...)):
         app.state.map_buffer = []
@@ -972,7 +1497,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # save, and save persists the raw cloud for later rebuilds.
         raw = [{c: r.channels[c] for c in _POS_CHANNELS if c in r.channels} for r in buf]
         app.state.last_ribbon = {"world": ribbon, "corners": corners, "sectors": sectors,
-                                 "sections": sections, "track": track, "laps": raw}
+                                 "sections": sections, "track": track, "laps": raw,
+                                 "built_from": "capture"}
         res = _clean(ribbon_to_screen(ribbon, corners, sectors,
                                       rotation=_track_rotation(track), sections=sections))
         res["track_name"] = _track_file_data(track).get("name") or track
@@ -992,11 +1518,12 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         keys = ("number", "label", "name", "direction", "start_dist", "apex_dist",
                 "end_dist", "apexes")
         corners = [{k: c[k] for k in keys if k in c} for c in rib["corners"]]
+        existing = _track_file_data(track)
         out = {
             "track": track_slug(track),
             # Display name from the session (the live track), unless a custom name was
             # already set — so a saved layout carries its track name.
-            "name": _track_file_data(track).get("name") or track,
+            "name": existing.get("name") or track,
             "corners": corners,
             "ribbon": {k: world[k] for k in ("left", "right", "center", "width", "bank")},
             "path": world["center"],
@@ -1006,13 +1533,25 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             "length": world["dist"][-1] if world["dist"] else 0.0,
             "rotation": _track_rotation(track),  # preserve any existing rotation
         }
-        _write_track_json(track, out)
+        # Mark maps this app BUILT (from a capture or from driven laps). A live-lap rebuild
+        # may replace only a marked map's corners -- an unmarked map with corners is a
+        # curated layout (see mapcapture_rebuild).
+        if rib.get("built_from"):
+            out["built_from"] = rib["built_from"]
+        # No `notes` key, deliberately -- see _persist_map. _write_track_json REPLACES
+        # the file, and this route builds its payload from scratch, which is how "Save
+        # ribbon" used to delete every authored note for the track (#65). The one writer
+        # carries the overlay, including on a corner-less rebuild: a thin capture can
+        # yield zero solver corners and this route still has a job to do (it exists to
+        # persist the reconstructed SURFACE -- see test_mapcapture_save_writes_track_json),
+        # and zero new corners cannot rebind a note to the wrong corner.
+        dropped = _write_track_json(track, out)
         # Persist the raw point cloud (app-data, not the repo tracks dir) so the
         # ribbon can be rebuilt after algorithm changes with no re-drive.
         if rib.get("laps"):
             _save_cloud(_capture_path(track), rib["laps"])
         _invalidate_canon(track)
-        return {"saved": True, "slug": track_slug(track)}
+        return {"saved": True, "slug": track_slug(track), "dropped_notes": dropped}
 
     @app.post("/mapcapture/save-cloud")
     def mapcapture_save_cloud(body: dict = Body(...)):
@@ -1042,61 +1581,135 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # ({"lap_id"} -> its track), the live/last track, else the NEWEST saved capture.
         # The edited lap MUST win over the live sim: editing a past Monza session has to
         # rebuild Monza even while Bahrain is the live track.
+        # A lap_id that can't be resolved is an ERROR, never a fall-through: it used
+        # to swallow every exception (including the result-log lap's missing
+        # telemetry, #28) and then rebuild the live/newest track instead -- writing
+        # one track's geometry over another's.
+        # Every 422 detail below reaches the driver VERBATIM (TrackMapEditor's rebuildGen),
+        # so each one says what to do next, not only what went wrong (#84).
         slug = body.get("slug")
         lap_id = body.get("lap_id")
         track = slug
         if not track and lap_id is not None:
             try:
-                track = app.state.store.load(int(lap_id)).track
-            except Exception:
-                track = None
+                tc = app.state.store.lap_track_car(int(lap_id))
+            except (TypeError, ValueError):
+                raise HTTPException(422, "lap_id must be an integer")
+            if tc is None:
+                raise HTTPException(404, "lap not found")
+            track = tc[0]
         if not track:
             track = _live_track() or (app.state.last_ribbon or {}).get("track")
-        path = _capture_path(track) if track else _newest_capture()
-        if path is None or not path.exists():
-            raise HTTPException(422, "no saved capture available")
-        laps = _load_cloud(path)
+        if not track:
+            newest = _newest_capture()
+            if newest is None:
+                raise HTTPException(422, "no saved capture available; use Generate map "
+                                         "layout to record one")
+            track = newest.stem  # offline: take the track (slug) from the file name
+        rows = _live_lap_paths()
+        # No capture file -> the track's own live laps (#69): the reported case, 27 live
+        # laps and no captures/<slug>.npz, used to 422 here with no way forward.
+        laps, from_capture = _rebuild_clouds(track, rows)
+        existing_map = _track_file_data(track)
+        curated = bool(existing_map.get("corners") and not existing_map.get("built_from"))
+        if not from_capture and curated:
+            # Never rebuild a CURATED corner map from driven laps. Its corners are owned
+            # data (GP numbering, the names the knowledge notes key on); a solver rebuild
+            # saves "Turn 1..N" over them -- the repo file in dev, the coach's corner map in
+            # an installed build. Shipped Spa (no stored outline, #82) reached this through
+            # "Add map" -> "Rebuild from saved capture". Maps THIS route or a capture build
+            # produced carry `built_from`, so driving more laps still improves them; only a
+            # map with corners and no such mark (every shipped layout) is refused. A real
+            # mapping capture stays the explicit way to regenerate a curated layout.
+            raise HTTPException(422, "this track has a curated corner map; rebuilding it "
+                                     "from driven laps would replace its corners; use "
+                                     "Generate map layout to record a mapping capture instead")
+        if not laps and not from_capture:
+            raise HTTPException(422, "no saved capture for this track; use Generate map "
+                                     "layout to record one")
         if not laps:
-            raise HTTPException(422, "saved capture is unreadable")
-        track = track or path.stem  # offline: take the track (slug) from the file name
+            # The capture exists and yields nothing. Still refused (#69), but name the file
+            # and the way out (#84). "Delete it" only where deleting it WOULD build: some
+            # usable live laps, and no curated map for the live-lap refusal above to hit.
+            n = 0 if curated else len(_rebuild_clouds(track, rows, capture=False)[0])
+            way_out = (f"delete it to build from your {n} lap{'' if n == 1 else 's'}" if n
+                       else "use Generate map layout to record a new one")
+            raise HTTPException(422, f"the saved capture for this track can't be read "
+                                     f"({_capture_path(track)}); {way_out}")
+        # Stage the live NAME the laps were recorded under when there is one, so Save
+        # names a new map "Silverstone National Circuit", not its slug. Same slug, so
+        # every slug-keyed lookup below is unchanged.
+        slug = track_slug(track)
+        track = next((n for s, n, _p in rows if s == slug), track)
         ribbon = reconstruct_surface(laps)
         if not ribbon:
-            raise HTTPException(422, "saved capture lacks position telemetry")
+            # Not "saved capture ...": the laps may be the track's live laps, not a capture.
+            raise HTTPException(422, "couldn't rebuild the track from its position "
+                                     "telemetry; use Generate map layout to record a new "
+                                     "capture")
         corners = _place_corners(ribbon, laps[0])
         extras = _track_file_data(track)
         sectors = extras.get("sectors") or []
         sections = extras.get("sections") or []
+        # "laps": None -- a rebuild never (re)writes captures/<slug>.npz on Save. Its
+        # cloud is already on disk: the capture it read, or the live laps themselves.
+        # Freezing live laps into a capture made the capture WIN every later rebuild, so
+        # laps driven afterwards never reached the map while the badge counted them.
         app.state.last_ribbon = {"world": ribbon, "corners": corners, "sectors": sectors,
-                                 "sections": sections, "track": track, "laps": laps}
+                                 "sections": sections, "track": track, "laps": None,
+                                 "built_from": "capture" if from_capture else "live_laps"}
         res = _clean(ribbon_to_screen(ribbon, corners, sectors,
                                       rotation=_track_rotation(track), sections=sections))
         res["track_name"] = _track_file_data(track).get("name") or track
+        # How many laps back this geometry, so the driver knows before committing it:
+        # a map off 1-3 clouds is thin (#41's Imola sector splits rest on a single lap).
+        res["lap_count"] = len(laps)
         return res
 
     @app.get("/setup")
     def setup():
         # Phase 1: raw dict from LmuRest, unfiltered. Filtering to the
         # human-meaningful subset is deferred to the Setup-panel phase (Phase 4).
+        # Read-only: no store write here. A GET must stay safe to prefetch,
+        # cache, retry, or replay -- persistence is the explicit POST below
+        # (#51: this used to write on every GET).
         rest = _ensure_rest()
         if not rest:
             return {}
         try:
-            data = rest.get_setup()
+            return rest.get_setup()
         except Exception:
             return {}
-        # Continuous capture: every time the Setup panel pulls the live setup and
-        # we know which session it belongs to, persist the real-adjustable subset
-        # (same isFreeSetting filter as the panel) so "what did we run here last
-        # time?" survives a session ending. Best-effort — never break the fetch.
-        if data:
-            try:
-                st = status()
-                if st["track"] and st["car"] and st["session_id"]:
-                    free = {k: data[k] for k in adjustable_from_setup(data)}
-                    store.save_session_setup(st["session_id"], st["track"], st["car"], free)
-            except Exception:
-                logging.getLogger(__name__).warning("session setup capture failed", exc_info=True)
-        return data
+
+    @app.post("/setup/capture")
+    def setup_capture(body: dict = Body(...)):
+        # Continuous capture: persists what the sim CURRENTLY reports via
+        # LmuRest, same as the old GET-time capture did -- NOT whatever the
+        # caller sent. `body` is unused except to force a non-simple request
+        # (the CSRF preflight, same as every other POST here); trusting
+        # caller-supplied setup content was a prompt-injection sink, since it
+        # lands verbatim in get_last_setup()'s output and the coach reads that
+        # as fact. Same isFreeSetting filter as the panel, same session_id
+        # guard as before (skip when there's no session_id to key the row on),
+        # same best-effort -- never break the caller.
+        rest = _ensure_rest()
+        if not rest:
+            return {"saved": False}
+        try:
+            data = rest.get_setup()
+        except Exception:
+            return {"saved": False}
+        if not data:
+            return {"saved": False}
+        try:
+            st = status()
+            if st["track"] and st["car"] and st["session_id"]:
+                free = {k: data[k] for k in adjustable_from_setup(data)}
+                store.save_session_setup(st["session_id"], st["track"], st["car"], free)
+                return {"saved": True}
+        except Exception:
+            logging.getLogger(__name__).warning("session setup capture failed", exc_info=True)
+        return {"saved": False}
 
     @app.get("/chats")
     def chats():
@@ -1105,6 +1718,12 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     @app.get("/chats/{chat_id}")
     def chat_messages(chat_id: str):
         return store.chat_messages(chat_id)
+
+    @app.get("/chats/{chat_id}/usage")
+    def chat_usage(chat_id: str):
+        """Billed tokens + estimated $ for a whole chat, so reopening a thread seeds
+        the meter without asking a question. Same shape the `done` frame carries."""
+        return _usage_view(store.chat_usage(chat_id))
 
     @app.websocket("/coach")
     async def coach_ws(ws: WebSocket):
@@ -1251,15 +1870,36 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                         if row.get("question"):
                             history.append({"role": "user", "content": row["question"]})
                         if row.get("answer"):
-                            history.append({"role": "assistant", "content": row["answer"]})
+                            # scrub_stored_answer, not the raw row: an older answer can
+                            # assert a fabricated grip reading (#72) or a race start the
+                            # coach could not know (#67) as established fact, and
+                            # resuming the chat would re-feed it to the model as its own
+                            # prior reasoning.
+                            history.append({"role": "assistant",
+                                            "content": scrub_stored_answer(row["answer"],
+                                                                           row["ts"],
+                                                                           row.get("track"))})
                 except Exception:
                     history = []
 
             text = ""
+            # What this turn billed. One usage event arrives per model call, so a
+            # tool-using question contributes several — summing them here is what
+            # makes the ×N tool-loop re-send visible instead of invisible.
+            turn_usage = TokenUsage()
+            used_model: str | None = None
             try:
                 for ev in app.state.coach.ask_agentic_stream(
                         ctx, question, car=car, input_device=req.get("input_device"),
                         history=history, units=ctx.units, driver_profile=driver_profile):
+                    if ev["type"] == "usage":
+                        # Keep the per-turn breakdown server-side (noise on the wire);
+                        # the client gets one cumulative figure on `done`. The model id
+                        # comes from the event, i.e. what actually billed — NOT from
+                        # config, which may have changed since the model was resolved.
+                        turn_usage = turn_usage + TokenUsage(**ev["usage"])
+                        used_model = ev.get("model") or used_model
+                        continue
                     if ev["type"] == "text":
                         text += ev["text"]       # accumulate streamed deltas into the full answer
                     _emit(ev)
@@ -1277,8 +1917,21 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 try:
                     chat_id = req.get("chat_id") or app.state.store.create_chat()
                     app.state.store.save_chat(chat_id, ctx.session_id, ctx.track, ctx.car, ctx.lap_id,
-                                              question, text, ctx.tool_calls)
+                                              question, text, ctx.tool_calls,
+                                              usage=turn_usage.as_dict(), model=used_model)
                     terminal["chat_id"] = chat_id
+                    # Report the CHAT cumulative total, read back from the store after
+                    # the insert: the number the driver sees is then the persisted
+                    # truth rather than a drifting in-memory counter, and it survives
+                    # a sidecar restart. Still inside the swallowing try — a pricing
+                    # or aggregate failure costs the meter, never the answer.
+                    terminal.update(_usage_view(app.state.store.chat_usage(chat_id)))
+                    terminal["model"] = used_model
+                    # Soft long-chat nudge: the core decides, the UI only renders it.
+                    # A SOFT signal — nothing is summarized, windowed or truncated;
+                    # the driver chooses whether to start a New chat. 0 disables it.
+                    soft = cfg.get("chat_token_soft_limit") or 0
+                    terminal["long_chat"] = bool(soft) and terminal["usage"]["total"] >= soft
                 except Exception:
                     pass
             _emit(terminal)
@@ -1373,10 +2026,11 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         track, car = laps[0]["track"], laps[0]["car"]
 
         digest = [f"Session {session_id} -- track {track}, car {car}, {len(laps)} lap(s)."]
-        arc = app.state.store.session_position_arc(session_id)
-        if arc:
-            digest.append(f"Race arc: started P{arc['start']}, best P{arc['best']}, "
-                          f"worst P{arc['worst']}, finished P{arc['last']}.")
+        # Via the shared owner, never a local arc read: an unscoped session_position_arc
+        # here called the first captured lap of ANY phase a starting position, which is
+        # the #67 defect the coach tool was fixed for. One wording, one place.
+        race = race_result_text(app.state.store, session_id)
+        digest.append(race)
 
         cmap = _cmap_for_map(track)
         if cmap and cmap.corners:
@@ -1402,7 +2056,14 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 if m.get("question"):
                     digest.append(f"Driver asked: {m['question']}")
                 if m.get("answer"):
-                    digest.append(f"Coach answered: {m['answer'][:200]}")
+                    # Scrub the SLICE, not the answer: the retraction appends at the
+                    # end, so scrubbing first then truncating would drop the correction
+                    # and keep the fabricated claim. Scrubbing what actually reaches the
+                    # model is also exactly right -- a claim past char 200 never gets
+                    # there, so it needs no retraction (#72).
+                    digest.append("Coach answered: "
+                                  + scrub_stored_answer(m["answer"][:200], m["ts"],
+                                                        m.get("track")))
 
         system = (
             "You are distilling durable driver-profile observations from one session's "
@@ -1504,7 +2165,12 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         return {"api_key_set": True}
 
     @app.post("/settings/test-key")
-    def test_key():
+    def test_key(body: dict = Body(...)):
+        # Body(...) required as a CSRF guard (same mechanism as /mapcapture/*,
+        # see comment above them). Sharper here than elsewhere: this handler
+        # makes a real, BILLED Anthropic call, so a cross-origin page could loop
+        # it with mode:"no-cors" and burn the user's API credit without ever
+        # needing to read a response.
         try:
             cfg = config.load_config()
             model = make_model(model=cfg.get("model"))
@@ -1514,7 +2180,9 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             return {"ok": False, "error": str(e)}
 
     @app.post("/ingest")
-    def ingest():
+    def ingest(body: dict = Body(...)):
+        # Body(...) forces a JSON content-type -- CSRF guard, same mechanism as
+        # /mapcapture/* (see comment above them).
         return ingest_all(store)
 
     @app.delete("/data")

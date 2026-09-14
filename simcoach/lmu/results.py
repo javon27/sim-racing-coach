@@ -3,7 +3,8 @@
 Player identification: `isPlayer` is set for every driver in MP result files
 (useless). Instead, the result file names its own active profile via
 `<PlayerFile>` -> `UserData/player/{PlayerFile}.JSON` -> its "Player Name"
-field, matched against each `<Driver><Name>`. A config override
+field (nested under "DRIVER" in the real file; older/flat shapes are a
+fallback), matched against each `<Driver><Name>`. A config override
 (`lmu_player_name`) short-circuits this lookup. Never raises -- degrades to
 None on any missing file/field."""
 from __future__ import annotations
@@ -33,7 +34,10 @@ def player_name_for(result_root: ET.Element, player_dir: Path) -> str | None:
         profile = json.loads(
             (Path(player_dir) / f"{player_file.text.strip()}.JSON").read_text()
         )
-        name = profile.get("Player Name")
+        driver = profile.get("DRIVER")
+        name = (driver.get("Player Name") if isinstance(driver, dict) else None) or profile.get(
+            "Player Name"
+        )
         return name if name else None
     except (OSError, json.JSONDecodeError, AttributeError):
         return None
@@ -62,9 +66,30 @@ class ResultSession:
     laps: list[ResultLap]
     incidents: list[str]
     penalties: list[dict]
+    # The grid slot the race was STARTED from. Live capture never samples it (the
+    # first lap it records is already underway), so the result log is the only
+    # source -- without it the coach reads its first captured lap as the start and
+    # can report a race backwards (issue #67).
+    grid_position: int | None = None
+    class_grid_position: int | None = None
+    # True when another HUMAN was on track, i.e. what live capture calls an "online"
+    # session (smm: any vehicle with mControl == 2). See _is_online for the signal.
+    online: bool | None = None
 
 
 _SESSION_TAG_RE = re.compile(r"^(Practice|Qualify|Warmup|Race)\d*$")
+
+# Result-log session elements carry an OPTIONAL trailing number: the real logs use
+# "Practice1" (719), "Qualify" (340) and "Race" (347), plus "Warmup". Live capture
+# (smm.session_phase) names the same phases "practice", "qualifying", "warmup", "race". The
+# live/result lap dedupe matches phase exactly, so the bare tag's "qualify" inserted every
+# qualifying result lap as a duplicate of its live twin (#88). Map to live capture's names.
+_RESULT_TAG_PHASE = {"qualify": "qualifying"}
+
+
+def _session_phase(tag: str) -> str:
+    raw = re.sub(r"\d+$", "", tag).lower()
+    return _RESULT_TAG_PHASE.get(raw, raw)
 
 
 def _to_float(text: str | None) -> float | None:
@@ -101,6 +126,22 @@ def _find_player_driver(session_elem: ET.Element, names: set[str]) -> ET.Element
         if (driver.findtext("Name") or "").strip().lower() in names:
             return driver
     return None
+
+
+def _is_online(session_elem: ET.Element) -> bool:
+    """Was another human on track? Live capture's session id ends `--online` when any
+    vehicle has mControl == 2 (a remotely controlled car), so a result log has to answer
+    the same question or the two can't be matched to each other.
+
+    The signal is the NUMBER of drivers flagged `isPlayer`. A multiplayer result file
+    sets it on every driver (hence the module docstring calling it useless for *picking*
+    the player); an offline file sets it only on the human. Measured over 1401 real
+    result logs: every offline file ('Race Weekend') has exactly 1, every multiplayer
+    file with 2+ entries has it on all of them, and it is never partial. `Setting` alone
+    is NOT usable -- the 5 single-entry 'Multiplayer' files are one human alone on a
+    server, which mControl (no remote car) correctly reads as offline, as this does."""
+    return sum(1 for d in session_elem.findall("Driver")
+               if (d.findtext("isPlayer") or "").strip() == "1") > 1
 
 
 def _player_laps(driver: ET.Element) -> list[ResultLap]:
@@ -174,9 +215,12 @@ def parse_result(path, player_names: str | Iterable[str]) -> ResultSession | Non
             car=driver.findtext("VehName"),
             car_class=driver.findtext("CarClass"),
             date_ts=date_ts,
-            session_type=re.sub(r"\d+$", "", session_elem.tag).lower(),
+            session_type=_session_phase(session_elem.tag),
             position=_to_int(driver.findtext("Position")),
             class_position=_to_int(driver.findtext("ClassPosition")),
+            grid_position=_to_int(driver.findtext("GridPos")),
+            class_grid_position=_to_int(driver.findtext("ClassGridPos")),
+            online=_is_online(session_elem),
             best_lap=_to_float(driver.findtext("BestLapTime")),
             finish_status=driver.findtext("FinishStatus"),
             laps=_player_laps(driver),

@@ -11,8 +11,9 @@ import {
   rebuildFromCapture,
   saveRibbon,
   saveMapCloud,
+  getTrackMap,
 } from "./api";
-import TrackMapEditor, { nearestPathIndex, nearestDistIndex, layoutLabels, wrapLabel, localOutward, type LabelItem } from "./TrackMapEditor.svelte";
+import TrackMapEditor, { nearestPathIndex, nearestDistIndex, layoutLabels, wrapLabel, localOutward, startMarker, type LabelItem } from "./TrackMapEditor.svelte";
 
 vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
@@ -28,6 +29,7 @@ vi.mock("./api", async () => {
     rebuildFromCapture: vi.fn(),
     saveRibbon: vi.fn(),
     saveMapCloud: vi.fn(),
+    getTrackMap: vi.fn(),
   };
 });
 
@@ -82,6 +84,39 @@ describe("localOutward", () => {
   });
   it("reports ~zero curvature on a straight", () => {
     expect(localOutward([[0, 0], [10, 0], [20, 0]], 1, 1).curv).toBeLessThan(1e-6);
+  });
+});
+
+describe("startMarker", () => {
+  it("aims the heading arrow along the track where it sits, not along the chord from S/F", () => {
+    // A short start straight into a right-angle bend (Spa's La Source is 278 m in).
+    // The arrow lands past the bend; it must point along the track there (north), where
+    // the old chord from S/F pointed diagonally across the corner.
+    const path: [number, number][] = [[0, 0], [10, 0], [20, 0]];
+    for (let y = 10; y <= 980; y += 10) path.push([20, y]);
+    const m = startMarker(path)!;
+    expect(m.ang).toBeCloseTo(Math.PI / 2, 9);
+    expect(m.sfAng).toBeCloseTo(0, 9); // the S/F bar is square to the start straight
+  });
+
+  it("places the arrow by distance along the drawing, not by how densely the path is sampled", () => {
+    // The same L-shaped track sampled coarsely and finely on its first leg. By point count
+    // (the old rule) the arrow moves with the sampling; by distance it stays at 8% of the
+    // drawing's extent, to within one sample.
+    const build = (step: number) => {
+      const p: [number, number][] = [];
+      for (let x = 0; x <= 2000; x += step) p.push([x, 0]);
+      for (let y = 100; y <= 2000; y += 100) p.push([2000, y]);
+      return p;
+    };
+    for (const step of [100, 5]) {
+      const m = startMarker(build(step))!;
+      expect(Math.abs(m.xj - 2000 * 0.08)).toBeLessThanOrEqual(step);
+    }
+  });
+
+  it("returns null for a path too short to have a direction", () => {
+    expect(startMarker([[0, 0]])).toBeNull();
   });
 });
 
@@ -155,6 +190,21 @@ describe("TrackMapEditor", () => {
     render(TrackMapEditor, { props: { lapId: 7, open: true } });
     expect(await screen.findByText("First")).toBeTruthy();
     expect(getLapMap).toHaveBeenCalledWith(7); // no avg=1 — shows the frozen/canonical ribbon
+  });
+
+  it("says so when the map has an outline but no corners yet", async () => {
+    // A track driven but never corner-mapped (e.g. Fuji): the outline draws, the side
+    // panel was just blank, which read as broken rather than "not mapped yet".
+    vi.mocked(getLapMap).mockResolvedValueOnce({ ...fixture, corners: [] });
+    const { container } = render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    expect(await screen.findByText("No corners mapped for this track yet.")).toBeTruthy();
+    expect(container.querySelector("polyline")).not.toBeNull(); // the outline still renders
+  });
+
+  it("does not show the no-corners message on a mapped track", async () => {
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+    expect(screen.queryByText("No corners mapped for this track yet.")).toBeNull();
   });
 
   it("shows direction read-only (no input to change it)", async () => {
@@ -441,6 +491,31 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     expect(screen.getAllByText("T1").length).toBeGreaterThan(0);
   });
 
+  it("Rebuild says how many laps back the geometry, before Save", async () => {
+    // A map off 1-3 clouds is thin (#41), and the rebuild may be falling back to the
+    // track's own live laps -- the driver has to see the count before committing it.
+    vi.mocked(rebuildFromCapture).mockResolvedValue({ ...ribbonFix, lap_count: 3 });
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+
+    await fireEvent.click(screen.getByText("Rebuild from saved capture"));
+    const footer = (await screen.findByText("Save ribbon")).closest("footer")!;
+    expect(footer.textContent).toContain("from 3 laps");
+    // No elevation-lap warning: width/banking are gated server-side on real lateral
+    // spread, so a lap count says nothing about whether they are right (#69).
+    expect(footer.textContent).not.toMatch(/elevation|banking/i);
+  });
+
+  it("Rebuild omits the lap count when the server didn't send one", async () => {
+    vi.mocked(rebuildFromCapture).mockResolvedValue(ribbonFix);   // no lap_count
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+
+    await fireEvent.click(screen.getByText("Rebuild from saved capture"));
+    const footer = (await screen.findByText("Save ribbon")).closest("footer")!;
+    expect(footer.textContent).not.toMatch(/\blaps?\b/);          // not "from undefined laps"
+  });
+
   it("Rebuild shows a hint when there's no saved capture (422)", async () => {
     vi.mocked(rebuildFromCapture).mockRejectedValue(new Error("API request failed: POST /mapcapture/rebuild -> 422"));
     render(TrackMapEditor, { props: { lapId: 7, open: true } });
@@ -448,6 +523,22 @@ describe("TrackMapEditor — (re)generate map layout", () => {
 
     await fireEvent.click(screen.getByText("Rebuild from saved capture"));
     expect(await screen.findByText(/no saved capture for this track/i)).toBeTruthy();
+  });
+
+  it("Rebuild shows the server's 422 detail, not the no-capture hint, when it sends one", async () => {
+    // #84: an unreadable capture 422s with its path and the way out. The editor is the only
+    // route to a rebuild, and the old hint ("No saved capture") contradicted the badge.
+    const detail = "the saved capture for this track can't be read "
+      + "(C:\\Users\\d\\AppData\\Roaming\\SimCoach\\telemetry\\captures\\fuji_speedway.npz); "
+      + "delete it to build from your 17 laps";
+    vi.mocked(rebuildFromCapture).mockRejectedValue(
+      new Error(`API request failed: POST /mapcapture/rebuild -> 422: ${detail}`));
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+
+    await fireEvent.click(screen.getByText("Rebuild from saved capture"));
+    expect(await screen.findByText(detail)).toBeTruthy();
+    expect(screen.queryByText(/no saved capture for this track/i)).toBeNull();
   });
 
   // Regression: on a fresh/unmapped session (lapId=null) starting a capture must
@@ -466,6 +557,25 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     cap.laps = [{ idx: 0, samples: 500, length: 5000 }];
     await waitFor(() => expect(screen.getByText(/1 lap\(s\) buffered/i)).toBeTruthy());
     expect(cancelMapCapture).not.toHaveBeenCalled(); // still alive while buffering
+  });
+});
+
+describe("TrackMapEditor — Tracks-screen (by-slug) binding", () => {
+  beforeEach(() => {
+    vi.mocked(getTrackMap).mockReset().mockResolvedValue({});
+    vi.mocked(rebuildFromCapture).mockReset().mockResolvedValue(ribbonFix);
+  });
+  afterEach(cleanup);
+
+  it("rebuilds the SELECTED track, not the live one (#26)", async () => {
+    // Editing from the Tracks screen: a slug, no lap. Sending neither lets the
+    // sidecar fall back to the live sim / newest capture and write a different
+    // track's geometry over this one.
+    render(TrackMapEditor, { props: { lapId: null, slug: "autodromo_nazionale_monza", open: true } });
+
+    await fireEvent.click(await screen.findByText("Rebuild from saved capture"));
+
+    expect(rebuildFromCapture).toHaveBeenCalledWith(null, "autodromo_nazionale_monza");
   });
 });
 

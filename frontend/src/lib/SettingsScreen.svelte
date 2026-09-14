@@ -55,6 +55,7 @@
     const cfg = {
       units: settings.units,
       corner_naming: settings.corner_naming,
+      show_cost: settings.show_cost,
       input_device: settings.input_device,
       model: settings.model,
       driver: settings.driver,
@@ -315,6 +316,17 @@
         </div>
       </div>
       <div class="field">
+        <span class="lbl">Cost estimate<InfoTip text="Show the estimated $ next to the chat's token count. Token counts always show; this only hides the dollar figure." /></span>
+        <div class="control">
+          <input
+            type="checkbox"
+            aria-label="Cost estimate"
+            bind:checked={settings.show_cost}
+            onchange={saveConfig}
+          />
+        </div>
+      </div>
+      <div class="field">
         <span class="lbl">API key<InfoTip text="Your Anthropic API key. Stored in the OS keyring, never in a file. Save, then Test to verify." /></span>
         <div class="control">
           <input
@@ -529,7 +541,10 @@
         {:else}
           <div>
             <span class="lbl">Reset all data</span>
-            <p class="sub">Erases every lap, chat, and telemetry file. Can't be undone.</p>
+            <p class="sub">
+              Erases every lap, chat, and telemetry file. Can't be undone. Sessions from LMU's
+              result logs are re-imported automatically within about a minute.
+            </p>
           </div>
           <button type="button" class="danger" onclick={() => (confirmingReset = true)}>
             Reset / clear data

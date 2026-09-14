@@ -12,6 +12,11 @@
   let saving = $state(false);
   let saveStatus: string | null = $state(null);
   let mapOpen = $state(false);
+  // Revision of the notes as loaded. Saving sends it back and the server refuses a stale
+  // one: the map editor (a modal on this screen) can re-key the notes on disk, and saving
+  // the copy held here would put every old key back onto corners it no longer names.
+  let notesRev: string | null = $state(null);
+  let notesStale = $state(false);
 
   let newRefClass = $state("");
   let newRefTime = $state("");
@@ -23,9 +28,22 @@
   // into a single row; only a key that matches no corner and no covering range is a
   // true orphan (surfaced, never silently dropped). Corners are owned by the map (edit
   // them via the map editor), so there's no free-form add here.
+  // A corner number, in a note key and in a corner label: 1-3 ASCII digits, ascending,
+  // spanning at most MAX_RANGE_SPAN corners. COUNTERPART of `note_key_binds` in
+  // simcoach/track_lookup.py (_MAX_CORNER_DIGITS / _NOTE_RANGE / _MAX_RANGE_SPAN),
+  // which is the guard deciding which notes survive a map save. The two must stay
+  // identical: a key that guard drops while this screen shows it collapsed under a
+  // range row is authored prose deleted with no warning to the person who wrote it.
+  const MAX_CORNER_DIGITS = 3;
+  const MAX_RANGE_SPAN = 100;
+  const NUM = String.raw`\d{1,${MAX_CORNER_DIGITS}}`;
+  const CORNER_NUM = new RegExp(`^${NUM}$`);
+  const RANGE_KEY = new RegExp(`^(${NUM})-(${NUM})$`);
   const rangeOf = (k: string): [number, number] | null => {
-    const m = /^(\d+)-(\d+)$/.exec(k);
-    return m ? [Number(m[1]), Number(m[2])] : null;
+    const m = RANGE_KEY.exec(k);
+    if (!m) return null;
+    const [lo, hi] = [Number(m[1]), Number(m[2])];
+    return hi < lo || hi - lo >= MAX_RANGE_SPAN ? null : [lo, hi];   // '13-11' is not one
   };
   const cornerView = $derived.by(() => {
     const keys = Object.keys(notes.corners);
@@ -36,7 +54,12 @@
     for (const c of map.corners) {
       const label = c.label || String(c.number);
       const n = Number(label);
-      const cover = Number.isInteger(n) ? ranges.find(({ r }) => n >= r[0] && n <= r[1]) : undefined;
+      // CANONICAL decimal only. `Number()` alone coerced '07', ' 7 ', '7.0', '+7', '0x7'
+      // and '1e1' to 7 and collapsed that corner under a range covering 7, while the
+      // Python guard probes `str(n) in labels` and matches only '7' -- so the note showed
+      // as bound here and was dropped on the next map save.
+      const cover = CORNER_NUM.test(label) && String(n) === label
+        ? ranges.find(({ r }) => n >= r[0] && n <= r[1]) : undefined;
       if (cover) {
         if (!usedRange.has(cover.key)) { usedRange.add(cover.key); rows.push({ key: cover.key, label: cover.key }); }
         continue; // a covered corner shows under its range row, not its own
@@ -46,11 +69,41 @@
     const valid = new Set(rows.map((row) => row.key));
     return { rows, orphans: keys.filter((k) => !valid.has(k)) };
   });
+  // Both note maps are keyed on FREE TEXT: a corner label typed into the map editor,
+  // and the reference-time class typed into the Add row below. 'toString' / 'valueOf'
+  // resolve through Object.prototype, which broke these objects BOTH ways, so every read
+  // goes through `noteOf` (never `in` + a bare index) and every write through
+  // `setNote`/`setRefTime` (never `notes.corners[k] = v`):
+  //   READ:  `'toString' in notes.corners` was true for a key that did not exist, so the
+  //          seed below skipped it and the row read Object.prototype.toString -- a
+  //          function, which `?? ""` keeps and wordCount() throws "s.trim is not a
+  //          function" on, blanking the screen.
+  //   WRITE: Svelte's $state proxy SILENTLY DISCARDS `obj[k] = v` for such a key -- its
+  //          set trap only creates a source when the key is absent or an own writable
+  //          property, and a prototype-shadowed name is neither. The authored note went
+  //          nowhere at all. Replacing the object materializes a real own property.
+  //   DELETE: `delete notes.corners[k]` leaves the RAW TARGET's key in place -- Svelte's
+  //          deleteProperty never calls Reflect.deleteProperty, it only parks the key's
+  //          source at UNINITIALIZED. Object.keys, `in`, a read and JSON.stringify all
+  //          correctly report it gone; Object.hasOwn does NOT, because
+  //          getOwnPropertyDescriptor hands back the raw target's descriptor. noteOf then
+  //          returned undefined and the seed skipped re-seeding, so a deleted orphan note
+  //          whose corner later reappeared on the map threw the same TypeError.
+  // That last one is the point of this whole shape: NEITHER `in` (wrong after a
+  // prototype-key write) NOR Object.hasOwn (wrong after a delete) is correct on its own.
+  // One honest read primitive requires an honest target, which is what replacing the
+  // object -- on set AND on delete -- is for. Do not "simplify" any of these back.
+  // The class input is the WIDER hole of the two -- the corner label is narrowed to
+  // exactly {toString, valueOf} by PUT /map's 8-char cap, the class input has no cap.
+  const noteOf = (key: string): string =>
+    Object.hasOwn(notes.corners, key) ? notes.corners[key] : "";
+  const setNote = (key: string, v: string) => { notes.corners = { ...notes.corners, [key]: v }; };
+  const setRefTime = (cls: string, v: string) => { notes.reference_times = { ...notes.reference_times, [cls]: v }; };
   // Seed a blank note for every per-corner row so binding + word count are safe and
   // the row shows before it's written (range rows already exist as keys).
   $effect(() => {
     for (const row of cornerView.rows) {
-      if (!(row.key in notes.corners)) notes.corners[row.key] = "";
+      if (!Object.hasOwn(notes.corners, row.key)) setNote(row.key, "");
     }
   });
 
@@ -66,20 +119,34 @@
     saveStatus = null;
     map = null;
     reloadMap();
-    // Pre-fill from the track's existing (migrated) notes so Save can't clobber
-    // them with blanks -- fall back to empty fields if the fetch fails.
+    await loadNotes(t.slug);
+  }
+
+  // Pre-fill from the track's existing (migrated) notes so Save can't clobber
+  // them with blanks -- fall back to empty fields if the fetch fails.
+  async function loadNotes(slug: string) {
+    notesStale = false;
     try {
-      const loaded = await getTrackNotes(t.slug);
+      const loaded = await getTrackNotes(slug);
       notes.overview = loaded.overview ?? "";
       notes.corners = { ...(loaded.corners ?? {}) };
       notes.reference_times = { ...(loaded.reference_times ?? {}) };
       notes.source = loaded.source ?? "";
+      notesRev = loaded.rev ?? null;
     } catch {
       notes.overview = "";
       notes.corners = {};
       notes.reference_times = {};
       notes.source = "";
+      notesRev = null;
     }
+  }
+
+  // Only ever the driver's click: it replaces what they typed with what is on disk.
+  function reloadNotes() {
+    if (!selected) return;
+    saveStatus = null;
+    loadNotes(selected.slug);
   }
 
   // Read-only layout for the map pane. {} (no map yet) -> null so the pane shows
@@ -92,24 +159,52 @@
       .catch(() => { if (selected?.slug === s) map = null; });
   }
 
+  const lapWord = (n: number): string => `${n} lap${n === 1 ? "" : "s"}`;
+
+  // What the coverage badge says. `captures` is the BUILD GATE -- laps whose .npz really
+  // holds the rebuild channels, not laps that merely have a file. Position capture landed
+  // partway through this store's history, so a track can hold live laps and none that can
+  // ever be rebuilt from (Sebring: 15 live, 0 usable). Say that rather than hiding the
+  // row: the driver needs to know those laps are unrecoverable and the track wants
+  // re-driving (#66).
+  // An unreadable saved capture blocks the build whatever the laps hold, so it is named
+  // before the position-data reading, which would otherwise be false (#84).
+  const coverage = (t: TrackRow): string =>
+    t.captures > 0 ? lapWord(t.captures)
+    : t.capture_unreadable ? `saved capture unreadable${t.live_laps > 0 ? `, ${lapWord(t.live_laps)} driven` : ""}`
+    : t.live_laps > 0 ? `${lapWord(t.live_laps)}, none with position data`
+    : "";
+
+  // The build action is just "select it, then open the map editor" -- the editor already
+  // owns the rebuild-from-saved-capture -> save pair (POST /mapcapture/rebuild + /save).
+  // No second write route to a track file.
+  function buildMap(t: TrackRow) {
+    selectTrack(t);
+    mapOpen = true;
+  }
+
   function wordCount(s: string): number {
     return s.trim() ? s.trim().split(/\s+/).length : 0;
   }
 
   function removeCorner(label: string) {
-    delete notes.corners[label];
+    const rest = { ...notes.corners };        // copy, drop, replace -- see the note above:
+    delete rest[label];                       // `delete notes.corners[label]` leaves the
+    notes.corners = rest;                     // key on the target and Object.hasOwn lies.
   }
 
   function addRefTime() {
     const cls = newRefClass.trim();
     if (!cls || !newRefTime.trim()) return;
-    notes.reference_times[cls] = newRefTime.trim();
+    setRefTime(cls, newRefTime.trim());
     newRefClass = "";
     newRefTime = "";
   }
   function removeRefTime(cls: string) {
-    delete notes.reference_times[cls];
-  }
+    const rest = { ...notes.reference_times };   // same shape as removeCorner: no visible
+    delete rest[cls];                            // consequence here today, but the
+    notes.reference_times = rest;                // invariant holds of the file, not of two
+  }                                              // functions someone has to remember.
 
   async function generateDraft() {
     if (!selected) return;
@@ -131,10 +226,23 @@
     saving = true;
     saveStatus = null;
     try {
-      await saveNotes(selected.slug, selected.name, notes);
+      const res = await saveNotes(selected.slug, selected.name, notes, notesRev);
+      notesRev = res.rev ?? null;
       saveStatus = "Saved.";
-    } catch {
-      saveStatus = "Save failed.";
+    } catch (e) {
+      // 409 stale / 428 no rev. Say which, and leave the driver's edits exactly where they
+      // are; reloading replaces what they typed, so it is their click, never automatic.
+      const msg = String((e as Error)?.message ?? "");
+      if (/-> 409\b/.test(msg)) {
+        notesStale = true;
+        saveStatus = "Not saved: these notes changed since you opened them (a map save can move or drop notes). Your edits are still below; copy anything you need, then reload.";
+      } else if (/-> 428\b/.test(msg)) {
+        // No rev means the notes never loaded (notesRev is null) -- nothing changed on disk.
+        notesStale = true;
+        saveStatus = "Not saved: this track's notes didn't load, so the save can't be checked against what's on disk. Your edits are still below; copy anything you need, then reload.";
+      } else {
+        saveStatus = "Save failed.";
+      }
     } finally {
       saving = false;
     }
@@ -156,8 +264,18 @@
                 <span class="badge" class:good={t.has_map}>{t.has_map ? "map" : "no map"}</span>
                 <span class="badge" class:good={t.has_notes}>{t.has_notes ? "notes" : "no notes"}</span>
                 <span class="badge">{t.user_edited ? "edited" : "shipped"}</span>
+                {#if coverage(t)}<span class="badge">{coverage(t)}</span>{/if}
               </span>
             </button>
+            {#if !t.has_map && t.captures > 0}
+              <!-- Driven, never mapped (#69). Gated on `captures`, NOT on live_laps: a
+                   button offering to build from laps that carry no position data leads
+                   straight back to the 422 this issue exists to remove.
+                   EXPLICIT action, never automatic, and it says what backs it (#41). -->
+              <button type="button" class="build" onclick={() => buildMap(t)}>
+                Build map from {lapWord(t.captures)}
+              </button>
+            {/if}
           </li>
         {/each}
       </ul>
@@ -183,8 +301,9 @@
         {#each cornerView.rows as row (row.key)}
           <div class="corner-row">
             <span class="clabel">T{row.label}</span>
-            <textarea rows="2" bind:value={notes.corners[row.key]} aria-label={`corner note ${row.key}`}></textarea>
-            <span class="wc">{wordCount(notes.corners[row.key] ?? "")}/50</span>
+            <textarea rows="2" aria-label={`corner note ${row.key}`}
+              bind:value={() => noteOf(row.key), (v) => setNote(row.key, v)}></textarea>
+            <span class="wc">{wordCount(noteOf(row.key))}/50</span>
           </div>
         {/each}
         {#if cornerView.orphans.length}
@@ -192,8 +311,9 @@
           {#each cornerView.orphans as key (key)}
             <div class="corner-row">
               <span class="clabel orphan">{key}</span>
-              <textarea rows="2" bind:value={notes.corners[key]} aria-label={`corner note ${key}`}></textarea>
-              <span class="wc">{wordCount(notes.corners[key] ?? "")}/50</span>
+              <textarea rows="2" aria-label={`corner note ${key}`}
+                bind:value={() => noteOf(key), (v) => setNote(key, v)}></textarea>
+              <span class="wc">{wordCount(noteOf(key))}/50</span>
               <button type="button" class="rm" aria-label={`remove corner note ${key}`} onclick={() => removeCorner(key)}>×</button>
             </div>
           {/each}
@@ -205,7 +325,8 @@
         {#each Object.keys(notes.reference_times) as cls (cls)}
           <div class="ref-row">
             <span class="clabel">{cls}</span>
-            <input type="text" bind:value={notes.reference_times[cls]} aria-label={`reference time ${cls}`} />
+            <input type="text" aria-label={`reference time ${cls}`}
+              bind:value={() => notes.reference_times[cls], (v) => setRefTime(cls, v)} />
             <button type="button" class="rm" aria-label={`remove reference time ${cls}`} onclick={() => removeRefTime(cls)}>×</button>
           </div>
         {/each}
@@ -234,6 +355,9 @@
           {saving ? "Saving…" : "Save"}
         </button>
         {#if saveStatus}<span class="status">{saveStatus}</span>{/if}
+        {#if notesStale}
+          <button type="button" onclick={reloadNotes}>Reload notes (discards unsaved edits)</button>
+        {/if}
       </div>
     </div>
 
@@ -327,6 +451,12 @@
     color: var(--good);
     border-color: var(--good);
     background: var(--good-soft);
+  }
+  .build {
+    width: 100%;
+    margin-top: 4px;
+    font-size: 11px;
+    padding: 5px 10px;
   }
   .empty {
     color: var(--faint);

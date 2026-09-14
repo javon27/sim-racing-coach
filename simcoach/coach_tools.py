@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 import time
 
-from simcoach.analysis import analyze_lap, time_loss_buckets
+from simcoach.analysis import analyze_lap, geometry_clause, time_loss_buckets
 from simcoach.coach import _setup_lines
 from simcoach.format import (
     find_corner,
@@ -24,6 +24,7 @@ from simcoach.format import (
     format_wheel_report,
 )
 from simcoach.fuel import fuel_per_lap_from_channel, laps_remaining
+from simcoach.track_lookup import load_track_knowledge, note_key_binds
 
 # Tool specs advertised to the model (Anthropic tool-use format).
 TOOLS = [
@@ -37,7 +38,7 @@ TOOLS = [
     {
         "name": "list_recent_laps",
         "description": "List recent laps for the current track/car (newest first) with "
-                       "the lap's in-session number (per phase, e.g. 'race lap 3' — the "
+                       "the lap's in-session number (per phase, e.g. 'lap 3' — the "
                        "same numbering the driver sees), time, and validity. Refer to laps "
                        "by that number; never invent or cite a database id.",
         "input_schema": {
@@ -55,7 +56,7 @@ TOOLS = [
             "type": "object",
             "properties": {"which": {"type": "string",
                                      "description": "'latest' (default), 'best', or an in-session "
-                                                    "lap number like 'race lap 3'."}},
+                                                    "lap number like 'lap 3'."}},
         },
     },
     {
@@ -91,17 +92,20 @@ TOOLS = [
     {
         "name": "get_corner",
         "description": "The telemetry facts for ONE corner, by number (e.g. '10') or name "
-                       "(e.g. 'Village'). Use this for a question about a specific corner "
-                       "instead of pulling the whole lap. Pass `which` to target a specific "
-                       "lap — do this whenever the conversation is about a particular lap "
-                       "(e.g. 'race lap 2'); it defaults to the latest lap otherwise.",
+                       "(e.g. 'Village'), plus its baked geometry (radius/width/banking/"
+                       "elevation change) and authored note when the map has them. Use this "
+                       "for shape/elevation/radius/banking questions, not just lap facts — "
+                       "never invent geometry from general knowledge, and use it instead of "
+                       "pulling the whole lap. Pass `which` to target a specific lap — do "
+                       "this whenever the conversation is about a particular lap (e.g. "
+                       "'lap 2'); it defaults to the latest lap otherwise.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "corner": {"type": "string", "description": "Corner number or name."},
                 "which": {"type": "string",
                           "description": "Which lap: 'latest' (default), 'best', or an "
-                                         "in-session lap number like 'race lap 2'."},
+                                         "in-session lap number like 'lap 2'."},
             },
             "required": ["corner"],
         },
@@ -122,7 +126,11 @@ TOOLS = [
     {
         "name": "get_setup",
         "description": "The car's current adjustable setup values, so setup advice can name "
-                       "specific changes. Includes which adjustments are legal this tier.",
+                       "specific changes. Includes which adjustments are legal this tier, and "
+                       "each param's current position as (step N of lo-hi) -- an option INDEX, "
+                       "not a physical value: use it to see whether a param is already at its "
+                       "limit and which way it can move, never restate it as a rate/pressure/"
+                       "angle. Step size is NOT exposed; give direction, not an exact amount.",
         "input_schema": {"type": "object", "properties": {}},
     },
     {
@@ -252,6 +260,140 @@ TOOLS = [
 ]
 
 
+# Claims a stored answer makes that the code now knows were never true, as
+# (pattern, cutoff, retraction): an answer written before `cutoff` (epoch seconds) that
+# matches `pattern` re-enters the model's context with `retraction` appended. Each
+# pattern was measured against every answer in the driver's store and against the
+# authored knowledge/*.md and cars/*.json prose, and matches exactly the poisoned rows.
+_STORED_ANSWER_RETRACTIONS = (
+    # #72: mGripFract is never populated by LMU, so every grip reading was fabricated --
+    # no cutoff. Shapes in the store: "min grip reading zero", "**Min grip 0.00**",
+    # "grip drops to **0.00**".
+    (re.compile(r"min[ _]grip|grip[^.\n]{0,40}\b0\.00\b", re.IGNORECASE),
+     float("inf"),
+     ("\n\n[Correction, added on read and not part of what was said: the answer above "
+      "cites a grip reading (a \"min grip\" figure, or grip falling to zero). That "
+      "channel (mGripFract) is never populated by the game -- it reads zero on every "
+      "captured lap of every car -- so the figure was fabricated and any conclusion "
+      "drawn from it is void. Disregard it and do not repeat it.]")),
+    # #67: until the fix merged (56aa319, 2026-09-10 10:22:07 -05:00) get_race_result
+    # could not reach a live session's result log and never had the grid slot. Shapes:
+    # "started **P18**", "P1 starting spot", "P14 to P9", "P1→P34", "from P4 down",
+    # "No incidents". After the fix the coach legitimately says "Started P9 on the grid",
+    # which this pattern also matches -- the cutoff, not the pattern, spares it.
+    # ponytail: a sidecar still running pre-fix code past the cutoff writes rows this
+    # treats as post-fix; none exist in the store, key on the code version if one does.
+    (re.compile(r"\bstart\w*\W{1,4}P\d+|\bP\d+\W{1,4}start|\bP\d+\W{0,4}(?:→|->|to)"
+                r"\W{0,4}P\d+|\bfrom\W{1,4}P\d+\W{1,4}(?:up|down)\b|\bno incidents\b",
+                re.IGNORECASE),
+     1789053727.0,
+     ("\n\n[Correction, added on read and not part of what was said: the answer above "
+      "states a starting position, or that no incidents were logged. It was written "
+      "before the coach could read the race's result log: its \"start\" was only the "
+      "first lap capture happened to record, already underway and never the grid slot, "
+      "and \"no incidents\" meant none were visible to it, not that none happened. Treat "
+      "both as unverified and do not repeat the earlier figures. get_race_result "
+      "names the track of the session it reports: use its figures for the race this "
+      "answer was about only if {same_race}.]")),
+)
+
+
+def scrub_stored_answer(answer: str, ts: float, track: str | None = None) -> str:
+    """Annotate a stored coach answer, written at `ts`, before it re-enters the model's
+    context.
+
+    Filter on READ, never on disk: the coach did say those things, and rewriting the
+    driver's own conversation history is a worse wrong than leaving a bad number in it
+    (issue #72). The stored row and the UI display stay untouched; only the copy that
+    becomes the model's prior reasoning carries the retraction.
+
+    Deliberately narrow. A blanket filter on "grip" would strip the legitimate authored
+    driving prose that `simcoach/knowledge/*.md` and `simcoach/cars/*.json` are full of,
+    and that prose reaches the model through other tools.
+
+    New answers CAN still match: each retraction names the claim it retracts, so a model
+    that echoes a correction writes a row that matches again. For grip that row is just
+    retracted again; for the race start it falls after the cutoff and is left alone.
+    """
+    if not answer:
+        return answer
+    # `track` is the track the stored answer was about. The race retraction can only be
+    # checked against get_race_result if it names one: the resumed history itself usually
+    # never does, so without it "the same race" is a condition the model cannot test.
+    same_race = f"the track it names is {track}" if track else "it is that same race"
+    return answer + "".join(retraction.replace("{same_race}", same_race)
+                            for pattern, cutoff, retraction in _STORED_ANSWER_RETRACTIONS
+                            if ts < cutoff and pattern.search(answer))
+
+
+def race_result_text(store, session_id) -> str:
+    """The session's race outcome as prompt text: grid slot, finish, incidents, and
+    the live per-lap position arc.
+
+    The single owner of that wording. Every surface that describes a race to the model
+    calls this -- the coach tool AND the profile digest. The digest used to phrase its
+    own copy ("Race arc: started P{start} ... finished P{last}") off an unscoped arc,
+    which is exactly the #67 defect: `start` is the first lap capture happened to
+    record, mid-race, and an unscoped arc reads it from whatever phase came first.
+    Two copies meant fixing one left the other asserting the opposite as fact.
+    """
+    rr = store.race_session(session_id) if session_id else None
+    # Race stint only — a session_id spans practice/qualy/race, so an all-phase arc
+    # would read the start/worst from an earlier phase (wrong start position).
+    # Bound the arc to the race the result row actually describes: phase='race'
+    # alone spans every race in the sitting, so a second race's grid would be
+    # reported next to the first race's lap positions. With no result row (a race
+    # still being driven, whose log does not exist yet) there is no race_ts, so fall
+    # back to the floor the store derives from the last logged race.
+    arc = None
+    if session_id:
+        since = (rr.get("race_ts") if rr
+                 else store.unlogged_race_since(session_id))
+        arc = store.session_position_arc(
+            session_id, phase="race", since=since,
+            until=rr.get("next_race_ts") if rr else None)
+    if not rr and not arc:
+        return ("No race result recorded for this session (practice/qualy, or not a "
+                "completed race).")
+    lines = []
+    if rr:
+        if rr["grid_position"] is not None:
+            grid = f"Started P{rr['grid_position']} on the grid"
+            if (rr["class_grid_position"] is not None
+                    and rr["class_grid_position"] != rr["grid_position"]):
+                grid += f" (P{rr['class_grid_position']} in class)"
+            lines.append(grid + ".")
+        parts = []
+        if rr["position"] is not None:
+            parts.append(f"Finished P{rr['position']} overall")
+        if rr["class_position"] is not None:
+            parts.append(f"P{rr['class_position']} in class")
+        if rr["finish_status"]:
+            parts.append(f"status: {rr['finish_status']}")
+        lines.append("; ".join(parts) + "." if parts else "Race result recorded.")
+        incidents = rr["incidents"]
+        if incidents:
+            head = "; ".join(incidents[:3])
+            more = f" (+{len(incidents) - 3} more)" if len(incidents) > 3 else ""
+            lines.append(f"Incidents ({len(incidents)}): {head}{more}")
+        penalties = rr["penalties"]
+        if penalties:
+            texts = [str(p.get("text") or p) for p in penalties[:3]]
+            lines.append(f"Penalties ({len(penalties)}): {'; '.join(texts)}")
+    if arc:
+        # NEVER call arc['start'] a starting position: it is the first lap capture
+        # happened to record, which is already underway (issue #67 reported a P9
+        # start as P18 this way). The grid slot only ever comes from the result log.
+        line = (f"Live per-lap positions over {arc['laps']} captured lap(s): "
+                f"P{arc['start']} on the first captured lap, as low as "
+                f"P{arc['worst']}, P{arc['last']} on the most recent.")
+        if not (rr and rr["grid_position"] is not None):
+            line += (" The grid position was not captured, so the first captured lap "
+                     "is NOT the starting position -- do not report a start.")
+        lines.append(line)
+    return "\n".join(lines)
+
+
 class CoachContext:
     """Live data bound for one question; tools read from it. Rebuilt each turn."""
 
@@ -303,11 +445,15 @@ class CoachContext:
         self._current_lap_cache = found
         return found
     def _lap_numbering(self) -> tuple[dict, dict]:
-        """Per-phase, in-session lap numbering matching the UI (laps numbered 1..N
-        within each phase, in ts order). Returns (label_by_id, id_by_ref):
-        label_by_id[lap_id] -> e.g. 'race lap 3'; id_by_ref maps textual refs the
-        model might use ('race 3', 'race lap 3', or a bare number in the current
-        phase) back to the DB lap_id. Cached per turn."""
+        """In-session lap numbering matching the UI (LapList.svelte): laps are
+        grouped into CONSECUTIVE same-phase runs in ts order, numbered 1..N within
+        each run -- a run restarts at 1 if the phase value changes and later comes
+        back (e.g. practice -> race -> practice), same as the UI's groups. Returns
+        (label_by_id, id_by_ref): label_by_id[lap_id] -> e.g. 'race lap 3';
+        id_by_ref maps textual refs the model might use ('race 3', 'race lap 3',
+        and -- for the current phase's run -- the UI's unprefixed 'lap 3' or a bare
+        '3') back to the DB lap_id.
+        Cached per turn."""
         if self._lap_numbering_cache is not None:
             return self._lap_numbering_cache
         label_by_id: dict[int, str] = {}
@@ -315,19 +461,25 @@ class CoachContext:
         if self.session_id:
             cur_rec, _ = self._current_lap()
             cur_phase = cur_rec.phase if cur_rec is not None else None
-            counts: dict = {}
+            prev_phase: object = object()  # sentinel -- never equals a real phase value
+            n = 0
             for lap in self.store.session_laps(self.session_id):
                 ph = lap.get("phase")
-                counts[ph] = counts.get(ph, 0) + 1
-                n = counts[ph]
+                n = n + 1 if ph == prev_phase else 1
+                prev_phase = ph
                 label_by_id[lap["id"]] = f"{ph} lap {n}" if ph else f"lap {n}"
                 if ph:
                     id_by_ref[f"{ph} {n}".lower()] = lap["id"]
                     id_by_ref[f"{ph} lap {n}".lower()] = lap["id"]
                     if ph == cur_phase:
-                        id_by_ref[str(n)] = lap["id"]  # bare number -> current phase
+                        # Bare number AND the UI's own unprefixed wording ("lap 35"),
+                        # which is what the driver reads off the lap list and the model
+                        # then echoes -- it must resolve, not look like a third scheme.
+                        id_by_ref[str(n)] = lap["id"]
+                        id_by_ref[f"lap {n}"] = lap["id"]
                 else:
                     id_by_ref[str(n)] = lap["id"]
+                    id_by_ref[f"lap {n}"] = lap["id"]
         self._lap_numbering_cache = (label_by_id, id_by_ref)
         return self._lap_numbering_cache
 
@@ -355,8 +507,11 @@ class CoachContext:
 
     def _resolve_lap(self, which):
         """which -> (record, lap_id). 'latest'/None -> current; 'best' -> best lap;
-        an in-session lap reference ('race lap 3', 'race 3', or a bare number in the
-        current phase) -> that lap; a bare number falls back to a raw DB id."""
+        an in-session lap reference ('race lap 3', 'race 3', 'lap 3' or a bare number
+        in the current phase) -> that lap. A raw DB id is accepted ONLY where the
+        listing itself had to fall back to raw ids (no in-session numbering) and only
+        for this track/car -- never as a guess at a number the in-session numbering
+        simply doesn't cover, which could pull an unrelated lap (issue #34)."""
         which = (which or "latest").strip().lower()
         if which in ("latest", "current", ""):
             return self._current_lap()
@@ -366,20 +521,38 @@ class CoachContext:
             best = self.store.best_lap(self.track, self.car)
             # best_lap returns the record; find its id via recent list match on time
             return best, None
-        # In-session per-phase reference (matches how laps are named to the driver).
+        # In-session reference (matches how laps are named to the driver) first.
         _, id_by_ref = self._lap_numbering()
-        if which in id_by_ref:
-            lid = id_by_ref[which]
-            try:
-                return self.store.load(lid), lid
-            except Exception:
-                return None, None
-        if which.isdigit():
-            try:
-                return self.store.load(int(which)), int(which)
-            except Exception:
-                return None, None
-        return None, None
+        lid = id_by_ref.get(which)
+        # With no in-session numbering (e.g. the REPL asking before this run's first
+        # lap lands), `list_recent_laps` labels laps by their raw DB id -- so that is
+        # the only reference the model can give back, and refusing it makes the tool
+        # surface contradict itself. Accept it there, but only for a lap that really
+        # belongs to this track/car, so it can never pull an unrelated lap (issue #34).
+        if lid is None and not id_by_ref:
+            raw = which.removeprefix("lap ")
+            if raw.isdigit() and int(raw) in set(self.store.list_lap_ids(self.track, self.car)):
+                lid = int(raw)
+        if lid is None:
+            return None, None
+        try:
+            return self.store.load(lid), lid
+        except Exception:
+            return None, None
+
+    def _no_lap_msg(self, which) -> str:
+        """Failure text for an unresolvable lap reference. Names this session's phase
+        and lap range so the model can correct itself instead of handing the driver a
+        dead end -- the schema's old 'race lap N' example primed exactly that wrong
+        guess in a practice session (issue #34)."""
+        cur_rec, _ = self._current_lap()
+        phase = cur_rec.phase if cur_rec is not None else None
+        # The bare-number keys are precisely the current phase's run of laps.
+        _, id_by_ref = self._lap_numbering()
+        n = max((int(k) for k in id_by_ref if k.isdigit()), default=0)
+        if phase and n:
+            return f"No lap matching {which!r}. This session is {phase}, laps 1-{n}."
+        return "No lap available for that request (none captured yet, or unknown lap)."
 
     # --- tools -----------------------------------------------------------
     def get_session_status(self):
@@ -431,7 +604,7 @@ class CoachContext:
     def get_lap_summary(self, which="latest"):
         record, lap_id = self._resolve_lap(which)
         if record is None:
-            return "No lap available for that request (none captured yet, or unknown id)."
+            return self._no_lap_msg(which)
         if self.cmap is None:
             return "No corner map for this track yet — can't break the lap into corners."
         analysis = self._analysis_for(record, lap_id)
@@ -492,7 +665,7 @@ class CoachContext:
     def get_corner(self, corner, which="latest"):
         record, lap_id = self._resolve_lap(which)
         if record is None:
-            return "No lap available for that request (none captured yet, or unknown lap)."
+            return self._no_lap_msg(which)
         if self.cmap is None:
             return "No corner map for this track yet — can't break the lap into corners."
         analysis = self._analysis_for(record, lap_id)
@@ -501,36 +674,66 @@ class CoachContext:
             names = ", ".join(f"T{c.label or c.corner_no} {c.name}" for c in analysis.corners)
             return f"No corner matching {corner!r}. Corners this track: {names}"
         line = format_corner_line(cm, self.units)
-        note = self._corner_note(cm.label or cm.corner_no)
-        return f"{line}\nAuthored note: {note}" if note else line
+        label = cm.label or cm.corner_no
+        note = self._corner_note(label)
+        if note:
+            line += f"\nAuthored note: {note}"
+        geo = self._corner_geometry_clause(label, cm.direction)
+        if geo:
+            line += f"\nGeometry (baked from the track map): {geo}"
+        return line
 
     def _corner_note(self, label) -> str | None:
         """Authored note for one corner label from the merged map, or None.
 
-        Notes may be keyed by a hyphen range ("10-11") covering several
-        corners, while corner maps label corners individually ("10", "11").
-        Fall back to a range match when the label is a plain integer.
+        Notes may be keyed by a hyphen range ("10-11") covering several corners,
+        while corner maps label corners individually ("10", "11"). `note_key_binds`
+        owns that grammar, shared with the map-save guard that decides which notes
+        survive a rebuild -- the two must agree on what a key names, or the guard
+        deletes notes this path could still serve.
+
+        Not a pure delegation: two rules live here rather than in the grammar.
+        An exact label is looked up FIRST, so a specific '12' note wins over a
+        '11-13' note covering it whatever order the dict happens to carry them in.
+        And the range scan takes the first covering key it meets, so two overlapping
+        ranges resolve by insertion order -- no shipped map has any.
         """
+        # 'corner' reaches here straight from the model's tool call, so it is arbitrary
+        # text; `note_key_binds` is total and the lookups are by string, so no shape of
+        # it can raise out of an LLM-callable tool.
         notes = getattr(self.cmap, "notes", None) or {}
         by_corner = notes.get("corners") or {}
         label = str(label)
-        if label in by_corner:
+        if label in by_corner:   # an exact label wins over a range that covers it
             return by_corner[label]
-        if not label.isdigit():
-            return None
-        n = int(label)
         for key, text in by_corner.items():
-            m = re.fullmatch(r"(\d+)-(\d+)", key)
-            if m and int(m.group(1)) <= n <= int(m.group(2)):
+            if note_key_binds(key, {label}):
                 return text
         return None
+
+    def _corner_geometry_clause(self, label, direction) -> str:
+        """Baked geometry (radius/width/banking/elevation) for one corner label, as
+        an owned-data clause, or '' if the map carries none for this corner.
+
+        `direction` is the corner's computed turn direction; banking reads as
+        banked or off-camber only against it (issue #35).
+        """
+        geometry = getattr(self.cmap, "geometry", None) or {}
+        metrics = geometry.get(str(label))
+        if not metrics:
+            return ""
+        return geometry_clause(metrics, direction)
 
     def get_track_notes(self, corner=None):
         notes = getattr(self.cmap, "notes", None) or {}
         overview = (notes.get("overview") or "").strip()
         by_corner = notes.get("corners") or {}
         if not overview and not by_corner:
-            return f"No authored notes for {self.track or 'this track'} yet."
+            # No notes on the map file (or no map file at all) — fall back to the
+            # authored `knowledge/<slug>.md` prose note. Verbatim: the coach states
+            # these as owned fact, so reaching them must not reformat them.
+            return (load_track_knowledge(self.track)
+                    or f"No authored notes for {self.track or 'this track'} yet.")
         lines = []
         if overview:
             lines.append(overview)
@@ -627,38 +830,16 @@ class CoachContext:
         return "\n".join(lines) if lines else "No fuel/energy data captured for this lap."
 
     def get_race_result(self):
-        rr = self.store.race_session(self.session_id) if self.session_id else None
-        # Race stint only — a session_id spans practice/qualy/race, so an all-phase arc
-        # would read the start/worst from an earlier phase (wrong start position).
-        arc = self.store.session_position_arc(self.session_id, phase="race") if self.session_id else None
-        if not rr and not arc:
-            return ("No race result recorded for this session (practice/qualy, or not a "
-                    "completed race).")
-        lines = []
-        if rr:
-            parts = []
-            if rr["position"] is not None:
-                parts.append(f"Finished P{rr['position']} overall")
-            if rr["class_position"] is not None:
-                parts.append(f"P{rr['class_position']} in class")
-            if rr["finish_status"]:
-                parts.append(f"status: {rr['finish_status']}")
-            lines.append("; ".join(parts) + "." if parts else "Race result recorded.")
-            incidents = rr["incidents"]
-            if incidents:
-                head = "; ".join(incidents[:3])
-                more = f" (+{len(incidents) - 3} more)" if len(incidents) > 3 else ""
-                lines.append(f"Incidents ({len(incidents)}): {head}{more}")
-            penalties = rr["penalties"]
-            if penalties:
-                texts = [str(p.get("text") or p) for p in penalties[:3]]
-                lines.append(f"Penalties ({len(penalties)}): {'; '.join(texts)}")
-        if arc:
-            lines.append(
-                f"In-race: started P{arc['start']}, as low as P{arc['worst']}, "
-                f"currently/finished P{arc['last']}."
-            )
-        return "\n".join(lines)
+        # Name the track of the session these figures DESCRIBE, taken from that session's
+        # own laps -- never self.track, which follows the live game or the last capture
+        # and can be another track entirely (reviewing Silverstone while the game sat at
+        # Fuji labelled Silverstone's result "Fuji"). A resumed chat's race retraction lets
+        # the model use these figures only for the same race, so a wrong label is worse
+        # than none.
+        text = race_result_text(self.store, self.session_id)
+        laps = self.store.session_laps(self.session_id) if self.session_id else []
+        track = laps[0].get("track") if laps else None
+        return f"Session track: {track}.\n{text}" if track else text
 
     def get_setup(self):
         if not self.setup:

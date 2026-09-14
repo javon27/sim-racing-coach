@@ -8,14 +8,14 @@
       "direction": "right",
       "start_dist": 657.8,
       "apex_dist": 744.1,
-      "end_dist": 808.8,
+      "end_dist": 792.7,
       "apexes": [
         744.1
       ],
       "radius_m": 17.2,
       "width_m": 8.9,
       "banking_deg": 1.4,
-      "elev_delta_m": -1.0
+      "elev_delta_m": -0.9
     },
     {
       "number": 2,
@@ -24,14 +24,14 @@
       "direction": "left",
       "start_dist": 808.8,
       "apex_dist": 841.2,
-      "end_dist": 916.6,
+      "end_dist": 895.1,
       "apexes": [
         841.2
       ],
       "radius_m": 84.5,
       "width_m": 12.2,
       "banking_deg": -0.6,
-      "elev_delta_m": 1.7
+      "elev_delta_m": 1.0
     },
     {
       "number": 3,
@@ -86,16 +86,16 @@
       "label": "6",
       "name": "Turn 6",
       "direction": "right",
-      "start_dist": 1811.7,
+      "start_dist": 1844.1,
       "apex_dist": 1898.0,
-      "end_dist": 1962.7,
+      "end_dist": 1957.3,
       "apexes": [
         1898.0
       ],
       "radius_m": 80.5,
       "width_m": 11.1,
       "banking_deg": 1.4,
-      "elev_delta_m": -2.3
+      "elev_delta_m": -1.6
     },
     {
       "number": 7,
@@ -9726,7 +9726,10 @@
     5370.5,
     5381.29
   ],
-  "sectors": [],
+  "sectors": [
+    1712.1,
+    3974.2
+  ],
   "sections": [],
   "length": 5381.29,
   "rotation": 0.0,

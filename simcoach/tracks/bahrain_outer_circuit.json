@@ -24,14 +24,14 @@
       "direction": "left",
       "start_dist": 787.5,
       "apex_dist": 822.7,
-      "end_dist": 900.0,
+      "end_dist": 882.5,
       "apexes": [
         822.7
       ],
       "radius_m": 33.0,
       "width_m": 13.9,
       "banking_deg": -0.8,
-      "elev_delta_m": 1.2
+      "elev_delta_m": 0.8
     },
     {
       "number": 3,
@@ -56,7 +56,7 @@
       "direction": "right",
       "start_dist": 1441.5,
       "apex_dist": 1518.8,
-      "end_dist": 1589.1,
+      "end_dist": 1585.6,
       "apexes": [
         1518.8
       ],
@@ -104,30 +104,30 @@
       "direction": "left",
       "start_dist": 2018.1,
       "apex_dist": 2025.1,
-      "end_dist": 2102.5,
+      "end_dist": 2060.2,
       "apexes": [
         2025.1
       ],
       "radius_m": 27.9,
       "width_m": 10.8,
       "banking_deg": -0.7,
-      "elev_delta_m": 3.1
+      "elev_delta_m": 1.6
     },
     {
       "number": 8,
       "label": "8",
       "name": "Turn 8",
       "direction": "right",
-      "start_dist": 2018.1,
+      "start_dist": 2060.2,
       "apex_dist": 2095.4,
       "end_dist": 2172.8,
       "apexes": [
         2095.4
       ],
-      "radius_m": 27.9,
+      "radius_m": 37.6,
       "width_m": 11.0,
       "banking_deg": 1.0,
-      "elev_delta_m": 1.3
+      "elev_delta_m": -0.3
     },
     {
       "number": 9,
@@ -152,30 +152,30 @@
       "direction": "right",
       "start_dist": 2949.9,
       "apex_dist": 3037.6,
-      "end_dist": 3125.3,
+      "end_dist": 3086.8,
       "apexes": [
         3037.6
       ],
       "radius_m": 21.8,
       "width_m": 14.2,
       "banking_deg": 1.4,
-      "elev_delta_m": -2.7
+      "elev_delta_m": -1.9
     },
     {
       "number": 11,
       "label": "11",
       "name": "Turn 11",
       "direction": "right",
-      "start_dist": 3048.3,
+      "start_dist": 3086.8,
       "apex_dist": 3136.0,
       "end_dist": 3223.7,
       "apexes": [
         3136.0
       ],
-      "radius_m": 30.5,
+      "radius_m": 82.4,
       "width_m": 16.0,
       "banking_deg": 1.4,
-      "elev_delta_m": -3.3
+      "elev_delta_m": -2.5
     }
   ],
   "path": [
@@ -2682,7 +2682,10 @@
     3501.66,
     3508.69
   ],
-  "sectors": [],
+  "sectors": [
+    1702.6,
+    2381.5
+  ],
   "sections": [],
   "length": 3508.69,
   "rotation": 0.0,

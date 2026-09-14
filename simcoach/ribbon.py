@@ -77,11 +77,18 @@ def reconstruct_ribbon(left_channels: dict, right_channels: dict, bins: int = 50
     width = np.hypot(lx - rx, lz - rz)
     seg = np.hypot(np.diff(cx), np.diff(cz))
     dist = np.concatenate([[0.0], np.cumsum(seg)])
-    # Bank from elevation. Convention MATCHES reconstruct_surface: positive = the
-    # RIGHT edge is higher (surface fits y vs +lateral offset). atan2 handles
-    # width->0; missing pos_y -> flat. Sign still rig-unverified on a banked track.
+    # Bank from elevation. Convention MATCHES reconstruct_surface: positive =
+    # banked for a right-hander, negative = banked for a left-hander
+    # (rig-validated, 9756b65). reconstruct_surface gets that by fitting y against
+    # the +lateral offset and +lateral is the driver's LEFT (#58, see _lateral), so
+    # here it is the LEFT edge being higher that reads positive. This subtracted the
+    # other way round while claiming the two matched -- they disagreed by a sign.
+    # Nothing in the app calls reconstruct_ribbon (capture goes through
+    # reconstruct_surface), so no shipped number moves; it was a trap waiting for
+    # whoever revived the edge-lap capture path. atan2 handles width->0; no pos_y
+    # -> flat.
     if ly is not None and ry is not None:
-        bank = np.arctan2(ry - ly, np.maximum(width, 1e-9))
+        bank = np.arctan2(ly - ry, np.maximum(width, 1e-9))
     else:
         bank = np.zeros(len(grid))
 
@@ -171,7 +178,18 @@ def _smooth_curve(x: np.ndarray, z: np.ndarray, base_w: int, pct: float = 88.0) 
 
 
 def _lateral(cx: np.ndarray, cz: np.ndarray):
-    """Unit lateral (perpendicular to the centered-diff tangent, rot +90), closed loop."""
+    """Unit lateral (perpendicular to the centered-diff tangent, rot +90), closed
+    loop. **+lateral is the driver's LEFT side of travel** -- an empirical
+    (x, z)-handedness fact, not derived from RIGHT_IS_POSITIVE. Settled in #58 off
+    the shipped maps: every corner with >=1 deg of baked camber reads positive on
+    right-handers and negative on left-handers, and since those corners really are
+    cambered (outer edge higher), the higher side of a cambered right-hander is the
+    driver's LEFT -- the side this calls positive. The opposite reading would make
+    Parabolica, both Lesmos, Rainey and Tosa all off-camber. Agrees with both the
+    rig-validated banking sign (9756b65) and trackmap's direction convention.
+    Pinned from both sides by test_lateral_points_left_of_travel_not_right and
+    test_left_key_is_the_inside_of_a_cambered_left_hander, the latter tying this
+    handedness to that banking sign so neither can move alone."""
     tx, tz = np.roll(cx, -1) - np.roll(cx, 1), np.roll(cz, -1) - np.roll(cz, 1)
     tn = np.hypot(tx, tz); tn[tn == 0] = 1.0
     return -tz / tn, tx / tn
@@ -186,9 +204,68 @@ def _lap_grid(x, z, d, max_len, bins):
     return _fill_nan(ex, period=bins), _fill_nan(ez, period=bins)
 
 
+# The lateral range (metres) a bin's samples must span before WIDTH or BANK is
+# estimated there; below it both are written as unknown (None). Laps on one racing
+# line never supply that range at any lap count, and a fit across ~1 m of them is
+# noise: on real Silverstone National clouds the old >1e-6 m test saved max bank 48 deg
+# off 1 elevation lap and 21 deg off 3, and a 4-lap build saved a median width of
+# 1.4 m -- both reaching the coach as owned fact via corner_geometry (#69).
+# Measured share of bins reaching 6 m: first 1-4 racing laps of Silverstone National/
+# Laguna/Algarve 0-6%; mapping captures (Laguna, Algarve, Monza, Bahrain, Le Mans)
+# 97-100%; Spa edge laps 100%. Gated on the spread itself, not on where the laps came
+# from.
+_MIN_SPREAD_M = 6.0
+
+# ...and that spread has to be SUSTAINED along the track: a bin counts only inside a
+# closed-loop run of such bins at least this long. Per bin, peak-to-peak lets ONE lap
+# running wide lend its bins a spread: on 17 real Fuji racing laps (no edge laps) it let
+# 26% of bins through and baked "width 26m, 2 deg banked" into two corners, off a single
+# qualifying lap 24.8 m off the pack.
+#   There is no clean gap, so this is a trade, set on the ASYMMETRY: a fabricated width
+# or camber reaches the coach as owned fact, an unknown one just goes unsaid. Measured
+# (% of bins with width known, at 500 m -> 1000 m):
+#   - racing-line clouds: Fuji 17, Laguna 45, Algarve 19 and every first-4 are 0 at both
+#     (longest local run 236 m). Silverstone National 17 is 24 -> 0: its one 632 m run
+#     straddles start/finish with a 30 s-slow race lap sitting ~16 m off the pack and
+#     reads 18-23 m "wide" -- consistent with the pit lane, not the track.
+#   - spanning clouds: Spa 1 left + 1 right edge lap, Laguna, Imola, Bahrain Endurance,
+#     Le Mans, Monza, Algarve captures 93-100 at both; but Bahrain International 84 -> 74,
+#     Interlagos 79 -> 45, Bahrain Outer 55 -> 30, Monza Curva Grande 66 -> 21, Bahrain
+#     Paddock 47 -> 0. A rebuild or re-bake from THOSE captures says less than it could;
+#     the maps already shipped keep their baked values.
+# ponytail: a length cannot reject a pit lane by design -- Silverstone's is only shorter
+# than this. Excluding in/out laps from a rebuild is the real fix for pit laps.
+_MIN_SPREAD_RUN_M = 1000.0
+
+
+def _sustained(mask: np.ndarray, min_bins: int) -> np.ndarray:
+    """`mask` with every True run shorter than `min_bins` cleared. Closed loop: a run
+    through the start/finish line is one run. An all-True mask is a whole lap and
+    always kept, even on a lap shorter than `min_bins`."""
+    if mask.all() or not mask.any():
+        return mask.copy()
+    start = int(np.argmin(mask))           # a False bin: rotate it first so no run wraps
+    m = np.roll(mask, -start)
+    out = np.zeros(len(m), dtype=bool)
+    i = 0
+    while i < len(m):
+        if not m[i]:
+            i += 1
+            continue
+        j = i
+        while j < len(m) and m[j]:
+            j += 1
+        out[i:j] = j - i >= min_bins
+        i = j
+    return np.roll(out, start)
+
+
 def _bank_per_bin(X, Z, Y, members, ctr_x, ctr_z, lat_x, lat_z, bins, w=_SMOOTH_W):
     """Cross-slope angle per bin from ALL samples: fit pos_y vs lateral offset.
-    Positive = right (+lateral) edge higher (matches reconstruct_ribbon)."""
+    Positive = the +lateral side is higher; +lateral is the driver's LEFT (#58),
+    so positive = banked for a right-hander and negative = banked for a
+    left-hander (rig-validated, 9756b65; matches reconstruct_ribbon).
+    NaN (unknown) where the elevation samples span < _MIN_SPREAD_M laterally."""
     bnk = np.full(bins, np.nan)
     for b in range(bins):
         mm = members[b]
@@ -196,14 +273,18 @@ def _bank_per_bin(X, Z, Y, members, ctr_x, ctr_z, lat_x, lat_z, bins, w=_SMOOTH_
             continue
         off = (X[mm] - ctr_x[b]) * lat_x[b] + (Z[mm] - ctr_z[b]) * lat_z[b]
         yb, fin = Y[mm], np.isfinite(Y[mm])
-        if fin.sum() >= 2 and np.ptp(off[fin]) > 1e-6:
+        if fin.sum() >= 2 and np.ptp(off[fin]) >= _MIN_SPREAD_M:
             bnk[b] = np.arctan(np.polyfit(off[fin], yb[fin], 1)[0])
-    return _smooth(_fill_nan(bnk, period=bins), w)
+    known = np.isfinite(bnk)
+    out = _smooth(_fill_nan(bnk, period=bins), w)
+    out[~known] = np.nan    # smoothing may borrow from neighbours, never invent a bin
+    return out
 
 
 def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
-    """Reconstruct the track from free-driving passes. The two BOUND laps (most-
-    negative / most-positive mean lateral offset) build the EDGES; in-between
+    """Reconstruct the track from free-driving passes. The two BOUND laps build the
+    EDGES -- most-POSITIVE mean lateral offset = the driver's LEFT, most-negative =
+    the RIGHT, since +lateral is the left side of travel (#58) -- while in-between
     weaving laps only contribute elevation across the width. Returns
     {left, right, center, width, bank, dist} (world), or {} with no usable data.
 
@@ -256,13 +337,24 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
     cx, cz = _smooth(_fill_nan(cx), sw), _smooth(_fill_nan(cz), sw)
     lat_x, lat_z = _lateral(cx, cz)
 
-    # Classify laps by mean lateral offset: most-negative = LEFT, most-positive =
-    # RIGHT, the rest weave (elevation only). Edges from the bound laps directly.
+    # Classify laps by mean lateral offset. +lateral is the driver's LEFT (see
+    # _lateral), so most-POSITIVE = LEFT and most-negative = RIGHT; the rest weave
+    # (elevation only). Edges from the bound laps directly. #58 relabelled these --
+    # they shipped inverted, harmlessly (width is symmetric, both edges are drawn),
+    # but any per-edge feature would have inherited a mirrored answer. Labels only:
+    # width, center, bank and dist are bit-identical either way, so the
+    # rig-validated banking sign of 9756b65 is untouched.
+    #   Residual: the 10 shipped maps that store a `ribbon` (every one except
+    #   test_track and Laguna) still hold left/right under the OLD labels --
+    #   measured mirrored, all 10 the same way, no mixed state, so a rebuild is one
+    #   uniform swap. Left alone because no consumer reads those arrays per-edge
+    #   (both are drawn; solve_corners is order-invariant). A per-edge feature must
+    #   rebuild them first.
     off_all = (X - cx[bi]) * lat_x[bi] + (Z - cz[bi]) * lat_z[bi]
     lap_means = np.array([off_all[a:b].mean() for a, b in slices])
     total_spread = float(np.ptp(off_all))
     if len(slices) >= 2 and total_spread > 0 and np.ptp(lap_means) > 0.2 * total_spread:
-        li, ri = int(lap_means.argmin()), int(lap_means.argmax())
+        li, ri = int(lap_means.argmax()), int(lap_means.argmin())
         a, b = slices[li]; lx, lz = _lap_grid(X[a:b], Z[a:b], D[a:b], max_len, bins)
         a, b = slices[ri]; rx, rz = _lap_grid(X[a:b], Z[a:b], D[a:b], max_len, bins)
         lx, lz, rx, rz = (_smooth(lx, swl), _smooth(lz, swl),
@@ -300,8 +392,9 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
                 arr[bad] = np.nan
                 arr[:] = _fill_nan(arr, period=bins)
             off_lo, off_hi = _smooth(off_lo, swl), _smooth(off_hi, swl)
-            lx, lz = cx + off_lo * lat_x, cz + off_lo * lat_z
-            rx, rz = cx + off_hi * lat_x, cz + off_hi * lat_z
+            # +lateral is the driver's LEFT, so off_hi is the LEFT edge (#58).
+            lx, lz = cx + off_hi * lat_x, cz + off_hi * lat_z
+            rx, rz = cx + off_lo * lat_x, cz + off_lo * lat_z
             wid = off_hi - off_lo
         else:  # single pass / no envelope -> degenerate centerline, zero width
             lx, lz, rx, rz = cx.copy(), cz.copy(), cx.copy(), cz.copy()
@@ -317,18 +410,33 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
     ctr_x, ctr_z = (lx + rx) / 2.0, (lz + rz) / 2.0
     lat_x, lat_z = _lateral(ctr_x, ctr_z)
     wid = np.hypot(lx - rx, lz - rz)
+    # Same gate as bank, over ALL samples (width needs no pos_y): the drawn edges stay
+    # (the editor and the corner solver need a corridor), but a width the samples never
+    # spanned is not written as a measurement. The EDGE separation must clear it too:
+    # the bound-lap branch takes width from two laps, and a third lap straying wide
+    # lends the bin a spread those two never had (real Algarve racing laps: 97 bins
+    # passed on spread alone with a median width of 1.8 m).
+    off = (X - ctr_x[bi]) * lat_x[bi] + (Z - ctr_z[bi]) * lat_z[bi]
+    spread = np.array([np.ptp(off[mm]) if mm.size else 0.0 for mm in members])
+    wid = np.where((spread >= _MIN_SPREAD_M) & (wid >= _MIN_SPREAD_M), wid, np.nan)
 
     bnk = _bank_per_bin(X, Z, Y, members, ctr_x, ctr_z, lat_x, lat_z, bins, w=sw)
+    run = max(1, int(np.ceil(_MIN_SPREAD_RUN_M * bins / max_len)))
+    wid = np.where(_sustained(np.isfinite(wid), run), wid, np.nan)
+    bnk = np.where(_sustained(np.isfinite(bnk), run), bnk, np.nan)
 
-    def _round(a, n):  # non-finite (e.g. bank with no elevation) -> 0.0, JSON-safe
+    def _round(a, n):  # non-finite -> 0.0, JSON-safe (edges/dist are always finite)
         return [round(float(v), n) if np.isfinite(v) else 0.0 for v in a]
+
+    def _known(a, n):  # width/bank: non-finite is UNKNOWN -> null, never 0.0 (= flat)
+        return [round(float(v), n) if np.isfinite(v) else None for v in a]
 
     return {
         "left": [list(p) for p in zip(_round(lx, 2), _round(lz, 2))],
         "right": [list(p) for p in zip(_round(rx, 2), _round(rz, 2))],
         "center": [list(p) for p in zip(_round(ctr_x, 2), _round(ctr_z, 2))],
-        "width": _round(wid, 2),
-        "bank": _round(bnk, 4),
+        "width": _known(wid, 2),
+        "bank": _known(bnk, 4),
         "dist": _round(dist_grid, 2),
     }
 

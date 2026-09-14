@@ -17,6 +17,8 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
+from simcoach.trackmap import turn_sign_along
+
 _EPS = 1e-9
 
 
@@ -81,7 +83,7 @@ def min_curvature_line(left_edge, right_edge, iterations=300, relax=0.2):
     return alpha, left + alpha[:, None] * lateral
 
 
-def speed_profile(line, mu, g, a_brake, a_accel, bank=None):
+def speed_profile(line, mu, g, a_brake, a_accel, bank=None, turn_sign=None):
     """Friction-circle point-mass speed profile over a closed line.
 
     Cornering cap v_cap = sqrt(g*r*(mu + tanθ)/(1 - mu*tanθ)) where r = 1/kappa
@@ -89,6 +91,29 @@ def speed_profile(line, mu, g, a_brake, a_accel, bank=None):
     to sqrt(mu*g*r). Then a backward pass limiting braking to a_brake and a
     forward pass limiting accel to a_accel. Two loops around so the limits
     propagate across the start/finish seam.
+
+    θ is the bank RELATIVE TO THE TURN, which is NOT the stored sign. ``bank`` is
+    signed by which side is higher (+ = the driver's left is higher, #58), i.e.
+    + = banked for a RIGHT-hander. So it is multiplied by ``turn_sign``
+    (+1 right / -1 left, from the owner ``trackmap.turn_sign_along``). Without that
+    re-signing every cambered LEFT-hander applied its camber as a penalty and read
+    min speed low -- Laguna's Rainey T10 at -7 deg worst (#63). It is deliberately
+    not ``abs(bank)``: genuine adverse camber (inside edge higher) must stay a
+    penalty, which is a sign flip away from favourable, not the same number.
+
+    ``turn_sign`` is REQUIRED whenever ``bank`` carries signal, and has no default
+    on purpose. Only ``line`` is in scope here, but the policy is that the sign comes
+    from the CENTERLINE -- the same geometry the corner map's owned direction is
+    read off (``solve_corners`` passes that). A ``line``-derived default would
+    therefore be a SECOND policy decided by omission, and the unsigned raw bank is
+    the #63 bug itself; both are worse than an explicit failure.
+
+    A bank that is entirely zero or non-finite is exempt: ``tan(0) * anything == 0``,
+    so there is provably nothing to sign, and it must read exactly like ``bank=None``
+    rather than raising -- "flat, as data" is a shape the repo really produces
+    (``ribbon.reconstruct_ribbon`` zeroes bank with no elevation channel, and its
+    ``_round`` maps non-finite to 0.0). One non-zero station is signal, and signal
+    must be signed.
 
     Returns (v, curvature), both shape (N,). v in m/s, curvature in 1/m.
     # ponytail: simple longitudinal caps, not a true traction-budget friction
@@ -100,7 +125,24 @@ def speed_profile(line, mu, g, a_brake, a_accel, bank=None):
     kappa = _curvature(line)
     seg = _seg_lengths(line)                         # seg[i] = dist from i to i+1
     r = 1.0 / np.maximum(kappa, _EPS)
-    tan_t = np.zeros(n) if bank is None else np.tan(np.asarray(bank, dtype=float))
+    if bank is None:
+        tan_t = np.zeros(n)
+    else:
+        tan_t = np.tan(np.asarray(bank, dtype=float))
+        # An unknown station (null/NaN: ribbon bins the samples never spanned) is
+        # solved as flat. Left as NaN it poisons v through the min() passes.
+        tan_t[~np.isfinite(tan_t)] = 0.0
+        if not np.any(tan_t):                          # every station 0 or non-finite
+            tan_t = np.zeros(n)                       # flat: nothing to sign
+        elif turn_sign is None:
+            raise ValueError(
+                "speed_profile needs turn_sign for a bank that is not flat: bank is "
+                "signed by which side is HIGHER (#58), so it says nothing about grip "
+                "until re-signed against the turn. Pass "
+                "trackmap.turn_sign_along(centerline)."
+            )
+        else:
+            tan_t = tan_t * np.asarray(turn_sign, dtype=float)
     # banked friction-circle cap; clamp denominator when mu*tanθ -> 1 (grip
     # dominated by banking, cap would blow up) to a large but finite value.
     denom = np.maximum(1.0 - mu * tan_t, 1e-3)
@@ -223,7 +265,14 @@ def _corner_window(kappa, apex, n, max_half):
 
 
 def _calibrate(car, telem):
-    """Calibrate mu/a_brake/a_accel from observed telemetry peaks (g-unit channels)."""
+    """Calibrate mu/a_brake/a_accel from observed telemetry peaks (g-unit channels).
+
+    long_g follows LMU's mLocalAccel.z: POSITIVE under braking, negative under
+    acceleration. Measured on real stored laps (#70): median +1.26..+1.71 g with
+    brake > 0.5, -0.22..-0.54 g at full throttle. This used to read +long_g as
+    acceleration, which on a real lap swaps the two limits -- a GT3 "accelerating"
+    at ~2.4 g and braking at ~0.9 g. Latent only because the one production caller
+    (server `_place_corners`) passes no telem."""
     lat = np.abs(np.asarray(telem.get("lat_g", []), dtype=float))
     lon = np.asarray(telem.get("long_g", []), dtype=float)
     lat = lat[np.isfinite(lat)]
@@ -233,9 +282,9 @@ def _calibrate(car, telem):
     a_brake = car.a_brake
     if lon.size:
         if lon.max() > 0:
-            a_accel = float(lon.max()) * car.g       # peak +long_g (g) -> m/s^2
+            a_brake = float(lon.max()) * car.g       # peak +long_g (g) = deceleration
         if lon.min() < 0:
-            a_brake = float(-lon.min()) * car.g      # peak -long_g (g) -> m/s^2
+            a_accel = float(-lon.min()) * car.g      # peak -long_g (g) = acceleration
     return replace(car, mu=mu, a_brake=a_brake, a_accel=a_accel)
 
 
@@ -248,7 +297,7 @@ def solve_corners(left_edge, right_edge, car=CarParams(), telem=None, bank=None,
     corners a single speed threshold would merge stay separate, while a sustained
     constant-radius arc stays one corner (prominence split, not fixed spacing). A
     speed profile over the min-curvature line still supplies each corner's
-    ``min_speed`` (calibrated from ``telem`` peak lat_g/long_g when given).
+    ``min_speed_kmh`` (calibrated from ``telem`` peak lat_g/long_g when given).
 
     Tunables (calibrated against driver-verified maps -- Algarve/Imola/Monza,
     avg F1 ~0.94): ``kappa_min`` 1/m curvature floor (~1/500 m radius), ``min_prom``
@@ -257,9 +306,15 @@ def solve_corners(left_edge, right_edge, car=CarParams(), telem=None, bank=None,
     over-smoothed the way a fixed bin count would be -- same fix as reconstruction).
 
     Each corner: ``{apex_idx, start_idx, end_idx, apex_dist, start_dist, end_dist,
-    min_speed}``. The *_idx values are station indices aligned with the input
+    min_speed_kmh}``. The *_idx values are station indices aligned with the input
     edges / ribbon dist arrays -- use these for placement. start>end is a valid
     S/F-seam wrap; the window is never zero-length.
+
+    ``min_speed_kmh`` is km/h: ``speed_profile`` is SI (m/s), so it is converted
+    here to match the captured ``speed`` channel, ``mapbuild.detect_corners`` and
+    what the coach displays. The unit is in the key name on purpose -- the old
+    unitless ``min_speed`` meant m/s here and km/h in mapbuild, 3.6x apart with
+    both values plausible for a racing speed (#55).
     """
     if telem is not None:
         car = _calibrate(car, telem)
@@ -272,8 +327,12 @@ def solve_corners(left_edge, right_edge, car=CarParams(), telem=None, bank=None,
     center = 0.5 * (left + right)
 
     # Speed profile on the min-curvature line -> per-corner min_speed (bank-aware).
+    # turn_sign comes from the CENTERLINE, the same geometry the corner map's owned
+    # direction is read off (direction_from_path), so bank is re-signed against the
+    # track's turn rather than the racing line's local wiggle (#63).
     _, line = min_curvature_line(left, right)
-    v, _ = speed_profile(line, car.mu, car.g, car.a_brake, car.a_accel, bank=bank)
+    v, _ = speed_profile(line, car.mu, car.g, car.a_brake, car.a_accel, bank=bank,
+                         turn_sign=turn_sign_along(center))
 
     # Apex detection from centerline curvature. Smoothing window is DISTANCE-based
     # (bins vary with track length) so it's consistent across layouts; _smooth_closed
@@ -296,7 +355,7 @@ def solve_corners(left_edge, right_edge, car=CarParams(), telem=None, bank=None,
             "apex_dist": float(dist[i]),
             "start_dist": float(dist[si]),
             "end_dist": float(dist[ei]),
-            "min_speed": float(v[i]),
+            "min_speed_kmh": float(v[i]) * 3.6,   # speed_profile is m/s (SI)
         })
 
     corners.sort(key=lambda c: c["apex_dist"])

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { CoachStream, type CoachPhase, type ToolActivity } from "./coach";
-  import { getChatMessages } from "./api";
+  import { getChatMessages, getChatUsage, getSettings, type ChatUsage } from "./api";
 
   let {
     sessionId,
@@ -22,6 +22,10 @@
       answer: string;
       chatId: string | null;
       error: string | null;
+      usage?: ChatUsage | null;
+      cost?: number | null;
+      costComplete?: boolean;
+      longChat?: boolean;
       ask(question: string, opts: { sessionId?: string; lapId?: number; chatId?: string }): void;
       subscribe(run: (value: unknown) => void): () => void;
     };
@@ -89,6 +93,43 @@
   let error: string | null = $state(null);
   let scrollEl: HTMLDivElement | undefined = $state();
 
+  // Usage/cost meter. Every number here is computed by the core and handed over —
+  // this component formats, it never prices.
+  let usedTokens = $state(0);
+  let cost: number | null = $state(null);
+  let costComplete = $state(true);
+  // Settings `show_cost` hides only the dollar figure; tokens always show. Read the
+  // same way CornerPanel reads `units` — defaults on, so a settings hiccup shows it.
+  let showCost = $state(true);
+
+  function formatTokens(n: number): string {
+    return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+  }
+
+  // A dash for "no dollar figure to show": either the model could not be priced
+  // (cost === null) or it is genuinely free (cost === 0, e.g. a local model).
+  // "$0.00" would read as "this paid thing cost nothing", so it is never printed —
+  // a real-but-tiny cost shows as "<$0.01" instead.
+  function formatCost(c: number | null, complete: boolean): string {
+    if (c === null || c === 0) return "—";
+    const prefix = complete ? "" : "≥ ";
+    if (c < 0.01) return `${prefix}<$0.01`;
+    return `${prefix}$${c < 1 ? c.toFixed(3) : c.toFixed(2)}`;
+  }
+
+  // Soft long-chat nudge. The server decides WHEN (it owns the threshold); this only
+  // renders it, and dismissing sticks for the rest of the thread so it never nags.
+  let longChat = $state(false);
+  let nudgeDismissed = $state(false);
+
+  function clearMeter() {
+    usedTokens = 0;
+    cost = null;
+    costComplete = true;
+    longChat = false;
+    nudgeDismissed = false;
+  }
+
   // Keep the newest message/streaming text in view, unless the user has
   // scrolled up to read history (within 80px of bottom = "at the bottom").
   $effect(() => {
@@ -114,11 +155,23 @@
     } catch {
       messages = [];
     }
+    // Seed the meter so reopening a thread shows what it has already cost.
+    // Best-effort, same shape as above: a sidecar hiccup hides the meter, it
+    // never costs the driver the thread.
+    try {
+      const u = await getChatUsage(id);
+      usedTokens = u.usage.total;
+      cost = u.cost;
+      costComplete = u.cost_complete;
+    } catch {
+      clearMeter();
+    }
   }
 
   function newChat() {
     currentChatId = undefined;
     messages = [];
+    clearMeter();
   }
 
   // "New session": clear the chat locally and ask the app to clear the selected
@@ -141,9 +194,20 @@
     }
   });
 
+  // Read the Settings toggle the same way CornerPanel reads `units`. Best-effort:
+  // the sidecar may not be up yet, so any failure keeps the default (show it).
+  async function loadShowCost() {
+    try {
+      showCost = (await getSettings()).show_cost !== false;
+    } catch {
+      /* keep the default */
+    }
+  }
+
   onMount(() => {
+    loadShowCost();
     const unsubscribe = stream.subscribe((s) => {
-      const snap = s as { phase: CoachPhase; toolActivity: ToolActivity | null; answer: string; chatId: string | null; error: string | null };
+      const snap = s as { phase: CoachPhase; toolActivity: ToolActivity | null; answer: string; chatId: string | null; error: string | null; usage?: ChatUsage | null; cost?: number | null; costComplete?: boolean; longChat?: boolean };
       phase = snap.phase;
       toolActivity = snap.toolActivity;
       answer = snap.answer;
@@ -153,6 +217,13 @@
         waiting = false;
         // Adopt the server's chat id so follow-ups append to this thread.
         if (snap.chatId) currentChatId = snap.chatId;
+        // ...and its cumulative usage snapshot (the persisted chat total).
+        if (snap.usage) {
+          usedTokens = snap.usage.total;
+          cost = snap.cost ?? null;
+          costComplete = snap.costComplete ?? true;
+          longChat = snap.longChat === true;
+        }
       } else if (snap.phase === "error") {
         messages = [...messages, { role: "coach", text: snap.error ?? "Something went wrong." }];
         waiting = false;
@@ -190,8 +261,30 @@
 
 <section class="chat">
   <div class="chat-bar">
+    {#if usedTokens > 0}
+      <span
+        class="meter"
+        data-testid="usage-meter"
+        title="Tokens billed in this chat, and the estimated API cost of them. Excludes setup capture, track-notes drafting, and memory operations, which are billed separately to your key."
+      >{formatTokens(usedTokens)} tokens{showCost ? ` · ${formatCost(cost, costComplete)}` : ""}</span>
+    {/if}
     <button type="button" class="new-chat" onclick={newSession}>+ New session</button>
   </div>
+  {#if longChat && !nudgeDismissed}
+    <!-- Soft nudge only: nothing is summarized or truncated. Prior sessions stay
+         reachable through the coach's own history tools, so a reset loses nothing
+         it cannot re-fetch. -->
+    <div class="nudge" data-testid="long-chat-nudge" role="status">
+      <span>Long chat — start a New chat to keep it snappy.</span>
+      <button type="button" class="nudge-go" onclick={newChat}>Start a new chat</button>
+      <button
+        type="button"
+        class="nudge-x"
+        aria-label="Dismiss"
+        onclick={() => (nudgeDismissed = true)}
+      >×</button>
+    </div>
+  {/if}
   <div class="chat-scroll" bind:this={scrollEl}>
     <div class="thread">
       {#if messages.length === 0 && !waiting}
@@ -258,6 +351,17 @@
     padding: 8px 12px;
     border-bottom: 1px solid var(--line);
   }
+  .meter {
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--faint);
+    white-space: nowrap;
+  }
+  /* With a meter present the meter takes the auto margin; alone, the button does. */
+  .meter + .new-chat {
+    margin-left: 0;
+  }
   .new-chat {
     margin-left: auto;
     font-family: var(--body);
@@ -271,6 +375,42 @@
   }
   .new-chat:hover {
     border-color: var(--accent);
+  }
+  .nudge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--faint);
+    border-bottom: 1px solid var(--line);
+  }
+  .nudge-go {
+    font-family: var(--body);
+    font-size: 11px;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 3px 9px;
+    cursor: pointer;
+  }
+  .nudge-go:hover {
+    border-color: var(--accent);
+  }
+  .nudge-x {
+    margin-left: auto;
+    font-size: 14px;
+    line-height: 1;
+    color: var(--faint);
+    background: none;
+    border: none;
+    padding: 0 2px;
+    cursor: pointer;
+  }
+  .nudge-x:hover {
+    color: var(--text);
   }
   .chat-empty {
     color: var(--faint);

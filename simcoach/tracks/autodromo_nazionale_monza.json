@@ -56,21 +56,21 @@
       "direction": "left",
       "start_dist": 2084.1,
       "apex_dist": 2130.4,
-      "end_dist": 2211.5,
+      "end_dist": 2153.6,
       "apexes": [
         2130.4
       ],
       "radius_m": 29.0,
       "width_m": 7.2,
       "banking_deg": -0.6,
-      "elev_delta_m": -0.6
+      "elev_delta_m": -0.3
     },
     {
       "number": 5,
       "label": "5",
       "name": "Turn 5",
       "direction": "right",
-      "start_dist": 2153.5,
+      "start_dist": 2153.6,
       "apex_dist": 2176.7,
       "end_dist": 2246.1,
       "apexes": [
@@ -150,7 +150,7 @@
       "label": "10",
       "name": "Turn 10",
       "direction": "left",
-      "start_dist": 4087.2,
+      "start_dist": 4104.5,
       "apex_dist": 4145.0,
       "end_dist": 4226.1,
       "apexes": [
@@ -2682,7 +2682,10 @@
     5766.01,
     5777.59
   ],
-  "sectors": [],
+  "sectors": [
+    1988.5,
+    3800.0
+  ],
   "sections": [
     {
       "name": "Ascari",

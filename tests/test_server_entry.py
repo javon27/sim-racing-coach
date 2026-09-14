@@ -188,3 +188,77 @@ def test_build_app_lmu_rest_failure_still_resolves_cmap(tmp_path, monkeypatch, m
     assert tc.get("/setup").json() == {}
     st = tc.get("/status").json()
     assert st["lmu_connected"] is False and st["has_map"] is True
+
+
+def test_create_app_and_build_app_do_not_start_the_result_poller(tmp_path, monkeypatch, mem_keyring):
+    # The poller reads the REAL LMU install (#81), and nearly every test builds an app.
+    import threading
+
+    from fastapi.testclient import TestClient
+
+    from simcoach.coach import Coach
+    from simcoach.lmu import ingest, install
+    from simcoach.model.fake import FakeModel
+    from simcoach.server.__main__ import build_app
+    from simcoach.server.app import create_app
+    from simcoach.store import LapStore
+
+    monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    # Should this ever regress, the poller it starts must still not see the real install.
+    monkeypatch.setattr(install, "lmu_userdata_dir", lambda: None)
+    targets = []
+    real_start = threading.Thread.start
+
+    def recording_start(self):
+        targets.append(self._target)
+        real_start(self)
+
+    monkeypatch.setattr(threading.Thread, "start", recording_start)
+
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    for app in (create_app(store, Coach(FakeModel())), build_app()):
+        with TestClient(app, base_url="http://127.0.0.1") as tc:   # runs startup too
+            assert tc.get("/health").status_code == 200
+
+    assert targets   # the recorder saw threads start (capture, test client), just not this
+    assert ingest.poll_results not in targets
+
+
+def test_main_starts_the_result_poller_on_a_daemon_thread_before_serving(tmp_path, monkeypatch,
+                                                                         mem_keyring):
+    import threading
+
+    import uvicorn
+
+    from simcoach.coach import Coach
+    from simcoach.model.fake import FakeModel
+    from simcoach.server import __main__ as entry
+    from simcoach.server.app import create_app
+    from simcoach.store import LapStore
+
+    monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    app = create_app(store, Coach(FakeModel()))
+    polled = {}
+    running = threading.Event()
+
+    def fake_poll(s):
+        polled.update(store=s, thread=threading.current_thread())
+        running.set()
+
+    served = []
+
+    def fake_run(a, **kw):
+        # uvicorn.run blocks for the life of the process: started after it = never started.
+        served.append((a, running.wait(5)))
+
+    monkeypatch.setattr(entry, "poll_results", fake_poll)
+    monkeypatch.setattr(entry, "build_app", lambda: app)
+    monkeypatch.setattr(uvicorn, "run", fake_run)
+
+    entry.main()
+
+    assert served == [(app, True)]
+    assert polled["store"] is store
+    assert polled["thread"].daemon and polled["thread"] is not threading.main_thread()

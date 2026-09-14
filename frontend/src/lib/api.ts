@@ -55,12 +55,11 @@ export interface CornerMetrics {
   apex_spd: number;
   min_spd: number;
   exit_spd: number;
-  brake_point: number;
-  throttle_point: number;
+  brake_point: number | null;      // null = never braked in this corner (may be < 0: see #7)
+  throttle_point: number | null;   // null = never past the throttle gate in this corner
   trailbrake_overlap: number;
   peak_brake: number;
   peak_lat_g: number;
-  min_grip: number | null;
   peak_brake_g: number | null;
   peak_accel_g: number | null;
   peak_steer: number | null;
@@ -102,6 +101,26 @@ export interface ChatMessage {
   tool_calls: unknown;
 }
 
+// Billed tokens for a whole chat. Computed by the core (simcoach/store.py +
+// simcoach/pricing.py) -- the UI only formats these numbers, never prices anything.
+export interface ChatUsage {
+  input: number;
+  output: number;
+  cache_read: number;
+  cache_write: number;
+  total: number;
+  messages: number;
+}
+
+export interface ChatUsageResponse {
+  usage: ChatUsage;
+  // null = the model could not be priced; 0 = a genuinely free model (render both
+  // as a dash, never "$0.00" -- see ChatPanel.formatCost).
+  cost: number | null;
+  // false = at least one model in the chat was unpriceable, so `cost` is a floor.
+  cost_complete: boolean;
+}
+
 export interface DriverProfile {
   braking_style: string | null;
   balance_preference: string | null;
@@ -113,6 +132,7 @@ export interface SettingsResponse {
   input_device: "wheel" | "controller";
   model: "opus" | "sonnet" | "haiku";
   corner_naming: "names" | "numbers";
+  show_cost: boolean;
   log_level: string;
   driver: DriverProfile;
   api_key_set: boolean;
@@ -352,6 +372,41 @@ export interface RibbonPreview {
   }[];
   sectors: number[];
   track_name?: string; // session track name, shown in the header + saved with the layout
+  /** Rebuild only: how many point clouds this geometry was reconstructed from. Shown
+   *  before Save, because a map off 1-3 laps is thin and the driver should know. */
+  lap_count?: number;
+}
+
+// Driver-input traces for the Pit Wall graphs (#21). Already resampled onto a
+// uniform lap_distance grid and reduced to 500 bins by the sidecar — this client
+// only fetches, the component only draws.
+//
+// Each channel is a per-bin min/max ENVELOPE, not a point sample: one bin spans
+// 180-400 ms, at or coarser than the game's 200 ms scoring tick, so a point
+// sample would drop a stab or a lift depending on where it fell. `dist` holds
+// the bin centres.
+export interface InputBand {
+  lo: number[];
+  hi: number[];
+}
+
+export interface InputTrace {
+  lap_id: number | null;
+  lap_time: number;
+  length: number;
+  dist: number[];
+  throttle: InputBand;
+  brake: InputBand;
+  steering: InputBand;
+}
+
+export interface InputTraces {
+  last: InputTrace | null;
+  best: InputTrace | null; // null when the last lap IS the best (nothing to compare)
+}
+
+export function getInputTraces(): Promise<InputTraces> {
+  return request<InputTraces>("/track/inputs");
 }
 
 export function startMapCapture(): Promise<{ active: boolean }> {
@@ -386,12 +441,17 @@ export function buildRibbon(): Promise<RibbonPreview> {
 }
 
 // Re-reconstruct from the track's SAVED raw capture (no active capture / re-drive).
-// Pass the edited lap so the SELECTED session's track is rebuilt, not the live sim's.
-export function rebuildFromCapture(lapId?: number | null): Promise<RibbonPreview> {
+// Bind the target explicitly: the edited lap (Sessions) or the track slug (Tracks
+// screen, which has no driven lap). With NEITHER, the sidecar falls back to the
+// live sim or the newest saved capture — i.e. it would rebuild a different track's
+// geometry over the one on screen (#26). Slug wins server-side, same priority.
+export function rebuildFromCapture(lapId?: number | null,
+                                   slug?: string | null): Promise<RibbonPreview> {
+  const target = slug ? { slug } : lapId != null ? { lap_id: lapId } : {};
   return request<RibbonPreview>("/mapcapture/rebuild", {
     method: "POST",
     headers: JSON_HEADERS,
-    body: JSON.stringify(lapId != null ? { lap_id: lapId } : {}),
+    body: JSON.stringify(target),
   });
 }
 
@@ -425,6 +485,10 @@ export function getChatMessages(chatId: string): Promise<ChatMessage[]> {
   return request<ChatMessage[]>(`/chats/${chatId}`);
 }
 
+export function getChatUsage(chatId: string): Promise<ChatUsageResponse> {
+  return request<ChatUsageResponse>(`/chats/${chatId}/usage`);
+}
+
 export function getSettings(): Promise<SettingsResponse> {
   return request<SettingsResponse>("/settings");
 }
@@ -434,6 +498,20 @@ export function getSetup(): Promise<Record<string, unknown>> {
 }
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
+
+// Explicit persistence of what the sim CURRENTLY reports (#51: GET is
+// read-only, a no-cors <img>/<script>/prefetch/retry/replay of it must not
+// write to the DB). Body is empty -- the server re-reads the setup itself
+// rather than trusting caller-supplied content (that was a prompt-injection
+// sink into the coach's prompt); `{}` only keeps the CSRF preflight (a
+// non-simple request needs a body).
+export function captureSetup(): Promise<{ saved: boolean }> {
+  return request<{ saved: boolean }>("/setup/capture", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({}),
+  });
+}
 
 export function putSettings(cfg: Record<string, unknown>): Promise<SettingsResponse> {
   return request<SettingsResponse>("/settings", {
@@ -452,7 +530,13 @@ export function setApiKey(key: string): Promise<{ api_key_set: boolean }> {
 }
 
 export function testApiKey(): Promise<{ ok: boolean; error: string | null }> {
-  return request<{ ok: boolean; error: string | null }>("/settings/test-key", { method: "POST" });
+  // Body required so the browser preflights (CSRF guard on a route that makes a
+  // real, billed API call).
+  return request<{ ok: boolean; error: string | null }>("/settings/test-key", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({}),
+  });
 }
 
 export function clearData(): Promise<{ cleared: boolean }> {
@@ -472,7 +556,12 @@ export interface IngestResult {
 }
 
 export function ingestHistory(): Promise<IngestResult> {
-  return request<IngestResult>("/ingest", { method: "POST" });
+  // Body required so the browser preflights (CSRF guard on the mutating route).
+  return request<IngestResult>("/ingest", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({}),
+  });
 }
 
 export interface TrackRow {
@@ -481,6 +570,16 @@ export interface TrackRow {
   has_map: boolean;
   has_notes: boolean;
   user_edited: boolean;
+  /** Exactly the clouds a Build would consume (the track's saved capture if it has
+   *  one, else its usable live laps). This is the build gate: 0 means nothing to
+   *  rebuild from, whatever live_laps says. */
+  captures: number;
+  /** Live-captured lap rows. Exceeds `captures` for laps recorded before position
+   *  capture existed (47 channels, no pos_*) -- they can never be rebuilt from. */
+  live_laps: number;
+  /** A saved capture exists but yields no usable cloud (corrupt, or no lap with
+   *  position data). It blocks the build (captures 0) whatever live_laps holds (#84). */
+  capture_unreadable?: boolean;
 }
 
 export interface TrackNotes {
@@ -502,16 +601,25 @@ export function draftNotes(slug: string, track: string, guides: string): Promise
   });
 }
 
-export function saveNotes(slug: string, track: string, notes: TrackNotes): Promise<{ ok: boolean }> {
-  return request<{ ok: boolean }>(`/tracks/${slug}/notes`, {
+export interface SaveNotesResult {
+  ok: boolean;
+  rev: string;                              // send this with the next save
+  dropped_notes: Record<string, string>;
+}
+
+// `rev` is the one getTrackNotes (or the previous save) returned. The server refuses a
+// missing one (428) and a stale one (409): a map save can re-key the notes underneath a
+// screen that is holding a copy, and writing that copy back puts every old key back.
+export function saveNotes(slug: string, track: string, notes: TrackNotes, rev: string | null): Promise<SaveNotesResult> {
+  return request<SaveNotesResult>(`/tracks/${slug}/notes`, {
     method: "PUT",
     headers: JSON_HEADERS,
-    body: JSON.stringify({ track, notes }),
+    body: JSON.stringify({ track, notes, rev }),
   });
 }
 
-export function getTrackNotes(slug: string): Promise<TrackNotes> {
-  return request<TrackNotes>(`/tracks/${slug}/notes`);
+export function getTrackNotes(slug: string): Promise<TrackNotes & { rev?: string }> {
+  return request<TrackNotes & { rev?: string }>(`/tracks/${slug}/notes`);
 }
 
 // --- Driver Profile & Memories

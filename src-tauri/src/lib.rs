@@ -2,6 +2,7 @@ use std::fs::File;
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::Manager;
@@ -165,31 +166,37 @@ fn is_on_screen(x: i32, y: i32, w: u32, h: u32, monitors: &[(i32, i32, u32, u32)
     })
 }
 
+/// First caller wins: flips `flag` and returns true only for the call that found
+/// it unset. Used to make the one-shot startup reveal one-shot -- on_page_load
+/// fires on EVERY navigation, and re-running the reveal on a reload is actively
+/// harmful (see the call site).
+fn claim_once(flag: &AtomicBool) -> bool {
+    !flag.swap(true, Ordering::Relaxed)
+}
+
 /// After the window-state plugin restores geometry, recenter on the primary
 /// monitor if the restored rect lands outside every monitor (layout changed
 /// since last launch). No-op if any Result fails — a missing window/monitor is
 /// not worth crashing startup over.
-fn recenter_if_offscreen(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        if let (Ok(pos), Ok(size), Ok(monitors)) = (
-            window.outer_position(),
-            window.outer_size(),
-            window.available_monitors(),
-        ) {
-            let rects: Vec<(i32, i32, u32, u32)> = monitors
-                .iter()
-                .map(|m| {
-                    (
-                        m.position().x,
-                        m.position().y,
-                        m.size().width,
-                        m.size().height,
-                    )
-                })
-                .collect();
-            if !is_on_screen(pos.x, pos.y, size.width, size.height, &rects) {
-                let _ = window.center();
-            }
+fn recenter_if_offscreen(window: &tauri::Window) {
+    if let (Ok(pos), Ok(size), Ok(monitors)) = (
+        window.outer_position(),
+        window.outer_size(),
+        window.available_monitors(),
+    ) {
+        let rects: Vec<(i32, i32, u32, u32)> = monitors
+            .iter()
+            .map(|m| {
+                (
+                    m.position().x,
+                    m.position().y,
+                    m.size().width,
+                    m.size().height,
+                )
+            })
+            .collect();
+        if !is_on_screen(pos.x, pos.y, size.width, size.height, &rects) {
+            let _ = window.center();
         }
     }
 }
@@ -198,7 +205,57 @@ fn recenter_if_offscreen(app: &tauri::AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                // Visibility is OURS, not the plugin's. The plugin restores state from
+                // its on_window_ready hook -- i.e. at window-creation time, long before
+                // the webview has painted -- and restore_state() ends in
+                // `if flags.contains(VISIBLE) && should_show { show(); set_focus(); }`.
+                // With VISIBLE in the flags that reveal wins the race, the window is
+                // already up by the time on_page_load runs, and "visible": false buys us
+                // nothing but the geometry half of the fix. Dropping the one flag leaves
+                // the plugin restoring/persisting position+size+maximized exactly as
+                // before, minus the show() -- so on_page_load below is the sole reveal.
+                .with_state_flags(StateFlags::all() - StateFlags::VISIBLE)
+                .build(),
+        )
+        // The main window is created hidden (tauri.conf.json "visible": false) so
+        // restoring its saved geometry + the off-screen recovery below (commit
+        // 40c18b1) happen before anything is shown -- otherwise it flashes blank
+        // on the primary monitor before jumping to the saved (secondary) one.
+        // This fires once the webview has actually painted (PageLoadEvent::Finished),
+        // not before, then reveals the window already placed correctly. The show() is
+        // unconditional and PageLoadEvent::Finished is wired to WebView2's
+        // NavigationCompleted without checking IsSuccess, so a failed/blank navigation
+        // still reveals the window -- it can never get stuck hidden.
+        .on_page_load(|webview, payload| {
+            // Startup reveal only: PageLoadEvent::Finished fires on EVERY navigation
+            // (dev HMR, a user refresh), and re-running restore_state() later in the
+            // session un-maximizes the window -- nothing refreshes the plugin's cached
+            // `maximized` flag while the app runs (its Resized handler deliberately
+            // skips saving size while maximized, and `maximized` is only written by
+            // update_state at CloseRequested), so a reload would restore the stale
+            // pre-maximize rect over a maximized window, and steal focus besides.
+            // One global flag is enough: only "main" gets past the label check, and
+            // this app has exactly one window (the track-map editor is an in-page
+            // Svelte view, not a second Tauri window).
+            static REVEALED: AtomicBool = AtomicBool::new(false);
+
+            if payload.event() != tauri::webview::PageLoadEvent::Finished {
+                return;
+            }
+            let window = webview.window();
+            if window.label() != "main" {
+                return;
+            }
+            if !claim_once(&REVEALED) {
+                return;
+            }
+            let _ = window.restore_state(StateFlags::all());
+            recenter_if_offscreen(&window);
+            let _ = window.show();
+            let _ = window.set_focus();
+        })
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -236,12 +293,8 @@ pub fn run() {
             };
             app.manage(Sidecar(Mutex::new(child)));
 
-            // Restore explicitly so the off-screen guard runs strictly AFTER
-            // the plugin applies the saved geometry, regardless of hook order.
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.restore_state(StateFlags::all());
-            }
-            recenter_if_offscreen(app.handle());
+            // Geometry restore + off-screen recovery + reveal now happen in
+            // on_page_load (above), once the webview has actually painted.
 
             Ok(())
         })
@@ -266,7 +319,25 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::is_on_screen;
+    use super::{claim_once, is_on_screen};
+    use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn claim_once_only_lets_the_first_caller_through() {
+        // Stands in for repeated PageLoadEvent::Finished on reloads: the startup
+        // reveal must run on the first one and never again.
+        let flag = AtomicBool::new(false);
+        assert!(claim_once(&flag));
+        assert!(!claim_once(&flag));
+        assert!(!claim_once(&flag));
+    }
+
+    #[test]
+    fn claim_once_flags_are_independent() {
+        let (a, b) = (AtomicBool::new(false), AtomicBool::new(false));
+        assert!(claim_once(&a));
+        assert!(claim_once(&b), "one window's reveal must not consume another's");
+    }
 
     #[test]
     fn fully_inside_one_monitor() {

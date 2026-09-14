@@ -9,7 +9,17 @@ into the shipped track maps, computed from local captures/laps.
 Reads machine-local app-data (captures + lap store); writes simcoach/tracks/*.json.
 Run once on the curator machine, then commit the JSON changes.
 
-    python scripts/backfill_corner_geometry.py [slug ...]
+    python scripts/backfill_corner_geometry.py [slug ...] [--only=metric,metric]
+
+`--only` bakes just those metrics and leaves the rest of the stored bake alone, so a
+re-bake stays a diff a reviewer can read by eye -- which is how owned corner data is
+supposed to change. #73 used `--only=radius_m`: 35254d5 (#30) narrowed 69 corner windows
+across 11 maps without re-baking, which staled `radius_m` on 18 corners, and baking
+everything would have put 59 `elev_delta_m` changes in the same commit. Those are NOT
+noise -- elev_delta_m reads the same window ends and was stale for the same reason (all
+169 stored values replayed exactly from the pre-#30 windows) -- so they got their own
+reviewed commit, #74's `--only=elev_delta_m`. width_m/banking_deg read the APEX, which
+#30 did not move, so they were never affected.
 """
 from __future__ import annotations
 
@@ -20,7 +30,7 @@ from pathlib import Path
 
 import numpy as np
 
-from simcoach.analysis import corner_geometry
+from simcoach.analysis import CORNER_GEOMETRY_KEYS, corner_geometry
 from simcoach.ribbon import reconstruct_surface
 from simcoach.server.__main__ import db_path, telemetry_dir
 from simcoach.server.app import _load_cloud
@@ -28,7 +38,10 @@ from simcoach.store import LapStore
 from simcoach.track_lookup import track_slug
 
 TRACKS_DIR = Path("simcoach/tracks")
-_METRIC_KEYS = ("radius_m", "width_m", "banking_deg", "elev_delta_m")
+# This script is the ONLY writer allowed to change these -- the editor's save path
+# carries them forward instead of re-deriving them (#62). Shared owner so the two
+# lists cannot drift.
+_METRIC_KEYS = CORNER_GEOMETRY_KEYS
 
 
 def _elev_on_path(samples, path_dist, bins: int = 500):
@@ -108,7 +121,29 @@ def _store_samples(slug, store, conn, limit=12):
     return out
 
 
-def backfill(slugs=None):
+def _usage_error(slugs, keys):
+    """Why this invocation would bake nothing, or the wrong thing -- or None.
+
+    Every failure here is SILENT if let through: an unknown metric matches nothing and
+    the files are written back unchanged; an unknown slug matches no map and nothing is
+    baked; no metrics at all bakes nothing. Each prints a normal-looking run, and the
+    curator commits a re-bake that did not happen. So refuse, before anything is opened.
+    """
+    if not keys:
+        return "no metrics to bake"
+    unknown = set(keys) - set(_METRIC_KEYS)
+    if unknown:
+        return f"not corner geometry metrics: {sorted(unknown)} (known: {list(_METRIC_KEYS)})"
+    missing = set(slugs or ()) - {f.stem for f in TRACKS_DIR.glob("*.json")}
+    if missing:
+        return f"no shipped map named: {sorted(missing)} (in {TRACKS_DIR})"
+    return None
+
+
+def backfill(slugs=None, keys=_METRIC_KEYS):
+    err = _usage_error(slugs, keys)
+    if err:
+        raise ValueError(err)
     cap_dir = Path(telemetry_dir()) / "captures"
     store = LapStore(str(db_path()), str(telemetry_dir()))
     conn = sqlite3.connect(str(db_path()))
@@ -137,17 +172,43 @@ def backfill(slugs=None):
         for c in corners:
             lab = str(c.get("label") or c.get("number"))
             m = geo.get(lab, {})
-            for k in _METRIC_KEYS:
+            for k in keys:
                 if k in m:
                     c[k] = m[k]
                 else:
                     c.pop(k, None)  # don't leave a stale metric if its source vanished
         f.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding="utf-8")
-        got = sorted({k for c in corners for k in _METRIC_KEYS if k in c})
+        got = sorted({k for c in corners for k in keys if k in c})
         src = "capture" if (cap_dir / f"{slug}.npz").exists() else ("laps" if samples else "none")
         print(f"{slug}: baked {len(corners)} corners | metrics={got} | elev_src={src}")
     conn.close()
 
 
+def main(argv):
+    """CLI entry point. Exits non-zero, before anything is opened or written, on any
+    argument it cannot act on exactly as typed.
+
+    The argv parse used to be the unguarded half: `--onyl=radius_m` or an empty
+    `--only=` fell back to baking EVERY metric (on the curator's machine before #74, a
+    radius-only re-bake that also rewrote 59 elev_delta_m values; anywhere else, one
+    that deletes elev_delta_m from all 169 corners), and `--only radius_m` read
+    `radius_m` as a slug and did nothing without saying so."""
+    slugs, keys = [], []
+    for a in argv:
+        if not a.startswith("-"):
+            slugs.append(a)
+            continue
+        names = a[len("--only="):].split(",") if a.startswith("--only=") else []
+        if not names or "" in names:
+            raise SystemExit(f"unrecognised argument {a!r}: the only option is "
+                             f"--only=metric[,metric...], with no empty names")
+        keys += names
+    keys = tuple(keys) or _METRIC_KEYS
+    err = _usage_error(slugs, keys)
+    if err:
+        raise SystemExit(err)
+    backfill(set(slugs) or None, keys)
+
+
 if __name__ == "__main__":
-    backfill(set(sys.argv[1:]) or None)
+    main(sys.argv[1:])

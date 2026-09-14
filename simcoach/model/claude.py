@@ -2,6 +2,8 @@ from typing import Callable, Iterator
 
 import anthropic
 
+from .base import RunResult, TokenUsage
+
 # Safety stop for the tool-use loop: a coach question should need only a few
 # tool calls; this bounds a runaway model without capping normal use.
 MAX_TOOL_ITERATIONS = 8
@@ -31,10 +33,17 @@ class ClaudeModel:
         Returns:
             The model's text response.
         """
+        # Same cache breakpoint as the tool loop, so a large system prompt on this
+        # path caches too. INERT on today's three callers (server/app.py track-notes
+        # draft, memory distillation, key ping): their system prompts are <=86 tokens,
+        # under the 512-1024 minimum cacheable prefix, so the API silently declines to
+        # cache and charges no write premium. Their bulk (pasted guides, digests) is
+        # in the USER message, which is after this breakpoint — moving that content
+        # into `system`, or marking the user block, is what would make it bite.
         resp = self.client.messages.create(
             model=self.model,
             max_tokens=self.max_tokens,
-            system=system,
+            system=_cached_system(system),
             messages=messages,
             thinking=self._thinking_param(),
         )
@@ -48,8 +57,15 @@ class ClaudeModel:
         returns the final message so the caller can inspect `stop_reason`/`content`
         — its text is never re-yielded (that would double the answer once `run`
         accumulates deltas). `tools=None` omits the `tools` kwarg entirely (the
-        iteration-cap call)."""
-        kw = dict(model=self.model, max_tokens=self.max_tokens, system=system,
+        iteration-cap call).
+
+        Also yields this turn's billed `usage` event last. EVERY billed API call in
+        this class goes through here — the tool turns and the tool-free iteration-cap
+        call alike — so summing the usage events is structurally complete rather than
+        something a later edit can forget on one code path. That is also why the
+        cache breakpoint goes here: one place, every billed call."""
+        kw = dict(model=self.model, max_tokens=self.max_tokens,
+                  system=_cached_system(system),
                   messages=convo, thinking=self._thinking_param())
         if tools is not None:
             kw["tools"] = tools
@@ -58,12 +74,17 @@ class ClaudeModel:
             text = _first_text(resp)
             if text:
                 yield {"type": "text", "text": text}
+            yield self._usage_event(resp)
             return resp
         with self.client.messages.stream(**kw) as stream:
             for delta in stream.text_stream:
                 yield {"type": "text", "text": delta}
             final = stream.get_final_message()
+        yield self._usage_event(final)
         return final
+
+    def _usage_event(self, resp) -> dict:
+        return {"type": "usage", "usage": _usage_of(resp).as_dict(), "model": self.model}
 
     def run_stream(
         self,
@@ -108,14 +129,55 @@ class ClaudeModel:
         messages: list[dict],
         tools: list[dict],
         dispatch: Callable[[str, dict], str],
-    ) -> str:
+    ) -> RunResult:
         """Agentic tool-use loop; drains `run_stream`, accumulating text deltas
-        into the final answer."""
+        into the final answer and the per-turn usage events into the turn's total
+        cost (every loop iteration, including the tool-free iteration-cap call)."""
         text = ""
+        usage = TokenUsage()
         for ev in self.run_stream(system, messages, tools, dispatch):
             if ev["type"] == "text":
                 text += ev["text"]
-        return text
+            elif ev["type"] == "usage":
+                usage = usage + TokenUsage(**ev["usage"])
+        return RunResult(text=text, usage=usage)
+
+
+def _cached_system(system: str):
+    """Send the system prompt as one cacheable block (issue #42).
+
+    The agentic loop re-sends the same tools array + system prompt on every
+    iteration of a single question — up to MAX_TOOL_ITERATIONS + 1 billed calls,
+    a ~3.5k-token prefix each time. Caching is a PREFIX match and the render
+    order is `tools` → `system` → `messages`, so one breakpoint on the last (only)
+    system block caches tools and system together; nothing volatile precedes it.
+    Iteration 1 pays 1.25x to write, iterations 2..N pay 0.1x to read, so it is
+    ahead after a single read — which the loop guarantees inside the 5-minute TTL.
+
+    Anything that makes the prefix vary between iterations (a timestamp in the
+    prompt, a set-ordered tool list) silently drops the hit rate to zero with no
+    error — tests/test_prompt_caching.py asserts the prefix stays byte-stable.
+
+    Falsy system stays a bare string: an empty `text` block is a 400."""
+    if not system:
+        return system
+    return [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+
+
+def _usage_of(resp) -> TokenUsage:
+    """Read anthropic's `response.usage` into our provider-neutral shape. Defensive
+    by design: a response double (or a future SDK) without the field contributes
+    zero rather than killing the answer the driver is waiting on. This is the ONLY
+    place in the codebase that touches the SDK's usage field names."""
+    u = getattr(resp, "usage", None)
+    if u is None:
+        return TokenUsage()
+    return TokenUsage(
+        input=getattr(u, "input_tokens", 0) or 0,
+        output=getattr(u, "output_tokens", 0) or 0,
+        cache_read=getattr(u, "cache_read_input_tokens", 0) or 0,
+        cache_write=getattr(u, "cache_creation_input_tokens", 0) or 0,
+    )
 
 
 def _first_text(resp) -> str:

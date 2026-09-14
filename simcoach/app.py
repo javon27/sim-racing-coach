@@ -12,6 +12,21 @@ from simcoach.store import LapStore
 from simcoach.tiers import legal_adjustments
 
 
+def _on_track_now(record, peek) -> bool:
+    """Whether the driver is CURRENTLY on track, not merely "a lap was ever
+    captured this run" -- `record` (the latest captured lap) never resets to
+    None once set, so `record is not None` alone stays True forever after the
+    first lap (bug: on_track stuck True after leaving the track/session).
+    `peek()` re-checks the live session every turn; a miss means off track or
+    LMU closed, so that takes priority when available.
+    # ponytail: mirrors scoring presence, not garage/pits granularity (unlike
+    # the server's read_live_status) -- upgrade if the REPL needs that too.
+    """
+    if peek is not None:
+        return peek() is not None
+    return record is not None
+
+
 def run_repl(source: TelemetrySource, store: LapStore, cmap: CornerMap, coach: Coach,
              car: str, rest=None, track_note: str | None = None,
              input_device: str | None = None, units: str = "metric",
@@ -133,7 +148,7 @@ def run_repl(source: TelemetrySource, store: LapStore, cmap: CornerMap, coach: C
         car_raw = record.car if record else (ctx_key[1] if ctx_key else None)
         context = CoachContext(
             store, units=units, record=record, lap_id=latest["lap_id"], cmap=cmap,
-            setup=setup, track=track, car=car_raw, on_track=record is not None,
+            setup=setup, track=track, car=car_raw, on_track=_on_track_now(record, peek),
             allowed_adjustments=allowed,
             # Car knowledge keys off the RESOLVED model name (session.car), not the
             # raw store name; reloaded each turn so a mid-session car switch follows.

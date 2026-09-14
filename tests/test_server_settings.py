@@ -36,6 +36,16 @@ def test_put_settings_persists_and_rejects_secret(tmp_path, monkeypatch, mem_key
     assert "sk-should-not-persist" not in paths.config_path().read_text()
 
 
+def test_put_show_cost_round_trips_through_the_whitelist(tmp_path, monkeypatch, mem_keyring):
+    """The cost estimate is a Settings toggle; it rides the existing DEFAULTS
+    whitelist with no special-casing in put_settings."""
+    c, _ = _client(tmp_path, monkeypatch, mem_keyring)
+    assert c.get("/settings").json()["show_cost"] is True      # default on
+    assert c.put("/settings", json={"show_cost": False}).json()["show_cost"] is False
+    assert c.get("/settings").json()["show_cost"] is False
+    assert c.put("/settings", json={"show_cost": True}).json()["show_cost"] is True
+
+
 def test_delete_requires_confirmation(tmp_path, monkeypatch, mem_keyring, synthetic_lap):
     c, store = _client(tmp_path, monkeypatch, mem_keyring)
     store.save(synthetic_lap)
@@ -55,9 +65,20 @@ def test_delete_data_clears_with_confirm(tmp_path, monkeypatch, mem_keyring, syn
 def test_test_key_never_raises(tmp_path, monkeypatch, mem_keyring):
     c, _ = _client(tmp_path, monkeypatch, mem_keyring)
     # no key set -> make_model raises -> endpoint returns ok:false, not 500
-    r = c.post("/settings/test-key")
+    r = c.post("/settings/test-key", json={})
     assert r.status_code == 200
     assert r.json()["ok"] is False
+
+
+def test_test_key_requires_json_body(tmp_path, monkeypatch, mem_keyring):
+    # /settings/test-key makes a real (billed) Anthropic call, so it must not be
+    # reachable cross-origin: requiring a JSON body stops it being a CORS "simple
+    # request", forcing a preflight the origin allowlist blocks. Same guard as
+    # /ingest and /mapcapture/*. A bodyless POST and a body with no Content-Type
+    # (both CORS-simple) must be rejected before the handler runs.
+    c, _ = _client(tmp_path, monkeypatch, mem_keyring)
+    assert c.post("/settings/test-key").status_code == 422
+    assert c.post("/settings/test-key", content=b"{}").status_code == 422
 
 
 def test_post_api_key_sets_it(tmp_path, monkeypatch, mem_keyring):

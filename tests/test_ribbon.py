@@ -29,17 +29,116 @@ def test_reconstruct_surface_straight_envelope():
     assert len(r["left"]) == len(r["right"]) == len(r["center"]) == 50
 
 
-def test_reconstruct_surface_bank_from_higher_outer_edge():
-    # Outer edge (positive lateral offset) is higher -> non-zero bank from the fit.
+def test_reconstruct_surface_bank_from_cross_slope():
+    # A cross-slope across the width -> non-zero bank from the fit. Magnitude only:
+    # these are straight passes, so there is no inside/outside to call it banked or
+    # off-camber, and the +offset side is the driver's LEFT (#58), not an "outer" edge.
     laps = [_pass(-4.0, 0.0), _pass(0.0, 0.5), _pass(4.0, 1.0)]  # y rises with +offset
     r = reconstruct_surface(laps, bins=50)
     mid = len(r["bank"]) // 2
     assert abs(r["bank"][mid]) > 0.05      # detects the cross-slope
 
 
+def _sep(r):
+    # Drawn edge separation per bin -- the corridor, independent of the width GATE.
+    return np.hypot(*(np.array(r["left"]) - np.array(r["right"])).T)
+
+
 def test_reconstruct_surface_single_pass_no_crash():
     r = reconstruct_surface([_pass(0.0, 0.0)], bins=50)
-    assert r["center"] and all(w == 0.0 for w in r["width"])  # degenerate width, no crash
+    # One line spans no width: UNKNOWN, not a measured 0 m (#69). No crash either.
+    assert r["center"] and all(w is None for w in r["width"])
+    assert all(b is None for b in r["bank"])
+
+
+def test_same_line_laps_give_unknown_width_and_bank():
+    # #69: real racing laps sit within ~1 m of one line and their pos_y differs by a few
+    # cm lap to lap. The old >1e-6 m test fitted a slope across that 1 m -- tens of
+    # degrees of "banking" -- and wrote the 1 m envelope as the track width.
+    laps = [_pass(z, y) for z, y in ((-0.4, 3.00), (0.1, 3.06), (0.5, 2.95), (-0.2, 3.04))]
+    r = reconstruct_surface(laps, bins=50)
+    assert all(w is None for w in r["width"])
+    assert all(b is None for b in r["bank"])
+    assert r["center"] and r["left"] and r["right"]     # the corridor is still drawn
+
+
+_TH = np.linspace(0.0, 2 * np.pi, 1200, endpoint=False)   # a CLOSED 2.5 km loop, like a
+_R = 400.0                                                # real track: a straight wraps its
+                                                          # ends into a false seam, and half
+                                                          # a lap must exceed the 1 km a
+                                                          # spread has to be sustained over
+
+
+def _ring_lap(off, y=None):
+    # One lap of a radius-400 circle at lateral offset `off` (scalar or per-sample).
+    r = _R + np.broadcast_to(np.asarray(off, dtype=float), _TH.shape)
+    ch = {"pos_x": r * np.cos(_TH), "pos_z": r * np.sin(_TH), "lap_distance": _TH * _R}
+    if y is not None:
+        ch["pos_y"] = np.broadcast_to(np.asarray(y, dtype=float), _TH.shape)
+    return ch
+
+
+def test_edge_lap_bins_estimate_racing_line_bins_do_not():
+    # One cloud, both regimes -- the shape of the Spa edge-lap session: edge laps hug
+    # +-5 m over the first half, then all three laps share one line (jittering ~0.3 m,
+    # pos_y a few cm apart) over the second. Cross-slope 0.05 m/m. Magnitude only: the
+    # sign convention is pinned by the #58 tests below.
+    first = _TH < np.pi
+
+    def lap(edge, jitter, dy):
+        off = np.where(first, edge, jitter)
+        return _ring_lap(off, 0.05 * off + np.where(first, 0.0, dy))
+
+    r = reconstruct_surface([lap(5.0, 0.3, 0.04), lap(-5.0, -0.3, -0.03), lap(0.0, 0.0, 0.0)],
+                            bins=120)
+    for i in range(15, 45):                              # well inside the edge-lap half
+        assert abs(r["width"][i] - 10.0) < 1.0
+        assert abs(abs(r["bank"][i]) - np.arctan(0.05)) < 0.01
+    for i in range(75, 105):                             # well inside the one-line half
+        assert r["width"][i] is None and r["bank"][i] is None
+
+
+def test_width_needs_the_edges_to_span_it_not_just_one_stray_lap():
+    # Real Algarve racing laps: the two BOUND laps (edges) sat ~2 m apart, and a third lap
+    # running 7 m wide over a stretch lent those bins a spread the edges never had --
+    # 97 bins passed on spread alone with a median width of 1.8 m.
+    # The stray stretch is 1200 m, past the sustained-run length, so ONLY the edge-
+    # separation check can refuse it (a short one is already refused by the run rule,
+    # and then this test would pass with that check deleted). The stray lap sits at -2 m
+    # elsewhere so its mean stays inside the bound laps' and it is not picked as an edge.
+    wide = (_TH > 1.0) & (_TH < 1.0 + 1200.0 / _R)
+    r = reconstruct_surface([_ring_lap(2.5), _ring_lap(-2.5), _ring_lap(np.where(wide, 7.0, -2.0))],
+                            bins=120)
+    assert np.all(_sep(r) < 6.0)                         # the bound-lap corridor is ~5 m
+    assert all(w is None for w in r["width"])            # and never written as a width
+
+
+def test_one_lap_straying_wide_is_not_a_width_even_over_hundreds_of_metres():
+    # Real Fuji Speedway, 17 racing laps and no edge laps: every stretch the per-bin gate
+    # let through was LOCAL. The longest ran 236 m, where one qualifying lap (7254) sat
+    # 24.8 m off the pack, and the save baked "width 26m, 2 deg banked" into two corners.
+    # Deliberate edge laps and mapping captures span the width for the whole lap instead
+    # (Spa, Laguna, Algarve: runs of 2311 m and up). Fixture: that exact excursion.
+    wide = (_TH > 1.0) & (_TH < 1.0 + 236.0 / _R)
+    laps = [_ring_lap(o, 3.0 + dy) for o, dy in ((-0.4, 0.0), (0.1, 0.06), (0.5, -0.05), (-0.2, 0.04))]
+    laps.append(_ring_lap(np.where(wide, 24.8, 0.0), np.where(wide, 2.0, 3.0)))
+    r = reconstruct_surface(laps, bins=120)
+    assert all(w is None for w in r["width"])
+    assert all(b is None for b in r["bank"])
+
+
+def test_sustained_spread_run_is_measured_around_the_closed_loop():
+    # A run through the start/finish line is ONE run: an edge-lap stretch straddling the
+    # line must not be split into two short pieces and thrown away.
+    from simcoach.ribbon import _sustained
+    seam = np.zeros(100, dtype=bool)
+    seam[:30] = True
+    seam[-30:] = True                                    # 60 bins, through S/F
+    assert _sustained(seam, 50).tolist() == seam.tolist()
+    mid = np.zeros(100, dtype=bool)
+    mid[40:70] = True                                    # 30 bins, mid-lap
+    assert not _sustained(mid, 50).any()
+    assert _sustained(np.ones(100, dtype=bool), 500).all()   # a whole lap always counts
 
 
 def test_reconstruct_surface_empty_is_empty():
@@ -56,9 +155,15 @@ def test_reconstruct_surface_stitches_sparse_seam():
         return {"pos_x": x, "pos_z": z, "lap_distance": x.copy()}
 
     r = reconstruct_surface([edge(1), edge(-1)], bins=50)
-    assert abs(r["width"][25] - 10.0) < 1.0   # mid-lap full width
-    assert r["width"][0] > 5.0                # seam bin stitched, not the ~0 crossing
-    assert r["width"][-1] > 5.0
+    assert abs(_sep(r)[25] - 10.0) < 1.0      # mid-lap full corridor (a 400 m loop is too
+                                              # short to sustain a WIDTH; the edges hold)
+    # The stitch is of the EDGES (the seam's samples really converge, so its width is
+    # gated to unknown). Smoothing alone already lifts the pinch to ~6.5 m on this
+    # fixture, so the bound has to sit above that: stitched 8.3, unstitched 6.48. The old
+    # "> 5.0" held either way and never tested the stitch.
+    sep = _sep(r)
+    assert sep[0] > 7.5
+    assert sep[-1] > 7.5
 
 
 def test_reconstruct_surface_keeps_narrow_midlap_corner():
@@ -71,10 +176,13 @@ def test_reconstruct_surface_keeps_narrow_midlap_corner():
         return {"pos_x": x, "pos_z": z, "lap_distance": x.copy()}
 
     r = reconstruct_surface([pass_(o) for o in (-4.0, -1.0, 2.0, 5.0)], bins=50)
-    # Stitch stays seam-only: the mid narrow bin is NOT widened to the ~9 median
-    # (smoothing softens the sharp dip, but it's still clearly narrower).
-    assert r["width"][25] < 0.75 * r["width"][10]
-    assert r["width"][10] > 5.0   # a straight bin keeps the full weave spread
+    # Stitch stays seam-only: the mid narrow bin is NOT widened to the ~9 median.
+    # Measured: 0.06x the straight here, 0.70x if the stitch runs everywhere -- so the
+    # old "< 0.75x" held either way; 0.25x separates them.
+    sep = _sep(r)
+    assert sep[25] < 0.25 * sep[10]
+    assert sep[10] > 5.0          # a straight bin keeps the full weave spread
+    assert r["width"][25] is None  # ...and one line through the corner measures no width
 
 
 def _turns_deg(path):
@@ -110,17 +218,24 @@ def test_reconstruct_surface_smooths_weave_straight():
 
 
 def test_reconstruct_surface_edges_from_bound_laps():
-    # left-hug + right-hug + a weave that SPIKES past the left bound mid-lap. Edges
-    # must come from the BOUND laps (left stays ~-5), not the all-sample envelope
-    # (which would grab the -8 spike).
+    # Two edge-hugging passes at z = +-5 plus a weave that SPIKES past the z=-5
+    # bound mid-lap. Edges must come from the BOUND laps (the -5 edge stays ~-5),
+    # not the all-sample envelope (which would grab the -8 spike).
+    # On a pass along +x, +lateral is +z (#58), so z=-5 is the driver's RIGHT edge
+    # and that is the key the spike would leak into.
     x = np.linspace(0.0, 400.0, 400)
-    left = {"pos_x": x, "pos_z": np.full(400, -5.0), "lap_distance": x.copy()}
-    right = {"pos_x": x, "pos_z": np.full(400, 5.0), "lap_distance": x.copy()}
+    neg = {"pos_x": x, "pos_z": np.full(400, -5.0), "lap_distance": x.copy()}
+    pos = {"pos_x": x, "pos_z": np.full(400, 5.0), "lap_distance": x.copy()}
     wz = np.zeros(400); wz[(x >= 200) & (x <= 210)] = -8.0  # ran wide once
     weave = {"pos_x": x, "pos_z": wz, "lap_distance": x.copy()}
-    r = reconstruct_surface([left, weave, right], bins=100)
+    r = reconstruct_surface([neg, weave, pos], bins=100)
+    rz = np.array([p[1] for p in r["right"]])[10:-10]
     lz = np.array([p[1] for p in r["left"]])[10:-10]
-    assert lz.min() > -6.0                       # bound lap, not the -8 weave spike
+    # Bound two-sided, so each array has to be the edge it is NAMED for: a
+    # one-sided "rz.min() > -6" would also hold for the +5 pass, i.e. it would
+    # still pass with the keys swapped. These go red if they are.
+    assert -6.0 < rz.min() and rz.max() < -4.0   # ~-5 throughout: bound lap, no -8 spike
+    assert 4.0 < lz.min() and lz.max() < 6.0     # ~+5 throughout
     assert abs(r["width"][50] - 10.0) < 1.0      # edges = the two bounds (~10 apart)
     cz = np.array([p[1] for p in r["center"]])[10:-10]
     assert np.abs(cz).max() < 0.6                # center = midpoint of the bounds
@@ -168,8 +283,9 @@ def test_reconstruct_ribbon_bank_from_elevation():
     left = {**_edge(5.0, 100.0), "pos_y": np.full(3, 2.0)}
     right = {**_edge(-5.0, 100.0), "pos_y": np.zeros(3)}
     ribbon = reconstruct_ribbon(left, right, bins=5)
-    # Convention: positive = RIGHT higher. Here LEFT is higher -> negative.
-    expected = np.arctan2(-2.0, 10.0)
+    # Convention (#58, matching reconstruct_surface): positive = the LEFT edge is
+    # higher = banked for a right-hander. Here LEFT is higher -> positive.
+    expected = np.arctan2(2.0, 10.0)
     assert all(abs(b - expected) < 1e-3 for b in ribbon["bank"])  # bank stored at 4 dp
 
 
@@ -207,11 +323,15 @@ _DIST = list(np.linspace(0.0, 40.0, 40))
 _N = len(_DIST)
 
 
-def _edge_signals(steer_sign):
+# The same quarter-circle mirrored across x: a RIGHT turn.
+_RIGHT_CENTER = [[x, -z] for x, z in _LEFT_CENTER]
+
+
+def _edge_signals(steer_sign, lat_g=1.0):
     return {
         "lap_distance": np.array(_DIST),
         "steering": np.full(_N, steer_sign * 0.4),  # >0 right, <0 left (RIGHT_IS_POSITIVE)
-        "lat_g": np.full(_N, 1.0),                   # >0 -> left
+        "lat_g": np.full(_N, lat_g),                 # >0 -> left, <0 -> right
     }
 
 
@@ -220,6 +340,15 @@ def test_multi_signal_direction_agreement_is_high():
     d, conf = multi_signal_direction(_LEFT_CENTER, _DIST, 20.0,
                                      _edge_signals(-1), lap_length=40.0, half=0.3)
     assert d == "left" and conf == "high"
+
+
+def test_multi_signal_direction_agreement_is_high_for_a_right_turn():
+    # The mirror case (#70 red-team): a right turn reads NEGATIVE lat_g. The left-only
+    # test above cannot tell a vote on lat_g's sign from a vote on |lat_g|, which says
+    # "left" for every corner and flags every right-hander low-confidence.
+    d, conf = multi_signal_direction(_RIGHT_CENTER, _DIST, 20.0,
+                                     _edge_signals(+1, lat_g=-1.0), lap_length=40.0, half=0.3)
+    assert d == "right" and conf == "high"
 
 
 def test_multi_signal_direction_disagreement_is_low():
@@ -281,3 +410,116 @@ def test_smooth_curve_preserves_corners_and_cleans_straights():
 
     assert np.std(sx - x) < np.std(xn - x)               # straights denoised
     assert _menger(sx, sz).max() > _menger(bx, bz).max()  # corners kept sharper than boxcar
+
+
+# --- #58: ribbon handedness --------------------------------------------------
+# `_lateral` rotates the tangent +90 as (-tz, tx) and never consults
+# RIGHT_IS_POSITIVE, so "+lateral = the right edge" was a naming assumption with
+# no test behind it. These pin which physical side it actually lands on, anchored
+# to the repo's OWN owned-geometry direction convention (trackmap's
+# _LEFT_TURN_IS_CROSS_POSITIVE, via direction_from_path) rather than to a guess.
+
+def _ccw_circle(r=100.0, n=240):
+    """A closed circular track traversed counter-clockwise in (x, z) -- a
+    continuous LEFT-hander under the repo's direction convention. Returns
+    (x, z, dist, theta); the centre is the origin, so the INSIDE of the turn at
+    any station is exactly the -radial direction, by construction."""
+    th = np.linspace(0.0, 2 * np.pi, n, endpoint=False)
+    return r * np.cos(th), r * np.sin(th), th * r, th
+
+
+def test_lateral_points_left_of_travel_not_right():
+    """+lateral is the LEFT side of travel, contradicting the old docstring.
+
+    Construction, so left/right is not a matter of opinion: on a corner that
+    direction_from_path calls a LEFT-hander, the inside of the turn is the
+    driver's left. The circle's inside is the -radial direction, so dotting
+    `_lateral` with -radial settles it. The opposite rotation, (tz, -tx), flips
+    every one of these dots negative -- this is not a round-trip.
+    """
+    from simcoach.ribbon import _lateral
+    from simcoach.trackmap import direction_from_path
+
+    x, z, dist, th = _ccw_circle()
+    path = [[a, b] for a, b in zip(x, z)]
+    # Anchor: this traverse IS a left-hander under the repo's convention. If this
+    # assert ever fires, the direction convention moved and the rest is void.
+    for apex in (0.0, dist[len(dist) // 3], dist[2 * len(dist) // 3]):
+        assert direction_from_path(path, dist, apex) == "left"
+
+    lat_x, lat_z = _lateral(x, z)
+    inward_x, inward_z = -np.cos(th), -np.sin(th)      # toward the centre = inside = LEFT
+    dots = lat_x * inward_x + lat_z * inward_z
+    assert np.all(dots > 0.99)                          # +lateral == inside == LEFT
+    assert not np.any(dots < 0)                         # ...and never the right edge
+
+
+def test_left_key_is_the_inside_of_a_cambered_left_hander():
+    """The "left" array holds the driver's LEFT edge -- anchored to the
+    RIG-VALIDATED banking sign, not to a guess, so the keys and that sign can
+    never drift apart again.
+
+    Geometry: a circular track traversed counter-clockwise in (x, z) with the
+    surface CAMBERED -- elevation rises with radius, so the physically OUTER edge
+    is higher. Two facts then pin the labels with no round-trip:
+
+      1. bank comes out NEGATIVE here. Per 9756b65 (rig-validated on Laguna's
+         Corkscrew: T8 left -> -3.9, T9 right -> +4.1) negative means banked FOR
+         A LEFT-HANDER. "Banked" means the outer edge is higher, which is exactly
+         how this surface is built -- so this traverse is a left-hander.
+      2. The inside of a left-hander is the driver's LEFT, and the inside here is
+         the smaller radius, by construction.
+
+    => out["left"] must be the INNER edge. This is a two-sided tripwire: under
+    the labelling that shipped before #58 the inner edge comes back keyed "right"
+    and the radius asserts go red, while flipping _lateral's rotation to
+    (tz, -tx) instead makes bank positive and the first assert go red. Neither
+    convention can be changed alone.
+    """
+    r_in, r_out = 95.0, 105.0
+    _, _, dist, th = _ccw_circle()
+    slope = 0.10  # elevation per metre of radius -> outer edge ~1 m higher
+
+    def lap(r):
+        return {"pos_x": r * np.cos(th), "pos_z": r * np.sin(th),
+                "pos_y": np.full(len(th), slope * r), "lap_distance": dist}
+
+    out = reconstruct_surface([lap(r_in), lap(r_out)], bins=120)
+    mid = len(out["left"]) // 2
+
+    def rad(p):
+        return float(np.hypot(p[0], p[1]))
+
+    # 1. Outer-higher camber on this traverse reads as a banked LEFT-hander.
+    assert out["bank"][mid] < -0.05
+    # 2. ...so the inside (smaller radius) is the driver's left.
+    assert rad(out["left"][mid]) < rad(out["right"][mid])
+    assert abs(rad(out["left"][mid]) - r_in) < 2.0
+    assert abs(rad(out["right"][mid]) - r_out) < 2.0
+
+
+def test_left_key_is_the_inside_in_the_envelope_fallback():
+    """Same relabel, the OTHER branch. Two passes that each spend half the lap on
+    each side have equal mean offset, so they can't be classified into bound laps
+    and the edges come from the lateral ENVELOPE instead. +lateral is the driver's
+    left, so the most-POSITIVE offset per bin is the LEFT edge -- the inside of
+    this counter-clockwise (left-hand) circle, i.e. the smaller radius. Sampled
+    well away from the two radius steps, which are the only ambiguous stations."""
+    r_in, r_out = 95.0, 105.0
+    th = np.linspace(0.0, 2 * np.pi, 600, endpoint=False)
+    dist = th * 100.0
+    first_half = th < np.pi
+
+    def lap(inner_first):
+        r = np.where(first_half == inner_first, r_in, r_out)
+        return {"pos_x": r * np.cos(th), "pos_z": r * np.sin(th), "lap_distance": dist}
+
+    out = reconstruct_surface([lap(True), lap(False)], bins=120)
+
+    def rad(p):
+        return float(np.hypot(p[0], p[1]))
+
+    for i in (30, 90):  # quarter and three-quarter distance; steps sit at 0 and 60
+        assert rad(out["left"][i]) < rad(out["right"][i])
+        assert abs(rad(out["left"][i]) - r_in) < 2.0
+        assert abs(rad(out["right"][i]) - r_out) < 2.0

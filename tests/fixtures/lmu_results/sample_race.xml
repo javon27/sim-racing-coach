@@ -46,7 +46,9 @@
 <CarClass>LMP2</CarClass>
 <CarNumber>41</CarNumber>
 <isPlayer>1</isPlayer>
+<GridPos>9</GridPos>
 <Position>17</Position>
+<ClassGridPos>4</ClassGridPos>
 <ClassPosition>8</ClassPosition>
 <Lap num="1" p="17" et="160.1201" s1="49.0212" s2="31.4488" s3="41.7803" topspeed="268.91">122.2503</Lap>
 <Lap num="2" p="17" et="281.0300" s1="48.5511" s2="31.0044" s3="41.3548" topspeed="269.42">120.9103</Lap>

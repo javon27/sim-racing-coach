@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass
 from typing import Optional
 import numpy as np
@@ -17,19 +18,29 @@ class CornerMetrics:
     apex_spd: float
     min_spd: float
     exit_spd: float
-    brake_point: float
-    throttle_point: float
+    # None = no such point exists in this corner: the driver never braked / never got
+    # past the throttle gate. A distance sentinel can't express that -- any value here
+    # reads as a real point to anything computing `apex_dist - brake_point`, and stays
+    # silent only while it happens to sit on the correct side of apex_dist.
+    # brake_point may legitimately be NEGATIVE: a corner braking across the S/F seam
+    # reports a distance before the line, so `apex_dist - brake_point` stays a positive
+    # metres-before-apex (#7). Not-None + negative is a valid state; only "not found"
+    # is None.
+    brake_point: float | None
+    throttle_point: float | None
     trailbrake_overlap: float
     peak_brake: float = 0.0          # max brake input in the corner (0..1)
     peak_lat_g: float = 0.0          # max |lateral g| — how hard the car was loaded
-    min_grip: float = float("nan")   # lowest grip fraction any tire saw (near 0 = sliding)
     # Extended inputs/loads — nan when the source channel is absent (older laps).
     peak_brake_g: float = float("nan")   # max deceleration g while braking
     peak_accel_g: float = float("nan")   # max acceleration g while on throttle
     peak_steer: float = float("nan")     # max |steering| (0..1 of full lock)
     abs_pct: float = float("nan")        # fraction of corner with ABS engaged (braking too hard)
     tc_pct: float = float("nan")         # fraction of corner with TC engaged (too much throttle)
-    track_edge_min: float = float("nan") # closest approach to the track edge (m); low = using all the track
+    # Closest approach of the car's CENTRE to the track edge (m) — not the track's
+    # half-width, and not the outer wheels. Low = using all the track; negative = the
+    # centre crossed the white line by that much.
+    track_edge_min: float = float("nan")
     coast_time: float = float("nan")      # seconds in the corner with NEITHER pedal
     coast_dist: float = float("nan")      # meters in the corner with neither pedal
     brake_to_throttle_dist: float = float("nan")  # last brake-off -> first throttle (m)
@@ -324,7 +335,9 @@ def _tire_summary(record: LapRecord):
     return means, (early, late)
 
 
-def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
+def _metrics_for_corner(
+    record: LapRecord, corner: Corner, length: float | None = None
+) -> CornerMetrics:
     dist = record.channels["lap_distance"]
     speed = record.channels["speed"]
     brake = record.channels["brake"]
@@ -334,8 +347,20 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
     label = corner.label or str(corner.number)
     apexes = list(corner.apexes) if corner.apexes else [corner.apex_dist]
 
+    # Lap length: the modulus everything that reasons across the S/F seam needs.
+    # Fall back to the lap's own furthest distance for maps that declare no length
+    # (within a sample of the truth, which is well under coaching resolution).
+    lap_len = float(length) if length else float(np.nanmax(dist))
+
     mask = in_window(dist, corner.start_dist, corner.end_dist)  # wrap-aware (S/F seam)
     idx = np.where(mask)[0]
+    wrap = corner.start_dist > corner.end_dist
+    if wrap and idx.size:
+        # Sample ORDER is not along-track order once a window straddles S/F: the
+        # post-seam samples (lap_distance ~0) sort first. Re-order along the window
+        # so entry/exit/throttle -- all of which read the window front-to-back --
+        # mean what they say (issue #7). Non-wrapping windows are left untouched.
+        idx = idx[np.argsort((dist[idx] - corner.start_dist) % lap_len)]
 
     if idx.size == 0:
         # Degenerate window: no telemetry samples fall inside this corner.
@@ -348,8 +373,8 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
             apex_spd=float("nan"),
             min_spd=float("nan"),
             exit_spd=float("nan"),
-            brake_point=corner.end_dist,
-            throttle_point=corner.end_dist,
+            brake_point=None,
+            throttle_point=None,
             trailbrake_overlap=0.0,
             label=label, apexes=apexes,
         )
@@ -371,8 +396,8 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
             apex_spd=float("nan"),
             min_spd=float("nan"),
             exit_spd=float("nan"),
-            brake_point=corner.end_dist,
-            throttle_point=corner.end_dist,
+            brake_point=None,
+            throttle_point=None,
             trailbrake_overlap=0.0,
             label=label, apexes=apexes,
         )
@@ -394,24 +419,47 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
     # corner's braking doesn't bleed in.
     # ponytail: fixed 250 m look-back; the contiguous-run isolation guards the common
     # case, but two heavy-braking corners <250 m apart could still confuse it.
-    appr = np.where(in_window(dist, corner.start_dist - 250.0, corner.apex_dist))[0]
-    brake_point = corner.end_dist
-    if appr.size:
-        ad, on = dist[appr], brake[appr] > 0.1
-        aj = int(np.argmin(np.abs(ad - corner.apex_dist)))
-        j = aj
-        while j >= 0 and not on[j]:  # nearest braking sample at/before the apex
-            j -= 1
-        if j >= 0:
+    #
+    # Both the look-back and the walk are done on a wrap-aware "metres BEFORE the
+    # apex" axis (issue #7). A raw distance window loses the approach whenever it
+    # crosses S/F -- `start_dist - 250` goes negative and clamps at the line -- and
+    # even a wrap-aware mask can't be walked by array index, because the samples
+    # either side of the seam are not in distance order.
+    back = (corner.apex_dist - dist) % lap_len       # 0 at the apex, grows backwards
+    sel = np.where(back <= (corner.apex_dist - corner.start_dist + 250.0) % lap_len)[0]
+    brake_point = None   # no braking found; never a distance standing in for that
+    if sel.size:
+        order = sel[np.argsort(back[sel], kind="stable")]  # apex first, then backwards
+        on = brake[order] > 0.1
+        j = 0
+        while j < on.size and not on[j]:  # nearest braking sample at/before the apex
+            j += 1
+        if j < on.size:
             k = j
-            while k > 0 and on[k - 1]:  # walk back through its contiguous run
-                k -= 1
-            brake_point = float(ad[k])
+            while k + 1 < on.size and on[k + 1]:  # walk back through its contiguous run
+                k += 1
+            d0 = float(dist[order[k]])
+            # Selected samples sit at/before the apex on the wrapped axis, so a raw
+            # distance ABOVE the apex is one that crossed S/F -- shift it a lap back
+            # rather than report a "brake point" the apex appears to precede.
+            brake_point = d0 - lap_len if d0 > corner.apex_dist else d0
 
+    # Throttle point: first sample past the 0.8 gate at/after the min-speed point, and
+    # None when there isn't one. Explicitly None rather than a distance sentinel -- the
+    # old `corner.end_dist` sits AFTER the apex by construction, so format_corner_line
+    # rendered (end_dist - apex_dist) as "back to throttle Nm after apex" for every
+    # corner the driver never took past 80% throttle: track geometry stated to the
+    # coach as a driver input.
     after_min = np.where(win_throttle[min_i:] > 0.8)[0]
-    throttle_point = (
-        float(win_dist[min_i + after_min[0]]) if after_min.size else corner.end_dist
-    )
+    throttle_point = None
+    if after_min.size:
+        d1 = float(win_dist[min_i + after_min[0]])
+        # Is d1 at/after the apex? Not "d1 >= apex_dist" -- across the seam the later
+        # distance is the SMALLER number. Measure forward from the apex, wrap-aware,
+        # and accept only what still lands inside the corner's post-apex extent.
+        fwd = (d1 - corner.apex_dist) % lap_len
+        if fwd <= (corner.end_dist - corner.apex_dist) % lap_len:
+            throttle_point = d1 if d1 >= corner.apex_dist else d1 + lap_len
 
     trailbrake_overlap = float(np.mean((win_brake > 0.1) & (np.abs(win_steering) > 0.1)))
     peak_brake = float(np.nanmax(win_brake)) if win_brake.size else 0.0
@@ -419,12 +467,6 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
     peak_lat_g = (
         float(np.nanmax(np.abs(win_lat_g[idx]))) if win_lat_g is not None and idx.size else 0.0
     )
-    # Lowest grip fraction any tire saw through the corner (near 0 = at/over the
-    # limit — sliding or locking). nan when the extended capture isn't present.
-    grip_ch = [record.channels[f"grip_{w}"][idx] for w in ("fl", "fr", "rl", "rr")
-               if f"grip_{w}" in record.channels]
-    min_grip = float(np.nanmin(np.vstack(grip_ch))) if grip_ch else float("nan")
-
     # Longitudinal g split by pedal (sign-convention agnostic: magnitude while the
     # brake / throttle is actually applied). nan when long_g wasn't captured.
     long_g = record.channels.get("long_g")
@@ -442,10 +484,31 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
         return float(np.nanmean((ch[idx] > 0.5).astype(float))) if ch is not None else float("nan")
     abs_pct, tc_pct = _pct("abs_active"), _pct("tc_active")
 
-    # Track-width usage: closest the car got to the track edge (m). New capture, so
-    # nan for laps recorded before it. (Edge units PENDING LIVE VALIDATION — see smm.)
+    # Track-width usage: closest the car got to the track edge (m). mTrackEdge is
+    # the EDGE's offset from the centre path (~= half the track width there), not
+    # the car's distance to it -- that distance is |track_edge| - |path_lateral|
+    # (path_lateral is the car's own offset from that same centre path).
+    # Deliberately NOT clamped at 0: negative means the car went that far PAST the
+    # white line, and nothing else in the codebase reports that -- the only other
+    # off-track surface is the lap-level `valid` flag from mLapInvalidated, which
+    # fired for none of the 168-of-468 real corners a clamp flattened to exactly
+    # 0.0. New capture, so nan for laps recorded before it. (Edge units PENDING
+    # LIVE VALIDATION — see smm.)
+    # ponytail: centre-to-line, not wheel-to-line. mPathLateral is the car's CENTRE
+    # and we hold no per-car width, so a ~2m GT car's outer wheels sit ~0.8m further
+    # out than this number says -- and the reported median is only 0.24m, i.e. the
+    # whole interesting range hides inside one unmodeled half-car-width (the main
+    # reason so many corners read ~0). Worded as "centre" in format.py rather than
+    # guessing a width; if per-car width ever lands, subtract half of it here.
+    # (Not a contradiction of the clamp note above: that 168-of-468 count was
+    # exact-0.0 saturation from clamping real excursions; this near-zero-but-not-0
+    # spread is the separate, still-present effect of the unmodeled half-car-width.)
     edge = record.channels.get("track_edge")
-    track_edge_min = float(np.nanmin(np.abs(edge[idx]))) if edge is not None else float("nan")
+    path_lat = record.channels.get("path_lateral")
+    if edge is not None and path_lat is not None:
+        track_edge_min = float(np.nanmin(np.abs(edge[idx]) - np.abs(path_lat[idx])))
+    else:
+        track_edge_min = float("nan")
 
     # Dead time: distance/seconds in the corner with neither pedal, plus the gap
     # between brake release and throttle pickup. Same ds/(v/3.6) integration as
@@ -489,7 +552,6 @@ def _metrics_for_corner(record: LapRecord, corner: Corner) -> CornerMetrics:
         trailbrake_overlap=trailbrake_overlap,
         peak_brake=peak_brake,
         peak_lat_g=peak_lat_g,
-        min_grip=min_grip,
         peak_brake_g=peak_brake_g,
         peak_accel_g=peak_accel_g,
         peak_steer=peak_steer,
@@ -509,7 +571,8 @@ def analyze_lap(
     if reference is not None and reference.track != record.track:
         raise ValueError(f"reference lap track {reference.track!r} != {record.track!r}")
 
-    corners = [_metrics_for_corner(record, corner) for corner in cmap.corners]
+    length = cmap.length
+    corners = [_metrics_for_corner(record, corner, length) for corner in cmap.corners]
 
     # Tag each corner with the named section its apex falls in (e.g. "The Corkscrew").
     for cm in corners:
@@ -520,7 +583,7 @@ def analyze_lap(
 
     has_reference = reference is not None
     if has_reference:
-        ref_metrics = {c.number: _metrics_for_corner(reference, c) for c in cmap.corners}
+        ref_metrics = {c.number: _metrics_for_corner(reference, c, length) for c in cmap.corners}
         for cm in corners:
             ref = ref_metrics.get(cm.corner_no)
             if ref is not None and not np.isnan(cm.min_spd) and not np.isnan(ref.min_spd):
@@ -534,6 +597,47 @@ def analyze_lap(
         tire_means=tire_means, tire_warmup=tire_warmup, wheels=_wheel_summary(record),
         coast_total=lap_coast_total(record),
     )
+
+
+# The per-corner geometry metrics `corner_geometry` can emit, in the order they are
+# baked. One owner because three writers touch them -- the backfill script that bakes
+# them, the editor's save path that carries them forward, and this function -- and a
+# key missing from one of those lists is a metric silently dropped on save (#62).
+CORNER_GEOMETRY_KEYS = ("radius_m", "width_m", "banking_deg", "elev_delta_m")
+
+# Which of those are SIGNED measurements rather than lengths. A signed one is
+# legitimately zero or negative (a flat corner, a downhill one); a length cannot be, so
+# a stored radius/width <= 0 did not come from a measurement and a save recomputes it
+# instead of preserving it. Kept HERE, beside the key list, rather than inline at the
+# one use site: a metric added to one list and not the other silently inherits the wrong
+# rule, and "one writer's list missing a key" is exactly what deleted Laguna's
+# width/banking (#62). Add a fifth metric -> classify it here in the same edit.
+SIGNED_GEOMETRY_KEYS = frozenset({"banking_deg", "elev_delta_m"})
+
+
+def measurable_geometry(key: str, value) -> bool:
+    """Is a stored geometry value one that could have been MEASURED -- a finite number,
+    and for a length also > 0?
+
+    One owner for two questions that must not disagree: whether the editor's save
+    carries a baked metric forward rather than recomputing it (#62), and whether any
+    writer may put it in a track file at all (#65). These come off disk, including
+    hand-edited and third-party maps, so `null`, a string, a dict, a non-finite float
+    and a zero/negative LENGTH are not data. A string is the sharp one: it loads, and
+    then `geometry_clause` raises `Unknown format code 'f'` on the coach's next answer.
+
+    The bool check is load-bearing, not defensive noise: bool IS an int in Python, so
+    `True > 0` would carry a stored `true` through as a measurement. OverflowError is
+    too: `math.isfinite` RAISES on an int too large for a double, which JSON parses.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        if not math.isfinite(value):
+            return False
+    except OverflowError:
+        return False
+    return value > 0 or key in SIGNED_GEOMETRY_KEYS
 
 
 def corner_geometry(path, dist, corners, *, width=None, bank=None, elev=None):
@@ -572,9 +676,12 @@ def corner_geometry(path, dist, corners, *, width=None, bank=None, elev=None):
         if kmax > 1e-4:  # tightest point in the window; <1e-4 (~>10 km) = effectively straight
             m["radius_m"] = round(1.0 / kmax, 1)
         ai = at(c["apex_dist"])
-        if w is not None and ai < len(w):
+        # A null/NaN station is a ribbon bin whose samples never spanned the width
+        # (ribbon._MIN_SPREAD_M): unknown, so no metric -- and never a NaN, which
+        # _write_track_json refuses (allow_nan=False).
+        if w is not None and ai < len(w) and np.isfinite(w[ai]):
             m["width_m"] = round(float(w[ai]), 1)
-        if b is not None and ai < len(b):
+        if b is not None and ai < len(b) and np.isfinite(b[ai]):
             m["banking_deg"] = round(float(np.degrees(b[ai])), 1)
         if e is not None:
             si, ei = at(c["start_dist"]), at(c["end_dist"])
@@ -584,9 +691,21 @@ def corner_geometry(path, dist, corners, *, width=None, bank=None, elev=None):
     return out
 
 
-def geometry_clause(metrics: dict) -> str:
+def geometry_clause(metrics: dict, direction: str | None) -> str:
     """Render baked per-corner geometry as a digest clause, omitting absent
-    metrics. Elevation/banking below a threshold are dropped as noise."""
+    metrics. Elevation/banking below a threshold are dropped as noise.
+
+    `direction` is the corner's OWNED turn direction ("left"/"right", computed
+    from telemetry geometry -- never inferred). It is required because a
+    cross-slope is only meaningful against it: banking_deg's sign names the
+    direction the slope favours (rig-validated in 9756b65 on Laguna's Corkscrew,
+    negative = left, positive = right), so the same 3 degrees is BANKED for a
+    corner turning that way and OFF-CAMBER for one turning the other. Rendering
+    the bare magnitude (issue #35) told the driver the track was helping them
+    where it was falling away -- they then carry more speed into exactly the
+    wrong place. Pass None only when the direction genuinely isn't known; the
+    banking term is then omitted rather than guessed.
+    """
     parts = []
     r = metrics.get("radius_m")
     if r is not None:
@@ -598,6 +717,117 @@ def geometry_clause(metrics: dict) -> str:
     if w is not None:
         parts.append(f"width {w:.0f}m")
     bk = metrics.get("banking_deg")
-    if bk is not None and abs(bk) >= 1.0:
-        parts.append(f"{abs(bk):.0f}\N{DEGREE SIGN} banking")
+    if bk is not None and abs(bk) >= 1.0 and direction in ("left", "right"):
+        favours = "left" if bk < 0 else "right"
+        camber = "banked" if favours == direction else "off-camber"
+        parts.append(f"{abs(bk):.0f}\N{DEGREE SIGN} {camber}")
     return ", ".join(parts)
+
+
+# --- Driver-input traces (UI: Pit Wall graphs, issue #21) ---------------------
+#
+# The two source structs run at DIFFERENT rates: throttle/brake/steering come from
+# the telemetry struct at ~48.6 Hz, `lap_distance` from the scoring struct at ~5 Hz.
+# So the stored lap_distance channel is a STAIRCASE -- roughly ten identical values,
+# then a jump. Plotting inputs straight against it collapses ~10 input samples onto
+# one x and draws visible stair steps that hide the modulation the graph exists to
+# show.
+#
+# Fix, part 1: treat the FIRST sample of each held run as a knot (that is when the
+# scoring value became visible) and linearly interpolate lap_distance across the
+# samples in between, using the sample index as a uniform-time axis. smm.py polls
+# both structs on one loop iteration, so first-of-run is late by 0-20 ms (<=1.1 m at
+# 200 km/h), not by a whole tick; assuming constant speed between knots costs <=8 cm
+# under 1.5 g. The lag is shared by every lap, so overlaid laps stay aligned -- and
+# the lap-distance axis (the repo's alignment key) is preserved rather than swapped
+# for a time axis.
+#
+# Fix, part 2: reduce with a per-bin min/max ENVELOPE, never a point sample. 500
+# bins puts one bin at 180 ms (5 km lap) to 400 ms (Le Mans) -- AT OR COARSER than
+# the 200 ms scoring tick part 1 exists to see inside -- so point-sampling the grid
+# drops a 0.1 s lift at 9 of 10 phases, worse than the naive scoring-rate resample.
+# The envelope keeps both extremes of each bin, so no input event can fall between
+# grid points, at any phase. Raising `bins` narrows the bins but does not remove
+# the aliasing; the envelope does.
+_INPUT_CHANNELS = ("throttle", "brake", "steering")
+
+
+def input_traces(record: LapRecord, bins: int = 500) -> dict:
+    """Throttle/brake/steering resampled onto a uniform lap_distance grid.
+
+    Pure and deterministic; UI-facing only (never fed to the model). Returns
+    ``{"length", "dist", "throttle", "brake", "steering"}`` where `dist` is the
+    `bins` bin centres and each channel is ``{"lo": [...], "hi": [...]}`` — the
+    min/max of the samples in each bin. Returns ``{}`` when the lap lacks a
+    channel or is too short.
+
+    `bins` bounds the payload: a full lap at 48.6 Hz is 4k-10k samples per channel.
+    """
+    ch = record.channels
+    if not all(k in ch for k in ("lap_distance", *_INPUT_CHANNELS)):
+        return {}
+    arrays = {k: np.asarray(ch[k], dtype=float) for k in ("lap_distance", *_INPUT_CHANNELS)}
+    n = min(len(a) for a in arrays.values())
+    if n < 2:
+        return {}
+    arrays = {k: a[:n] for k, a in arrays.items()}
+
+    mask = np.ones(n, dtype=bool)
+    for a in arrays.values():
+        mask &= np.isfinite(a)
+    keep = np.flatnonzero(mask)
+    if keep.size < 2:
+        return {}
+    d = arrays["lap_distance"][keep]
+
+    # Knots = first sample of each held run, in ORIGINAL sample numbering (so the
+    # index axis stays a uniform-time axis even after dropping non-finite samples).
+    run_start = np.r_[True, np.diff(d) != 0]
+    ki, kd = keep[run_start], d[run_start]
+    # Keep only knots that beat the RUNNING MAXIMUM. Comparing each knot to its
+    # immediate predecessor is not enough: after a backward step (a wrap, a scoring
+    # glitch) the next knot passes as long as it beats the DIPPED value, leaving the
+    # axis non-monotonic -- and np.interp returns garbage on an unsorted xp without
+    # raising. This guarantees the strictly-increasing xp/fp pair np.interp needs.
+    forward = np.r_[True, kd[1:] > np.maximum.accumulate(kd)[:-1]]
+    ki, kd = ki[forward], kd[forward]
+    if ki.size < 2:
+        return {}
+    # The trailing partial run has no next knot to interpolate toward; extend it at
+    # the last observed rate so the final ~0.2 s isn't clamped flat.
+    if ki[-1] < keep[-1]:
+        rate = (kd[-1] - kd[-2]) / (ki[-1] - ki[-2])
+        kd = np.append(kd, kd[-1] + rate * (keep[-1] - ki[-1]))
+        ki = np.append(ki, keep[-1])
+
+    dist = np.interp(keep, ki, kd)
+
+    # Per-bin min/max ENVELOPE, not point-sampling. At 500 bins one bin spans
+    # 180 ms (5 km lap) to 400 ms (Le Mans) -- at or COARSER than the 200 ms
+    # scoring tick the de-staircasing above exists to see inside. Point-sampling
+    # the grid drops any event narrower than a bin whenever it lands between two
+    # grid points, which at Le Mans loses a 0.1 s lift more often than the naive
+    # scoring-rate resample does. Taking each bin's extremes instead means a stab
+    # or a lift cannot vanish at any phase; the chart draws the band.
+    edges = np.linspace(float(dist[0]), float(dist[-1]), bins + 1)
+    centres = (edges[:-1] + edges[1:]) / 2.0
+    idx = np.clip(np.searchsorted(edges, dist, side="right") - 1, 0, bins - 1)
+    empty = np.bincount(idx, minlength=bins) == 0
+
+    out: dict = {"length": round(float(dist[-1]), 1),
+                 "dist": [round(float(v), 1) for v in centres]}
+    for k in _INPUT_CHANNELS:
+        v = arrays[k][keep]
+        lo = np.full(bins, np.inf)
+        hi = np.full(bins, -np.inf)
+        np.minimum.at(lo, idx, v)
+        np.maximum.at(hi, idx, v)
+        if empty.any():
+            # Bins finer than the sample spacing hold nothing; interpolate them so
+            # the chart has no holes.
+            pt = np.interp(centres, dist, v)
+            lo = np.where(empty, pt, lo)
+            hi = np.where(empty, pt, hi)
+        out[k] = {"lo": [round(float(x), 3) for x in lo],
+                  "hi": [round(float(x), 3) for x in hi]}
+    return out

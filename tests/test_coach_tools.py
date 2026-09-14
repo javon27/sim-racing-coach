@@ -1,7 +1,9 @@
 """Agentic tool layer: the tools return the right on-demand summaries, and the
 Coach agentic loop dispatches the model's tool calls (via FakeModel scripting)."""
+import pytest
+
 from simcoach.coach import Coach
-from simcoach.coach_tools import TOOLS, CoachContext
+from simcoach.coach_tools import TOOLS, CoachContext, scrub_stored_answer
 from simcoach.corners import CornerMap
 from simcoach.model.fake import FakeModel
 from simcoach.store import LapStore
@@ -112,6 +114,123 @@ def test_recent_laps_use_in_session_phase_numbering(tmp_path, synthetic_lap):
     assert ctx._resolve_lap("2")[1] == ids[3]  # bare number -> current (race) phase
 
 
+def test_lap_numbering_matches_ui_contiguous_phase_grouping(tmp_path, synthetic_lap):
+    # Issue #34: the UI (LapList.svelte) groups laps into a NEW block -- restarting
+    # "Lap 1" -- every time the phase value changes, even if that same phase
+    # recurs later (e.g. practice -> race -> practice again). The coach's numbering
+    # must follow the same grouping, not a cumulative per-phase count across the
+    # whole session (which would keep climbing past the interruption).
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    ids = []
+    for ph, t in [("practice", 1.0), ("practice", 2.0), ("race", 3.0), ("practice", 4.0)]:
+        ids.append(store.save(LapRecord(**{**synthetic_lap.__dict__,
+                                           "session_id": "s1", "phase": ph, "timestamp": t})))
+    ctx = CoachContext(
+        store,
+        record=LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1", "phase": "practice"}),
+        lap_id=ids[-1], session_id="s1",
+    )
+    listing = ctx.list_recent_laps().lower()
+    # The UI shows this lap as the FIRST lap of the second (new) practice block,
+    # not the third practice lap overall.
+    assert "practice lap 1" in listing
+    assert ctx._resolve_lap("practice lap 1")[1] == ids[-1]
+
+
+def test_resolve_lap_never_falls_back_to_raw_db_id(tmp_path, synthetic_lap):
+    # Issue #34: a bare number the driver gives must only ever resolve through the
+    # in-session lap numbering (what they actually see in the UI) -- never be
+    # silently reinterpreted as a raw database id, which can point at a
+    # completely unrelated lap (here, one from a different track/car entirely).
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    unrelated = LapRecord(**{**synthetic_lap.__dict__, "track": "other_track", "car": "other_car",
+                             "session_id": None, "phase": None})
+    for _ in range(5):
+        store.save(unrelated)  # bump the autoincrement so later ids are unrelated laps
+    ids = []
+    for t in (10.0, 11.0):
+        ids.append(store.save(LapRecord(**{**synthetic_lap.__dict__,
+                                           "session_id": "s1", "phase": "race", "timestamp": t})))
+    ctx = CoachContext(
+        store,
+        record=LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1", "phase": "race"}),
+        lap_id=ids[-1], session_id="s1",
+    )
+    # "5" isn't a valid in-session reference (only race laps 1-2 exist) and happens
+    # to collide with an unrelated lap's raw id (ids 1-5) -- must not resolve to it.
+    record, lap_id = ctx._resolve_lap("5")
+    assert record is None and lap_id is None
+
+
+def _practice_session(tmp_path, synthetic_lap, n=35):
+    """A practice session of `n` laps, like the one in issue #34's chat."""
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    ids = [store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1",
+                                   "phase": "practice", "timestamp": float(i)}))
+           for i in range(n)]
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    ctx = CoachContext(
+        store, cmap=cmap,
+        record=LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1", "phase": "practice"}),
+        lap_id=ids[-1], session_id="s1",
+    )
+    return ctx, store, ids
+
+
+def test_unprefixed_lap_reference_resolves(tmp_path, synthetic_lap):
+    # Issue #34 (real root cause): the driver says "lap 35 on this list" using the
+    # UI's own unprefixed wording, so the model asks for "lap 35". Only
+    # "practice lap 35"/"practice 35"/"35" were registered, so the UI's own phrasing
+    # never resolved and the driver saw the tool's failure text.
+    ctx, _, ids = _practice_session(tmp_path, synthetic_lap)
+    assert ctx._resolve_lap("lap 35")[1] == ids[34]
+    assert ctx._resolve_lap("practice lap 35")[1] == ids[34]  # still works
+    assert ctx._resolve_lap("35")[1] == ids[34]
+
+
+def test_unknown_lap_reference_names_the_phase_and_range(tmp_path, synthetic_lap):
+    # The failure must be self-correcting: our own tool schema primed "race lap N",
+    # and the old message named neither the session's phase nor the valid range, so
+    # the model had nothing to retry against.
+    ctx, _, _ = _practice_session(tmp_path, synthetic_lap)
+    msg = ctx.get_lap_summary("race lap 35")
+    assert "practice" in msg and "1-35" in msg and "race lap 35" in msg
+    assert "practice" in ctx.get_corner("1", which="race lap 35")
+
+
+def test_unknown_lap_reference_still_fails(tmp_path, synthetic_lap):
+    # Making the UI's wording resolve must not make everything resolve.
+    ctx, _, _ = _practice_session(tmp_path, synthetic_lap, n=3)
+    for ref in ("race lap 2", "lap 99", "qualifying lap 1", "lap banana"):
+        assert ctx._resolve_lap(ref) == (None, None)
+
+
+def test_raw_id_resolves_only_when_laps_are_labelled_by_id(tmp_path, synthetic_lap):
+    # With no session numbering (the REPL asks questions before this run's first lap)
+    # list_recent_laps labels laps by their raw DB id, so that is the only reference
+    # the model can give back. It must resolve -- but only after validating the id
+    # belongs to THIS track/car, never an unrelated lap (issue #34).
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    other = [store.save(LapRecord(**{**synthetic_lap.__dict__, "track": "other_track",
+                                     "car": "other_car", "session_id": None, "phase": None}))
+             for _ in range(3)]
+    mine = store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": None,
+                                   "phase": "practice"}))
+    ctx = CoachContext(store, cmap=CornerMap.load("simcoach/tracks/test_track.json"),
+                       track=synthetic_lap.track, car=synthetic_lap.car)
+    listing = ctx.list_recent_laps()
+    assert f"lap {mine}" in listing          # labelled by raw id, so it must resolve
+    assert ctx._resolve_lap(str(mine))[1] == mine
+    assert ctx._resolve_lap(f"lap {mine}")[1] == mine
+    # An id from a different track/car stays unresolvable.
+    assert ctx._resolve_lap(str(other[0])) == (None, None)
+    assert ctx._resolve_lap(f"lap {other[-1]}") == (None, None)
+
+
 def test_get_race_result_formats_and_falls_back(tmp_path, synthetic_lap):
     from simcoach.lmu.results import ResultLap, ResultSession
     ctx, store, _ = _ctx(tmp_path, synthetic_lap)
@@ -147,8 +266,100 @@ def test_get_race_result_arc_is_race_phase_only(tmp_path, synthetic_lap):
         store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "arc-1",
                                 "timestamp": float(i), "position": place, "phase": "race"}))
     out = ctx.get_race_result()
-    assert "started P5" in out and "as low as P10" in out and "P3" in out
+    assert "P5 on the first captured lap" in out and "as low as P10" in out and "P3" in out
     assert "P14" not in out  # practice position excluded
+    # With no result log there is no grid slot, and the first lap capture happened to
+    # record is NOT one -- the tool must not offer it as a start (issue #67).
+    assert "started p" not in out.lower()
+    assert "grid position was not captured" in out
+
+
+def test_get_race_result_for_a_live_session_reports_the_real_arc(tmp_path, synthetic_lap):
+    """The 2026-09-10 Silverstone race (issue #67): the coach said 'you started P18 and
+    crossed the line P18. No incidents or penalties logged' for a P9 -> P18 race with a
+    logged contact, because the live session id never joined the result-log row."""
+    from simcoach.lmu.results import ResultLap, ResultSession
+    from simcoach.model_types import LapRecord
+    track, car = "Silverstone National Circuit", "Team WRT 2026 #32:WEC"
+    live_sid = "silverstone-national-circuit--team-wrt-2026-32-wec--offline"
+    result_sid = "2026_09_10_00_39_07-16R1"   # the XML stem: NOT the live id
+    contact = "Jayson G(0) reported contact (948.15) with another vehicle"
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    # Live capture got every timed lap the XML lists, at the sim's full float precision,
+    # the first of them already running P18. So the dedupe leaves NO result lap row and
+    # the link has to hold without one.
+    live_times = [70.40680694580078, 88.20706176757812, 92.79763793945312,
+                  66.87100219726562, 62.2532958984375, 60.8125, 62.413330078125,
+                  63.27410888671875, 76.2119140625]
+    for i, (lt, place) in enumerate(zip(live_times, [18, 2, 18, 18, 18, 18, 18, 18, 18])):
+        store.save(LapRecord(**{**synthetic_lap.__dict__, "track": track, "car": car,
+                                "lap_time": lt, "phase": "race",
+                                "timestamp": 1789017974.0 + 63.0 * i,
+                                "session_id": live_sid, "position": place}))
+    store.save_result_session(ResultSession(
+        sim="lmu", track=track, car=car, car_class="GT3", date_ts=1789017807.0,
+        session_type="race", position=18, class_position=18, best_lap=60.8125,
+        finish_status="Finished Normally", grid_position=9, class_grid_position=9,
+        online=False,
+        laps=[ResultLap(lap_no=i + 1, lap_time=t, sectors=[], valid=True) for i, t in
+              enumerate([70.4068, 88.2071, 92.7976, 66.8710, 62.2533, 60.8125,
+                         62.4133, 63.2741, 76.2119])],
+        incidents=[contact], penalties=[]), session_id=result_sid)
+    assert store.session_lap_ids(result_sid) == [], "fixture must leave no result laps"
+
+    ctx = CoachContext(store, track=track, car=car, session_id=live_sid, on_track=True)
+    out = ctx.get_race_result()
+
+    assert "Started P9 on the grid" in out
+    assert "P18 overall" in out and "Finished Normally" in out
+    assert "Incidents (1)" in out and "contact" in out
+    # The first captured lap ran P18; that is not a start position and must not be sold
+    # as one -- reporting it as the start is what inverted the whole race narrative.
+    assert "started P18" not in out and "started p18" not in out.lower()
+    # With a known grid slot the disclaimer is unnecessary and must not appear.
+    assert "grid position was not captured" not in out
+
+
+def test_get_race_result_is_honest_while_a_second_race_is_running(tmp_path, synthetic_lap):
+    """Mid-race-2 the only result log on disk is race 1's, because a race's log is not
+    written until after it finishes. Reporting from it asserted a grid slot and
+    'Finished Normally' for a race still being driven, and merged both races' laps into
+    one arc -- a confident wrong where the tool used to say nothing."""
+    from simcoach.lmu.results import ResultLap, ResultSession
+    from simcoach.model_types import LapRecord
+    track, car = "Silverstone National Circuit", "Team WRT 2026 #32:WEC"
+    live_sid = "silverstone-national-circuit--team-wrt-2026-32-wec--offline"
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+
+    def _laps(times, places, t0):
+        for i, (lt, place) in enumerate(zip(times, places)):
+            store.save(LapRecord(**{**synthetic_lap.__dict__, "track": track, "car": car,
+                                    "lap_time": lt, "phase": "race", "position": place,
+                                    "timestamp": t0 + 63.0 * i, "session_id": live_sid}))
+
+    race1 = [70.4068, 88.2071, 92.7976, 66.8710, 62.2533, 60.8125, 62.4133, 63.2741]
+    _laps(race1, [14, 12, 10, 9, 8, 7, 6, 6], 1789017974.0)
+    store.save_result_session(ResultSession(
+        sim="lmu", track=track, car=car, car_class="GT3", date_ts=1789017807.0,
+        session_type="race", position=6, class_position=6, best_lap=60.8125,
+        finish_status="Finished Normally", grid_position=9, class_grid_position=9,
+        online=False, incidents=[], penalties=[],
+        laps=[ResultLap(lap_no=i + 1, lap_time=t, sectors=[], valid=True)
+              for i, t in enumerate(race1)]), session_id="2026_09_10_00_39_07-16R1",
+        logged_ts=1789018800.0)
+    # Race 2, two hours later, three laps in. Its log does not exist yet.
+    _laps([64.1, 64.2, 64.3], [18, 17, 16], 1789017807.0 + 7200.0)
+
+    ctx = CoachContext(store, track=track, car=car, session_id=live_sid, on_track=True)
+    out = ctx.get_race_result()
+
+    # No grid slot, no finish, no status invented for a race still running.
+    assert "Started P9" not in out and "on the grid" not in out
+    assert "Finished P6" not in out and "Finished Normally" not in out
+    # And the arc covers race 2's three laps only, not all eleven.
+    assert "over 3 captured lap(s)" in out
+    assert "P18 on the first captured lap" in out and "P16 on the most recent" in out
+    assert "grid position was not captured" in out
 
 
 def test_no_lap_context_is_honest(tmp_path):
@@ -222,6 +433,46 @@ def test_reference_times_not_in_single_corner_view():
     assert "1:41.500" not in ctx.get_track_notes(corner="1")
 
 
+def _knowledge(slug):
+    from pathlib import Path
+    return (Path(__file__).resolve().parents[1] / "simcoach" / "knowledge"
+            / f"{slug}.md").read_text(encoding="utf-8")
+
+
+def test_get_track_notes_falls_back_to_knowledge_file_when_no_map():
+    # COTA has an authored note but NO corner-map JSON, so cmap is None. Before the
+    # fallback the coach could not reach a word of it.
+    ctx = CoachContext(store=None, cmap=None, track="Circuit of the Americas", car="GT3")
+    out = ctx.get_track_notes()
+    assert out == _knowledge("circuit_of_the_americas")   # verbatim, not reformatted
+    assert "Bobby Pin" in out
+
+
+def test_get_track_notes_falls_back_when_map_notes_are_empty():
+    # A map file exists but carries no `notes` — the authored .md still gets through.
+    ctx = _ctx_with_notes({})
+    ctx.track = "Fuji Speedway"
+    out = ctx.get_track_notes()
+    assert out == _knowledge("fuji_speedway")
+    assert "300R" in out
+
+
+def test_map_notes_win_over_knowledge_file():
+    # Guard (green before and after): the map file stays authoritative where it has
+    # notes — the fallback must never shadow it.
+    ctx = _ctx_with_notes({"overview": "rhythm track", "corners": {"1": "brake earlier"}})
+    ctx.track = "Silverstone Grand Prix Circuit"   # has a knowledge/*.md too
+    out = ctx.get_track_notes()
+    assert "rhythm track" in out and "brake earlier" in out
+    assert "Silverstone (Grand Prix layout) notes" not in out
+
+
+def test_get_track_notes_with_neither_map_nor_knowledge_file():
+    # Guard (green before and after): no map, no note -> the plain "none yet" answer.
+    ctx = CoachContext(store=None, cmap=None, track="Nowhere Circuit", car="GT3")
+    assert "no authored notes" in ctx.get_track_notes().lower()
+
+
 def test_record_driver_learning_writes_pending(tmp_path, synthetic_lap):
     ctx, store, _ = _ctx(tmp_path, synthetic_lap)
     out = ctx.record_driver_learning("consistently late on throttle")
@@ -275,11 +526,120 @@ def test_corner_note_resolves_ranged_key_on_real_track():
     assert ctx._corner_note("10") == ctx._corner_note("11")
 
 
+def test_corner_note_survives_labels_int_cannot_parse():
+    # The label reaching the read path comes from the map, and the editor's label box
+    # is free text -- '²' U+00B2, '₂' U+2082, '⑥' U+2465 all satisfy str.isdigit() and
+    # RAISE on int(). Parsing the label inside the range check made _corner_note (and
+    # so the LLM-callable get_track_notes) throw for any map carrying one.
+    ctx = _ctx_with_notes({"overview": "rhythm track",
+                           "corners": {"1-3": "the opening complex", "²": "the squared one"}})
+    assert ctx._corner_note("²") == "the squared one"        # its own exact key wins
+    assert "the squared one" in ctx.get_track_notes(corner="²")
+    for odd in ("₂", "⑥"):                                   # no exact key, no bind
+        assert ctx._corner_note(odd) is None
+        assert f"No authored note for corner {odd}." in ctx.get_track_notes(corner=odd)
+    assert ctx._corner_note("2") == "the opening complex"    # the range still resolves
+    assert "the squared one" in ctx.get_track_notes()        # listing all notes is fine
+
+
+def test_corner_note_survives_an_overlong_range_key():
+    # A note key of 5000 digits is persistable (`PUT /notes` validates nothing) and
+    # made the int() parse raise -- for EVERY label, including ones the map does not
+    # have, because the poison key is reached before any comparison. One such key on
+    # disk took out the whole read path, while GET .../notes still returned 200 so the
+    # editor showed nothing wrong.
+    poison = "1-" + "9" * 5000
+    ctx = _ctx_with_notes({"corners": {poison: "nonsense", "1": "brake late"}})
+    assert ctx._corner_note("1") == "brake late"     # ordinary labels keep working
+    assert ctx._corner_note("99") is None
+    assert ctx._corner_note("2") is None             # the poison key names nothing
+    assert "brake late" in ctx.get_track_notes(corner="1")
+
+
+def test_corner_note_exact_label_wins_in_either_dict_order():
+    # GUARD (passes before this commit too). Pins the precedence rule that lives in
+    # _corner_note rather than in the shared grammar, so a later "simplification" that
+    # folds the exact-label lookup into the range scan cannot silently lose it.
+    # An exact '12' note must beat a '11-13' range covering it whichever order the
+    # authored dict happens to carry them in -- the read path looks the label up
+    # before it scans for a covering range, so this cannot depend on insertion order.
+    for corners in ({"12": "the exact one", "11-13": "the complex"},
+                    {"11-13": "the complex", "12": "the exact one"}):
+        ctx = _ctx_with_notes({"corners": corners})
+        assert ctx._corner_note("12") == "the exact one", corners
+        assert ctx._corner_note("11") == "the complex", corners
+
+
 def test_get_corner_output_includes_authored_note(tmp_path, synthetic_lap):
     ctx, _, _ = _ctx(tmp_path, synthetic_lap)
     ctx.cmap.notes = {"corners": {"1": "brake earlier than it looks"}}
     out = ctx.get_corner("1")
     assert "Authored note: brake earlier than it looks" in out
+
+
+def test_get_corner_output_includes_baked_geometry(tmp_path, synthetic_lap):
+    # Issue #35: radius/elevation/banking baked into the map must reach the
+    # coach through get_corner, not be left stranded at map-build time.
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    ctx.cmap.geometry = {"1": {"radius_m": 66.0, "elev_delta_m": -11.0, "banking_deg": 2.0}}
+    out = ctx.get_corner("1")
+    # T1 is a LEFT hairpin and +2.0 favours right (9756b65), so this reads
+    # off-camber -- the corner's computed direction must reach the clause (#35).
+    assert ("Geometry (baked from the track map): "
+            "radius ~66m, downhill 11m, 2\N{DEGREE SIGN} off-camber") in out
+    # same magnitude, sign flipped to favour the left-hander -> banked
+    ctx.cmap.geometry = {"1": {"radius_m": 66.0, "banking_deg": -2.0}}
+    assert "2\N{DEGREE SIGN} banked" in ctx.get_corner("1")
+
+
+def test_get_corner_output_omits_geometry_line_when_none_baked(tmp_path, synthetic_lap):
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    out = ctx.get_corner("1")
+    assert "Geometry" not in out
+
+
+def test_corner_geometry_clause_empty_for_unknown_corner():
+    ctx = _ctx_with_notes({})
+    assert ctx._corner_geometry_clause("99", None) == ""
+
+
+def test_get_setup_surfaces_step_position(tmp_path, synthetic_lap):
+    # Issue #32: minValue/maxValue are ORDINAL option indices, not physical bounds.
+    # Real captured shape: VM_BRAKE_BALANCE = stringValue "51.5:48.5", value 22,
+    # minValue 0, maxValue 57 -- bias *position* 22 of 0-57, NOT "max 57".
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    ctx.setup = {
+        "VM_BRAKE_BALANCE": {"stringValue": "51.5:48.5", "value": 22, "isFreeSetting": True,
+                             "minValue": 0, "maxValue": 57},
+    }
+    out = ctx.get_setup()
+    assert "Brake Balance: 51.5:48.5 (step 22 of 0-57)" in out
+    assert "(range" not in out
+
+
+def test_get_setup_omits_step_without_ordinal(tmp_path, synthetic_lap):
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    ctx.setup = {
+        "VM_BRAKE_BALANCE": {"stringValue": "51.5:48.5", "isFreeSetting": True,
+                             "minValue": 0, "maxValue": 57},
+    }
+    out = ctx.get_setup()
+    assert "Brake Balance: 51.5:48.5" in out
+    assert "0-57" not in out
+
+
+def test_get_last_setup_renders_step_position(tmp_path):
+    # The third _setup_lines caller must render identically -- and must not
+    # double-format a line that already carries its step suffix.
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    store.save_session_setup("s1--online", "spa", "gt3", {
+        "VM_REAR_WING": {"stringValue": "6.5 deg", "value": 6, "isFreeSetting": True,
+                         "minValue": 0, "maxValue": 9},
+    })
+    ctx = CoachContext(store, track="spa", car="gt3")
+    out = ctx.dispatch("get_last_setup", {})
+    assert "Rear Wing: 6.5 deg (step 6 of 0-9)" in out
+    assert out.count("step 6 of 0-9") == 1
 
 
 def test_dispatch_routes_and_handles_unknown(tmp_path, synthetic_lap):
@@ -294,8 +654,9 @@ def test_agentic_loop_dispatches_tool_calls(tmp_path, synthetic_lap):
     model = FakeModel(reply="Turn 1 looks good.",
                       tool_script=[("get_corner", {"corner": "1"})])
     coach = Coach(model)
-    answer = coach.ask_agentic(ctx, "how's turn 1?", "test_car")
-    assert answer == "Turn 1 looks good."
+    res = coach.ask_agentic(ctx, "how's turn 1?", "test_car")
+    assert res.text == "Turn 1 looks good."
+    assert res.usage.total > 0          # usage rides back out with the answer
     # the tool actually ran and produced the corner line
     assert model.dispatched[0][0] == "get_corner"
     assert model.dispatched[0][2].startswith("T1 ")
@@ -510,7 +871,7 @@ def test_agentic_loop_can_call_get_time_loss(tmp_path, synthetic_lap):
     model = FakeModel(reply="You're losing it at Turn 1.",
                       tool_script=[("get_time_loss", {})])
     answer = Coach(model).ask_agentic(ctx, "where am I losing time?", "test_car")
-    assert answer == "You're losing it at Turn 1."
+    assert answer.text == "You're losing it at Turn 1."
     assert model.dispatched[0][0] == "get_time_loss"
     assert "Net" in model.dispatched[0][2]
 
@@ -520,3 +881,84 @@ def test_agentic_prompt_points_at_get_time_loss(tmp_path, synthetic_lap):
     model = FakeModel(reply="ok")
     Coach(model).ask_agentic(ctx, "where am I losing time?", "test_car")
     assert "get_time_loss" in model.last_system
+
+# Either side of the #67 fix merging (56aa319). BEFORE is the stored timestamp of the
+# answer that told a P9 -> P18 driver "you started P18 ... No incidents".
+_BEFORE_67_FIX = 1789018942.56
+_AFTER_67_FIX = 1789057327.0
+
+
+@pytest.mark.parametrize("excerpt", [
+    # Every grip shape among the driver's stored answers (#72)...
+    "with min grip reading zero you're asking for more than the rear can give",
+    "min grip reading 0.00 there confirms the tires weren't gripping at all",
+    "- **Min grip 0.00** logged mid-corner",
+    "**TC hammers in at 48%** and grip drops to **0.00** -- the rear letting go completely",
+    # ...and a capital that only a case-insensitive match catches.
+    "Min Grip reading zero mid-corner",
+])
+def test_scrub_retracts_a_fabricated_grip_reading_whenever_written(excerpt):
+    # The channel never carried data, so there is no cutoff: a row from any time is void.
+    for ts in (_BEFORE_67_FIX, _AFTER_67_FIX):
+        out = scrub_stored_answer(excerpt, ts)
+        assert out.startswith(excerpt + "\n\n[Correction") and "mGripFract" in out
+        assert "never the grid slot" not in out
+
+
+@pytest.mark.parametrize("excerpt", [
+    # Every start / incident shape among the pre-fix stored answers (#67)...
+    "you started P3, had a rough patch that dropped you as low as P15",
+    "you started **P18** and crossed the line **P18**",
+    "I shouldn't have assumed that P1 starting spot",
+    "that P1→P34 overall swing is almost certainly the prototypes",
+    "**P14 to P9** is a solid haul through the field",
+    "it explains the drop from P4 down toward P11",
+    # ...where only a case-insensitive match catches the capital.
+    "No incidents or penalties logged.",
+])
+def test_scrub_retracts_a_race_start_claim_only_before_the_fix(excerpt):
+    out = scrub_stored_answer(excerpt, _BEFORE_67_FIX)
+    assert out.startswith(excerpt + "\n\n[Correction") and "never the grid slot" in out
+    # After the fix the same words are the coach reading a real result log.
+    assert scrub_stored_answer(excerpt, _AFTER_67_FIX) == excerpt
+
+
+def test_race_retraction_lets_get_race_result_speak_only_for_the_same_race():
+    # Resuming from the Sessions screen re-opens a chat in its OWN session, where
+    # get_race_result is the true result for that race; continuing an old chat while a
+    # different session is selected is where it is not. The retraction must allow the
+    # first and refuse the second -- not blanket-forbid the tool (which discards the
+    # correct result on the common path) nor blanket-direct the model to it.
+    claim = "you started **P18** and crossed the line **P18**"
+    out = scrub_stored_answer(claim, _BEFORE_67_FIX, "Silverstone National Circuit")
+    assert "only if the track it names is Silverstone National Circuit" in out
+    assert "do not attach its figures" not in out
+    # A row with no stored track still gets the condition, just without a name to match.
+    assert "only if it is that same race" in scrub_stored_answer(claim, _BEFORE_67_FIX)
+
+
+def test_get_race_result_names_the_track_of_the_session_it_reports(tmp_path, synthetic_lap):
+    # The label must come from the session the figures describe, not ctx.track: that
+    # follows the live game or the last capture, so reviewing one session while the game
+    # sits at another track labelled one track's result with the other's name -- a false
+    # fact stated as fact, the #67 class.
+    from simcoach.model_types import LapRecord
+    ctx, store, _ = _ctx(tmp_path, synthetic_lap)
+    store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "sel-1", "phase": "race",
+                            "timestamp": 5.0, "position": 4}))
+    ctx.session_id = "sel-1"
+    ctx.track = "Fuji Speedway"   # the live game, at a different track entirely
+    out = ctx.get_race_result()
+    assert out.startswith(f"Session track: {synthetic_lap.track}.")
+    assert "Fuji" not in out
+
+
+@pytest.mark.parametrize("excerpt", [
+    # Authored-style grip prose: a blanket "grip" filter would gut knowledge/ and cars/.
+    "You ran out of front grip on entry; the mechanical grip balance is rearward.",
+    # Pre-fix stored answers that name a position without claiming a start.
+    "that P1 driver was almost **1.7 seconds** faster than you",
+    "your last outing dipped to 1:28.602 (P32)",
+])
+def test_scrub_leaves_every_other_answer_untouched(excerpt):
+    assert scrub_stored_answer(excerpt, _BEFORE_67_FIX) == excerpt

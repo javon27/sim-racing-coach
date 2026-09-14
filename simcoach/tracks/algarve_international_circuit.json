@@ -54,7 +54,7 @@
       "label": "4",
       "name": "Turn 4",
       "direction": "left",
-      "start_dist": 798.4,
+      "start_dist": 798.5,
       "apex_dist": 872.7,
       "end_dist": 956.3,
       "apexes": [
@@ -104,14 +104,14 @@
       "direction": "right",
       "start_dist": 1838.3,
       "apex_dist": 1921.8,
-      "end_dist": 2005.4,
+      "end_dist": 1996.1,
       "apexes": [
         1921.8
       ],
       "radius_m": 42.3,
       "width_m": 12.5,
       "banking_deg": 2.4,
-      "elev_delta_m": -2.7
+      "elev_delta_m": -2.8
     },
     {
       "number": 8,
@@ -166,7 +166,7 @@
       "label": "11",
       "name": "Turn 11",
       "direction": "right",
-      "start_dist": 2692.4,
+      "start_dist": 2710.9,
       "apex_dist": 2748.1,
       "end_dist": 2831.7,
       "apexes": [
@@ -175,7 +175,7 @@
       "radius_m": 31.7,
       "width_m": 12.4,
       "banking_deg": 2.2,
-      "elev_delta_m": -6.5
+      "elev_delta_m": -6.3
     },
     {
       "number": 12,
@@ -2746,7 +2746,10 @@
     4623.51,
     4632.79
   ],
-  "sectors": [],
+  "sectors": [
+    973.5,
+    2577.9
+  ],
   "sections": [],
   "length": 4632.79,
   "rotation": 0.0,

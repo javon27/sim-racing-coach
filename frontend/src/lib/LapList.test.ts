@@ -274,19 +274,31 @@ describe("LapList", () => {
   });
 
   it("stops polling after unmount", async () => {
-    vi.mocked(getStatus).mockResolvedValue(status("S1", 5));
-    vi.mocked(getSessionLaps).mockResolvedValue([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
+    // Fake timers: the old version raced a real 50ms setTimeout against a real 5ms
+    // setInterval poll, which lost ~half the time under full-suite load (issue #52).
+    // Advancing a fake clock makes the poll-then-unmount-then-no-more-polls sequence
+    // deterministic instead of wall-clock-dependent.
+    vi.useFakeTimers();
+    try {
+      vi.mocked(getStatus).mockResolvedValue(status("S1", 5));
+      vi.mocked(getSessionLaps).mockResolvedValue([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
 
-    const { unmount } = render(LapList, { props: { pollMs: 5 } });
+      const { unmount } = render(LapList, { props: { pollMs: 5 } });
 
-    expect(await screen.findByText("Lap 1")).toBeTruthy();
-    await vi.waitFor(() => expect(vi.mocked(getStatus).mock.calls.length).toBeGreaterThan(1), {
-      timeout: 2000,
-    });
+      // Initial load() is promise-driven (no timer involved); advanceTimersByTimeAsync(0)
+      // flushes those microtasks so the DOM and the poll interval are both up.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(screen.getByText("Lap 1")).toBeTruthy();
 
-    unmount();
-    const callsAtUnmount = vi.mocked(getStatus).mock.calls.length;
-    await new Promise((r) => setTimeout(r, 50));
-    expect(vi.mocked(getStatus).mock.calls.length).toBe(callsAtUnmount);
+      await vi.advanceTimersByTimeAsync(20); // several 5ms poll ticks
+      expect(vi.mocked(getStatus).mock.calls.length).toBeGreaterThan(1);
+
+      unmount();
+      const callsAtUnmount = vi.mocked(getStatus).mock.calls.length;
+      await vi.advanceTimersByTimeAsync(50);
+      expect(vi.mocked(getStatus).mock.calls.length).toBe(callsAtUnmount);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

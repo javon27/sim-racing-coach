@@ -38,7 +38,7 @@
       "label": "3",
       "name": "Turn 3",
       "direction": "right",
-      "start_dist": 889.9,
+      "start_dist": 896.2,
       "apex_dist": 952.6,
       "end_dist": 1027.8,
       "apexes": [
@@ -47,7 +47,7 @@
       "radius_m": 126.8,
       "width_m": 12.3,
       "banking_deg": 1.6,
-      "elev_delta_m": 4.5
+      "elev_delta_m": 4.1
     },
     {
       "number": 4,
@@ -70,7 +70,7 @@
       "label": "5",
       "name": "Turn 5",
       "direction": "left",
-      "start_dist": 1591.8,
+      "start_dist": 1598.1,
       "apex_dist": 1667.0,
       "end_dist": 1742.2,
       "apexes": [
@@ -79,7 +79,7 @@
       "radius_m": 47.3,
       "width_m": 10.9,
       "banking_deg": -0.1,
-      "elev_delta_m": -0.4
+      "elev_delta_m": 0.0
     },
     {
       "number": 6,
@@ -88,14 +88,14 @@
       "direction": "right",
       "start_dist": 1830.0,
       "apex_dist": 1905.2,
-      "end_dist": 1980.4,
+      "end_dist": 1974.1,
       "apexes": [
         1905.2
       ],
       "radius_m": 137.0,
       "width_m": 10.5,
       "banking_deg": 1.4,
-      "elev_delta_m": -2.3
+      "elev_delta_m": -2.4
     },
     {
       "number": 7,
@@ -104,14 +104,14 @@
       "direction": "left",
       "start_dist": 1980.4,
       "apex_dist": 2043.0,
-      "end_dist": 2080.7,
+      "end_dist": 2068.1,
       "apexes": [
         2043.0
       ],
       "radius_m": 33.9,
       "width_m": 10.0,
       "banking_deg": -0.6,
-      "elev_delta_m": 2.8
+      "elev_delta_m": 2.3
     },
     {
       "number": 8,
@@ -134,32 +134,32 @@
       "label": "9",
       "name": "Turn 9",
       "direction": "right",
-      "start_dist": 2105.7,
+      "start_dist": 2130.8,
       "apex_dist": 2168.4,
-      "end_dist": 2243.6,
+      "end_dist": 2212.2,
       "apexes": [
         2168.4
       ],
       "radius_m": 18.4,
       "width_m": 9.7,
       "banking_deg": -0.9,
-      "elev_delta_m": -0.6
+      "elev_delta_m": -0.9
     },
     {
       "number": 10,
       "label": "10",
       "name": "Turn 10",
       "direction": "left",
-      "start_dist": 2180.9,
+      "start_dist": 2212.2,
       "apex_dist": 2256.1,
-      "end_dist": 2318.8,
+      "end_dist": 2293.7,
       "apexes": [
         2256.1
       ],
-      "radius_m": 28.6,
+      "radius_m": 123.4,
       "width_m": 9.4,
       "banking_deg": -2.0,
-      "elev_delta_m": 0.2
+      "elev_delta_m": 0.1
     },
     {
       "number": 11,
@@ -198,16 +198,16 @@
       "label": "13",
       "name": "Turn 13",
       "direction": "right",
-      "start_dist": 2431.6,
+      "start_dist": 2481.8,
       "apex_dist": 2506.8,
-      "end_dist": 2582.0,
+      "end_dist": 2569.5,
       "apexes": [
         2506.8
       ],
-      "radius_m": 40.8,
+      "radius_m": 340.7,
       "width_m": 10.8,
       "banking_deg": 0.7,
-      "elev_delta_m": -4.4
+      "elev_delta_m": -2.7
     },
     {
       "number": 14,
@@ -216,14 +216,14 @@
       "direction": "left",
       "start_dist": 2594.6,
       "apex_dist": 2632.2,
-      "end_dist": 2707.4,
+      "end_dist": 2694.8,
       "apexes": [
         2632.2
       ],
       "radius_m": 32.6,
       "width_m": 10.5,
       "banking_deg": -1.3,
-      "elev_delta_m": -0.3
+      "elev_delta_m": -0.1
     },
     {
       "number": 15,
@@ -232,21 +232,21 @@
       "direction": "right",
       "start_dist": 2707.4,
       "apex_dist": 2757.5,
-      "end_dist": 2832.7,
+      "end_dist": 2820.2,
       "apexes": [
         2757.5
       ],
       "radius_m": 49.9,
       "width_m": 12.2,
       "banking_deg": 1.2,
-      "elev_delta_m": -2.0
+      "elev_delta_m": -1.7
     },
     {
       "number": 16,
       "label": "16",
       "name": "Turn 16",
       "direction": "left",
-      "start_dist": 2807.6,
+      "start_dist": 2820.2,
       "apex_dist": 2882.8,
       "end_dist": 2958.0,
       "apexes": [
@@ -255,7 +255,7 @@
       "radius_m": 59.7,
       "width_m": 9.1,
       "banking_deg": -1.5,
-      "elev_delta_m": -5.5
+      "elev_delta_m": -5.2
     },
     {
       "number": 17,
@@ -280,21 +280,21 @@
       "direction": "left",
       "start_dist": 3421.8,
       "apex_dist": 3484.5,
-      "end_dist": 3559.7,
+      "end_dist": 3547.2,
       "apexes": [
         3484.5
       ],
       "radius_m": 71.5,
       "width_m": 9.7,
       "banking_deg": -2.0,
-      "elev_delta_m": -2.8
+      "elev_delta_m": -2.6
     },
     {
       "number": 19,
       "label": "19",
       "name": "Turn 19",
       "direction": "left",
-      "start_dist": 3534.7,
+      "start_dist": 3547.2,
       "apex_dist": 3609.8,
       "end_dist": 3672.5,
       "apexes": [
@@ -303,7 +303,7 @@
       "radius_m": 13.1,
       "width_m": 11.4,
       "banking_deg": -1.7,
-      "elev_delta_m": -1.4
+      "elev_delta_m": -1.0
     },
     {
       "number": 20,
@@ -360,14 +360,14 @@
       "direction": "right",
       "start_dist": 5703.0,
       "apex_dist": 5778.2,
-      "end_dist": 5840.9,
+      "end_dist": 5822.0,
       "apexes": [
         5778.2
       ],
       "radius_m": 26.2,
       "width_m": 13.5,
       "banking_deg": 1.3,
-      "elev_delta_m": -2.1
+      "elev_delta_m": -1.5
     },
     {
       "number": 24,
@@ -2890,7 +2890,10 @@
     6241.96,
     6254.49
   ],
-  "sectors": [],
+  "sectors": [
+    2212.8,
+    3280.7
+  ],
   "sections": [],
   "length": 6254.49,
   "rotation": 0.0,

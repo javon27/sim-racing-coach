@@ -50,6 +50,7 @@ function baseSettings(overrides: Partial<SettingsResponse> = {}): SettingsRespon
     input_device: "wheel",
     model: "sonnet",
     corner_naming: "names",
+    show_cost: true,
     log_level: "INFO",
     driver: { braking_style: null, balance_preference: null, risk_tolerance: null },
     api_key_set: false,
@@ -143,6 +144,27 @@ describe("SettingsScreen", () => {
     );
   });
 
+  it("renders the cost-estimate toggle, on by default", async () => {
+    vi.mocked(getSettings).mockResolvedValue(baseSettings());
+
+    render(SettingsScreen);
+
+    const toggle = await screen.findByLabelText<HTMLInputElement>(/cost estimate/i);
+    expect(toggle.checked).toBe(true);
+  });
+
+  it("turning the cost estimate off calls putSettings with show_cost false", async () => {
+    vi.mocked(getSettings).mockResolvedValue(baseSettings({ show_cost: true }));
+    vi.mocked(putSettings).mockResolvedValue(baseSettings({ show_cost: false }));
+
+    render(SettingsScreen);
+
+    const toggle = await screen.findByLabelText(/cost estimate/i);
+    await fireEvent.click(toggle);
+
+    expect(putSettings).toHaveBeenCalledWith(expect.objectContaining({ show_cost: false }));
+  });
+
   it("entering a key and clicking Save calls setApiKey", async () => {
     vi.mocked(getSettings).mockResolvedValue(baseSettings());
     vi.mocked(setApiKey).mockResolvedValue({ api_key_set: true });
@@ -204,6 +226,8 @@ describe("SettingsScreen", () => {
 
     render(SettingsScreen);
 
+    // The sidecar's poller re-imports LMU result logs after a reset (#81); say so up front.
+    expect(await screen.findByText(/result logs are re-imported automatically/i)).toBeTruthy();
     await fireEvent.click(await screen.findByRole("button", { name: /reset \/ clear data/i }));
     expect(clearData).not.toHaveBeenCalled();
 

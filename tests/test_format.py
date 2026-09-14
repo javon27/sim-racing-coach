@@ -1,6 +1,16 @@
 import math
 
-from simcoach.format import format_laptime
+from simcoach.analysis import CornerMetrics
+from simcoach.format import format_corner_line, format_laptime
+
+
+def _cm(track_edge_min: float) -> CornerMetrics:
+    return CornerMetrics(
+        corner_no=1, name="Turn 1", direction="right", apex_dist=100.0,
+        entry_spd=200.0, apex_spd=150.0, min_spd=150.0, exit_spd=180.0,
+        brake_point=80.0, throttle_point=110.0, trailbrake_overlap=0.2,
+        track_edge_min=track_edge_min,
+    )
 
 
 def test_format_laptime_basic():
@@ -89,3 +99,21 @@ def test_format_corner_line_silent_when_coasting_was_not_measured():
                        brake_point=900.0, throttle_point=1050.0, trailbrake_overlap=0.3)
     line = format_corner_line(cm)
     assert "coasting" not in line and "gap" not in line
+
+def test_track_edge_small_excursion_renders_figure():
+    assert "centre 0.5m past edge" in format_corner_line(_cm(-0.50))
+
+
+def test_track_edge_positive_renders_figure():
+    assert "centre 0.2m from edge" in format_corner_line(_cm(0.24))
+
+
+def test_track_edge_boundary_still_renders_figure():
+    # Exactly at the cap: "below that, keep the existing wording" — boundary
+    # is inclusive on the numeric side, only strictly-beyond hedges.
+    assert "centre 2.0m past edge" in format_corner_line(_cm(-2.0))
+
+
+def test_track_edge_large_excursion_renders_phrase():
+    assert "centre well past edge" in format_corner_line(_cm(-9.75))
+    assert "-9.8" not in format_corner_line(_cm(-9.75))

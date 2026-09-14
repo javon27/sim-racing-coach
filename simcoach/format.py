@@ -34,6 +34,11 @@ def unit_fns(units: str = "metric"):
 # through settles them.
 _COAST_REPORT_S = 0.05
 _GAP_REPORT_M = 5.0
+# ponytail: mPathLateral/mTrackEdge units + sign are still PENDING LIVE
+# VALIDATION (see analysis.py) and the subtraction degrades exactly where the
+# car is off-track, so a precise figure past this magnitude implies confidence
+# the data can't support. Raise or remove once the channel is rig-validated.
+_TRACK_EDGE_RENDER_CAP_M = 2.0
 
 
 def format_corner_line(cm, units: str = "metric") -> str:
@@ -46,20 +51,22 @@ def format_corner_line(cm, units: str = "metric") -> str:
         # No telemetry in this corner's window (e.g. a sparse out-lap): say so
         # rather than render nan speeds + the defaulted (fake) brake/throttle.
         return f"{tag} {cm.name} ({cm.direction}){sect}: no telemetry captured here"
-    brake_before = cm.apex_dist - cm.brake_point
-    thr_after = cm.throttle_point - cm.apex_dist
+    # None = the driver never braked here. Guard on the field, not on the sign of the
+    # subtraction: the sign only stood in for "not found" while the sentinel happened
+    # to sit past the apex.
     brake_txt = (
-        f"brake {brake_before:.0f}m before apex @ {cm.peak_brake:.0%} peak"
-        if brake_before > 0 else "no heavy braking"
+        f"brake {cm.apex_dist - cm.brake_point:.0f}m before apex @ {cm.peak_brake:.0%} peak"
+        if cm.brake_point is not None else "no heavy braking"
     )
-    thr_txt = f", back to throttle {thr_after:.0f}m after apex" if thr_after > 0 else ""
+    # Same for the throttle gate: say nothing rather than turn the corner's own
+    # geometry into a claimed driver input.
+    thr_txt = (f", back to throttle {cm.throttle_point - cm.apex_dist:.0f}m after apex"
+               if cm.throttle_point is not None else "")
     line = (
         f"{tag} {cm.name} ({cm.direction}){sect}: "
         f"{spd(cm.entry_spd):.0f}→min {spd(cm.min_spd):.0f}→{spd(cm.exit_spd):.0f} {spd_u}, "
         f"{brake_txt}{thr_txt}, trail {cm.trailbrake_overlap:.0%}, peak {cm.peak_lat_g:.1f}g"
     )
-    if not math.isnan(cm.min_grip):
-        line += f", min grip {cm.min_grip:.2f}"   # 1.0 = full grip; low = sliding/locking
     # Extended inputs/loads (guarded — older laps lack these channels).
     if not math.isnan(getattr(cm, "peak_brake_g", float("nan"))):
         line += f", brake {cm.peak_brake_g:.1f}g"
@@ -74,8 +81,19 @@ def format_corner_line(cm, units: str = "metric") -> str:
         aids.append(f"TC {cm.tc_pct:.0%}")
     if aids:
         line += ", " + " ".join(aids)
-    if not math.isnan(getattr(cm, "track_edge_min", float("nan"))):
-        line += f", {cm.track_edge_min:.1f}m from edge"
+    edge_min = getattr(cm, "track_edge_min", float("nan"))
+    if not math.isnan(edge_min):
+        # Negative = the car went past the white line. Render that as "past edge"
+        # rather than a nonsensical "-0.4m from edge". Says "centre" because the
+        # measurement is the car's centre, not its outer wheels — at "centre 0.2m
+        # from edge" a ~2m car already has a wheel over the line.
+        if edge_min < -_TRACK_EDGE_RENDER_CAP_M:
+            # Beyond the cap the magnitude isn't trustworthy (see comment above) —
+            # hedge with a phrase instead of a false-precision number.
+            line += ", centre well past edge"
+        else:
+            line += (f", centre {-edge_min:.1f}m past edge" if edge_min < 0
+                     else f", centre {abs(edge_min):.1f}m from edge")
     # Dead time. Silent on a clean corner — zero coasting shouldn't carry a line.
     coast_t = getattr(cm, "coast_time", float("nan"))
     if not math.isnan(coast_t) and coast_t > _COAST_REPORT_S:

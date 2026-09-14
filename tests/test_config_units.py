@@ -41,8 +41,13 @@ def test_imperial_prompt_converts_speed_and_temp(synthetic_lap):
     _, user = c.build_prompt(a, "test_car", "q", units="imperial")
     assert "mph" in user and "km/h" not in user
     assert "°F" in user and "°C" not in user
-    # 30 km/h min speed -> ~18-19 mph, not the raw 30
-    assert "min 18" in user or "min 19" in user
+    # Both corners' minima must be CONVERTED, not passed through: the hairpin's
+    # 50 km/h reads 31 mph and the sweeper's 94 km/h reads 58 mph. Asserting the raw
+    # km/h numbers are absent is the half that catches a missing conversion -- and
+    # checking both corners is what catches a conversion applied to only one of them
+    # (the two used to share a single min speed, so one number covered both).
+    assert "min 31" in user and "min 58" in user
+    assert "min 50" not in user and "min 94" not in user
     # system prompt tells the model the units
     system, _ = c.build_prompt(a, "test_car", "q", units="imperial")
     assert "mph" in system and "°F" in system

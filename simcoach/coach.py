@@ -11,12 +11,68 @@ _SETUP_TERMS = (
     "ride_height", "rideheight", "ride", "spring", "damp", "bump", "rebound", "packer",
     "camber", "toe", "caster", "antiroll", "arb", "roll_bar", "pressure", "traction",
     "tc_", "migration", "balance", "steer", "duct", "radiator", "fuel", "engine_brak",
+    # Params the terms above silently dropped: LMU packs the anti-roll bars as ANTISWAY
+    # (not the "antiroll"/"arb"/"roll_bar" spellings listed) and the engine map as
+    # ELECTRIC_MOTOR_MAP, and nothing matched mixture or regen at all. All five are
+    # settings the driver actually has, so the coach could not see or discuss them.
+    # Together these render 5 more lines: VM_FRONT_ANTISWAY, VM_REAR_ANTISWAY,
+    # VM_ELECTRIC_MOTOR_MAP, VM_ENGINE_MIXTURE, VM_REGEN_LEVEL -- every one a cockpit
+    # electronic, so every one carries the garage caveat below.
+    "antisway", "motor_map", "mixture", "regen",
 )
+
+# Cockpit-adjustable ELECTRONICS -- the dials a driver turns mid-stint. LMU's REST
+# reports the GARAGE setup and ANY electronic change made on track is lost when the
+# car returns to the garage, so these values can differ from what the driver is
+# actually running (issue #33). Source: the app's driver, stated 2026-09-09 -- this
+# supersedes the earlier note here that recorded brake balance as "unmeasured" and
+# left it uncaveated; the discard covers all cockpit electronics, BB included.
+#
+# The criterion is CAN THE DRIVER CHANGE IT FROM THE COCKPIT -- not whether LMU
+# reports it live. For most of the set the two coincide: TelemInfoV01 pairs mABS /
+# mTC / mTCSlip / mTCCut / mMotorMap / mMigration / mFront+mRearAntiSway each with a
+# *Max index, and carries mRearBrakeBias, precisely because they are cockpit dials.
+# That pairing is strong evidence of cockpit-adjustability, not the definition of it:
+# engine mixture, regen level and engine brake map are cockpit controls in this sim
+# family too, yet no live source exists for them at all (mRegen is instantaneous
+# regen, a c_float with no *Max -- the actual energy flow, not the driver's dialed
+# level; there is no mEngineMixture field whatsoever). Having no live source makes
+# the garage value LESS verifiable, not more, so they are caveated: asserting a
+# possibly-stale value is exactly what issue #33 was filed for.
+#
+# Anti-sway is here because it sits in that cockpit-dial block, so LMU itself treats
+# it as driver-adjustable, even though the bar is mechanical. On a car whose bar has
+# no rotary this over-hedges one line; to revert, drop "antisway" from the tuple.
+#
+# Matched on the packed names so two things stay UNcaveated: the availability flags
+# (ANTILOCK_BRAKES / TRACTION_CONTROL, "Available") -- not dials -- and every
+# mechanical param (springs, ride height, camber, wings, dampers), which a driver
+# cannot change on track; hedging those would make the coach hedge a fact.
+_ELECTRONICS_TERMS = (
+    "antilockbrakesystem", "tractioncontrol", "brake_balance", "brake_migration",
+    "antisway", "motor_map", "engine_mixture", "engine_brak", "regen",
+)
+_GARAGE_CAVEAT = " [garage value — confirm what's dialed on-track]"
 
 
 def _setup_lines(setup: dict) -> list[str]:
     """Human-meaningful setup params, formatted for the prompt (filters ~170 -> the
-    commonly-coached subset; flags tier-locked ones)."""
+    commonly-coached subset; flags tier-locked ones and garage-sourced electronics).
+
+    Appends "(step N of lo-hi)" -- the param's ORDINAL position among the garage's
+    available options (issue #32). minValue/maxValue on LMU's garage payload are
+    option INDICES, not physical bounds: VM_REAR_WING comes back as
+    stringValue "6.5 deg", value 6, minValue 0, maxValue 9 -- wing position 6 of
+    0-9. Rendering those bounds next to the physical stringValue ("1200lbf/in
+    (range 0-4)") reads as a physical limit and is flatly wrong, so the suffix
+    MUST name the position and MUST be omitted entirely when `value` is absent --
+    bounds without their ordinal are the same unit mismatch. stringValue stays the
+    displayed physical value; it already carries real units/labels.
+
+    The payload exposes no step/increment SIZE anywhere, so the step count says
+    only how far a param can still move, never by how much -- the system prompts
+    tell the coach to give direction rather than an exact amount.
+    """
     out = []
     for key, v in setup.items():
         if not isinstance(v, dict) or "stringValue" not in v:
@@ -29,7 +85,10 @@ def _setup_lines(setup: dict) -> list[str]:
             continue
         label = key[3:].replace("_", " ").title() if key.startswith("VM_") else key
         locked = "" if v.get("isFreeSetting", True) else " [locked this tier]"
-        out.append(f"- {label}: {v['stringValue']}{locked}")
+        lo, hi, cur = v.get("minValue"), v.get("maxValue"), v.get("value")
+        step = "" if None in (lo, hi, cur) else f" (step {cur} of {lo}-{hi})"
+        garage = _GARAGE_CAVEAT if any(t in k for t in _ELECTRONICS_TERMS) else ""
+        out.append(f"- {label}: {v['stringValue']}{step}{locked}{garage}")
     return out
 
 
@@ -73,6 +132,20 @@ SYSTEM_PROMPT = (
     "and the specific fix — a setup change with a direction and rough amount, or a driving "
     "cue — not broken out into labeled sections. Keep setup vs driving advice clearly "
     "distinct in your wording.\n"
+    "- SETUP STEPS: each adjustable setup line ends with (step N of lo-hi) — N is that "
+    "param's CURRENT position among the garage's available positions. It is an index, "
+    "NOT a physical value: never restate it as a spring rate, pressure or angle. Use it "
+    "only to tell whether a param is already at its limit and which way it can still "
+    "move. One step's physical size is not exposed, so NEVER state an exact increment "
+    "(e.g. '-50 lbf/in') — give direction ('soften the front spring a step or two').\n"
+    "- COCKPIT ELECTRONICS: a setup line ending [garage value — ...] is the GARAGE "
+    "setting. LMU discards ANY electronics change the driver made on track once the car "
+    "returns to the garage — ABS, the TC family, the engine and motor maps, mixture, "
+    "regen, brake migration, brake balance, anti-roll — so it never reports what they "
+    "actually dialed in. Never "
+    "assert one as what they're currently running — name it as the garage value and ask "
+    "them to confirm. Mechanical params (springs, ride height, camber, wings, dampers) "
+    "carry no such marker and ARE the truth; state those plainly.\n"
     "- Weigh context before over-reading a lap: tire temp/warm-up, fuel, wear. If the lap "
     "looks unrepresentative, say so.\n"
     "- Encouraging and constructive; acknowledge what's working, never berate. Honor the "
@@ -167,6 +240,20 @@ AGENTIC_SYSTEM_PROMPT = (
     "setup vs driving advice distinct.\n"
     "- Lead with the one thing that matters most. Weigh context before over-reading a lap (tire "
     "temp/warm-up, fuel, wear). Encouraging and constructive; note what's working; never berate.\n"
+    "- SETUP STEPS: get_setup ends each adjustable line with (step N of lo-hi) — N is that "
+    "param's CURRENT position among the garage's available positions. It is an index, "
+    "NOT a physical value: never restate it as a spring rate, pressure or angle. Use it "
+    "only to tell whether a param is already at its limit and which way it can still "
+    "move. One step's physical size is not exposed, so NEVER state an exact increment "
+    "(e.g. '-50 lbf/in') — give direction ('soften the front spring a step or two').\n"
+    "- COCKPIT ELECTRONICS: a setup line ending [garage value — ...] is the GARAGE "
+    "setting. LMU discards ANY electronics change the driver made on track once the car "
+    "returns to the garage — ABS, the TC family, the engine and motor maps, mixture, "
+    "regen, brake migration, brake balance, anti-roll — so it never reports what they "
+    "actually dialed in. Never "
+    "assert one as what they're currently running — name it as the garage value and ask "
+    "them to confirm. Mechanical params (springs, ride height, camber, wings, dampers) "
+    "carry no such marker and ARE the truth; state those plainly.\n"
     "- Match length to the question: a quick question gets a sentence or two; a broad one ('how's "
     "my race going') can be a few short paragraphs or a bullet list — thorough but never padded. "
     "The driver will ask follow-ups."
@@ -258,9 +345,12 @@ class Coach:
         driver_profile: DriverProfile | None = None,
         input_device: str | None = None,
         units: str = "metric",
-    ) -> str:
+    ):
         """Answer via the on-demand tool loop: the model fetches exactly the data the
-        question needs through `context`'s tools instead of receiving the whole lap."""
+        question needs through `context`'s tools instead of receiving the whole lap.
+
+        Returns the model's `RunResult` (`.text` + `.usage`) so callers can account
+        for what the turn cost; the usage is summed over every tool-loop call."""
         from simcoach.coach_tools import TOOLS
         _, _, spd_u, temp_u = unit_fns(units)
         system = self._augment_system(
