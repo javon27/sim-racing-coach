@@ -446,13 +446,17 @@ class CoachContext:
         return found
     def _lap_numbering(self) -> tuple[dict, dict]:
         """In-session lap numbering matching the UI (LapList.svelte): laps are
-        grouped into CONSECUTIVE same-phase runs in ts order, numbered 1..N within
-        each run -- a run restarts at 1 if the phase value changes and later comes
-        back (e.g. practice -> race -> practice), same as the UI's groups. Returns
-        (label_by_id, id_by_ref): label_by_id[lap_id] -> e.g. 'race lap 3';
-        id_by_ref maps textual refs the model might use ('race 3', 'race lap 3',
-        and -- for the current phase's run -- the UI's unprefixed 'lap 3' or a bare
-        '3') back to the DB lap_id.
+        grouped into CONSECUTIVE same-phase runs in ts order. Within a run, the
+        game's own lap number (lap_no -- scoring mTotalLaps at the wrap, issue #77)
+        is used when EVERY lap in the run has one (so a garage return or an
+        out-lap in between shows the game's real gaps, e.g. 2,3,4,8,9); otherwise
+        the run falls back to counting 1..N, same as before lap_no existed (a
+        legacy session, or any lap in the run still missing it). A run restarts
+        if the phase value changes and later comes back (e.g. practice -> race ->
+        practice), same as the UI's groups. Returns (label_by_id, id_by_ref):
+        label_by_id[lap_id] -> e.g. 'race lap 3'; id_by_ref maps textual refs the
+        model might use ('race 3', 'race lap 3', and -- for the current phase's
+        run -- the UI's unprefixed 'lap 3' or a bare '3') back to the DB lap_id.
         Cached per turn."""
         if self._lap_numbering_cache is not None:
             return self._lap_numbering_cache
@@ -461,25 +465,33 @@ class CoachContext:
         if self.session_id:
             cur_rec, _ = self._current_lap()
             cur_phase = cur_rec.phase if cur_rec is not None else None
+            runs: list[list[dict]] = []
             prev_phase: object = object()  # sentinel -- never equals a real phase value
-            n = 0
             for lap in self.store.session_laps(self.session_id):
                 ph = lap.get("phase")
-                n = n + 1 if ph == prev_phase else 1
+                if ph == prev_phase and runs:
+                    runs[-1].append(lap)
+                else:
+                    runs.append([lap])
                 prev_phase = ph
-                label_by_id[lap["id"]] = f"{ph} lap {n}" if ph else f"lap {n}"
-                if ph:
-                    id_by_ref[f"{ph} {n}".lower()] = lap["id"]
-                    id_by_ref[f"{ph} lap {n}".lower()] = lap["id"]
-                    if ph == cur_phase:
-                        # Bare number AND the UI's own unprefixed wording ("lap 35"),
-                        # which is what the driver reads off the lap list and the model
-                        # then echoes -- it must resolve, not look like a third scheme.
+            for run in runs:
+                ph = run[0].get("phase")
+                use_lap_no = all(lap.get("lap_no") is not None for lap in run)
+                for i, lap in enumerate(run):
+                    n = lap["lap_no"] if use_lap_no else i + 1
+                    label_by_id[lap["id"]] = f"{ph} lap {n}" if ph else f"lap {n}"
+                    if ph:
+                        id_by_ref[f"{ph} {n}".lower()] = lap["id"]
+                        id_by_ref[f"{ph} lap {n}".lower()] = lap["id"]
+                        if ph == cur_phase:
+                            # Bare number AND the UI's own unprefixed wording ("lap 35"),
+                            # which is what the driver reads off the lap list and the model
+                            # then echoes -- it must resolve, not look like a third scheme.
+                            id_by_ref[str(n)] = lap["id"]
+                            id_by_ref[f"lap {n}"] = lap["id"]
+                    else:
                         id_by_ref[str(n)] = lap["id"]
                         id_by_ref[f"lap {n}"] = lap["id"]
-                else:
-                    id_by_ref[str(n)] = lap["id"]
-                    id_by_ref[f"lap {n}"] = lap["id"]
         self._lap_numbering_cache = (label_by_id, id_by_ref)
         return self._lap_numbering_cache
 

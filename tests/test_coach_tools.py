@@ -138,6 +138,54 @@ def test_lap_numbering_matches_ui_contiguous_phase_grouping(tmp_path, synthetic_
     assert ctx._resolve_lap("practice lap 1")[1] == ids[-1]
 
 
+def test_lap_numbering_prefers_game_lap_no_when_every_lap_in_run_has_one(tmp_path, synthetic_lap):
+    # Issue #77: a session with a garage return or an out-lap in between should
+    # show the game's real lap numbers (2,3,4,8,9), not a plain 1..N re-count,
+    # once every lap in the run captured mTotalLaps at the wrap.
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    ids = []
+    for t, n in [(1.0, 2), (2.0, 3), (3.0, 4), (4.0, 8), (5.0, 9)]:
+        ids.append(store.save(LapRecord(**{**synthetic_lap.__dict__,
+                                           "session_id": "s1", "phase": "practice",
+                                           "timestamp": t, "lap_no": n})))
+    ctx = CoachContext(
+        store,
+        record=LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1", "phase": "practice"}),
+        lap_id=ids[-1], session_id="s1",
+    )
+    listing = ctx.list_recent_laps().lower()
+    for lbl in ("practice lap 2", "practice lap 3", "practice lap 4",
+                "practice lap 8", "practice lap 9"):
+        assert lbl in listing
+    assert "practice lap 1" not in listing
+    assert "practice lap 5" not in listing
+    assert ctx._resolve_lap("practice lap 8")[1] == ids[3]
+    assert ctx._resolve_lap("9")[1] == ids[4]  # bare number, current phase
+
+
+def test_lap_numbering_falls_back_to_counting_when_any_lap_in_run_lacks_lap_no(
+    tmp_path, synthetic_lap
+):
+    # Legacy session (or a run where even one lap never got a lap_no): number
+    # 1..N within the run, same as today.
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    ids = []
+    for t, n in [(1.0, 2), (2.0, None), (3.0, 4)]:
+        ids.append(store.save(LapRecord(**{**synthetic_lap.__dict__,
+                                           "session_id": "s1", "phase": "practice",
+                                           "timestamp": t, "lap_no": n})))
+    ctx = CoachContext(
+        store,
+        record=LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1", "phase": "practice"}),
+        lap_id=ids[-1], session_id="s1",
+    )
+    listing = ctx.list_recent_laps().lower()
+    for lbl in ("practice lap 1", "practice lap 2", "practice lap 3"):
+        assert lbl in listing
+
+
 def test_resolve_lap_never_falls_back_to_raw_db_id(tmp_path, synthetic_lap):
     # Issue #34: a bare number the driver gives must only ever resolve through the
     # in-session lap numbering (what they actually see in the UI) -- never be

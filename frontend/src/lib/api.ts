@@ -44,6 +44,8 @@ export interface LapRow {
   track?: string;
   car?: string;
   car_model?: string | null;
+  lap_no?: number | null;
+  pit?: boolean | null;
 }
 
 export interface CornerMetrics {

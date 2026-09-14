@@ -169,6 +169,42 @@ describe("LapList", () => {
     expect(container.querySelectorAll(".phase-head")).toHaveLength(2);
   });
 
+  it("shows the game's own lap number when every lap in the session has one", async () => {
+    // Issue #77: a session with a garage return (or an out-lap) shows the game's
+    // real numbers/gaps, not a plain 1..N re-count.
+    vi.mocked(getStatus).mockResolvedValue(status("S1", 9));
+    vi.mocked(getSessionLaps).mockResolvedValue([
+      { id: 1, lap_time: 95.0, valid: 1, ts: 100, lap_no: 2 },
+      { id: 2, lap_time: 94.0, valid: 1, ts: 200, lap_no: 3 },
+      { id: 3, lap_time: 93.0, valid: 1, ts: 300, lap_no: 4 },
+      { id: 4, lap_time: 92.5, valid: 1, ts: 400, lap_no: 8 },
+      { id: 5, lap_time: 92.0, valid: 1, ts: 500, lap_no: 9 },
+    ]);
+
+    render(LapList);
+
+    for (const n of [2, 3, 4, 8, 9]) {
+      expect(await screen.findByText(`Lap ${n}`)).toBeTruthy();
+    }
+    expect(screen.queryByText("Lap 1")).toBeNull();
+    expect(screen.queryByText("Lap 5")).toBeNull();
+  });
+
+  it("falls back to 1..N numbering when any lap in the session lacks a lap_no (legacy)", async () => {
+    vi.mocked(getStatus).mockResolvedValue(status("S1", 3));
+    vi.mocked(getSessionLaps).mockResolvedValue([
+      { id: 1, lap_time: 95.0, valid: 1, ts: 100, lap_no: 2 },
+      { id: 2, lap_time: 94.0, valid: 1, ts: 200, lap_no: null },
+      { id: 3, lap_time: 93.0, valid: 1, ts: 300, lap_no: 4 },
+    ]);
+
+    render(LapList);
+
+    for (const n of [1, 2, 3]) {
+      expect(await screen.findByText(`Lap ${n}`)).toBeTruthy();
+    }
+  });
+
   it("shows a best-lap header with the fastest lap time", async () => {
     vi.mocked(getStatus).mockResolvedValue(status("S1", 6));
     vi.mocked(getSessionLaps).mockResolvedValue([

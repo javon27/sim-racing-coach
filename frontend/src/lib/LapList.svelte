@@ -39,11 +39,17 @@
   });
 
   // Group consecutive laps by phase (a session spans practice/qualy/race in
-  // chronological blocks) and number laps 1..N within each phase.
-  type LapGroup = { phase: string | null; laps: LapRow[] };
+  // chronological blocks) and number laps within each phase. Prefers the game's
+  // own lap number (lap_no -- scoring mTotalLaps at the wrap, issue #77) when
+  // EVERY lap in the group has one, so a garage return or an out-lap in between
+  // shows the game's real gaps (e.g. 2,3,4,8,9); falls back to counting 1..N
+  // otherwise (a legacy session, or any lap in the group still missing it) --
+  // must agree with the backend's CoachContext._lap_numbering.
+  type NumberedLap = LapRow & { num: number };
+  type LapGroup = { phase: string | null; laps: NumberedLap[] };
   const groups = $derived.by<LapGroup[]>(() => {
-    const out: LapGroup[] = [];
-    let cur: LapGroup | null = null;
+    const out: { phase: string | null; laps: LapRow[] }[] = [];
+    let cur: { phase: string | null; laps: LapRow[] } | null = null;
     for (const lap of laps) {
       const p = lap.phase ?? null;
       if (!cur || cur.phase !== p) {
@@ -52,7 +58,13 @@
       }
       cur.laps.push(lap);
     }
-    return out;
+    return out.map((g) => {
+      const useLapNo = g.laps.every((l) => l.lap_no != null);
+      return {
+        phase: g.phase,
+        laps: g.laps.map((l, i) => ({ ...l, num: useLapNo ? l.lap_no! : i + 1 })),
+      };
+    });
   });
   function phaseLabel(p: string | null): string {
     return (p ?? "laps").toUpperCase();
@@ -255,7 +267,7 @@
       {#if group.phase}
         <div class="phase-head">{phaseLabel(group.phase)}</div>
       {/if}
-      {#each group.laps as lap, i (lap.id)}
+      {#each group.laps as lap (lap.id)}
         {@const sectors = hasSectors(lap) ? sectorInfo(lap) : null}
         {@const open = expanded.has(lap.id)}
         <div class="lapwrap" class:open>
@@ -273,7 +285,7 @@
                 onclick={() => select(lap.id)}
               >
                 <span class="n">
-                  Lap {i + 1}
+                  Lap {lap.num}
                   <span class="lapsec">
                     {#each sectors as s}
                       <i class={s.cls} title="{s.label} {s.delta}"></i>
@@ -303,7 +315,7 @@
                 aria-pressed={lap.id === selectedLapId}
                 onclick={() => select(lap.id)}
               >
-                <span class="n">Lap {i + 1}</span>
+                <span class="n">Lap {lap.num}</span>
                 <span class="t">{formatTime(lap.lap_time)}</span>
                 <span class="flag">{lap.valid ? "" : "✗ inv"}</span>
               </button>
