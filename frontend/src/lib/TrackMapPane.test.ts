@@ -88,6 +88,32 @@ describe("TrackMapPane", () => {
     expect(container.querySelector("polyline")).toBeTruthy();
   });
 
+  it("only re-fetches the live map when the polled track/car changes (#98)", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(getStatus).mockResolvedValue({ ...noStatus, track: "Live Track", car: "GT3", on_track: true, activity: "track", has_map: true });
+      vi.mocked(getCurrentMap).mockResolvedValue({ ...mapFixture, track_name: "Live Track" });
+
+      render(TrackMapPane, { props: { sessionId: undefined } });
+      await vi.waitFor(() => expect(getCurrentMap).toHaveBeenCalledTimes(1));
+
+      // 5 more unchanged status ticks -> still just the one map fetch.
+      for (let i = 0; i < 5; i++) {
+        await vi.advanceTimersByTimeAsync(2000);
+      }
+      expect(getStatus).toHaveBeenCalledTimes(6); // initial poll + 5 ticks
+      expect(getCurrentMap).toHaveBeenCalledTimes(1);
+
+      // Track changes -> exactly one more map fetch.
+      vi.mocked(getStatus).mockResolvedValue({ ...noStatus, track: "Other Track", car: "GT3", on_track: true, activity: "track", has_map: true });
+      vi.mocked(getCurrentMap).mockResolvedValue({ ...mapFixture, track_name: "Other Track" });
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(getCurrentMap).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("opens the map strictly read-only from the magnifier", async () => {
     render(TrackMapPane, { props: { sessionId: "s1" } });
     await fireEvent.click(await screen.findByLabelText("Enlarge track map"));

@@ -14,11 +14,20 @@
   let phase: "connecting" | "ok" | "unreachable" = $state("connecting");
   let pollTimer: ReturnType<typeof setInterval> | undefined;
 
+  // #98: getSettings was fetched alongside getStatus on every 2s poll tick (~100
+  // req/min against a ~130 KB-ish settings payload -- one of the self-inflicted
+  // load sources). Nothing in the app propagates a settings save today (every
+  // screen just calls getSettings on its own mount), so throttle it here instead.
+  const SETTINGS_REFRESH_MS = 60_000;
+  let lastSettingsFetch = 0;
+
   async function poll() {
     try {
-      const [s, settings] = await Promise.all([getStatus(), getSettings()]);
-      status = s;
-      units = settings.units;
+      status = await getStatus();
+      if (Date.now() - lastSettingsFetch >= SETTINGS_REFRESH_MS) {
+        lastSettingsFetch = Date.now();
+        units = (await getSettings()).units;
+      }
     } catch {
       // transient poll failure - keep last good data, don't touch phase
     }
@@ -39,6 +48,7 @@
       );
       status = s;
       units = settings.units;
+      lastSettingsFetch = Date.now();
       phase = "ok";
       startPolling();
     } catch {

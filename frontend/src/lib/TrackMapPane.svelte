@@ -38,16 +38,25 @@
   let liveTrack: string | null = $state(null);
   let liveMap: TrackMapData | null = $state(null);
 
+  // #98: getCurrentMap fetched a full (~130 KB) map on every 2s status poll, even
+  // when the track hadn't changed. Keep polling /status every 2s, but only
+  // re-fetch the map when the track (or car) it names actually changed.
+  let lastFetchedKey: string | null = null;
+
   async function pollLive() {
     try {
       const status = await getStatus();
       liveTrack = status.track;
       if (!status.track) {
         liveMap = null;
+        lastFetchedKey = null;
         return;
       }
+      const key = `${status.track}|${status.car ?? ""}`;
+      if (key === lastFetchedKey) return;
       const m = await getCurrentMap();
       liveMap = "path" in m && m.path.length > 0 ? m : null;
+      lastFetchedKey = key;
     } catch {
       // transient poll failure - keep last good data
     }
@@ -57,6 +66,7 @@
     if (sessionId) {
       liveTrack = null;
       liveMap = null;
+      lastFetchedKey = null;
       return;
     }
     pollLive();

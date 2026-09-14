@@ -117,6 +117,35 @@ describe("SessionsScreen", () => {
     expect(getSessionChats).toHaveBeenCalledWith("s1");
   });
 
+  it("ignores a stale resolve from a superseded click (#98)", async () => {
+    // Two rapid clicks (s1 then s2); s1's getSessionChats resolves LAST. Without a
+    // click token, s1's late resolve would fire onselectSession again and steal
+    // focus back to the wrong session.
+    let resolveFirst!: (v: { chat_id: string; started: number; last: number; message_count: number; tracks: string }[]) => void;
+    const firstPromise = new Promise<
+      { chat_id: string; started: number; last: number; message_count: number; tracks: string }[]
+    >((res) => { resolveFirst = res; });
+    vi.mocked(getSessionChats).mockImplementation(async (sid: string) =>
+      sid === "s1" ? firstPromise
+        : [{ chat_id: "chatB", started: 1, last: 5, message_count: 1, tracks: "Le Mans" }],
+    );
+    const onselectSession = vi.fn();
+
+    const { container } = render(SessionsScreen, { props: { onselectSession } });
+    await within(sessList(container)).findByText("Sebring");
+
+    const rows = container.querySelectorAll(".srow");
+    await fireEvent.click(rows[0] as HTMLElement); // s1 -- pending
+    await fireEvent.click(rows[1] as HTMLElement); // s2 -- resolves first
+
+    await waitFor(() => expect(onselectSession).toHaveBeenCalledWith("s2", "chatB"));
+
+    resolveFirst([{ chat_id: "chatA", started: 1, last: 5, message_count: 1, tracks: "Le Mans" }]);
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(onselectSession).toHaveBeenCalledTimes(1);
+  });
+
   it("passes chatId undefined when a session has no linked chat", async () => {
     vi.mocked(getSessionChats).mockResolvedValue([]);
     const onselectSession = vi.fn();

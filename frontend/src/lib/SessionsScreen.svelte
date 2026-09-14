@@ -17,7 +17,11 @@
   let { onselectSession }: { onselectSession?: (sessionId: string, chatId?: string) => void } = $props();
 
   // Open a session: resolve its most-recent linked chat (if any) and hand both up.
+  // A click token guards against an out-of-order resolve: a fast second click on a
+  // different session must win even if its getSessionChats resolves first.
+  let clickToken = 0;
   async function selectSession(sessionId: string) {
+    const token = ++clickToken;
     let chatId: string | undefined;
     try {
       const linked = await getSessionChats(sessionId);
@@ -25,6 +29,7 @@
     } catch {
       chatId = undefined;
     }
+    if (token !== clickToken) return;
     onselectSession?.(sessionId, chatId);
   }
 

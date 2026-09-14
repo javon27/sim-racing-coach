@@ -225,6 +225,40 @@ describe("SessionBar", () => {
     expect(screen.queryByText(/can't reach the coach server/i)).toBeNull();
   });
 
+  it("does not re-fetch settings on every poll tick (#98)", async () => {
+    vi.mocked(getStatus).mockResolvedValue({
+      track: "Le Mans",
+      car: "Corvette Z06",
+      on_track: false,
+      has_map: true,
+      lmu_connected: true,
+    });
+    vi.mocked(getSettings).mockResolvedValue({
+      units: "metric",
+      input_device: "wheel",
+      model: "sonnet",
+      corner_naming: "names",
+      driver: { braking_style: null, balance_preference: null, risk_tolerance: null },
+      api_key_set: true,
+      data_dir: "x",
+      app_version: "0.1",
+      lmu_build: null,
+    });
+
+    render(SessionBar, { props: { pollMs: 5 } });
+
+    expect(await screen.findByText("Le Mans")).toBeTruthy();
+    const settingsCallsAfterLoad = vi.mocked(getSettings).mock.calls.length;
+    expect(settingsCallsAfterLoad).toBe(1); // the initial load() fetch
+
+    await vi.waitFor(() => expect(vi.mocked(getStatus).mock.calls.length).toBeGreaterThan(10), {
+      timeout: 2000,
+    });
+
+    // Many status polls happened, but the 60s settings throttle held.
+    expect(vi.mocked(getSettings).mock.calls.length).toBe(settingsCallsAfterLoad);
+  });
+
   it("stops polling after unmount", async () => {
     vi.mocked(getStatus).mockResolvedValue({
       track: "Le Mans",
