@@ -124,3 +124,52 @@ def test_track_edge_never_renders_until_rig_verified():
     for v in (-9.75, -2.0, -0.5, 0.24, 3.0):
         line = format_corner_line(_cm(v))
         assert "edge" not in line, line
+
+
+# --- #102: per-corner deltas vs the reference, relative and driver-facing --------
+
+def _cm_deltas(**deltas) -> CornerMetrics:
+    return CornerMetrics(
+        corner_no=1, name="Turn 1", direction="right", apex_dist=1000.0,
+        entry_spd=200.0, apex_spd=150.0, min_spd=150.0, exit_spd=180.0,
+        brake_point=900.0, throttle_point=1050.0, trailbrake_overlap=0.2,
+        **deltas,
+    )
+
+
+def test_format_corner_line_renders_brake_and_throttle_point_deltas():
+    cm = _cm_deltas(brake_point_delta=10.0, throttle_point_delta=15.0)
+    line = format_corner_line(cm)
+    assert "brake 10 m later than best" in line
+    assert "throttle 15 m later than best" in line
+
+
+def test_format_corner_line_renders_earlier_wording_for_negative_deltas():
+    cm = _cm_deltas(brake_point_delta=-8.0)
+    line = format_corner_line(cm)
+    assert "brake 8 m earlier than best" in line
+
+
+def test_format_corner_line_renders_coast_trail_and_abs_tc_deltas():
+    cm = _cm_deltas(coast_time_delta=0.3, trailbrake_overlap_delta=-0.08,
+                    abs_pct_delta=0.15)
+    line = format_corner_line(cm)
+    assert "+0.3s coasting vs best" in line
+    assert "trail -8 pts" in line
+    assert "ABS +15 pts" in line
+
+
+def test_format_corner_line_silent_with_no_reference():
+    # No deltas supplied (all None, the no-reference default) -> no delta text.
+    cm = _cm_deltas()
+    line = format_corner_line(cm)
+    assert "vs best" not in line and "than best" not in line and "pts" not in line
+
+
+def test_format_corner_line_silent_for_deltas_under_the_floor():
+    cm = _cm_deltas(brake_point_delta=1.0, throttle_point_delta=-2.0,
+                    coast_time_delta=0.02, trailbrake_overlap_delta=0.01,
+                    abs_pct_delta=-0.03, peak_lat_g_delta=0.05,
+                    peak_brake_g_delta=-0.1, entry_spd_delta=1.5, exit_spd_delta=-2.0)
+    line = format_corner_line(cm)
+    assert "vs best" not in line and "than best" not in line and "pts" not in line

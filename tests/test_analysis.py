@@ -501,6 +501,87 @@ def test_analyze_lap_delta_is_none_when_min_spd_is_nan(synthetic_lap):
     assert a.corners[0].min_spd_delta is None
 
 
+# --- #102: diff every comparable metric vs the reference, not just min speed -----
+
+def test_analyze_lap_diffs_brake_and_throttle_points_vs_reference(synthetic_lap):
+    # Reference brakes 10 m EARLIER and picks up throttle 15 m EARLIER than the
+    # current (synthetic_lap) lap in corner 1: shift the whole brake/throttle
+    # profile earlier along distance so the on/off edges both move together.
+    import dataclasses
+
+    import numpy as np
+
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap
+
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    dist = synthetic_lap.channels["lap_distance"]
+    ref_brake = np.interp(dist + 10.0, dist, synthetic_lap.channels["brake"])
+    ref_throttle = np.interp(dist + 15.0, dist, synthetic_lap.channels["throttle"])
+    reference = dataclasses.replace(synthetic_lap, channels={
+        **synthetic_lap.channels, "brake": ref_brake, "throttle": ref_throttle,
+    })
+
+    a = analyze_lap(synthetic_lap, cmap, reference=reference)
+    c1 = a.corners[0]
+    assert c1.brake_point is not None and c1.brake_point_delta is not None
+    assert abs(c1.brake_point_delta - 10.0) < 5.0    # current brakes LATER -> positive
+    assert c1.throttle_point is not None and c1.throttle_point_delta is not None
+    assert abs(c1.throttle_point_delta - 15.0) < 5.0
+
+
+def test_analyze_lap_delta_none_when_reference_never_brakes(synthetic_lap):
+    # A corner the reference never braked in has no brake point to diff against --
+    # the delta must be None, never computed off a "not found" sentinel.
+    import dataclasses
+
+    import numpy as np
+
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap
+
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    ref_brake = np.zeros_like(synthetic_lap.channels["lap_distance"])
+    reference = dataclasses.replace(synthetic_lap, channels={
+        **synthetic_lap.channels, "brake": ref_brake,
+    })
+
+    a = analyze_lap(synthetic_lap, cmap, reference=reference)
+    c1 = a.corners[0]
+    assert c1.brake_point is not None       # the current lap still braked
+    assert c1.brake_point_delta is None     # but the reference never did
+
+
+def test_analyze_lap_diffs_extended_corner_metrics_vs_reference(synthetic_lap):
+    # A reference with more trailbrake overlap and more ABS in corner 1 -- both
+    # extended (delta) fields must move, not just min_spd_delta.
+    import dataclasses
+
+    import numpy as np
+
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap
+
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    dist = synthetic_lap.channels["lap_distance"]
+    corner1 = (dist >= 800) & (dist <= 1200)
+    # Widen the reference's braking to cover its whole steering-lock zone, so it
+    # trail-brakes MORE of the corner than the current lap does.
+    steer_mask = np.abs(synthetic_lap.channels["steering"]) > 0.1
+    ref_brake = synthetic_lap.channels["brake"].copy()
+    ref_brake[corner1 & steer_mask] = 0.5
+    ref_abs = synthetic_lap.channels["abs_active"].copy()
+    ref_abs[corner1] = 1.0
+    reference = dataclasses.replace(synthetic_lap, channels={
+        **synthetic_lap.channels, "brake": ref_brake, "abs_active": ref_abs,
+    })
+
+    a = analyze_lap(synthetic_lap, cmap, reference=reference)
+    c1 = a.corners[0]
+    assert c1.trailbrake_overlap_delta is not None and c1.trailbrake_overlap_delta < 0
+    assert c1.abs_pct_delta is not None and c1.abs_pct_delta < 0
+
+
 def test_analyze_lap_direction_is_computed_not_read_from_map(synthetic_lap):
     """Live analysis must COMPUTE direction from telemetry, not just echo the map's
     stated direction. Use a map with a deliberately WRONG direction and assert the

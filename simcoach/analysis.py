@@ -45,6 +45,21 @@ class CornerMetrics:
     coast_dist: float = float("nan")      # meters in the corner with neither pedal
     brake_to_throttle_dist: float = float("nan")  # last brake-off -> first throttle (m)
     min_spd_delta: Optional[float] = None
+    # #102: every other comparable metric, diffed the same way (current - reference).
+    # Distance fields are metres, positive = LATER than the reference (further along
+    # the lap); the rest are in the field's own native unit. None when either side is
+    # None/NaN -- never computed from a "not found" sentinel.
+    brake_point_delta: Optional[float] = None
+    throttle_point_delta: Optional[float] = None
+    trailbrake_overlap_delta: Optional[float] = None
+    coast_time_delta: Optional[float] = None
+    brake_to_throttle_dist_delta: Optional[float] = None
+    peak_brake_g_delta: Optional[float] = None
+    peak_lat_g_delta: Optional[float] = None
+    abs_pct_delta: Optional[float] = None
+    tc_pct_delta: Optional[float] = None
+    entry_spd_delta: Optional[float] = None
+    exit_spd_delta: Optional[float] = None
     label: str = ""                          # displayed designation ("8A")
     apexes: Optional[list[float]] = None     # apex lap_distances (>1 = multi-apex)
     apex_min_speeds: Optional[list[float]] = None  # min speed per apex (parallel to apexes)
@@ -663,6 +678,16 @@ def _metrics_for_corner(
     )
 
 
+def _delta(cur, ref) -> float | None:
+    """cur - ref, or None when either side is missing (None) or NaN -- a "not found"
+    reading (e.g. no braking) must never be diffed as if it were a real point (#102)."""
+    if cur is None or ref is None:
+        return None
+    if math.isnan(cur) or math.isnan(ref):
+        return None
+    return cur - ref
+
+
 def analyze_lap(
     record: LapRecord, cmap: CornerMap, reference: Optional[LapRecord] = None
 ) -> LapAnalysis:
@@ -684,10 +709,20 @@ def analyze_lap(
         ref_metrics = {c.number: _metrics_for_corner(reference, c, length) for c in cmap.corners}
         for cm in corners:
             ref = ref_metrics.get(cm.corner_no)
-            if ref is not None and not np.isnan(cm.min_spd) and not np.isnan(ref.min_spd):
-                cm.min_spd_delta = cm.min_spd - ref.min_spd
-            else:
-                cm.min_spd_delta = None
+            if ref is None:
+                continue
+            cm.min_spd_delta = _delta(cm.min_spd, ref.min_spd)
+            cm.brake_point_delta = _delta(cm.brake_point, ref.brake_point)
+            cm.throttle_point_delta = _delta(cm.throttle_point, ref.throttle_point)
+            cm.trailbrake_overlap_delta = _delta(cm.trailbrake_overlap, ref.trailbrake_overlap)
+            cm.coast_time_delta = _delta(cm.coast_time, ref.coast_time)
+            cm.brake_to_throttle_dist_delta = _delta(cm.brake_to_throttle_dist, ref.brake_to_throttle_dist)
+            cm.peak_brake_g_delta = _delta(cm.peak_brake_g, ref.peak_brake_g)
+            cm.peak_lat_g_delta = _delta(cm.peak_lat_g, ref.peak_lat_g)
+            cm.abs_pct_delta = _delta(cm.abs_pct, ref.abs_pct)
+            cm.tc_pct_delta = _delta(cm.tc_pct, ref.tc_pct)
+            cm.entry_spd_delta = _delta(cm.entry_spd, ref.entry_spd)
+            cm.exit_spd_delta = _delta(cm.exit_spd, ref.exit_spd)
 
     tire_means, tire_warmup = _tire_summary(record)
     return LapAnalysis(

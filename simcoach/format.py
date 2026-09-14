@@ -35,6 +35,46 @@ def unit_fns(units: str = "metric"):
 _COAST_REPORT_S = 0.05
 _GAP_REPORT_M = 5.0
 
+# #102: floors for the vs-reference deltas, one per unit family. Below these the
+# reading is axis/sensor noise, not a coachable technique difference.
+# ponytail: tuning knobs -- a rig read settles them further.
+_DELTA_DIST_M = 3.0      # brake/throttle point deltas (m) -- #101 gives a ~1 m axis
+_DELTA_COAST_S = 0.1     # coast-time delta (s)
+_DELTA_PTS = 0.05        # trail/ABS/TC deltas (fraction points; 0.05 = 5 pts)
+_DELTA_G = 0.2           # peak brake/lat g deltas
+_DELTA_SPEED_KMH = 3.0   # entry/exit speed deltas, in the native km/h channel
+
+
+def _dist_delta_txt(label: str, delta) -> str:
+    if delta is None or abs(delta) < _DELTA_DIST_M:
+        return ""
+    word = "later" if delta > 0 else "earlier"
+    return f", {label} {abs(delta):.0f} m {word} than best"
+
+
+def _coast_delta_txt(delta) -> str:
+    if delta is None or abs(delta) < _DELTA_COAST_S:
+        return ""
+    return f", {delta:+.1f}s coasting vs best"
+
+
+def _pct_delta_txt(label: str, delta) -> str:
+    if delta is None or abs(delta) < _DELTA_PTS:
+        return ""
+    return f", {label} {round(delta * 100):+d} pts"
+
+
+def _g_delta_txt(label: str, delta) -> str:
+    if delta is None or abs(delta) < _DELTA_G:
+        return ""
+    return f", {label} {delta:+.1f}g vs best"
+
+
+def _speed_delta_txt(label: str, delta, spd, spd_u: str) -> str:
+    if delta is None or abs(delta) < _DELTA_SPEED_KMH:
+        return ""
+    return f", {label} {spd(delta):+.0f} {spd_u} vs best"
+
 
 def format_corner_line(cm, units: str = "metric") -> str:
     """One driver-facing corner line: speeds, apex-relative brake/throttle, trail,
@@ -93,6 +133,18 @@ def format_corner_line(cm, units: str = "metric") -> str:
         line += f", {len(aps)}-apex (per-apex min {mins} {spd_u})"
     if cm.min_spd_delta is not None:
         line += f" (min vs best: {spd(cm.min_spd_delta):+.1f} {spd_u})"
+    # #102: every other comparable metric, vs the reference -- relative and
+    # driver-facing, silent below its floor or with no reference (delta is None).
+    line += _dist_delta_txt("brake", getattr(cm, "brake_point_delta", None))
+    line += _dist_delta_txt("throttle", getattr(cm, "throttle_point_delta", None))
+    line += _coast_delta_txt(getattr(cm, "coast_time_delta", None))
+    line += _pct_delta_txt("trail", getattr(cm, "trailbrake_overlap_delta", None))
+    line += _pct_delta_txt("ABS", getattr(cm, "abs_pct_delta", None))
+    line += _pct_delta_txt("TC", getattr(cm, "tc_pct_delta", None))
+    line += _g_delta_txt("brake", getattr(cm, "peak_brake_g_delta", None))
+    line += _g_delta_txt("peak", getattr(cm, "peak_lat_g_delta", None))
+    line += _speed_delta_txt("entry", getattr(cm, "entry_spd_delta", None), spd, spd_u)
+    line += _speed_delta_txt("exit", getattr(cm, "exit_spd_delta", None), spd, spd_u)
     return line
 
 
