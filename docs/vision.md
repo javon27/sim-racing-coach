@@ -85,7 +85,8 @@ decisions:
    shipped 2026-09-08 (summary injection, driver memories, session setups).
 
 Later/optional: proactive *push* spotter alerts ("box this lap, fuel's short"),
-distinct from the agentic *pull* model above.
+distinct from the agentic *pull* model above. Fast-follow after voice: make
+building a track map less of a curation loop (#100).
 
 ## Where v1 stands
 
