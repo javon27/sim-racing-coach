@@ -99,9 +99,15 @@ def format_corner_line(cm, units: str = "metric") -> str:
 # How many loss buckets the coach is handed. More than this and the ranking stops
 # being a ranking. ponytail: a flat cap; a "everything above 0.1s" rule would adapt.
 _TOP_BUCKETS = 5
-# Below this a bucket is ds/v integration noise, not a coachable loss.
-# ponytail: tuning knob — raise it if real laps show chatter in the listing.
-_BUCKET_NOISE_S = 0.02
+# Below this a bucket is integration/interpolation noise, not a coachable loss.
+# Two floors, keyed to which time axis `time_loss_buckets` used (#101): the exact
+# elapsed_time path is precise to interpolation noise only, while the ds/v
+# fallback integrates ~50 Hz speed samples and carries the model's own ~0.2s
+# median error (smm.py) -- a fixed 0.02s floor was too tight for the ds/v path's
+# real noise and too loose for the exact path's.
+# ponytail: tuning knobs — a rig read settles them further.
+_BUCKET_NOISE_S_EXACT = 0.005
+_BUCKET_NOISE_S_DS_V = 0.02
 
 
 def format_time_loss(buckets, reference_label: str = "your best lap") -> str:
@@ -112,14 +118,18 @@ def format_time_loss(buckets, reference_label: str = "your best lap") -> str:
     if not buckets:
         return ("No comparable reference lap to measure time loss against yet — "
                 "you need a second valid lap on this track/car.")
+    # Every bucket in one call carries the same "exact" flag (see
+    # `time_loss_buckets`); buckets without one (older callers/fixtures) get the
+    # wider, more conservative ds/v floor.
+    noise = _BUCKET_NOISE_S_EXACT if buckets[0].get("exact") else _BUCKET_NOISE_S_DS_V
     net = sum(b["delta"] for b in buckets)
     out = f"Net {-net:+.2f}s vs {reference_label}."
-    losses = sorted((b for b in buckets if b["delta"] > _BUCKET_NOISE_S),
+    losses = sorted((b for b in buckets if b["delta"] > noise),
                     key=lambda b: -b["delta"])[:_TOP_BUCKETS]
     if losses:
         out += " Biggest losses: " + ", ".join(
             f"{b['label']} {-b['delta']:+.2f}s" for b in losses) + "."
-    gains = [b for b in buckets if b["delta"] < -_BUCKET_NOISE_S]
+    gains = [b for b in buckets if b["delta"] < -noise]
     if gains:
         g = min(gains, key=lambda b: b["delta"])
         out += f" Biggest gain: {g['label']} {-g['delta']:+.2f}s."
