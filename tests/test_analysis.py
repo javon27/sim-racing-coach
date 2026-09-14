@@ -583,6 +583,152 @@ def test_lap_time_axis_survives_a_stopped_sample():
     assert math.isfinite(t[-1])                        # no div-by-zero / inf
 
 
+# --- #101: de-staircased lap_distance + measured elapsed_time axis -----------
+
+def _stair_hold(dist, hz=48.6, scoring_hz=5.0):
+    """Hold `dist` (already sampled at `hz`) at the ~5 Hz scoring rate, same
+    staircase shape as test_input_traces._staircase_lap: ~10 identical values,
+    then a jump."""
+    import numpy as np
+    n = len(dist)
+    t = np.arange(n) / hz
+    step = 1.0 / scoring_hz
+    ticks = np.floor(t / step) * step
+    return np.interp(ticks, t, dist)
+
+
+def test_brake_point_resolves_to_within_1m_despite_the_staircase():
+    """A ~48.6 Hz lap (~0.33 m/sample -- real capture density) that brakes at a
+    known, deliberately off-grid distance. Holding lap_distance at the ~5 Hz
+    scoring rate (#101's staircase, ~8-10 m steps) makes that true brake point
+    land mid-step; de-staircasing must recover it to within ~1 m."""
+    import dataclasses
+
+    import numpy as np
+
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap
+    from simcoach.model_types import LapRecord
+
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    true_brake_at = 950.37   # inside T1 (800-1200, apex 1000), off any 8-10m grid line
+
+    n, hz, length = 9000, 48.6, 3000.0
+    t = np.arange(n) / hz
+    dist = length * t / t[-1]
+    ch = {"lap_distance": dist, "speed": np.full(n, 200.0),
+          "brake": np.where(dist >= true_brake_at, 0.8, 0.0),
+          "throttle": np.zeros(n), "steering": np.zeros(n)}
+    smooth_lap = LapRecord(sim="lmu", track="test_track", car="test_car",
+                           lap_time=float(t[-1]), valid=True, timestamp=0.0, channels=ch)
+    smooth_bp = analyze_lap(smooth_lap, cmap).corners[0].brake_point
+    assert smooth_bp is not None and abs(smooth_bp - true_brake_at) < 0.5  # sanity
+
+    held = _stair_hold(dist, hz=hz)
+    assert len(np.unique(held)) < len(held) / 5    # precondition: really a staircase
+
+    # The raw staircase channel itself disagrees with the truth near the brake
+    # point by more than the ~1 m tolerance the fix must hit -- reading it
+    # directly (the pre-fix behaviour) could not have resolved it that tightly.
+    i = int(np.argmin(np.abs(dist - true_brake_at)))
+    assert abs(held[i] - dist[i]) > 1.0
+
+    staircase_lap = dataclasses.replace(smooth_lap, channels={**ch, "lap_distance": held})
+    fixed_bp = analyze_lap(staircase_lap, cmap).corners[0].brake_point
+    assert fixed_bp is not None
+    assert abs(fixed_bp - true_brake_at) < 1.0
+
+
+def test_lap_time_axis_uses_measured_elapsed_time_when_present():
+    """A lap carrying elapsed_time/lap_start_et must produce a time axis matching
+    it exactly, not the ds/v estimate (deliberately given a different total so the
+    two paths can't be confused)."""
+    import numpy as np
+
+    from simcoach.analysis import _uses_exact_time_axis, lap_time_axis
+    n = 50
+    et = np.linspace(10.0, 22.345, n)          # 12.345 s elapsed, NOT 1000/20=50s
+    lap = _flat_lap(72.0, n=n, length=1000.0,
+                    elapsed_time=et, lap_start_et=np.full(n, 10.0))
+    assert _uses_exact_time_axis(lap) is True
+    d, t = lap_time_axis(lap)
+    assert np.allclose(t, et - 10.0)
+    assert np.allclose(d, lap.channels["lap_distance"])
+
+
+def test_uses_exact_time_axis_false_without_elapsed_time_channels():
+    """Older captures (no elapsed_time/lap_start_et) fall back to ds/v -- the
+    existing lap_time_axis tests above exercise that path already; this pins the
+    predicate `format_time_loss`'s noise floor depends on."""
+    from simcoach.analysis import _uses_exact_time_axis
+    assert _uses_exact_time_axis(_flat_lap(72.0, length=1000.0)) is False
+
+
+def test_exact_time_axis_drops_the_seam_sample():
+    """A sample carrying the NEXT lap's lap_start_et shows elapsed_time -
+    lap_start_et dropping back toward zero (smm.py) -- it must be filtered out
+    like a backwards lap_distance jitter, not integrated as a huge negative dt."""
+    import numpy as np
+
+    from simcoach.analysis import lap_time_axis
+    n = 50
+    et = np.linspace(10.0, 22.0, n)
+    lap_start = np.full(n, 10.0)
+    lap_start[-1] = 22.0                        # next lap's lap_start_et at the seam
+    lap = _flat_lap(72.0, n=n, length=1000.0, elapsed_time=et, lap_start_et=lap_start)
+    d, t = lap_time_axis(lap)
+    assert np.all(np.diff(t) > 0)
+    assert len(d) == n - 1                      # the seam sample dropped, not kept
+
+
+def test_input_traces_unaffected_by_lap_distance_interpolation_cache():
+    """analyze_lap caches an interpolated lap_distance on the record (#101, for its
+    own repeat corner-metric reads); input_traces reads record.channels directly
+    and must be unaffected regardless of whether that cache ran first."""
+    import numpy as np
+
+    from simcoach.analysis import analyze_lap, input_traces
+    from simcoach.corners import CornerMap
+    from simcoach.model_types import LapRecord
+
+    n = 486
+    t = np.arange(n) / 48.6
+    dist = 3000.0 * t / t[-1]
+    step = 1.0 / 5.0
+    held = np.interp(np.floor(t / step) * step, t, dist)
+    lap = LapRecord(sim="lmu", track="test_track", car="test_car", lap_time=t[-1],
+                    valid=True, timestamp=0.0,
+                    channels={"lap_distance": held, "throttle": np.ones(n),
+                              "brake": np.zeros(n), "steering": np.zeros(n),
+                              "speed": np.full(n, 100.0)})
+    before = input_traces(lap, bins=50)
+    analyze_lap(lap, CornerMap.load("simcoach/tracks/test_track.json"))
+    after = input_traces(lap, bins=50)
+    assert before.keys() == after.keys()
+    for k, v in before.items():
+        assert after[k] == v
+
+
+def test_time_loss_buckets_flag_exact_when_both_laps_carry_elapsed_time():
+    import numpy as np
+
+    from simcoach.analysis import time_loss_buckets
+    cur, ref = _slow_in_t1()
+    for lap in (cur, ref):
+        n = len(lap.channels["lap_distance"])
+        lap.channels["elapsed_time"] = np.arange(n, dtype=float) * 0.01
+        lap.channels["lap_start_et"] = np.zeros(n)
+    b = time_loss_buckets(cur, ref, _test_cmap())
+    assert b and all(x["exact"] for x in b)
+
+
+def test_time_loss_buckets_flag_not_exact_when_either_lap_lacks_elapsed_time():
+    from simcoach.analysis import time_loss_buckets
+    cur, ref = _slow_in_t1()
+    b = time_loss_buckets(cur, ref, _test_cmap())
+    assert b and all(not x["exact"] for x in b)
+
+
 def test_align_time_axes_injected_loss_shows_as_delta():
     from simcoach.analysis import align_time_axes
     ref = _flat_lap(72.0, length=1000.0)

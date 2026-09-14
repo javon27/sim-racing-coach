@@ -78,6 +78,24 @@ def test_format_time_loss_is_honest_with_no_buckets():
     assert "reference" in format_time_loss(None, "your best lap").lower()
 
 
+# --- #101: noise floor keyed to which time axis produced the buckets ---------
+
+def test_format_time_loss_treats_small_delta_as_loss_when_exact():
+    from simcoach.format import format_time_loss
+    buckets = [{"label": "T1", "kind": "corner", "delta": 0.01, "exact": True,
+                "start_dist": 0.0, "end_dist": 100.0}]
+    out = format_time_loss(buckets, "your best lap")
+    assert "T1" in out and "Biggest losses" in out
+
+
+def test_format_time_loss_treats_same_delta_as_noise_when_not_exact():
+    from simcoach.format import format_time_loss
+    buckets = [{"label": "T1", "kind": "corner", "delta": 0.01,
+                "start_dist": 0.0, "end_dist": 100.0}]
+    out = format_time_loss(buckets, "your best lap")
+    assert "stands out" in out
+
+
 def test_format_corner_line_reports_coasting_and_the_brake_to_throttle_gap():
     from simcoach.analysis import CornerMetrics
     from simcoach.format import format_corner_line
