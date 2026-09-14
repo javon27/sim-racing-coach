@@ -258,7 +258,7 @@ def test_extended_corner_inputs(synthetic_lap):
 
     line = format_corner_line(c1, "metric")
     assert "brake 1.4g" in line and "accel 0.3g" in line
-    assert "ABS" in line and "from edge" in line
+    assert "ABS" in line and "edge" not in line   # track_edge computed, not rendered (#99)
     assert "TC" not in line                  # tc_active is flat 0 here
 
 
@@ -310,6 +310,7 @@ def test_track_edge_distance_uses_path_lateral(synthetic_lap):
 
 
 def test_track_edge_past_edge_wording(synthetic_lap):
+    # Metric stays computed (sign-aware) for when it is rig-verified; see below.
     # A negative distance-to-edge must read as "past edge", not as a nonsense
     # "-0.4m from edge". Both wordings name the car's CENTRE, because mPathLateral
     # is the centre and we hold no per-car width -- a ~2m GT car at "centre 0.2m
@@ -331,13 +332,12 @@ def test_track_edge_past_edge_wording(synthetic_lap):
         lap = LapRecord(**{**synthetic_lap.__dict__, "channels": c})
         return format_corner_line(analyze_lap(lap, cmap).corners[0], "metric")
 
+    # Cut from the prompt until rig-verified (#99): neither wording renders,
+    # and no raw negative number leaks either.
     past = line_for(4.4)            # centre 0.4m beyond the white line
-    assert "centre 0.4m past edge" in past
-    assert "-0.4" not in past and "from edge" not in past
-
+    assert "edge" not in past and "-0.4" not in past
     inside = line_for(3.8)          # centre still 0.2m inside the line
-    assert "centre 0.2m from edge" in inside
-    assert "past edge" not in inside
+    assert "edge" not in inside
 
 
 def test_extended_inputs_absent_without_channels(synthetic_lap):

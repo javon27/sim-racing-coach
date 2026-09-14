@@ -34,11 +34,6 @@ def unit_fns(units: str = "metric"):
 # through settles them.
 _COAST_REPORT_S = 0.05
 _GAP_REPORT_M = 5.0
-# ponytail: mPathLateral/mTrackEdge units + sign are still PENDING LIVE
-# VALIDATION (see analysis.py) and the subtraction degrades exactly where the
-# car is off-track, so a precise figure past this magnitude implies confidence
-# the data can't support. Raise or remove once the channel is rig-validated.
-_TRACK_EDGE_RENDER_CAP_M = 2.0
 
 
 def format_corner_line(cm, units: str = "metric") -> str:
@@ -81,19 +76,9 @@ def format_corner_line(cm, units: str = "metric") -> str:
         aids.append(f"TC {cm.tc_pct:.0%}")
     if aids:
         line += ", " + " ".join(aids)
-    edge_min = getattr(cm, "track_edge_min", float("nan"))
-    if not math.isnan(edge_min):
-        # Negative = the car went past the white line. Render that as "past edge"
-        # rather than a nonsensical "-0.4m from edge". Says "centre" because the
-        # measurement is the car's centre, not its outer wheels — at "centre 0.2m
-        # from edge" a ~2m car already has a wheel over the line.
-        if edge_min < -_TRACK_EDGE_RENDER_CAP_M:
-            # Beyond the cap the magnitude isn't trustworthy (see comment above) —
-            # hedge with a phrase instead of a false-precision number.
-            line += ", centre well past edge"
-        else:
-            line += (f", centre {-edge_min:.1f}m past edge" if edge_min < 0
-                     else f", centre {abs(edge_min):.1f}m from edge")
+    # track_edge_min is computed but NOT rendered (#99 second review): the
+    # mPathLateral/mTrackEdge units and sign are still PENDING LIVE VALIDATION
+    # (smm.py), and the rule is cut, don't hedge. Restore once rig-verified.
     # Dead time. Silent on a clean corner — zero coasting shouldn't carry a line.
     coast_t = getattr(cm, "coast_time", float("nan"))
     if not math.isnan(coast_t) and coast_t > _COAST_REPORT_S:

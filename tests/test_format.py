@@ -100,20 +100,9 @@ def test_format_corner_line_silent_when_coasting_was_not_measured():
     line = format_corner_line(cm)
     assert "coasting" not in line and "gap" not in line
 
-def test_track_edge_small_excursion_renders_figure():
-    assert "centre 0.5m past edge" in format_corner_line(_cm(-0.50))
-
-
-def test_track_edge_positive_renders_figure():
-    assert "centre 0.2m from edge" in format_corner_line(_cm(0.24))
-
-
-def test_track_edge_boundary_still_renders_figure():
-    # Exactly at the cap: "below that, keep the existing wording" — boundary
-    # is inclusive on the numeric side, only strictly-beyond hedges.
-    assert "centre 2.0m past edge" in format_corner_line(_cm(-2.0))
-
-
-def test_track_edge_large_excursion_renders_phrase():
-    assert "centre well past edge" in format_corner_line(_cm(-9.75))
-    assert "-9.8" not in format_corner_line(_cm(-9.75))
+def test_track_edge_never_renders_until_rig_verified():
+    # mTrackEdge/mPathLateral units + sign are PENDING LIVE VALIDATION; an
+    # unverified figure is cut from the prompt, not hedged (#99).
+    for v in (-9.75, -2.0, -0.5, 0.24, 3.0):
+        line = format_corner_line(_cm(v))
+        assert "edge" not in line, line

@@ -69,10 +69,15 @@ decisions:
 
 ## Approved build order (post-v1, revised 2026-09-14)
 
-1. **Tighten** — wrong facts reaching the coach. #67 (race lookup by phase),
-   #33 (trust the electronics block only once populated), #77 (store the
-   game's lap number), #87 (chat-screen save flips a curated direction), #71
-   (v15-store residual). Plus #59 (delete the terminal REPL).
+1. **Tighten** — make every number the coach states honest. First the
+   time/distance axis: `lap_distance` is a ~5 Hz staircase (~8.5 m steps,
+   ~0.2 s delta-t error) under every brake/throttle/coasting/time-loss fact,
+   while `elapsed_time` is captured and unused (#101). Then diff every
+   per-corner metric against the reference, not just min speed, so "early or
+   late vs best" is computed, not inferred (#102). Then #77 (store the game's
+   lap number), #87 (chat-screen save flips a curated direction), #71
+   (v15-store residual), #59 (delete the terminal REPL). Done: #67, #33
+   (rig-verify still owed), `track_edge` cut from the prompt until validated.
 2. **Deepen** — the rest of #38, cheapest first: P1.5 consistency → P1.3
    handling → P1.4 traction circle → P1.6 tire trend → P1.7 gear/lockup; then
    Phase 0 setup-channel capture → Phase 2 setup diagnostics.
