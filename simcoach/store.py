@@ -76,7 +76,7 @@ def _session_base(sid: str) -> str:
     """The (track, car, mode) base of a session id, dropping any ~<instance> suffix."""
     return sid.split(_SESSION_SEP, 1)[0]
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
@@ -162,7 +162,9 @@ CREATE TABLE IF NOT EXISTS laps (
     s2 REAL,
     s3 REAL,
     position INTEGER,
-    sector_bounds TEXT
+    sector_bounds TEXT,
+    lap_no INTEGER,
+    pit INTEGER
 );
 CREATE TABLE IF NOT EXISTS ingested_files (
     path TEXT PRIMARY KEY,
@@ -586,6 +588,17 @@ class LapStore:
                                 self.conn, _duplicate_result_lap_pairs(self.conn))
                         else:
                             stamp = current_version   # nothing renamed or removed; retry
+            if current_version < 18:
+                # v17 -> v18: the game's own lap number (scoring mTotalLaps, read at the
+                # same commit as mLastLapTime) and whether the car was ever in the pits
+                # during the lap (scoring mInPits) -- issue #77. Existing rows stay NULL;
+                # lap numbering falls back to today's per-phase counting when any lap in
+                # a run lacks lap_no (CoachContext._lap_numbering, LapList.svelte).
+                cols = [r[1] for r in self.conn.execute("PRAGMA table_info(laps)")]
+                if cols:
+                    for c in ("lap_no", "pit"):
+                        if c not in cols:
+                            _add_column(self.conn, "laps", f"{c} INTEGER")
         if current_version != stamp:
             self.conn.execute(f"PRAGMA user_version = {stamp}")
         self.conn.commit()
@@ -683,14 +696,15 @@ class LapStore:
                 def _sec(i):
                     return record.sectors[i] if record.sectors and len(record.sectors) > i else None
                 bounds = json.dumps(record.sector_bounds) if record.sector_bounds else None
+                pit = None if record.pit is None else int(record.pit)
                 cur = self.conn.execute(
                     "INSERT INTO laps (ts, sim, track, car, lap_time, valid, telemetry_path, "
-                    "phase, session_id, s1, s2, s3, position, sector_bounds) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "phase, session_id, s1, s2, s3, position, sector_bounds, lap_no, pit) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (record.timestamp, record.sim, record.track, record.car,
                      record.lap_time, int(record.valid), None,
                      record.phase, sid, _sec(0), _sec(1), _sec(2),
-                     record.position, bounds),
+                     record.position, bounds, record.lap_no, pit),
                 )
                 lap_id = cur.lastrowid
                 telemetry_path = os.path.join(self.data_dir, f"{lap_id}.npz")
@@ -733,18 +747,20 @@ class LapStore:
     def load(self, lap_id: int) -> LapRecord:
         with self._lock:
             row = self.conn.execute(
-                "SELECT ts, sim, track, car, lap_time, valid, telemetry_path, phase, session_id "
-                "FROM laps WHERE id = ?",
+                "SELECT ts, sim, track, car, lap_time, valid, telemetry_path, phase, session_id, "
+                "lap_no, pit FROM laps WHERE id = ?",
                 (lap_id,),
             ).fetchone()
             if row is None:
                 raise KeyError(f"no lap with id {lap_id}")
-            ts, sim, track, car, lap_time, valid, telemetry_path, phase, session_id = row
+            (ts, sim, track, car, lap_time, valid, telemetry_path, phase, session_id,
+             lap_no, pit) = row
             if telemetry_path is None:
                 raise FileNotFoundError(f"lap {lap_id} has no telemetry (imported from a result log)")
             with np.load(telemetry_path) as npz:
                 channels = {k: npz[k] for k in npz.files}
-            return LapRecord(sim, track, car, lap_time, bool(valid), ts, channels, phase, session_id)
+            return LapRecord(sim, track, car, lap_time, bool(valid), ts, channels, phase, session_id,
+                              lap_no=lap_no, pit=(None if pit is None else bool(pit)))
 
     def best_lap(self, track: str, car: str, exclude_lap_id: int | None = None,
                  phase: str | None = None, session_id: str | None = None) -> LapRecord | None:
@@ -1146,15 +1162,17 @@ class LapStore:
     def session_laps(self, session_id: str) -> list[dict]:
         with self._lock:
             rows = self.conn.execute(
-                "SELECT id, lap_time, valid, ts, s1, s2, s3, phase, track, car FROM laps "
-                "WHERE session_id = ? ORDER BY ts",
+                "SELECT id, lap_time, valid, ts, s1, s2, s3, phase, track, car, lap_no, pit "
+                "FROM laps WHERE session_id = ? ORDER BY ts",
                 (session_id,),
             ).fetchall()
-            keys = ("id", "lap_time", "valid", "ts", "s1", "s2", "s3", "phase", "track", "car")
+            keys = ("id", "lap_time", "valid", "ts", "s1", "s2", "s3", "phase", "track", "car",
+                    "lap_no", "pit")
             out = []
             for r in rows:
                 d = dict(zip(keys, r))
                 d["car_model"] = resolve_car(d["car"]) if d["car"] else None
+                d["pit"] = None if d["pit"] is None else bool(d["pit"])
                 out.append(d)
             return out
 
@@ -1286,12 +1304,12 @@ class LapStore:
                     continue
                 rows.append(
                     (rs.date_ts, rs.sim, rs.track, rs.car, lap.lap_time, int(lap.valid),
-                     None, rs.session_type, session_id, s1, s2, s3))
+                     None, rs.session_type, session_id, s1, s2, s3, lap.lap_no))
             self.conn.executemany(_BACKFILL_SECTORS_SQL, backfill)
             self.conn.executemany(
                 "INSERT INTO laps (ts, sim, track, car, lap_time, valid, telemetry_path, "
-                "phase, session_id, source, s1, s2, s3) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'result', ?, ?, ?)",
+                "phase, session_id, source, s1, s2, s3, lap_no) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'result', ?, ?, ?, ?)",
                 rows,
             )
             self.conn.execute(

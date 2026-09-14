@@ -596,6 +596,47 @@ def test_v12_migration_tolerates_columns_already_present(tmp_path):
     assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
 
 
+def test_v17_schema_migrates_lap_no_and_pit_columns_to_v18(tmp_path):
+    """Issue #77: the game's own lap number (mTotalLaps at the wrap) and whether the
+    car was ever in the pits during the lap. Existing rows stay NULL."""
+    from simcoach.store import SCHEMA_VERSION, LapStore
+    db = str(tmp_path / "c.sqlite")
+    s = LapStore(db, str(tmp_path / "telem"))
+    s.conn.execute("PRAGMA user_version = 17")
+    s.conn.commit(); s.conn.close()
+
+    s2 = LapStore(db, str(tmp_path / "telem"))
+    assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    cols = [r[1] for r in s2.conn.execute("PRAGMA table_info(laps)")]
+    assert {"lap_no", "pit"} <= set(cols)
+
+
+def test_save_and_load_round_trips_lap_no_and_pit(tmp_path, synthetic_lap):
+    from simcoach.store import LapStore
+
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "telem"))
+    lap_id = s.save(LapRecord(**{**synthetic_lap.__dict__, "lap_no": 8, "pit": True}))
+    loaded = s.load(lap_id)
+    assert loaded.lap_no == 8
+    assert loaded.pit is True
+
+    # A legacy/unset lap keeps both as NULL -> None.
+    legacy_id = s.save(LapRecord(**synthetic_lap.__dict__))
+    legacy = s.load(legacy_id)
+    assert legacy.lap_no is None
+    assert legacy.pit is None
+
+
+def test_session_laps_returns_lap_no_and_pit(tmp_path, synthetic_lap):
+    from simcoach.store import LapStore
+
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "telem"))
+    s.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1", "lap_no": 5, "pit": False}))
+    rows = s.session_laps("s1")
+    assert rows[0]["lap_no"] == 5
+    assert rows[0]["pit"] is False
+
+
 def test_v5_schema_migrates_source_column_to_v6(tmp_path, synthetic_lap):
     from simcoach.store import SCHEMA_VERSION, LapStore
     db_path = str(tmp_path / "c.sqlite")
