@@ -144,19 +144,64 @@ def lap_coast_total(record: LapRecord):
     idx = _monotonic_idx(record)
     if idx.size < 2:
         return None
-    return _coast_totals(np.asarray(ch["lap_distance"], dtype=float)[idx],
+    d = _interp_lap_distance(record)
+    return _coast_totals(d[idx],
                          np.asarray(ch["speed"], dtype=float)[idx],
                          np.asarray(ch["throttle"], dtype=float)[idx],
                          np.asarray(ch["brake"], dtype=float)[idx])
 
 
+def _interp_lap_distance(record: LapRecord) -> np.ndarray:
+    """De-staircase `lap_distance`: it comes off the SCORING struct at ~5 Hz while
+    every other channel is ~48.6 Hz (see `input_traces`), so the stored channel is
+    a staircase -- one new value per ~10 samples, ~8.5 m median step (#101). This
+    linearly interpolates it across each held run using the same running-maximum
+    knot logic `input_traces` uses for the UI chart, so every corner metric and
+    time-axis integration downstream sees the real ~1 m axis instead.
+
+    Returns a full-length array (same shape/order as the raw channel). A sample
+    with non-finite raw distance stays non-finite. Unlike `input_traces`, the
+    TRAILING partial run (past the last knot that beat the running maximum -- lap
+    end, or the tail of a wrapped/glitched next-lap that failed the knot filter)
+    is left non-finite rather than extrapolated: this feeds corner metrics and the
+    time axis, where a handful of unknown trailing samples is harmless, and
+    inventing a distance past a possible seam wrap is not.
+
+    Cached on the record: `analyze_lap` calls in here once per corner (via
+    `_metrics_for_corner`) plus the time-axis functions, so interpolating once and
+    reusing it matters.
+    """
+    cached = getattr(record, "_lap_distance_interp", None)
+    if cached is not None:
+        return cached
+    d = np.asarray(record.channels["lap_distance"], dtype=float)
+    out = np.full(d.size, np.nan)
+    keep = np.flatnonzero(np.isfinite(d))
+    if keep.size >= 2:
+        dk = d[keep]
+        run_start = np.r_[True, np.diff(dk) != 0]
+        ki, kd = keep[run_start], dk[run_start]
+        forward = np.r_[True, kd[1:] > np.maximum.accumulate(kd)[:-1]]
+        ki, kd = ki[forward], kd[forward]
+        if ki.size >= 2:
+            inner = keep[(keep >= ki[0]) & (keep <= ki[-1])]
+            out[inner] = np.interp(inner, ki, kd)
+        else:
+            out[keep] = dk
+    elif keep.size == 1:
+        out[keep] = d[keep]
+    record._lap_distance_interp = out
+    return out
+
+
 def _monotonic_idx(record: LapRecord) -> np.ndarray:
     """Indices of the samples with finite distance/speed and strictly increasing
-    `lap_distance`. Strictly increasing distance is a precondition of every two-lap
-    comparison: a pit re-entry, an S/F wrap or sensor jitter otherwise integrates a
-    negative ds or interpolates backwards. Returned as indices so other channels
-    can be sliced onto the same filtered grid."""
-    d = np.asarray(record.channels["lap_distance"], dtype=float)
+    (de-staircased) `lap_distance`. Strictly increasing distance is a
+    precondition of every two-lap comparison: a pit re-entry, an S/F wrap or
+    sensor jitter otherwise integrates a negative ds or interpolates backwards.
+    Returned as indices so other channels can be sliced onto the same filtered
+    grid."""
+    d = _interp_lap_distance(record)
     v = np.asarray(record.channels["speed"], dtype=float)
     n = min(d.size, v.size)
     d, v = d[:n], v[:n]
@@ -172,20 +217,68 @@ def _monotonic_idx(record: LapRecord) -> np.ndarray:
 def _monotonic_axis(record: LapRecord) -> tuple[np.ndarray, np.ndarray]:
     """(dist, speed) on the filtered grid — see `_monotonic_idx`."""
     idx = _monotonic_idx(record)
-    return (np.asarray(record.channels["lap_distance"], dtype=float)[idx],
+    return (_interp_lap_distance(record)[idx],
             np.asarray(record.channels["speed"], dtype=float)[idx])
 
 
-def lap_time_axis(record: LapRecord) -> tuple[np.ndarray, np.ndarray]:
-    """Cumulative elapsed seconds along `lap_distance`, integrating ds / (v/3.6).
+def _exact_time_axis(record: LapRecord):
+    """(dist, t) from the measured `elapsed_time`/`lap_start_et` channels, or None
+    when the record doesn't carry them or too few samples survive filtering.
 
-    Returns (dist, t) with `t[0] == 0.0`. There is no captured `time` channel —
-    this is the lap's time axis, and the alignment key stays lap distance.
-
-    ponytail: trapezoidal integration of the ~50 Hz ds/v samples, so it is exact
-    only to sampling resolution. Sampling `mElapsedTime` / `mLapStartET` would
-    give an exact axis (plan Open Question 5 / Task 10) — out of this slice.
+    t = elapsed_time - lap_start_et (smm.py's own definition; both are per-poll
+    fresh at ~50 Hz, rig-confirmed for #101). Samples carrying the NEXT lap's
+    lap_start_et show t dropping back toward zero at the seam -- the same shape
+    as a backwards lap_distance jitter -- so a sample only survives if it is the
+    running maximum on BOTH distance and time together.
     """
+    ch = record.channels
+    if "elapsed_time" not in ch or "lap_start_et" not in ch:
+        return None
+    d = _interp_lap_distance(record)
+    et = np.asarray(ch["elapsed_time"], dtype=float)
+    lset = np.asarray(ch["lap_start_et"], dtype=float)
+    n = min(d.size, et.size, lset.size)
+    d, t = d[:n], et[:n] - lset[:n]
+    i = np.where(np.isfinite(d) & np.isfinite(t))[0]
+    if i.size < 2:
+        return None
+    dd, tt = d[i], t[i]
+    keep = np.concatenate(([True],
+                           (dd[1:] > np.maximum.accumulate(dd)[:-1]) &
+                           (tt[1:] > np.maximum.accumulate(tt)[:-1])))
+    dd, tt = dd[keep], tt[keep]
+    if dd.size < 2:
+        return None
+    return dd, tt
+
+
+def _uses_exact_time_axis(record: LapRecord) -> bool:
+    """Whether `lap_time_axis` resolves this record to the measured elapsed_time
+    channel (True) or falls back to ds/v integration (False) -- same condition
+    `lap_time_axis` checks. Exposed so a caller presenting a noise floor to the
+    driver (`format_time_loss`) knows which precision applies."""
+    return _exact_time_axis(record) is not None
+
+
+def lap_time_axis(record: LapRecord) -> tuple[np.ndarray, np.ndarray]:
+    """Cumulative elapsed seconds along `lap_distance`.
+
+    Uses the measured `elapsed_time - lap_start_et` channel when the record
+    carries it (exact to capture resolution); falls back to trapezoidal
+    integration of ds / (v/3.6) on the de-staircased distance axis for older
+    captures that lack it (exact only to ~50 Hz sampling resolution — smm.py
+    measured a 0.206 s median / 1.212 s max net-delta error against the exact
+    axis, #101).
+
+    Returns (dist, t) with `t[0] == 0.0` on the ds/v path (integration starts at
+    zero by construction); on the exact path t[0] is whatever `elapsed_time -
+    lap_start_et` reads at the record's first sample (~0 in practice, since
+    capture starts at lap start). There is no captured `time` channel — this is
+    the lap's time axis, and the alignment key stays lap distance.
+    """
+    exact = _exact_time_axis(record)
+    if exact is not None:
+        return exact
     d, v = _monotonic_axis(record)
     if d.size < 2:
         return d, np.zeros_like(d)
@@ -230,11 +323,16 @@ def time_loss_buckets(record: LapRecord, reference: LapRecord, cmap: CornerMap):
 
     Gap buckets are labelled from the corners they sit between; no corner name,
     number or direction is invented. None when the laps aren't comparable.
+
+    Each bucket also carries `"exact"`: whether BOTH laps resolved to the
+    measured elapsed_time axis (see `lap_time_axis`) rather than the ds/v
+    fallback for either -- `format_time_loss` picks its noise floor from it.
     """
     aligned = align_time_axes(record, reference)
     if aligned is None:
         return None
     grid, delta = aligned
+    exact = _uses_exact_time_axis(record) and _uses_exact_time_axis(reference)
     lo0, hi0 = float(grid[0]), float(grid[-1])
 
     def t_at(d: float) -> float:
@@ -278,7 +376,7 @@ def time_loss_buckets(record: LapRecord, reference: LapRecord, cmap: CornerMap):
     for i, (a, b, no) in enumerate(tiled):
         if a > cursor + 1e-9:
             out.append({"label": gap_label(i), "kind": "straight",
-                        "delta": t_at(a) - t_at(cursor),
+                        "delta": t_at(a) - t_at(cursor), "exact": exact,
                         "start_dist": cursor, "end_dist": a})
         d = t_at(b) - t_at(a)
         if no in by_corner:
@@ -288,14 +386,14 @@ def time_loss_buckets(record: LapRecord, reference: LapRecord, cmap: CornerMap):
             by_corner[no]["start_dist"] = float(wrapped[no].start_dist)
             by_corner[no]["end_dist"] = float(wrapped[no].end_dist)
         else:
-            bucket = {"label": name[no], "kind": "corner", "delta": d,
+            bucket = {"label": name[no], "kind": "corner", "delta": d, "exact": exact,
                       "start_dist": a, "end_dist": b}
             by_corner[no] = bucket
             out.append(bucket)
         cursor = b
     if hi0 > cursor + 1e-9:
         out.append({"label": gap_label(len(tiled)), "kind": "straight",
-                    "delta": t_at(hi0) - t_at(cursor),
+                    "delta": t_at(hi0) - t_at(cursor), "exact": exact,
                     "start_dist": cursor, "end_dist": hi0})
     return out
 
@@ -338,7 +436,7 @@ def _tire_summary(record: LapRecord):
 def _metrics_for_corner(
     record: LapRecord, corner: Corner, length: float | None = None
 ) -> CornerMetrics:
-    dist = record.channels["lap_distance"]
+    dist = _interp_lap_distance(record)
     speed = record.channels["speed"]
     brake = record.channels["brake"]
     throttle = record.channels["throttle"]
