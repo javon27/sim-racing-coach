@@ -622,3 +622,39 @@ def test_coach_ws_errored_turn_still_closes_clean(tmp_path, monkeypatch):
     frames = _ask(client, {"question": "q"})
     assert frames[-1]["type"] == "error"
     assert "usage" not in frames[-1]          # nothing persisted, nothing to report
+
+
+def test_ws_coach_starts_a_new_chat_when_session_changes(tmp_path):
+    # #97: a chat must never span sessions. The Monza WRT bug -- a chat's last
+    # turn stamped session s1, continued (same chat_id) under session s2 -- must
+    # not append to the same chat: the sidecar mints a fresh chat id instead, the
+    # same way a chat_id-less request does.
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    fake = FakeModel(reply="second answer")
+    app = create_app(store, Coach(fake))
+    client = TestClient(app, base_url="http://127.0.0.1")
+
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "first question", "session_id": "s1"})
+        while True:
+            ev1 = ws.receive_json()
+            if ev1["type"] in ("done", "error"):
+                break
+    chat_id_1 = ev1["chat_id"]
+
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "second question", "session_id": "s2",
+                      "chat_id": chat_id_1})
+        while True:
+            ev2 = ws.receive_json()
+            if ev2["type"] in ("done", "error"):
+                break
+    chat_id_2 = ev2["chat_id"]
+
+    assert chat_id_2 != chat_id_1
+    # No history bleed: the second turn didn't see the first chat's Q&A.
+    assert [m["content"] for m in fake.last_messages] == ["second question"]
+    s1_chats = [c["chat_id"] for c in store.chats_for_session("s1")]
+    s2_chats = [c["chat_id"] for c in store.chats_for_session("s2")]
+    assert s1_chats == [chat_id_1]
+    assert s2_chats == [chat_id_2]

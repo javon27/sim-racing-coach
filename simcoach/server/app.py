@@ -1866,21 +1866,34 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             chat_id_in = req.get("chat_id")
             if chat_id_in:
                 try:
-                    for row in app.state.store.chat_messages(chat_id_in):
-                        if row.get("question"):
-                            history.append({"role": "user", "content": row["question"]})
-                        if row.get("answer"):
-                            # scrub_stored_answer, not the raw row: an older answer can
-                            # assert a fabricated grip reading (#72) or a race start the
-                            # coach could not know (#67) as established fact, and
-                            # resuming the chat would re-feed it to the model as its own
-                            # prior reasoning.
-                            history.append({"role": "assistant",
-                                            "content": scrub_stored_answer(row["answer"],
-                                                                           row["ts"],
-                                                                           row.get("track"))})
+                    messages = app.state.store.chat_messages(chat_id_in)
                 except Exception:
-                    history = []
+                    messages = []
+                last_session = messages[-1]["session_id"] if messages else None
+                if last_session and eff_session_id and last_session != eff_session_id:
+                    # This chat's last turn belongs to a different race session --
+                    # continuing it here would let one chat span sessions (#97, the
+                    # Monza WRT bug). Start a fresh chat instead, same as a request
+                    # that sent no chat_id at all -- history stays empty, and
+                    # save_chat below persists under the new id.
+                    chat_id_in = app.state.store.create_chat()
+                else:
+                    try:
+                        for row in messages:
+                            if row.get("question"):
+                                history.append({"role": "user", "content": row["question"]})
+                            if row.get("answer"):
+                                # scrub_stored_answer, not the raw row: an older answer can
+                                # assert a fabricated grip reading (#72) or a race start the
+                                # coach could not know (#67) as established fact, and
+                                # resuming the chat would re-feed it to the model as its own
+                                # prior reasoning.
+                                history.append({"role": "assistant",
+                                                "content": scrub_stored_answer(row["answer"],
+                                                                               row["ts"],
+                                                                               row.get("track"))})
+                    except Exception:
+                        history = []
 
             text = ""
             # What this turn billed. One usage event arrives per model call, so a
@@ -1915,7 +1928,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             # pollute history with an empty answer.
             if terminal["type"] == "done" or text:
                 try:
-                    chat_id = req.get("chat_id") or app.state.store.create_chat()
+                    chat_id = chat_id_in or app.state.store.create_chat()
                     app.state.store.save_chat(chat_id, ctx.session_id, ctx.track, ctx.car, ctx.lap_id,
                                               question, text, ctx.tool_calls,
                                               usage=turn_usage.as_dict(), model=used_model)
