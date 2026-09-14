@@ -1410,9 +1410,12 @@ class LapStore:
         _linked_result_session) -- the row is keyed by the XML stem, so a live session
         has no row of its own. None while a race is still being driven: its log is not
         written yet, and the newest one on disk belongs to an earlier race."""
+        # phase = 'race' OR NULL: a practice/qualifying result row must not resolve
+        # (issue #67 residual). NULL is grandfathered for rows migrated from a
+        # pre-v15 db that never had a phase column -- a re-ingest backfills it.
         cols = ("SELECT position, class_position, finish_status, incidents, penalties, "
                 "grid_position, class_grid_position, track, car, ts, mode "
-                "FROM race_sessions WHERE session_id = ?")
+                "FROM race_sessions WHERE session_id = ? AND (phase = 'race' OR phase IS NULL)")
         with self._lock:
             row = self.conn.execute(cols, (session_id,)).fetchone()
             if row is None:

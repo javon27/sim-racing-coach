@@ -841,6 +841,18 @@ def test_race_session_none_when_absent(tmp_path):
     assert s.race_session("nope") is None
 
 
+def test_race_session_exact_id_lookup_ignores_non_race_phase(tmp_path):
+    """A practice/qualifying result session looked up by its own result-log id must not
+    report a race finish (issue #67 residual) -- only a phase='race' row resolves."""
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    s.save_result_session(_fake_result_session(session_type="practice"), session_id="practice-1")
+    s.save_result_session(_fake_result_session(session_type="race"), session_id="race-1")
+
+    assert s.race_session("practice-1") is None
+    assert s.race_session("race-1") is not None
+
+
 # --- the 2026-09-10 Silverstone race (issues #67/#68) --------------------------
 # Real measured values. The live times are the sim's full floats as capture stored
 # them; the result times are the same laps as the XML lists them, rounded to 4
