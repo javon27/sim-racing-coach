@@ -74,8 +74,6 @@ _MIN_OVERLAP_FRAC = 0.5
 # throttle floor raised; a rig check on a known coasting corner settles them.
 _COAST_THROTTLE = 0.05
 _COAST_BRAKE = 0.05
-# Below this, reporting coasting is noise on a clean corner.
-_COAST_REPORT_S = 0.05
 # How far past a corner window to look for the throttle pickup that ends the dead
 # zone — throttle often comes up after the window closes. Mirrors the 250 m
 # approach look-back `brake_point` already uses.
@@ -234,14 +232,16 @@ def time_loss_buckets(record: LapRecord, reference: LapRecord, cmap: CornerMap):
     # Corner windows clipped onto the compared range. A window that wraps the S/F
     # seam (start_dist > end_dist) contributes two distance runs; they are summed
     # back into one bucket below so the corner is reported once.
+    # Keyed by index into cmap.corners, not c.number: nothing on load makes
+    # numbers unique (8A/8B may share 8), and a collision would fold two corners.
     runs: list[tuple[float, float, int]] = []
-    for c in cmap.corners:
+    for no, c in enumerate(cmap.corners):
         pairs = ([(c.start_dist, c.end_dist)] if c.start_dist <= c.end_dist
                  else [(lo0, c.end_dist), (c.start_dist, hi0)])
         for a, b in pairs:
             a, b = max(float(a), lo0), min(float(b), hi0)
             if b > a:
-                runs.append((a, b, c.number))
+                runs.append((a, b, no))
     runs.sort()
 
     # Overlapping windows (a malformed map) would double-count: clip to the tiling.
@@ -252,9 +252,9 @@ def time_loss_buckets(record: LapRecord, reference: LapRecord, cmap: CornerMap):
         if b > a:
             tiled.append((a, b, no))
 
-    tag = {c.number: f"T{c.label or c.number}" for c in cmap.corners}
-    name = {c.number: f"T{c.label or c.number} {c.name}".strip() for c in cmap.corners}
-    wrapped = {c.number: c for c in cmap.corners if c.start_dist > c.end_dist}
+    tag = {i: f"T{c.label or c.number}" for i, c in enumerate(cmap.corners)}
+    name = {i: f"T{c.label or c.number} {c.name}".strip() for i, c in enumerate(cmap.corners)}
+    wrapped = {i: c for i, c in enumerate(cmap.corners) if c.start_dist > c.end_dist}
 
     def gap_label(i: int) -> str:
         before = f"{tag[tiled[i - 1][2]]} exit" if i > 0 else "lap start"
