@@ -368,6 +368,24 @@ def test_build_lap_record_stamps_phase_and_session():
     assert record.phase == "race" and record.session_id == "s1"
 
 
+def test_build_lap_record_carries_lap_no_and_pit():
+    record = build_lap_record(
+        "lmu", "track", "car", lap_time=92.5, invalidated=0, timestamp=0.0,
+        channels=_channels(), lap_no=8, pit=True,
+    )
+    assert record.lap_no == 8
+    assert record.pit is True
+
+
+def test_build_lap_record_defaults_lap_no_and_pit_to_none():
+    record = build_lap_record(
+        "lmu", "track", "car", lap_time=92.5, invalidated=0, timestamp=0.0,
+        channels=_channels(),
+    )
+    assert record.lap_no is None
+    assert record.pit is None
+
+
 def test_laps_commits_only_completed_freshly_timed_laps():
     """Unit: LmuSource._poll_once() against a scripted fake buffer, driven
     synchronously -- write a sample, then poll once, no threads and no sleep-based
@@ -443,6 +461,61 @@ def test_laps_commits_only_completed_freshly_timed_laps():
     # `self._channels = {}` in _poll_once no-opped): a leaked out-lap buffer would
     # merge into this one and still happen to satisfy the range check above.
     assert len(d) == 41
+
+
+def test_laps_commits_game_lap_no_and_pit_flag_from_scoring():
+    """Unit: _poll_once() records the SCORING struct's mTotalLaps (the game's own
+    lap counter, read at the same commit as mLastLapTime) as LapRecord.lap_no --
+    issue #77's rig log: mTotalLaps at the wrap equals the result XML `num` of the
+    lap that just finished. LapRecord.pit is True if mInPits was ever true at any
+    polled instant during the lap, else False -- needed by #69's map-rebuild gate
+    to exclude pit laps by fact rather than by lateral-spread shape."""
+    import mmap
+    from simcoach.lmu import smm
+    from simcoach.lmu.rf2structs import rF2Scoring, rF2Telemetry
+
+    tag = uuid.uuid4().hex
+    tn, sn = f"$simcoach_test_telem_{tag}$", f"$simcoach_test_scoring_{tag}$"
+    tmap = mmap.mmap(-1, C.sizeof(rF2Telemetry), tagname=tn, access=mmap.ACCESS_WRITE)
+    smap = mmap.mmap(-1, C.sizeof(rF2Scoring), tagname=sn, access=mmap.ACCESS_WRITE)
+
+    def write(dist, last_lap, total_laps=0, in_pits=False, spd=180.0):
+        t = rF2Telemetry(); t.mVersionUpdateBegin = t.mVersionUpdateEnd = 1; t.mNumVehicles = 1
+        v = t.mVehicles[0]; v.mID = 1; v.mLocalVel.z = -spd / 3.6
+        v.mTrackName = b"Test Circuit"; v.mVehicleName = b"Car"
+        s = rF2Scoring(); s.mScoringInfo.mVersionUpdateBegin = s.mScoringInfo.mVersionUpdateEnd = 1
+        s.mScoringInfo.mNumVehicles = 1; s.mScoringInfo.mSession = 2
+        pv = s.mVehicles[0]; pv.mID = 1; pv.mIsPlayer = True; pv.mLapDist = dist
+        pv.mLastLapTime = last_lap; pv.mTotalLaps = total_laps; pv.mInPits = in_pits
+        tmap.seek(0); tmap.write(bytes(t)); smap.seek(0); smap.write(bytes(s))
+
+    src = smm.LmuSource(poll_hz=60, now_fn=lambda: 1_700_000_000.0)
+    records = []
+
+    def step():
+        record = src._poll_once(tn, sn)
+        if record is not None:
+            records.append(record)
+
+    def ramp(d0, d1, last, total_laps, in_pits=False, n=10):
+        for i in range(n):
+            write(d0 + (d1 - d0) * i / n, last, total_laps, in_pits)
+            step()
+
+    write(5.0, -1.0, total_laps=1); step()        # start of an out-lap
+    ramp(5, 4000, -1.0, 1)                         # out-lap, never in pits
+    write(3.0, -1.0, 2); step()                    # cross S/F ending out-lap: untimed -> DROP
+    ramp(3, 4000, -1.0, 2)                         # lap A: the flying lap, never in pits
+    write(2.0, 92.5, 2); step()                    # cross S/F, fresh time -> COMMIT lap A
+    ramp(2, 1500, 92.5, 3, in_pits=True)           # lap B: dips into the pits partway...
+    ramp(1500, 4000, 92.5, 3, in_pits=False)       # ...then back out for the rest of it
+    write(2.0, 88.0, 3); step()                    # cross S/F, fresh time -> COMMIT lap B
+
+    tmap.close(); smap.close()
+
+    assert len(records) == 2
+    assert records[0].lap_no == 2 and records[0].pit is False
+    assert records[1].lap_no == 3 and records[1].pit is True
 
 
 def test_sector_boundary_dists_forward_transitions_only():

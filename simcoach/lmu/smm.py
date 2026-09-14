@@ -472,6 +472,8 @@ def build_lap_record(
     sectors: list[float] | None = None,
     position: int | None = None,
     sector_bounds: list[float] | None = None,
+    lap_no: int | None = None,
+    pit: bool | None = None,
 ) -> LapRecord | None:
     """Pure decision: turn a completed lap's raw fields into a LapRecord, or
     None if the lap shouldn't be stored.
@@ -496,6 +498,8 @@ def build_lap_record(
         sectors=sectors,
         position=position,
         sector_bounds=sector_bounds,
+        lap_no=lap_no,
+        pit=pit,
     )
 
 
@@ -628,6 +632,9 @@ class LmuSource:
         # forward changes become the sector boundaries at commit (see
         # sector_boundary_dists / sector_bounds_from).
         self._sector_seq: list[int] = []
+        # True if mInPits was ever true at any polled instant during the in-progress
+        # lap (issue #77/#69) -- reset alongside _channels/_sector_seq at each commit.
+        self._pit_during_lap: bool = False
 
     def _poll_once(self, telemetry_name: str, scoring_name: str):
         """One read-and-decide step: read the current telemetry/scoring snapshot,
@@ -668,16 +675,24 @@ class LmuSource:
                 sector_bounds = sector_bounds_from(
                     sector_boundary_dists(lap_dists, self._sector_seq), lap_len
                 )
+                # The game's own lap number: scoring mTotalLaps, read from the SAME
+                # frame as mLastLapTime above, equals the result XML `num` of the lap
+                # that just finished (issue #77 rig log). [RIG] unverified whether
+                # mTotalLaps resets across a session phase change (practice ->
+                # qualifying) -- the logged run never left practice.
+                lap_no = int(player.mTotalLaps)
                 record = build_lap_record(
                     sim="lmu", track=track, car=car, lap_time=lap_time,
                     invalidated=vt.mLapInvalidated, timestamp=self._now(),
                     channels=self._channels, phase=phase, session_id=session_id,
                     sectors=sectors, position=position, sector_bounds=sector_bounds,
+                    lap_no=lap_no, pit=self._pit_during_lap,
                 )
                 if record is not None:
                     self._committed_time = lap_time
             self._channels = {}  # start the next lap fresh (committed or discarded)
             self._sector_seq = []
+            self._pit_during_lap = False
 
         sample = sample_from_telem(vt, dist)
         # Track-width usage lives on SCORING, not telemetry: path_lateral is the
@@ -695,6 +710,8 @@ class LmuSource:
         self._prev_dist = dist
         # mCurrentSector lives on the TELEM struct (vt), not scoring.
         self._sector_seq.append(int(vt.mCurrentSector))  # parallel to lap_distance
+        if player.mInPits:
+            self._pit_during_lap = True
 
         return record
 
