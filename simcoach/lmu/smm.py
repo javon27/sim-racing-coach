@@ -226,6 +226,11 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
         as-is -> float. Ordinals, not physical values. MEANING UNVERIFIED.
       rear_brake_bias: mRearBrakeBias, raw, no conversion. SCALE UNVERIFIED
         (fraction vs percent).
+      All of the above (the whole electronics block, rear_brake_bias included) read
+      NaN until any aid *Max has populated (rig-confirmed: 0-0 at frame 1, filling
+      in once on track) -- #33. A value-based range check cannot catch this on its
+      own: rear_brake_bias's pre-population 0.5150 is a plausible bias, not an
+      out-of-range number.
       per-wheel [fl,fr,rl,rr]: wheel_rot (mRotation, rad/s -- lockup ~ 0 while
         moving), brake_temp, brake_press (mBrakePressure), tire_press
         (mPressure, kPa), tire_wear (mWear, 0..1). gear/rpm/abs_active/tc_active
@@ -238,6 +243,20 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
         or temps (Kelvin) which need conversion.
     """
     wheels = telem.mWheel
+    # #33: at frame 1, in the garage, this whole block reads pre-population state --
+    # aid indices come back "0 of 0-0", and mRearBrakeBias reads a plausible-looking
+    # 0.5150 that a value-based range check cannot catch. Gate on any *Max having
+    # populated (rig-confirmed: they fill in once on track) before trusting ANY
+    # field here, mRearBrakeBias included even though it has no *Max of its own.
+    electronics_ready = any(m > 0 for m in (
+        telem.mABSMax, telem.mTCMax, telem.mTCSlipMax, telem.mTCCutMax,
+        telem.mMotorMapMax, telem.mMigrationMax,
+        telem.mFrontAntiSwayMax, telem.mRearAntiSwayMax,
+    ))
+
+    def _electronic(value):
+        return float(value) if electronics_ready else math.nan
+
     sample = {
         "speed": telem.mLocalVel.magnitude() * 3.6,
         "throttle": telem.mUnfilteredThrottle,
@@ -282,29 +301,29 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
         # hedges the garage value in the prompt), the garage value, or something
         # else is unknown; the first rig lap after this lands settles it.
         # Captured now regardless: a lap driven without them can never get them back.
-        "abs_map": float(telem.mABS),
-        "abs_map_max": float(telem.mABSMax),
-        "tc_map": float(telem.mTC),
-        "tc_map_max": float(telem.mTCMax),
-        "tc_slip_map": float(telem.mTCSlip),
-        "tc_slip_map_max": float(telem.mTCSlipMax),
-        "tc_cut_map": float(telem.mTCCut),
-        "tc_cut_map_max": float(telem.mTCCutMax),
-        "motor_map": float(telem.mMotorMap),
-        "motor_map_max": float(telem.mMotorMapMax),
-        "migration": float(telem.mMigration),
-        "migration_max": float(telem.mMigrationMax),
-        "front_antisway": float(telem.mFrontAntiSway),
-        "front_antisway_max": float(telem.mFrontAntiSwayMax),
-        "rear_antisway": float(telem.mRearAntiSway),
-        "rear_antisway_max": float(telem.mRearAntiSwayMax),
+        "abs_map": _electronic(telem.mABS),
+        "abs_map_max": _electronic(telem.mABSMax),
+        "tc_map": _electronic(telem.mTC),
+        "tc_map_max": _electronic(telem.mTCMax),
+        "tc_slip_map": _electronic(telem.mTCSlip),
+        "tc_slip_map_max": _electronic(telem.mTCSlipMax),
+        "tc_cut_map": _electronic(telem.mTCCut),
+        "tc_cut_map_max": _electronic(telem.mTCCutMax),
+        "motor_map": _electronic(telem.mMotorMap),
+        "motor_map_max": _electronic(telem.mMotorMapMax),
+        "migration": _electronic(telem.mMigration),
+        "migration_max": _electronic(telem.mMigrationMax),
+        "front_antisway": _electronic(telem.mFrontAntiSway),
+        "front_antisway_max": _electronic(telem.mFrontAntiSwayMax),
+        "rear_antisway": _electronic(telem.mRearAntiSway),
+        "rear_antisway_max": _electronic(telem.mRearAntiSwayMax),
         # Brake bias, the other cockpit dial the garage payload can disagree with
         # (VM_BRAKE_BALANCE, rendered front:rear e.g. "51.5:48.5"). Unlike the
         # uint8 indices above this is a plain double in the offset-anchored region
         # with unambiguous rF2 semantics, so it is the field most likely to settle
         # the brake-balance half of #33. Stored raw, no conversion: the scale
         # (fraction ~0.485 vs percent ~48.5) is INFERRED, NOT MEASURED.
-        "rear_brake_bias": telem.mRearBrakeBias,
+        "rear_brake_bias": _electronic(telem.mRearBrakeBias),
         "fuel": telem.mFuel,
         "virtual_energy": telem.mVirtualEnergy,
         "soc": telem.mSoC,

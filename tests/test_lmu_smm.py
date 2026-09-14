@@ -6,6 +6,7 @@ that sample_from_telem() maps fields correctly -- NOT that the offsets match
 a real LMU process. Live offset/sign validation is a separate [LUNCH] task.
 """
 import ctypes as C
+import math
 import uuid
 
 import pytest
@@ -217,9 +218,40 @@ def test_sample_from_telem_maps_rear_brake_bias():
     """mRearBrakeBias is a plain double in the offset-anchored region with
     unambiguous rF2 semantics, unlike the uint8 map indices above -- it is what
     would settle the brake-balance half of #33. Stored raw: the scale (fraction
-    vs percent) is inferred, not measured, so no conversion is applied here."""
-    t = roundtrip(make_telem(mRearBrakeBias=0.485))
+    vs percent) is inferred, not measured, so no conversion is applied here.
+    A populated aid *Max (mABSMax) is included so the #33 pre-population gate
+    below does not mask this value -- see test_electronics_block_gated_on_max."""
+    t = roundtrip(make_telem(mRearBrakeBias=0.485, mABSMax=10))
     assert sample_from_telem(t, lap_dist=0.0)["rear_brake_bias"] == pytest.approx(0.485)
+
+
+def test_electronics_block_is_nan_before_any_max_populates():
+    """Issue #33: at frame 1, in the garage, LMU's aid *Max fields (and everything
+    in the same block, including mRearBrakeBias) hold pre-population state --
+    '0 of 0-0' for the aid indices, but a perfectly plausible 0.5150 for brake
+    bias, which a value-based range check cannot catch. Gate on any *Max > 0
+    instead: until one populates, every field in the block must read NaN, not
+    a plausible-looking number."""
+    t = roundtrip(make_telem(mRearBrakeBias=0.5150))   # all *Max default to 0
+    s = sample_from_telem(t, lap_dist=0.0)
+    for key in ("abs_map", "abs_map_max", "tc_map", "tc_map_max",
+                "tc_slip_map", "tc_slip_map_max", "tc_cut_map", "tc_cut_map_max",
+                "motor_map", "motor_map_max", "migration", "migration_max",
+                "front_antisway", "front_antisway_max",
+                "rear_antisway", "rear_antisway_max", "rear_brake_bias"):
+        assert math.isnan(s[key]), key
+
+
+def test_electronics_block_reports_values_once_any_max_populates():
+    """The gate keys off ANY *Max being populated -- e.g. mMigrationMax stays 0
+    all lap (brake migration never touched), but the block is trusted anyway
+    once a sibling *Max (mABSMax) has populated."""
+    t = roundtrip(make_telem(mABS=3, mABSMax=10, mMigration=0, mMigrationMax=0,
+                             mRearBrakeBias=0.4950))
+    s = sample_from_telem(t, lap_dist=0.0)
+    assert (s["abs_map"], s["abs_map_max"]) == (3.0, 10.0)
+    assert (s["migration"], s["migration_max"]) == (0.0, 0.0)
+    assert s["rear_brake_bias"] == pytest.approx(0.4950)
 
 
 def test_lap_time_channels_survive_a_store_round_trip(tmp_path):
