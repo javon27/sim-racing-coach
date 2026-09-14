@@ -796,7 +796,8 @@ def test_save_track_map_bakes_geometry_and_digest_uses_it(tmp_path):
     d = c.post(f"/tracks/{slug}/draft-notes", json={"track": slug})
     assert d.status_code == 200
     prompt = fake.last_messages[0]["content"]            # the digest sent to the model
-    assert "radius ~" in prompt and "width 12m" in prompt
+    assert "banked" in prompt or "off-camber" in prompt   # banking still reaches the digest
+    assert "radius ~" not in prompt and "width 12m" not in prompt   # #99: stale bakes cut
 
 
 def test_put_notes_rejects_unbounded_input(tmp_path):

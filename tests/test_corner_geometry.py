@@ -56,7 +56,7 @@ def test_unknown_width_and_bank_stations_emit_no_metric():
     json.dumps(g, allow_nan=False)                   # bakeable
     clause = geometry_clause(g["1"], "left")
     assert "width" not in clause and "banked" not in clause and "camber" not in clause
-    assert "radius ~50m" in clause                   # the measured metric still renders
+    assert clause == ""                              # radius/width never render (#99)
 
 
 def test_downhill_is_negative_delta():
@@ -87,10 +87,10 @@ def test_wraparound_window():
 def test_geometry_clause_renders_present_metrics_only():
     c = geometry_clause(
         {"radius_m": 35.0, "elev_delta_m": -6.0, "width_m": 12.0, "banking_deg": 2.0}, "right")
-    assert "radius ~35m" in c
     assert "downhill 6m" in c
-    assert "width 12m" in c
     assert "banked" in c
+    # radius/width are stale in the shipped bakes (#73/#76/#83) and never render (#99)
+    assert "radius" not in c and "width" not in c
     assert geometry_clause({}, "left") == ""         # nothing supplied -> empty
     up = geometry_clause({"elev_delta_m": 4.0, "banking_deg": 0.4}, "left")
     assert "uphill 4m" in up                          # sign kept
@@ -121,7 +121,7 @@ def test_banking_sign_plus_direction_decides_banked_vs_off_camber():
 def test_banking_omitted_when_direction_unknown():
     """Without the corner's direction the slope cannot be called banked or
     off-camber, and guessing is the #35 defect. Say nothing instead."""
-    assert geometry_clause({"radius_m": 35.0, "banking_deg": 4.0}, None) == "radius ~35m"
+    assert geometry_clause({"elev_delta_m": 3.0, "banking_deg": 4.0}, None) == "uphill 3m"
 
 
 def test_la_sarthe_t2_reads_off_camber():

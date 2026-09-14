@@ -578,15 +578,17 @@ def test_get_corner_output_includes_authored_note(tmp_path, synthetic_lap):
 
 
 def test_get_corner_output_includes_baked_geometry(tmp_path, synthetic_lap):
-    # Issue #35: radius/elevation/banking baked into the map must reach the
-    # coach through get_corner, not be left stranded at map-build time.
+    # Issue #35: elevation/banking baked into the map must reach the coach
+    # through get_corner, not be left stranded at map-build time. radius_m is
+    # present but must NOT reach the coach (#99: the shipped bakes are stale).
     ctx, _, _ = _ctx(tmp_path, synthetic_lap)
     ctx.cmap.geometry = {"1": {"radius_m": 66.0, "elev_delta_m": -11.0, "banking_deg": 2.0}}
     out = ctx.get_corner("1")
     # T1 is a LEFT hairpin and +2.0 favours right (9756b65), so this reads
     # off-camber -- the corner's computed direction must reach the clause (#35).
     assert ("Geometry (baked from the track map): "
-            "radius ~66m, downhill 11m, 2\N{DEGREE SIGN} off-camber") in out
+            "downhill 11m, 2\N{DEGREE SIGN} off-camber") in out
+    assert "radius" not in out
     # same magnitude, sign flipped to favour the left-hander -> banked
     ctx.cmap.geometry = {"1": {"radius_m": 66.0, "banking_deg": -2.0}}
     assert "2\N{DEGREE SIGN} banked" in ctx.get_corner("1")

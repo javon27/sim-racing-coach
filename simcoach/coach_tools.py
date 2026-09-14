@@ -92,9 +92,9 @@ TOOLS = [
     {
         "name": "get_corner",
         "description": "The telemetry facts for ONE corner, by number (e.g. '10') or name "
-                       "(e.g. 'Village'), plus its baked geometry (radius/width/banking/"
-                       "elevation change) and authored note when the map has them. Use this "
-                       "for shape/elevation/radius/banking questions, not just lap facts — "
+                       "(e.g. 'Village'), plus its baked elevation change / banking and "
+                       "authored note when the map has them. Use this "
+                       "for elevation/banking questions, not just lap facts — "
                        "never invent geometry from general knowledge, and use it instead of "
                        "pulling the whole lap. Pass `which` to target a specific lap — do "
                        "this whenever the conversation is about a particular lap (e.g. "
@@ -712,7 +712,7 @@ class CoachContext:
         return None
 
     def _corner_geometry_clause(self, label, direction) -> str:
-        """Baked geometry (radius/width/banking/elevation) for one corner label, as
+        """Baked elevation/banking for one corner label, as
         an owned-data clause, or '' if the map carries none for this corner.
 
         `direction` is the corner's computed turn direction; banking reads as

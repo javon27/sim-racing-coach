@@ -338,8 +338,8 @@ def test_a_seeded_writer_strips_unusable_geometry_and_writes_sectors_as_numbers(
     data["corners"][1]["width_m"] = -1e9
     data["sectors"] = ["30", "70"]
     _disk(tracks_dir).write_text(json.dumps(data))
-    with pytest.raises(ValueError):
-        geometry_clause(data["corners"][0], "right")          # the crash is real
+    with pytest.raises((TypeError, ValueError)):
+        geometry_clause(data["corners"][0], "right")          # the crash is real (banking "3")
 
     assert client.post(f"/tracks/{SLUG}/rotation", json={"degrees": 90}).status_code == 200
 

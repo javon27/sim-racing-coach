@@ -692,8 +692,8 @@ def corner_geometry(path, dist, corners, *, width=None, bank=None, elev=None):
 
 
 def geometry_clause(metrics: dict, direction: str | None) -> str:
-    """Render baked per-corner geometry as a digest clause, omitting absent
-    metrics. Elevation/banking below a threshold are dropped as noise.
+    """Render baked per-corner elevation/banking as a digest clause, omitting
+    absent metrics; values below a threshold are dropped as noise.
 
     `direction` is the corner's OWNED turn direction ("left"/"right", computed
     from telemetry geometry -- never inferred). It is required because a
@@ -706,16 +706,14 @@ def geometry_clause(metrics: dict, direction: str | None) -> str:
     wrong place. Pass None only when the direction genuinely isn't known; the
     banking term is then omitted rather than guessed.
     """
+    # radius_m / width_m are deliberately NOT rendered (#99): the baked radius
+    # sits on the window edge for half the shipped corners (#73/#76) and the
+    # width is inflated 5-7 m through chicanes (#83), so the coach was stating
+    # wrong numbers as owned fact. They stay in the files for the UI ribbon.
     parts = []
-    r = metrics.get("radius_m")
-    if r is not None:
-        parts.append(f"radius ~{r:.0f}m")
     ed = metrics.get("elev_delta_m")
     if ed is not None and abs(ed) >= 1.0:
         parts.append(f"{'uphill' if ed > 0 else 'downhill'} {abs(ed):.0f}m")
-    w = metrics.get("width_m")
-    if w is not None:
-        parts.append(f"width {w:.0f}m")
     bk = metrics.get("banking_deg")
     if bk is not None and abs(bk) >= 1.0 and direction in ("left", "right"):
         favours = "left" if bk < 0 else "right"

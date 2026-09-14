@@ -588,7 +588,7 @@ def test_installed_read_takes_geometry_from_shipped_and_annotations_from_the_cop
     assert merged["notes"]["corners"]["13"] == T13_NOTE
     # What the coach is told, through the CornerMap the sidecar's resolver builds.
     clause = geometry_clause(CornerMap.from_data(merged).geometry["13"], by["13"]["direction"])
-    assert clause.startswith("radius ~322m, uphill 9m"), clause
+    assert clause.startswith("uphill 9m"), clause     # radius no longer rendered (#99)
 
 
 @pytest.mark.parametrize("save", ["editor", "rotation"])
