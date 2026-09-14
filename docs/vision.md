@@ -41,17 +41,48 @@ recommendation. During: hands-free race-engineer questions (Pit Wall). After:
 the arc and struggles are already known; deep-dive to plan improvements. The
 driver profile carries the learnings into the next session. Rinse and repeat.
 
-## Approved build order (post-v1)
+## Course-correct (2026-09-14, issue #99)
 
-1. **Voice loop** — a thin speech-in → core → speech-out path over the existing
+An outside review of the backlog found the pattern: **the architecture is right,
+but cycles were going into a track-map curation pipeline that never improves a
+lap time, while the deterministic analysis — the real edge over a generic LLM
+notebook — used a fraction of the telemetry captured.** Adopted, with these
+decisions:
+
+- **The coach only states what is measured.** Baked corner radius/width were
+  stale and reached the model as fact; they no longer render (#99). Elevation
+  and banking stay (re-baked, rig-verified). Anything the coach can't trust is
+  cut from the prompt, not "fixed later".
+- **Code extracts, the model narrates.** Deltas, rankings, thresholds and
+  "early/late vs best" are computed; the model is handed conclusions, not asked
+  to infer them. `get_time_loss` (ranked delta-t by corner/straight) is the
+  template for every remaining #38 tool.
+- **Result-log ingest stays.** It is ~97% of stored laps plus race results and
+  car names. The problems were seam bugs (dedupe, identity), not the
+  architecture; live capture wins on conflict.
+- **Parked**, labelled `deprioritized` in Issues: map-geometry curation, the
+  editor's save-path guardrails, promote/import, sector auto-generation,
+  replay overlay, 3D viewer, live corner callouts. They come back only when a
+  coaching feature needs them.
+- **Token budget:** one subagent at a time, cheaper models for implementation,
+  review done in-session.
+
+## Approved build order (post-v1, revised 2026-09-14)
+
+1. **Tighten** — wrong facts reaching the coach. #67 (race lookup by phase),
+   #33 (trust the electronics block only once populated), #77 (store the
+   game's lap number), #87 (chat-screen save flips a curated direction), #71
+   (v15-store residual). Plus #59 (delete the terminal REPL).
+2. **Deepen** — the rest of #38, cheapest first: P1.5 consistency → P1.3
+   handling → P1.4 traction circle → P1.6 tire trend → P1.7 gear/lockup; then
+   Phase 0 setup-channel capture → Phase 2 setup diagnostics.
+3. **Voice loop** — a thin speech-in → core → speech-out path over the existing
    agentic coach. Unblocks the VR reality; highest daily-use leverage.
-2. **Pit Wall persona + live-race tools** — standings/gaps, fuel/energy, pit
+4. **Pit Wall persona + live-race tools** — standings/gaps, fuel/energy, pit
    window, relative pace (most data already reachable via `simcoach/lmu/rest.py`
    plus the per-lap position capture already in place).
-3. **Longitudinal driver profile** — once there's a body of sessions worth
-   distilling; a stored, evolving profile injected into every conversation and
-   updated after deep-dives.
-4. **Deep-dive Analyst mode** — leans on the profile.
+5. **Deep-dive Analyst mode** — leans on the longitudinal profile, which
+   shipped 2026-09-08 (summary injection, driver memories, session setups).
 
 Later/optional: proactive *push* spotter alerts ("box this lap, fuel's short"),
 distinct from the agentic *pull* model above.
