@@ -53,9 +53,9 @@ is using) and exercise `/voice/status` and `/voice/transcribe`:
 pip install -e ".[voice]"
 pyinstaller packaging/simcoach-sidecar.spec --distpath dist-sidecar --workpath build-sidecar
 SIMCOACH_DATA_DIR=/path/to/scratch-data dist-sidecar/simcoach-sidecar.exe &
-# copy a downloaded model into <SIMCOACH_DATA_DIR>/telemetry/whisper/small/
-# (model_dir() keys off store.data_dir, which is the telemetry dir, not the
-# app-data root) then:
+# copy a downloaded model into <SIMCOACH_DATA_DIR>/whisper/small/ (the app-data
+# root, next to the config; an older install under telemetry/whisper is moved
+# there automatically on startup) then:
 curl http://127.0.0.1:8765/voice/status        # installed: true
 curl -X POST --data-binary @clip.wav http://127.0.0.1:8765/voice/transcribe
 ```
