@@ -12,7 +12,13 @@ from __future__ import annotations
 import re
 import time
 
-from simcoach.analysis import analyze_lap, geometry_clause, stint_consistency, time_loss_buckets
+from simcoach.analysis import (
+    analyze_lap,
+    geometry_clause,
+    grip_envelope,
+    stint_consistency,
+    time_loss_buckets,
+)
 from simcoach.coach import _setup_lines
 from simcoach.format import (
     find_corner,
@@ -452,6 +458,9 @@ class CoachContext:
         self._analysis_cache: dict = {}
         self._lap_numbering_cache: tuple[dict, dict] | None = None
         self._current_lap_cache: tuple | None = None
+        # #38 P1.4: grip envelope, computed once per context (see `_grip_envelope`).
+        self._envelope: float | None = None
+        self._envelope_computed = False
 
     # --- helpers ---------------------------------------------------------
     def _current_lap(self) -> tuple:
@@ -525,6 +534,29 @@ class CoachContext:
         self._lap_numbering_cache = (label_by_id, id_by_ref)
         return self._lap_numbering_cache
 
+    def _grip_envelope(self, reference):
+        """The grip envelope (g), computed ONCE per context (cached on
+        `self._envelope`) from this track/car's recent stored laps plus
+        `reference` -- later calls reuse the same cached value regardless of
+        which record/reference triggered the first one, so every tool call
+        this turn reads the same envelope."""
+        if self._envelope_computed:
+            return self._envelope
+        self._envelope_computed = True
+        records = []
+        if self.track and self.car:
+            for row in self.store.recent_laps(self.track, self.car, limit=10):
+                try:
+                    rec = self.store.load(row["lap_id"])
+                except Exception:
+                    rec = None   # a result-log row with no telemetry -- nothing to read
+                if rec is not None:
+                    records.append(rec)
+        if reference is not None:
+            records.append(reference)
+        self._envelope = grip_envelope(records) if records else None
+        return self._envelope
+
     def _analysis_for(self, record, lap_id):
         if self.cmap is None:
             return None
@@ -538,7 +570,9 @@ class CoachContext:
                                           session_id=self.session_id)
             if ref is None:
                 ref = self.store.best_lap(record.track, record.car, exclude_lap_id=lap_id)
-            self._analysis_cache[key] = analyze_lap(record, self.cmap, reference=ref)
+            envelope = self._grip_envelope(ref)
+            self._analysis_cache[key] = analyze_lap(record, self.cmap, reference=ref,
+                                                     envelope=envelope)
         return self._analysis_cache[key]
 
     def _latest_analysis(self):

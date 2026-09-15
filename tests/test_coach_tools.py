@@ -50,6 +50,47 @@ def test_get_lap_summary_and_tires(tmp_path, synthetic_lap):
     assert "Tire temps" in ctx.get_tire_report()
 
 
+def test_get_lap_summary_shows_grip_envelope(tmp_path, synthetic_lap):
+    # 3 stored laps give `grip_envelope` real samples to read (the fixture's
+    # own lat_g/long_g clear the load gate in both corners).
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    for _ in range(3):
+        store.save(synthetic_lap)
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    ctx = CoachContext(store, cmap=cmap, track=synthetic_lap.track, car=synthetic_lap.car,
+                       on_track=True)
+    summary = ctx.get_lap_summary("latest")
+    assert "Grip envelope" in summary
+    assert "% of it in the corners" in summary
+
+
+def test_get_lap_summary_envelope_computed_once_per_context(tmp_path, synthetic_lap, monkeypatch):
+    # Two DIFFERENT laps (distinct analysis-cache keys) in one context must still
+    # only trigger one `grip_envelope` call between them (issue #38 P1.4).
+    import simcoach.coach_tools as coach_tools_mod
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    lap_a = LapRecord(**{**synthetic_lap.__dict__, "session_id": None, "phase": None})
+    lap_b = LapRecord(**{**synthetic_lap.__dict__, "session_id": None, "phase": None,
+                         "lap_time": 91.0})
+    id_a = store.save(lap_a)
+    id_b = store.save(lap_b)
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    ctx = CoachContext(store, cmap=cmap, track=lap_a.track, car=lap_a.car, on_track=True)
+
+    calls = []
+    real = coach_tools_mod.grip_envelope
+
+    def spy(records):
+        calls.append(records)
+        return real(records)
+    monkeypatch.setattr(coach_tools_mod, "grip_envelope", spy)
+
+    ctx.get_lap_summary(which=str(id_a))
+    ctx.get_corner("1", which=str(id_b))
+    assert len(calls) == 1  # not re-fetched for the second, different lap this turn
+
+
 def test_get_wheel_report(tmp_path, synthetic_lap):
     ctx, _, _ = _ctx(tmp_path, synthetic_lap)
     rep = ctx.dispatch("get_wheel_report", {})
