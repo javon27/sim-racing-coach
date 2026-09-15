@@ -8,39 +8,55 @@ import type { Earcon, Recorder, Speaker, Transcriber } from "./voice";
 export class MicRecorder implements Recorder {
   #ctx: AudioContext | null = null;
   #stream: MediaStream | null = null;
+  #source: MediaStreamAudioSourceNode | null = null;
   #node: ScriptProcessorNode | null = null;
   #chunks: Float32Array[] = [];
 
-  async start(onFrame: (frame: Float32Array) => void): Promise<void> {
+  // Acquired once, lazily, and kept for the life of the page -- getUserMedia +
+  // AudioContext creation costs hundreds of ms, which used to run on every press.
+  async #ensureStream(): Promise<void> {
+    if (this.#stream && this.#ctx) return;
     this.#stream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
     });
     this.#ctx = new AudioContext({ sampleRate: 16000 });
-    const source = this.#ctx.createMediaStreamSource(this.#stream);
+    this.#source = this.#ctx.createMediaStreamSource(this.#stream);
+  }
+
+  async start(onFrame: (frame: Float32Array) => void): Promise<void> {
+    await this.#ensureStream();
+    const ctx = this.#ctx!;
     // ponytail: ScriptProcessorNode is deprecated but inline and universal; AudioWorklet when it breaks.
-    this.#node = this.#ctx.createScriptProcessor(4096, 1, 1);
+    this.#node = ctx.createScriptProcessor(4096, 1, 1);
     this.#chunks = [];
     this.#node.onaudioprocess = (e) => {
       const chunk = new Float32Array(e.inputBuffer.getChannelData(0));
       this.#chunks.push(chunk);
       onFrame(chunk);
     };
-    source.connect(this.#node);
-    this.#node.connect(this.#ctx.destination);
+    this.#source!.connect(this.#node);
+    this.#node.connect(ctx.destination);
   }
 
   async stop(): Promise<{ pcm: Float32Array; sampleRate: number }> {
-    const ctx = this.#ctx;
-    const sampleRate = ctx?.sampleRate ?? 16000;
+    const sampleRate = this.#ctx?.sampleRate ?? 16000;
     const total = this.#chunks.reduce((n, c) => n + c.length, 0);
     const pcm = new Float32Array(total);
     let offset = 0;
     for (const c of this.#chunks) { pcm.set(c, offset); offset += c.length; }
     this.#node?.disconnect();
-    this.#stream?.getTracks().forEach((t) => t.stop());
-    await ctx?.close();
-    this.#ctx = null; this.#stream = null; this.#node = null; this.#chunks = [];
+    this.#node = null; this.#chunks = [];
     return { pcm, sampleRate };
+  }
+
+  // Releases the mic + AudioContext. Not called anywhere yet (the stream is
+  // meant to live for the page's lifetime); here for when a real teardown
+  // point (e.g. voice disabled in Settings) needs it.
+  async dispose(): Promise<void> {
+    this.#node?.disconnect();
+    this.#stream?.getTracks().forEach((t) => t.stop());
+    await this.#ctx?.close();
+    this.#ctx = null; this.#stream = null; this.#source = null; this.#node = null; this.#chunks = [];
   }
 }
 

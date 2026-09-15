@@ -72,7 +72,12 @@ import { VoiceLoop, type Recorder, type Speaker, type Transcriber, type VoiceMod
 
 class FakeRecorder implements Recorder {
   started = 0; stopped = 0; onFrame: ((f: Float32Array) => void) | null = null; failStart = false;
-  async start(onFrame: (f: Float32Array) => void) { if (this.failStart) throw new Error("NotAllowedError"); this.started++; this.onFrame = onFrame; }
+  startGate: Promise<void> | null = null;
+  async start(onFrame: (f: Float32Array) => void) {
+    if (this.startGate) await this.startGate;
+    if (this.failStart) throw new Error("NotAllowedError");
+    this.started++; this.onFrame = onFrame;
+  }
   async stop() { this.stopped++; this.onFrame = null; return { pcm: new Float32Array(160), sampleRate: 16000 }; }
   get open() { return this.started > this.stopped; }
   frame(level: number) { this.onFrame?.(new Float32Array(800).fill(level)); }
@@ -134,6 +139,19 @@ describe("VoiceLoop PTT", () => {
     loop.onAnswer("A.", "A."); await flush();
     loop.press(); await flush();
     expect(speaker.cancels).toBe(1); expect(loop.state).toBe("listening"); expect(recorder.open).toBe(true);
+  });
+  it("release before start resolves waits for start then transcribes", async () => {
+    const { loop, recorder, transcriber } = make();
+    let resolveGate: () => void = () => {};
+    recorder.startGate = new Promise((r) => { resolveGate = r; });
+    loop.press();
+    loop.release();
+    await flush();
+    expect(transcriber.calls).toBe(0);
+    resolveGate();
+    await flush(); await flush(); await flush();
+    expect(transcriber.calls).toBe(1);
+    expect(recorder.stopped).toBe(1);
   });
   it("release without press, or press while asking, is ignored", async () => {
     const { loop, recorder, asked } = make();
