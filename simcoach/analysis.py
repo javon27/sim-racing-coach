@@ -553,11 +553,14 @@ def handling_read(win_steering, win_lat_g, win_speed, win_brake, win_throttle,
 
     lockup = wheelspin = None
     if wheel_rot is not None and all(k in wheel_rot for k in ("fl", "fr", "rl", "rr")):
-        rot = {k: np.asarray(v, dtype=float) for k, v in wheel_rot.items()}
+        # mRotation is NEGATIVE rolling forward on real laps (mean ~ -176 rad/s), so
+        # every comparison below is on magnitude; signed values would flag a rear
+        # wheel turning SLOWER than the fronts as wheelspin.
+        rot = {k: np.abs(np.asarray(v, dtype=float)) for k, v in wheel_rot.items()}
         if win_brake is not None and win_speed is not None:
             braking = (np.asarray(win_brake) > 0.3) & (np.asarray(win_speed) > 30.0)
             lockup = bool(braking.any() and any(
-                np.any(np.abs(rot[w][braking]) < _LOCKUP_ROT) for w in ("fl", "fr", "rl", "rr")))
+                np.any(rot[w][braking] < _LOCKUP_ROT) for w in ("fl", "fr", "rl", "rr")))
         if win_throttle is not None:
             on_power = np.asarray(win_throttle) > 0.5
             front_mean = (rot["fl"] + rot["fr"]) / 2.0

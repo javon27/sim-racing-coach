@@ -1153,3 +1153,24 @@ def test_analyze_lap_carries_handling_fields_neutral_on_synthetic_lap(synthetic_
         line = format_corner_line(cm, "metric")
         assert "understeer" not in line and "oversteer" not in line
         assert "lockup" not in line and "wheelspin" not in line
+
+
+def test_wheelspin_and_lockup_read_magnitude_not_sign():
+    # Real captures carry mRotation NEGATIVE rolling forward (~ -176 rad/s at speed).
+    # A rear wheel turning SLOWER than the fronts must not read as wheelspin, and a
+    # faster one must.
+    import numpy as np
+
+    from simcoach.analysis import handling_read
+    n = 40
+    steer = np.full(n, -0.3); lat_g = np.full(n, 1.0); speed = np.full(n, 120.0)
+    brake = np.zeros(n); throttle = np.full(n, 0.8)
+    front = np.full(n, -176.0)
+    slow_rear = {"fl": front, "fr": front, "rl": np.full(n, -150.0), "rr": np.full(n, -150.0)}
+    assert handling_read(steer, lat_g, speed, brake, throttle, slow_rear)["wheelspin"] is False
+    fast_rear = {"fl": front, "fr": front, "rl": np.full(n, -230.0), "rr": front}
+    assert handling_read(steer, lat_g, speed, brake, throttle, fast_rear)["wheelspin"] is True
+    # Lockup: a wheel at ~0 rad/s (either sign) under braking at speed.
+    braking = np.full(n, 0.8)
+    locked = {"fl": np.full(n, -0.2), "fr": front, "rl": front, "rr": front}
+    assert handling_read(steer, lat_g, speed, braking, np.zeros(n), locked)["lockup"] is True

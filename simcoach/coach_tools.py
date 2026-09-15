@@ -743,7 +743,7 @@ class CoachContext:
         for cm in analysis.corners:
             flags = []
             if cm.handling and cm.handling != "neutral":
-                flags.append(f"entry {cm.handling} — {cm.handling_why}")
+                flags.append(f"{cm.handling} — {cm.handling_why}")
             if cm.lockup:
                 flags.append("lockup under braking")
             if cm.wheelspin:
