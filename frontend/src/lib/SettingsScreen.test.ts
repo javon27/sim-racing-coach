@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/svelte";
+import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/svelte";
+import { isTauri, captureNext, pushBinds } from "./voice-shell";
 import {
   getSettings,
   putSettings,
@@ -46,6 +47,11 @@ vi.mock("./api", async () => {
 vi.mock("./theme", async () => {
   const actual = await vi.importActual<typeof import("./theme")>("./theme");
   return { ...actual, applyTheme: vi.fn() };
+});
+
+vi.mock("./voice-shell", async () => {
+  const actual = await vi.importActual<typeof import("./voice-shell")>("./voice-shell");
+  return { ...actual, isTauri: vi.fn(() => false), captureNext: vi.fn(), pushBinds: vi.fn(), attachShell: vi.fn() };
 });
 
 function baseSettings(overrides: Partial<SettingsResponse> = {}): SettingsResponse {
@@ -111,6 +117,9 @@ describe("SettingsScreen", () => {
     vi.mocked(distillProfile).mockReset();
     vi.mocked(voiceStatus).mockReset();
     vi.mocked(voiceSetup).mockReset();
+    vi.mocked(isTauri).mockReset().mockReturnValue(false);
+    vi.mocked(captureNext).mockReset();
+    vi.mocked(pushBinds).mockReset();
     localStorage.clear();
   });
 
@@ -530,6 +539,24 @@ describe("SettingsScreen", () => {
 
       expect(screen.queryByText(/wheel/i)).toBeNull();
       expect(screen.queryByText(/gamepad/i)).toBeNull();
+    });
+
+    it("wheel/gamepad capture rows appear only under Tauri and save the captured bind", async () => {
+      vi.mocked(isTauri).mockReturnValue(true);
+      vi.mocked(captureNext).mockResolvedValue("winmm:0:7");
+      vi.mocked(pushBinds).mockResolvedValue(null);
+      vi.mocked(getSettings).mockResolvedValue(baseSettings({ voice: voiceDefaults }));
+      vi.mocked(voiceStatus).mockResolvedValue({ installed: true, installing: false, progress_bytes: 0, total_bytes: null, error: null });
+      vi.mocked(putSettings).mockImplementation(async (cfg) =>
+        baseSettings({ voice: { ...voiceDefaults, ...(cfg.voice as object) } }),
+      );
+
+      render(SettingsScreen);
+      const row = await screen.findByText("Wheel button");
+      await fireEvent.click(within(row.closest(".field")!).getByRole("button", { name: "Capture" }));
+      await waitFor(() =>
+        expect(vi.mocked(putSettings).mock.calls.at(-1)![0]).toMatchObject({ voice: { ptt_wheel: "winmm:0:7" } }),
+      );
     });
   });
 });

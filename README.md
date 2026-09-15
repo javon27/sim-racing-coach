@@ -52,6 +52,14 @@ profile name(s) there so it can pick out your own laps.
 
 The sidecar alone, for frontend dev: `python -m simcoach.server` (→ `127.0.0.1:8765`).
 
+### Voice
+
+Optional hands-free chat — enable it in **Settings → Voice**. First enable downloads
+a local speech-recognition model (~250 MB, one-time). Hold the push-to-talk key (or
+a bound wheel/gamepad button — captured in the same Settings section) to talk, or
+tap it to start hands-free conversation mode; answers are read back aloud. No extra
+API key or network service beyond the model download — transcription runs locally.
+
 ## Corner maps
 
 Each track needs a corner map under `simcoach/tracks/<slug>.json`. It's what the
