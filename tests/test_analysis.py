@@ -154,7 +154,20 @@ def test_corner_metrics_fields_vary_or_are_allowlisted(synthetic_lap):
     # unless a reference lap is supplied (not exercised here) and is already
     # filtered out below as non-numeric, so nothing needs listing today --
     # this set exists for the next field that's a genuine tie, not a bug.
-    ALLOWLISTED: set[str] = set()
+    # #38 P1.8: brake_reversals and steer_reversals are 1 for BOTH corners
+    # here, and that is structural, not a tie the fixture failed to exercise:
+    # a single clean, non-pumped brake application (rise to peak, then
+    # release) or a single clean lock-and-unwind of the wheel always has
+    # exactly one direction change, regardless of the corner's speed,
+    # pressure, lock angle or distance. This synthetic fixture deliberately
+    # never pumps the brake or saws the wheel (see conftest's physics-based
+    # profile), so both corners read the same baseline "1" -- which is also
+    # why format.py's report floors are 2 (brake) and 3 (steer), not 1:
+    # pumping/sawing is what should ever surface, not the ordinary single
+    # input this fixture models. throttle_reversals ties at 0 for the same
+    # reason -- a single clean throttle pickup that ramps up and holds is
+    # monotonic (no stabbing) in both corners.
+    ALLOWLISTED: set[str] = {"brake_reversals", "throttle_reversals", "steer_reversals"}
 
     checked = 0
     for f in dataclasses.fields(CornerMetrics):
@@ -1468,3 +1481,154 @@ def test_analyze_lap_gear_fields_none_without_rpm_channel(synthetic_lap):
         line = format_corner_line(cm, "metric")
         assert "gear at min speed" not in line
         assert "bogged" not in line and "short-shifted" not in line
+
+
+# --- input-shape facts (#38 P1.8) --------------------------------------------
+
+def test_input_shape_linear_release_measures_distance_and_steep_frac():
+    import numpy as np
+    import pytest
+    from simcoach.analysis import input_shape
+
+    dist = np.array([0.0, 8.0, 16.0, 24.0, 32.0, 40.0])
+    brake = np.array([1.0, 0.8, 0.6, 0.4, 0.2, 0.0])
+    n = brake.size
+    result = input_shape(dist, brake, np.zeros(n), np.zeros(n))
+    assert result["brake_release_m"] == pytest.approx(40.0)
+    assert result["brake_release_steep_frac"] == pytest.approx(0.2, abs=0.01)
+
+
+def test_input_shape_dumped_release_has_high_steep_frac():
+    import numpy as np
+    from simcoach.analysis import input_shape
+
+    dist = np.array([0.0, 8.0, 16.0, 24.0])
+    brake = np.array([1.0, 0.97, 0.03, 0.0])
+    n = brake.size
+    result = input_shape(dist, brake, np.zeros(n), np.zeros(n))
+    assert result["brake_release_steep_frac"] > 0.8
+
+
+def test_input_shape_no_braking_phase_release_is_none():
+    import numpy as np
+    from simcoach.analysis import input_shape
+
+    n = 6
+    result = input_shape(np.linspace(0, 40, n), np.zeros(n), np.zeros(n), np.zeros(n))
+    assert result["brake_release_m"] is None
+    assert result["brake_release_steep_frac"] is None
+
+
+def test_input_shape_no_release_inside_window_is_none():
+    import numpy as np
+    from simcoach.analysis import input_shape
+
+    n = 6
+    brake = np.linspace(0.5, 1.0, n)   # rising the whole window, never releases
+    result = input_shape(np.linspace(0, 40, n), brake, np.zeros(n), np.zeros(n))
+    assert result["brake_release_m"] is None
+
+
+def test_input_shape_pumped_brake_counts_three_reversals():
+    import numpy as np
+    from simcoach.analysis import input_shape
+
+    brake = np.array([0.9, 0.7, 0.9, 0.7, 0.9])   # 3 reversals of 0.2
+    n = brake.size
+    result = input_shape(np.linspace(0, 40, n), brake, np.zeros(n), np.zeros(n))
+    assert result["brake_reversals"] == 3
+
+
+def test_input_shape_smooth_brake_has_no_reversals():
+    import numpy as np
+    from simcoach.analysis import input_shape
+
+    brake = np.array([0.9, 0.8, 0.7, 0.6, 0.5])   # monotonic release, no pumping
+    n = brake.size
+    result = input_shape(np.linspace(0, 40, n), brake, np.zeros(n), np.zeros(n))
+    assert result["brake_reversals"] == 0
+
+
+def test_input_shape_hysteresis_ignores_small_wiggles():
+    import numpy as np
+    from simcoach.analysis import input_shape
+
+    # 0.02 wiggle, under the 0.05 hysteresis.
+    brake = np.array([0.9, 0.88, 0.9, 0.88, 0.9])
+    n = brake.size
+    result = input_shape(np.linspace(0, 40, n), brake, np.zeros(n), np.zeros(n))
+    assert result["brake_reversals"] == 0
+
+
+def test_input_shape_throttle_stabs_counted():
+    import numpy as np
+    from simcoach.analysis import input_shape
+
+    throttle = np.array([0.9, 0.6, 0.9, 0.6, 0.9])   # 3 reversals, mirrors brake pumping
+    n = throttle.size
+    result = input_shape(np.linspace(0, 40, n), np.zeros(n), throttle, np.zeros(n))
+    assert result["throttle_reversals"] == 3
+
+
+def test_input_shape_steering_sawing_counted():
+    import numpy as np
+    from simcoach.analysis import input_shape
+
+    steer = np.array([0.0, 0.3, -0.3, 0.3, -0.3])
+    n = steer.size
+    result = input_shape(np.linspace(0, 40, n), np.zeros(n), np.zeros(n), steer)
+    assert result["steer_reversals"] == 3
+
+
+def test_input_shape_none_when_channel_absent():
+    import numpy as np
+    from simcoach.analysis import input_shape
+
+    n = 5
+    result = input_shape(np.linspace(0, 40, n), None, np.zeros(n), None)
+    assert result["brake_release_m"] is None
+    assert result["brake_release_steep_frac"] is None
+    assert result["brake_reversals"] is None
+    assert result["steer_reversals"] is None
+    assert result["throttle_reversals"] == 0   # present but flat -- a real 0, not absent
+
+
+def test_analyze_lap_input_shape_fields_are_sane(synthetic_lap):
+    # synthetic_lap through analyze_lap: every corner gets a read, and it's
+    # internally consistent (no nonsense ranges), whatever the exact values are.
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap
+
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    a = analyze_lap(synthetic_lap, cmap)
+    for cm in a.corners:
+        assert cm.brake_reversals is not None and cm.brake_reversals >= 0
+        assert cm.throttle_reversals is not None and cm.throttle_reversals >= 0
+        assert cm.steer_reversals is not None and cm.steer_reversals >= 0
+        assert cm.brake_release_m is not None and cm.brake_release_m >= 0
+        assert cm.brake_release_steep_frac is not None
+        assert 0.0 <= cm.brake_release_steep_frac <= 1.0
+
+
+def test_analyze_lap_diffs_input_shape_metrics_vs_reference(synthetic_lap):
+    # A reference that pumps the brake 3 times in corner 1's braking zone (the
+    # current lap brakes smoothly) must move brake_reversals_delta.
+    import dataclasses
+    import numpy as np
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap
+
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    dist = synthetic_lap.channels["lap_distance"]
+    braking = synthetic_lap.channels["brake"] > 0.1
+    corner1 = (dist >= 800) & (dist <= 1200) & braking
+    ref_brake = synthetic_lap.channels["brake"].copy()
+    idx = np.where(corner1)[0]
+    ref_brake[idx] = 0.9 + 0.1 * (np.arange(idx.size) % 2)   # oscillate 0.9/1.0
+    reference = dataclasses.replace(synthetic_lap, channels={
+        **synthetic_lap.channels, "brake": ref_brake,
+    })
+
+    a = analyze_lap(synthetic_lap, cmap, reference=reference)
+    c1 = a.corners[0]
+    assert c1.brake_reversals_delta is not None and c1.brake_reversals_delta < 0

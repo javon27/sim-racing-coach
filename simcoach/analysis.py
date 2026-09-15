@@ -81,6 +81,19 @@ class CornerMetrics:
     gear_min: Optional[int] = None       # forward gear at the min-speed sample
     bog: Optional[bool] = None           # rpm below its power band at the exit throttle pickup
     short_shift: Optional[bool] = None   # an upshift inside the window well below redline
+    # #38 P1.8: input-shape facts (see `input_shape`). Release fields are None
+    # with no braking phase or no release inside the window; reversal counts
+    # are None when their channel is absent.
+    brake_release_m: Optional[float] = None
+    brake_release_steep_frac: Optional[float] = None
+    brake_reversals: Optional[int] = None
+    throttle_reversals: Optional[int] = None
+    steer_reversals: Optional[int] = None
+    brake_release_m_delta: Optional[float] = None
+    brake_release_steep_frac_delta: Optional[float] = None
+    brake_reversals_delta: Optional[int] = None
+    throttle_reversals_delta: Optional[int] = None
+    steer_reversals_delta: Optional[int] = None
 
 
 @dataclass
@@ -714,6 +727,158 @@ def _gg_used_and_dead(lat_g, long_g, envelope: float | None) -> "tuple[float | N
     return used, dead
 
 
+# --- input-shape facts (#38 P1.8) ----------------------------------------
+# What a race engineer reads off the input graph beyond point-in-time metrics:
+# how the brake was released, and how much the driver modulated each
+# pedal/the wheel. Pure functions on already-windowed channels, same shape as
+# handling_read/gear_read above.
+# ponytail: brake fully released below this fraction of full pressure.
+_BRAKE_OFF = 0.05
+# ponytail: peak brake below this means no real braking phase to measure a
+# release shape from.
+_INPUT_SHAPE_MIN_BRAKE = 0.1
+# ponytail: hysteresis (fraction of full pedal/steering range) below which a
+# wiggle doesn't count as a reversal -- a rig read on a known pumping/sawing
+# corner settles it.
+_MOD_HYST = 0.05
+
+
+def _reversals(x, hyst: float) -> int:
+    """Count direction changes in `x` that exceed `hyst`: a simple state
+    machine tracking the last extreme in the current direction, counting a
+    reversal only once the trace has moved more than `hyst` back against it
+    (then tracking the new direction from there). The very first movement
+    away from `x[0]` only ESTABLISHES a direction, not a reversal, but every
+    turning point after that (including the first) counts -- a single clean
+    apply-then-release is one reversal, which is why the callers below apply
+    a >=2 report floor rather than treating this as a pumping flag."""
+    x = np.asarray(x, dtype=float)
+    if x.size < 2:
+        return 0
+    count = 0
+    extreme = x[0]
+    direction = 0  # 0 = undetermined, 1 = rising, -1 = falling
+    for v in x[1:]:
+        if direction == 0:
+            if v - extreme > hyst:
+                direction, extreme = 1, v
+            elif extreme - v > hyst:
+                direction, extreme = -1, v
+        elif direction == 1:
+            if v > extreme:
+                extreme = v
+            elif extreme - v > hyst:
+                count += 1
+                direction, extreme = -1, v
+        else:
+            if v < extreme:
+                extreme = v
+            elif v - extreme > hyst:
+                count += 1
+                direction, extreme = 1, v
+    return count
+
+
+def _reversals_masked(x, mask, hyst: float) -> int:
+    """Sum of `_reversals` over each contiguous run of `mask`, rather than
+    `_reversals(x[mask], hyst)`. Flattening the masked-out samples away first
+    would splice two unrelated on-pedal segments together at the seam -- e.g.
+    full throttle on the approach, masked out through braking, then the exit
+    ramp -- and read the jump between them as a fake reversal that never
+    happened in time."""
+    x = np.asarray(x, dtype=float)
+    mask = np.asarray(mask, dtype=bool)
+    total = 0
+    i = 0
+    n = mask.size
+    while i < n:
+        if not mask[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and mask[j]:
+            j += 1
+        total += _reversals(x[i:j], hyst)
+        i = j
+    return total
+
+
+def _brake_release_shape(win_dist, win_brake) -> "tuple[float | None, float | None]":
+    """(brake_release_m, brake_release_steep_frac): metres from the sample of
+    peak brake (within the window) to the first sample after it where brake
+    drops below `_BRAKE_OFF`, and the fraction of that release's total
+    pressure drop that happens within its steepest contiguous 20% of samples
+    (1.0 = dumped in one step, ~0.2 = perfectly linear). (None, None) when
+    there's no braking phase (peak < `_INPUT_SHAPE_MIN_BRAKE`) or no release
+    inside the window."""
+    brake = np.asarray(win_brake, dtype=float)
+    dist = np.asarray(win_dist, dtype=float)
+    n = min(brake.size, dist.size)
+    if n < 2:
+        return None, None
+    brake, dist = brake[:n], dist[:n]
+    peak_i = int(np.nanargmax(brake))
+    peak = brake[peak_i]
+    if not np.isfinite(peak) or peak < _INPUT_SHAPE_MIN_BRAKE:
+        return None, None
+    after = np.where(brake[peak_i + 1:] < _BRAKE_OFF)[0]
+    if after.size == 0:
+        return None, None
+    rel_i = peak_i + 1 + int(after[0])
+    release_m = float(dist[rel_i] - dist[peak_i])
+    seg = brake[peak_i:rel_i + 1]
+    total_drop = float(seg[0] - seg[-1])
+    if total_drop <= 0:
+        return release_m, None
+    drops = np.clip(-np.diff(seg), 0.0, None)
+    win_len = max(1, round(0.2 * drops.size))
+    if drops.size <= win_len:
+        steepest = float(np.sum(drops))
+    else:
+        steepest = float(np.max(np.convolve(drops, np.ones(win_len), mode="valid")))
+    return release_m, min(1.0, steepest / total_drop)
+
+
+def input_shape(win_dist, win_brake, win_throttle, win_steering) -> dict:
+    """Pure per-corner input-shape read from already-windowed channels (no
+    LLM, no corner identity -- the caller supplies that separately).
+
+    Returns {"brake_release_m", "brake_release_steep_frac", "brake_reversals",
+    "throttle_reversals", "steer_reversals"}. The release fields are None with
+    no braking phase or no release inside the window (see
+    `_brake_release_shape`). Reversal counts (pumping/stabbing/sawing, via the
+    shared `_reversals` helper) are None when their channel is absent;
+    brake/throttle reversals only count while the pedal is actually applied
+    (brake > `_BRAKE_OFF` / throttle > 0.1), steering counts the whole window
+    and both signs.
+    """
+    release_m = steep_frac = None
+    if win_brake is not None and win_dist is not None:
+        release_m, steep_frac = _brake_release_shape(win_dist, win_brake)
+
+    brake_reversals = None
+    if win_brake is not None:
+        b = np.asarray(win_brake, dtype=float)
+        brake_reversals = _reversals_masked(b, b > _BRAKE_OFF, _MOD_HYST)
+
+    throttle_reversals = None
+    if win_throttle is not None:
+        t = np.asarray(win_throttle, dtype=float)
+        throttle_reversals = _reversals_masked(t, t > 0.1, _MOD_HYST)
+
+    steer_reversals = None
+    if win_steering is not None:
+        steer_reversals = _reversals(win_steering, _MOD_HYST)
+
+    return {
+        "brake_release_m": release_m,
+        "brake_release_steep_frac": steep_frac,
+        "brake_reversals": brake_reversals,
+        "throttle_reversals": throttle_reversals,
+        "steer_reversals": steer_reversals,
+    }
+
+
 def _metrics_for_corner(
     record: LapRecord, corner: Corner, length: float | None = None,
     envelope: float | None = None, rpm_max_lap: float | None = None,
@@ -916,6 +1081,10 @@ def _metrics_for_corner(
     win_rpm = rpm_ch[idx] if rpm_ch is not None else None
     gear_info = gear_read(win_gear, win_rpm, win_throttle, win_speed, min_i, rpm_max_lap)
 
+    # #38 P1.8: input-shape facts (brake release shape, modulation counts)
+    # from this corner's own already-windowed channels.
+    shape_info = input_shape(win_dist, win_brake, win_throttle, win_steering)
+
     try:
         direction = compute_direction(record, corner.start_dist, corner.end_dist)
     except ValueError:
@@ -967,6 +1136,11 @@ def _metrics_for_corner(
         gg_used=gg_used, gg_dead_middle=gg_dead_middle,
         gear_min=gear_info["gear_min"], bog=gear_info["bog"],
         short_shift=gear_info["short_shift"],
+        brake_release_m=shape_info["brake_release_m"],
+        brake_release_steep_frac=shape_info["brake_release_steep_frac"],
+        brake_reversals=shape_info["brake_reversals"],
+        throttle_reversals=shape_info["throttle_reversals"],
+        steer_reversals=shape_info["steer_reversals"],
     )
 
 
@@ -1032,6 +1206,12 @@ def analyze_lap(
             cm.tc_pct_delta = _delta(cm.tc_pct, ref.tc_pct)
             cm.entry_spd_delta = _delta(cm.entry_spd, ref.entry_spd)
             cm.exit_spd_delta = _delta(cm.exit_spd, ref.exit_spd)
+            cm.brake_release_m_delta = _delta(cm.brake_release_m, ref.brake_release_m)
+            cm.brake_release_steep_frac_delta = _delta(
+                cm.brake_release_steep_frac, ref.brake_release_steep_frac)
+            cm.brake_reversals_delta = _delta(cm.brake_reversals, ref.brake_reversals)
+            cm.throttle_reversals_delta = _delta(cm.throttle_reversals, ref.throttle_reversals)
+            cm.steer_reversals_delta = _delta(cm.steer_reversals, ref.steer_reversals)
 
     tire_means, tire_warmup = _tire_summary(record)
     gg_used, _ = _gg_used_and_dead(
