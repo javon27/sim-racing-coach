@@ -194,6 +194,13 @@
       </ul>
     {/if}
     <div class="plot">
+      {#if mode === "line"}
+        <!-- HTML, not SVG, so it never scales with the viewBox (#95 round 2). -->
+        <div class="line-legend" aria-hidden="true">
+          <span class="lg-item"><span class="lg-sw selected"></span>selected lap</span>
+          <span class="lg-item"><span class="lg-sw best"></span>best</span>
+        </div>
+      {/if}
       <svg viewBox="0 0 {W} {H}" preserveAspectRatio="none" role="img"
            aria-label="Driver inputs against lap distance">
         {#if hasMarkers}
@@ -208,7 +215,7 @@
             <line x1="0" y1={r.zero} x2={W} y2={r.zero} class="grid" />
           {/if}
           {#if r.best}
-            <path d={r.best} class="{mode === 'line' ? 'mline' : 'line'} best" data-testid="trace-{r.key}-best" />
+            <path d={r.best} class="{mode === 'line' ? 'mline dashed' : 'line'} best" data-testid="trace-{r.key}-best" />
           {/if}
           <path d={r.last} class="{mode === 'line' ? 'mline' : 'line'} last" data-testid="trace-{r.key}-last" />
         {/each}
@@ -297,16 +304,20 @@
      trace instead of a min/max ribbon. */
   .mline {
     fill: none;
-    stroke-width: 1.5;
     stroke-linejoin: round;
     vector-effect: non-scaling-stroke;
   }
   .mline.last {
     stroke: var(--accent);
+    stroke-width: 1.6;
   }
   .mline.best {
-    stroke: var(--muted);
-    opacity: 0.8;
+    stroke: var(--faint);
+    stroke-width: 1.2;
+    opacity: 1;
+  }
+  .mline.dashed {
+    stroke-dasharray: 4 3;
   }
   .corner-band {
     fill: var(--muted);
@@ -331,6 +342,34 @@
     color: var(--faint);
     font-family: var(--mono);
     pointer-events: none;
+  }
+  .line-legend {
+    position: absolute;
+    top: 0;
+    right: 0;
+    z-index: 1;
+    display: flex;
+    gap: 10px;
+    font-size: 10px;
+    color: var(--faint);
+    font-family: var(--mono);
+    pointer-events: none;
+  }
+  .lg-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .lg-sw {
+    width: 14px;
+    height: 2px;
+    border-radius: 1px;
+  }
+  .lg-sw.selected {
+    background: var(--accent);
+  }
+  .lg-sw.best {
+    background: var(--faint);
   }
   .legend {
     display: flex;
