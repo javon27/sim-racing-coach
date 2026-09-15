@@ -133,3 +133,29 @@ def test_system_prompts_tell_the_coach_to_flag_not_assert_electronics():
     assert "COCKPIT ELECTRONICS:" in prompt
     assert "garage value" in prompt
     assert "Never assert" in prompt
+
+
+from simcoach.coach import first_paragraph, split_spoken
+
+
+def test_split_spoken_extracts_and_strips_the_last_tag_line():
+    text = "Brake **later** into T4.\n\n- point one\n- point two\n\n[spoken] Brake later into T4, you're giving up 2 tenths."
+    answer, spoken = split_spoken(text)
+    assert spoken == "Brake later into T4, you're giving up 2 tenths."
+    assert answer == "Brake **later** into T4.\n\n- point one\n- point two"
+
+
+def test_split_spoken_tolerates_bold_tag_and_colon():
+    answer, spoken = split_spoken("Full answer.\n**[Spoken]:** Short cue.")
+    assert (answer, spoken) == ("Full answer.", "Short cue.")
+
+
+def test_split_spoken_absent_or_malformed_returns_text_unchanged():
+    assert split_spoken("Just an answer.") == ("Just an answer.", None)
+    assert split_spoken("Answer.\n[spoken]") == ("Answer.\n[spoken]", None)     # empty capture = absent
+    assert split_spoken("[spoken] only a summary") == ("", "only a summary")
+
+
+def test_first_paragraph_is_the_fallback():
+    assert first_paragraph("\n\nFirst block\nstill first.\n\nSecond.") == "First block\nstill first."
+    assert first_paragraph("") == ""

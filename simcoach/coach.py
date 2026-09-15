@@ -1,3 +1,5 @@
+import re
+
 from simcoach.driver import DriverProfile
 from simcoach.format import unit_fns
 from simcoach.model.base import Model
@@ -208,6 +210,38 @@ AGENTIC_SYSTEM_PROMPT = (
 )
 
 
+SPOKEN_SENTENCE = (
+    "VOICE: the driver asked by voice from the headset and will HEAR only a short summary "
+    "while the full answer is shown on screen. Write your normal full answer, then on its "
+    "own FINAL line write `[spoken] ` followed by 2-3 plain spoken sentences carrying the "
+    "single most important cue -- no markdown, no lists, no numbers they can't hold in "
+    "their head mid-session."
+)
+
+_SPOKEN_RE = re.compile(r"^\s*(?:\*\*)?\[spoken\](?:\*\*)?:?(?:\*\*)?\s*(.*?)\s*$", re.IGNORECASE)
+
+
+def split_spoken(text: str) -> tuple[str, str | None]:
+    """Pull the trailing `[spoken] ...` line out of an answer. Returns
+    (answer without that line, spoken) or (text, None) when absent/empty."""
+    lines = text.split("\n")
+    for i in range(len(lines) - 1, -1, -1):
+        m = _SPOKEN_RE.match(lines[i])
+        if m:
+            if not m.group(1):
+                return text, None
+            rest = "\n".join(lines[:i] + lines[i + 1:]).rstrip()
+            return rest, m.group(1)
+    return text, None
+
+
+def first_paragraph(text: str) -> str:
+    for block in text.split("\n\n"):
+        if block.strip():
+            return block.strip()
+    return ""
+
+
 class Coach:
     """Assembles prompts from analysis + corner facts + knowledge notes and calls the Model."""
 
@@ -274,6 +308,7 @@ class Coach:
         driver_profile: DriverProfile | None = None,
         input_device: str | None = None,
         units: str = "metric",
+        voice: str | None = None,
     ):
         """Like `ask_agentic`, but yields tool/text events as they occur instead of
         returning a final string. Does not persist or emit done/error — the caller does."""
@@ -283,6 +318,8 @@ class Coach:
             AGENTIC_SYSTEM_PROMPT.format(car=car, speed_unit=spd_u, temp_unit=temp_u),
             context.allowed_adjustments, driver_profile, input_device,
         )
+        if voice == "ptt":
+            system += " " + SPOKEN_SENTENCE
         messages = list(history) if history else []
         messages.append({"role": "user", "content": question})
         yield from self.model.run_stream(system, messages, TOOLS, context.dispatch)
