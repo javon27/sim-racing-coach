@@ -1048,6 +1048,91 @@ def stint_consistency(analyses: "list[LapAnalysis]", lap_times: "list[float]") -
     }
 
 
+# --- tire-deg trend (#38 P1.6) -----------------------------------------------
+# Same floor idea as `stint_consistency`: fewer laps than this and a slope is
+# noise, not a trend.
+_MIN_TIRE_TREND_LAPS = 3
+
+
+def stint_tire_trend(analyses: "list[LapAnalysis]", lap_times: "list[float]") -> dict:
+    """Per-wheel tire temp/pressure/wear slope (per lap) and lap-time (pace)
+    drift across one stint's laps, in order (caller has already scoped
+    `analyses`/`lap_times` exactly the way `stint_consistency` does: one
+    session + phase, valid laps only, lap order -- this function doesn't know
+    what a "stint" is, only that the two lists are parallel).
+
+    Fewer than `_MIN_TIRE_TREND_LAPS` laps can't support a slope reading:
+    returns ``{"ok": False, "n": n}``.
+
+    Otherwise returns:
+        ok, n,
+        temp_slope / temp_mean: {wheel: value} -- least-squares °C/lap slope
+            and mean °C over the stint, one entry per wheel with at least
+            `_MIN_TIRE_TREND_LAPS` valid samples (a wheel missing entirely --
+            e.g. laps predating the extended capture -- has no key, not a
+            zeroed one),
+        press_slope: {wheel: kPa/lap}, same gating,
+        wear_pct_per_lap: {wheel: % worn per lap} -- POSITIVE means wearing
+            (wear is stored as a REMAINING fraction, 1.0 = new, so this is
+            `-100 * slope` of that fraction -- see `_wheel_summary`), same
+            gating,
+        pace_slope_s: s/lap least-squares slope of `lap_times` (always
+            computable once the top-level `n` gate passes -- lap time is
+            captured for every lap),
+        hottest: wheel with the highest mean temp over the stint, or None,
+        most_worn: wheel with the lowest final remaining wear, or None.
+
+    A lap missing `wheels`/`tire_means` entirely (older capture) contributes no
+    sample to any per-wheel field for that lap -- never a fake zero.
+    """
+    n = len(analyses)
+    if n < _MIN_TIRE_TREND_LAPS:
+        return {"ok": False, "n": n}
+
+    def _series(getter):
+        out = []
+        for i, a in enumerate(analyses):
+            v = getter(a)
+            if v is not None and not (isinstance(v, float) and math.isnan(v)):
+                out.append((i, float(v)))
+        return out
+
+    temp_slope, temp_mean, press_slope, wear_pct_per_lap, wear_end = {}, {}, {}, {}, {}
+    for w in _WHEELS:
+        txy = _series(lambda a, w=w: (a.tire_means or {}).get(w))
+        if len(txy) >= _MIN_TIRE_TREND_LAPS:
+            xs, ys = zip(*txy)
+            temp_slope[w] = float(np.polyfit(xs, ys, 1)[0])
+            temp_mean[w] = float(np.mean(ys))
+
+        pxy = _series(lambda a, w=w: (a.wheels or {}).get("tire_press_mean", {}).get(w))
+        if len(pxy) >= _MIN_TIRE_TREND_LAPS:
+            xs, ys = zip(*pxy)
+            press_slope[w] = float(np.polyfit(xs, ys, 1)[0])
+
+        wxy = _series(lambda a, w=w: (a.wheels or {}).get("tire_wear_end", {}).get(w))
+        if len(wxy) >= _MIN_TIRE_TREND_LAPS:
+            xs, ys = zip(*wxy)
+            wear_pct_per_lap[w] = float(-100.0 * np.polyfit(xs, ys, 1)[0])
+            wear_end[w] = ys[-1]
+
+    pace_slope_s = float(np.polyfit(range(n), [float(t) for t in lap_times], 1)[0])
+    hottest = max(temp_mean, key=temp_mean.get) if temp_mean else None
+    most_worn = min(wear_end, key=wear_end.get) if wear_end else None
+
+    return {
+        "ok": True,
+        "n": n,
+        "temp_slope": temp_slope,
+        "temp_mean": temp_mean,
+        "press_slope": press_slope,
+        "wear_pct_per_lap": wear_pct_per_lap,
+        "pace_slope_s": pace_slope_s,
+        "hottest": hottest,
+        "most_worn": most_worn,
+    }
+
+
 # The per-corner geometry metrics `corner_geometry` can emit, in the order they are
 # baked. One owner because three writers touch them -- the backfill script that bakes
 # them, the editor's save path that carries them forward, and this function -- and a

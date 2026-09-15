@@ -223,6 +223,56 @@ def test_format_consistency_silent_when_no_corner_clears_the_sample_floor():
     assert out.startswith("Lap time")
 
 
+# --- tire-deg trend (#38 P1.6) --------------------------------------------------
+
+def _trend_result(**overrides) -> dict:
+    result = {
+        "ok": True, "n": 8,
+        "temp_slope": {"rl": 2.0}, "temp_mean": {"rl": 96.0},
+        "press_slope": {}, "wear_pct_per_lap": {"rl": 2.1},
+        "pace_slope_s": 0.15, "hottest": "rl", "most_worn": "rl",
+    }
+    result.update(overrides)
+    return result
+
+
+def test_format_tire_trend_house_style_and_deg_limited():
+    from simcoach.format import format_tire_trend
+    out = format_tire_trend(_trend_result())
+    assert out.startswith("Over 8 laps: pace +0.15 s/lap; ")
+    assert "RL wear +2.1%/lap (most worn)" in out
+    assert "RL running hottest (96 °C mean)" in out
+    assert "pressures steady" in out
+    assert out.endswith("deg-limited")
+
+
+def test_format_tire_trend_not_tire_limited_when_wear_steady():
+    from simcoach.format import format_tire_trend
+    out = format_tire_trend(_trend_result(
+        temp_slope={}, temp_mean={}, wear_pct_per_lap={}, hottest=None, most_worn=None))
+    assert "temps and wear steady" in out
+    assert out.endswith("not tire-limited")
+
+
+def test_format_tire_trend_silent_suffix_when_pace_steady():
+    from simcoach.format import format_tire_trend
+    out = format_tire_trend(_trend_result(pace_slope_s=0.01))
+    assert "pace steady" in out
+    assert "deg-limited" not in out and "not tire-limited" not in out
+
+
+def test_format_tire_trend_respects_imperial_units():
+    from simcoach.format import format_tire_trend
+    out = format_tire_trend(_trend_result(), units="imperial")
+    assert "205 °F mean" in out   # 96 C -> 204.8 F, rounds to 205
+
+
+def test_format_tire_trend_honest_with_fewer_than_three_laps():
+    from simcoach.format import format_tire_trend
+    out = format_tire_trend({"ok": False, "n": 2})
+    assert "2 laps" in out and "tire trend" in out.lower()
+
+
 # --- handling / lockup / wheelspin suffixes (#38) ---------------------------
 
 def test_format_corner_line_appends_understeer_suffix():

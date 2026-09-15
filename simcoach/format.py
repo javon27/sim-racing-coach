@@ -272,6 +272,63 @@ def format_wheel_report(analysis, units: str = "metric") -> str | None:
     return "\n".join(lines)
 
 
+# --- tire-deg trend (#38 P1.6) -----------------------------------------------
+# Below these magnitudes a per-lap slope is sensor/sampling noise, not a
+# coachable trend -- name only what clears its floor, "steady" for the rest.
+# ponytail: tuning knobs -- a rig read across a real stint settles them.
+_TREND_WEAR_PCT = 0.3    # %/lap
+_TREND_PACE_S = 0.05     # s/lap
+_TREND_TEMP_C = 1.0      # °C/lap
+_TREND_PRESS_KPA = 1.0   # kPa/lap
+
+
+def format_tire_trend(result: dict, units: str = "metric") -> str:
+    """House style for `analysis.stint_tire_trend`: pace drift, wheel wear (plus
+    which wheel is running hottest, when its own temp is trending), and
+    pressures -- naming only what clears its floor, "steady" for the rest.
+    Honest one-liner when the stint was too short to read a trend."""
+    if not result.get("ok"):
+        n = result.get("n", 0)
+        return (f"Only {n} lap{'s' if n != 1 else ''} recorded this stint — need at "
+                "least 3 to read tire trend.")
+    _, temp, _, temp_u = unit_fns(units)
+    wheels = ("fl", "fr", "rl", "rr")
+
+    pace = result.get("pace_slope_s")
+    pace_trending = pace is not None and abs(pace) >= _TREND_PACE_S
+    pace_txt = f"pace {pace:+.2f} s/lap" if pace_trending else "pace steady"
+
+    wear = result.get("wear_pct_per_lap") or {}
+    most_worn = result.get("most_worn")
+    bits = [
+        f"{w.upper()} wear {wear[w]:+.1f}%/lap" + (" (most worn)" if w == most_worn else "")
+        for w in wheels if wear.get(w) is not None and abs(wear[w]) >= _TREND_WEAR_PCT
+    ]
+
+    hottest = result.get("hottest")
+    temp_slope = result.get("temp_slope") or {}
+    temp_mean = result.get("temp_mean") or {}
+    if hottest is not None and abs(temp_slope.get(hottest, 0.0)) >= _TREND_TEMP_C:
+        bits.append(f"{hottest.upper()} running hottest "
+                     f"({temp(temp_mean[hottest]):.0f} {temp_u} mean)")
+    wear_txt = ", ".join(bits) if bits else "temps and wear steady"
+
+    press = result.get("press_slope") or {}
+    press_bits = [
+        f"{w.upper()} pressure {press[w]:+.1f} kPa/lap"
+        for w in wheels if press.get(w) is not None and abs(press[w]) >= _TREND_PRESS_KPA
+    ]
+    press_txt = ", ".join(press_bits) if press_bits else "pressures steady"
+
+    out = f"Over {result['n']} laps: {pace_txt}; {wear_txt}; {press_txt}."
+    wear_trending = any(abs(v) >= _TREND_WEAR_PCT for v in wear.values())
+    if pace_trending and wear_trending:
+        out += " — deg-limited"
+    elif pace_trending and not wear_trending:
+        out += " — not tire-limited"
+    return out
+
+
 def format_tire_report(analysis, units: str = "metric") -> str | None:
     """Per-wheel mean temps (imbalance) + early→late warm-up, or None if the lap
     was captured without tire channels."""

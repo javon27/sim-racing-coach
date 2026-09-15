@@ -1042,6 +1042,70 @@ def test_stint_consistency_skips_none_and_nan_fields_instead_of_zeroing(syntheti
     assert bp["n"] == 2   # only the two laps that actually braked here count
 
 
+# --- tire-deg trend (#38 P1.6) --------------------------------------------------
+
+def _trend_stint(n=5, temp_rise=2.0, wear_fall=0.02, pace_rise=0.1, missing=frozenset()):
+    """n synthetic LapAnalysis objects built directly (no fixture needed): RL
+    heats up `temp_rise` C/lap and wears `wear_fall`/lap (remaining fraction),
+    every other wheel flat; lap time rises `pace_rise` s/lap. Laps whose index
+    is in `missing` carry no tire_means/wheels at all (older-capture lap)."""
+    from simcoach.analysis import LapAnalysis
+    analyses, lap_times = [], []
+    for i in range(n):
+        t = 90.0 + pace_rise * i
+        tire_means = wheels = None
+        if i not in missing:
+            tire_means = {"fl": 80.0, "fr": 80.0, "rl": 80.0 + temp_rise * i, "rr": 80.0}
+            wheels = {
+                "tire_press_mean": {"fl": 27.0, "fr": 27.0, "rl": 27.0, "rr": 27.0},
+                "tire_wear_end": {"fl": 0.95, "fr": 0.95, "rl": 1.0 - wear_fall * i, "rr": 0.95},
+            }
+        analyses.append(LapAnalysis(lap_time=t, corners=[], has_reference=False,
+                                    tire_means=tire_means, wheels=wheels))
+        lap_times.append(t)
+    return analyses, lap_times
+
+
+def test_stint_tire_trend_reads_rl_wear_temp_and_pace():
+    from simcoach.analysis import stint_tire_trend
+    analyses, lap_times = _trend_stint()
+    result = stint_tire_trend(analyses, lap_times)
+    assert result["ok"] is True
+    assert result["n"] == 5
+    assert result["hottest"] == "rl"
+    assert result["most_worn"] == "rl"
+    assert abs(result["temp_slope"]["rl"] - 2.0) < 1e-6
+    assert abs(result["wear_pct_per_lap"]["rl"] - 2.0) < 1e-6   # -100 * -0.02
+    assert abs(result["pace_slope_s"] - 0.1) < 1e-6
+    # Untouched wheels read ~flat (present, near-zero slope), not skipped.
+    assert abs(result["wear_pct_per_lap"]["fl"]) < 1e-6
+    assert all(abs(v) < 1e-6 for v in result["press_slope"].values())
+
+
+def test_stint_tire_trend_honest_with_two_laps():
+    from simcoach.analysis import stint_tire_trend
+    analyses, lap_times = _trend_stint(n=2)
+    result = stint_tire_trend(analyses, lap_times)
+    assert result == {"ok": False, "n": 2}
+
+
+def test_stint_tire_trend_skips_missing_wheels_instead_of_zeroing():
+    from simcoach.analysis import stint_tire_trend
+    # 2 of 5 laps missing wheels/tire_means -- 3 remain, right at the floor.
+    ok = stint_tire_trend(*_trend_stint(missing=frozenset({0, 1})))
+    assert ok["ok"] is True
+    assert "rl" in ok["wear_pct_per_lap"] and "rl" in ok["temp_slope"]
+
+    # 3 of 5 missing -- only 2 remain, below the floor -> field absent, not zero.
+    short = stint_tire_trend(*_trend_stint(missing=frozenset({0, 1, 2})))
+    assert "rl" not in short["wear_pct_per_lap"]
+    assert "rl" not in short["temp_slope"]
+    assert short["most_worn"] is None
+    assert short["hottest"] is None
+    # Pace never depends on wheels/tire_means -- still readable.
+    assert abs(short["pace_slope_s"] - 0.1) < 1e-6
+
+
 # --- handling_read (#38) ---------------------------------------------------
 
 def test_handling_read_understeer():
