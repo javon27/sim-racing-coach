@@ -613,8 +613,8 @@ class LmuSource:
 
     def _reset(self) -> None:
         """(Re)initialise per-capture-run state. Called from __init__ AND from the
-        top of laps() -- callers (simcoach/app.py's run_repl) reuse ONE LmuSource
-        across LMU drop/reconnect cycles via `while True: for lap in source.laps()`,
+        top of laps() -- a long-lived capture loop reuses ONE LmuSource across LMU
+        drop/reconnect cycles via `while True: for lap in source.laps()`,
         and a generator's local variables would reset on each such call but instance
         attributes would not. Without this, a reconnect mid-lap resumes with the
         pre-drop buffer still attached: stale _prev_dist can read as a finish-line

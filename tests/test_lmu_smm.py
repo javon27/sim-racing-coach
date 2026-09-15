@@ -602,7 +602,7 @@ def test_laps_records_sector_bounds_end_to_end():
 
 
 def test_laps_resets_buffer_across_reused_instance_no_ghost_lap(monkeypatch):
-    """simcoach/app.py's run_repl reuses ONE LmuSource across LMU drop/reconnect
+    """A long-lived capture loop reuses ONE LmuSource across LMU drop/reconnect
     cycles: `while True: try: for lap in source.laps(): ...` -- on a RuntimeError
     (dropped connection) it loops back and calls laps() again on the SAME instance.
     A second laps() call must start with a clean buffer: otherwise a stale
@@ -669,7 +669,7 @@ def test_laps_resets_buffer_across_reused_instance_no_ghost_lap(monkeypatch):
             for lap in gen:
                 records.append(lap)
         except RuntimeError:
-            pass  # what simcoach/app.py's run_repl catches before reconnecting
+            pass  # what a reconnecting capture loop catches before retrying
         return records
 
     # First connection: accumulates a partial-lap buffer, then drops. Nothing

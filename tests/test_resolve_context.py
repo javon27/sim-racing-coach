@@ -5,7 +5,7 @@ Shipped track JSONs are user-owned map data (built/cleared in the editor), so th
 tests use the synthetic `test_track.json` fixture and tmp fixtures, never real maps."""
 import json
 
-from simcoach.__main__ import TRACKS_DIR, resolve_context
+from simcoach.track_lookup import TRACKS_DIR, resolve_context
 
 
 def test_resolves_map_and_note_from_track_name():

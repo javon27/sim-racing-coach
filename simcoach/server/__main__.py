@@ -8,14 +8,17 @@ import threading
 import time
 from pathlib import Path
 
-from .. import __main__ as m  # reuse track/car/corner-map resolution helpers
 from ..coach import Coach
 from ..config import load_config
+from ..corners import CornerMap
 from ..lmu.ingest import poll_results
+from ..lmu.rest import LmuRest
+from ..lmu.smm import LmuSource
 from ..logging_setup import configure_logging
 from ..model.factory import LazyModel
 from ..paths import db_path, telemetry_dir
 from ..store import LapStore
+from ..track_lookup import TRACKS_DIR, load_map_data
 from .app import SIDECAR_PORT, create_app, _capture_loop
 
 
@@ -33,24 +36,23 @@ def build_app():
         # user's annotation overlay (names/labels/etc.) so the coach uses the
         # driver's own corner names.
         try:
-            data = m.load_map_data(track, str(m.TRACKS_DIR), user_dir=user_tracks_dir)
+            data = load_map_data(track, str(TRACKS_DIR), user_dir=user_tracks_dir)
             if data.get("corners"):
-                return m.CornerMap.from_data(data)
+                return CornerMap.from_data(data)
         except Exception:
             pass
         return None
 
     app = create_app(store, coach, cmap=None, rest=None,
-                     map_resolver=_map_resolver, rest_factory=m.LmuRest,
-                     tracks_dir=m.TRACKS_DIR)
+                     map_resolver=_map_resolver, rest_factory=LmuRest,
+                     tracks_dir=TRACKS_DIR)
 
     def _capture_forever():
-        # Retries like simcoach.app.run_repl's capture thread: LMU may not be
-        # running yet (or drops mid-session) -- wait and reopen rather than
-        # dying, and never let a failure here block/crash the sidecar.
+        # LMU may not be running yet (or drops mid-session) -- wait and reopen
+        # rather than dying, and never let a failure here block/crash the sidecar.
         while True:
             try:
-                _capture_loop(m.LmuSource(), store, app.state)
+                _capture_loop(LmuSource(), store, app.state)
             except Exception:
                 pass
             time.sleep(3)

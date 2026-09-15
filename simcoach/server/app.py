@@ -245,9 +245,9 @@ def _load_cloud(path) -> list[dict]:
 def _capture_loop(source, store, app_state) -> None:
     """One pass over `source.laps()`: save each completed lap to `store` and
     record it on `app_state.latest` so /status and the lap list see it live.
-    Mirrors simcoach.app.run_repl's capture thread body. Returns when
-    `source.laps()` is exhausted or raises -- the caller (build_app) wraps
-    this in a retry loop so a real LMU source reconnects after a drop."""
+    Returns when `source.laps()` is exhausted or raises -- the caller
+    (build_app) wraps this in a retry loop so a real LMU source reconnects
+    after a drop."""
     for lap in source.laps():
         # Mapping mode: buffer the lap for ribbon reconstruction AND persist it,
         # tagged phase="mapping" so it gives an immediately-editable lap + shows in
@@ -1809,8 +1809,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 on_track = True
                 track, vehicle = live
                 try:
-                    from .. import __main__ as _m  # resolve_context: map + car name (+ note)
-                    cmap, car, _ = _m.resolve_context(
+                    from ..track_lookup import resolve_context
+                    cmap, car, _ = resolve_context(
                         rest, str(app.state.tracks_dir), track, vehicle,
                         user_dir=str(Path(store.data_dir) / "tracks"))
                 except Exception:

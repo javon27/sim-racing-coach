@@ -26,22 +26,18 @@ def test_build_app_lmu_running(tmp_path, monkeypatch, mem_keyring):
     monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
-    import simcoach.__main__ as m
+    from simcoach.server import __main__ as entry
     from simcoach.lmu import smm
 
     class FakeRest:
         def get_setup(self):
             return {"carClass": "GT3"}
 
-    fake_cmap = object()
-
     # /status reads live state via `from ..lmu.smm import read_live_status` at call
-    # time, so patch it on smm (the source), not on the __main__ re-export.
+    # time, so patch it on smm (the source), not on the sidecar entry module.
     monkeypatch.setattr(smm, "read_live_status",
                         lambda: {"track": "test_track", "car": "test_car", "state": "track"})
-    monkeypatch.setattr(m, "LmuRest", FakeRest)
-    monkeypatch.setattr(m, "resolve_track_map", lambda track, tracks_dir: "fake/path.json")
-    monkeypatch.setattr(m, "CornerMap", type("CM", (), {"load": staticmethod(lambda p: fake_cmap)}))
+    monkeypatch.setattr(entry, "LmuRest", FakeRest)
 
     from fastapi.testclient import TestClient
 
@@ -162,20 +158,16 @@ def test_build_app_lmu_rest_failure_still_resolves_cmap(tmp_path, monkeypatch, m
     monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
-    import simcoach.__main__ as m
+    from simcoach.server import __main__ as entry
     from simcoach.lmu import smm
 
     class BrokenRest:
         def get_setup(self):
             raise RuntimeError("LMU closed")
 
-    fake_cmap = object()
-
     monkeypatch.setattr(smm, "read_live_status",
                         lambda: {"track": "test_track", "car": "test_car", "state": "track"})
-    monkeypatch.setattr(m, "LmuRest", BrokenRest)
-    monkeypatch.setattr(m, "resolve_track_map", lambda track, tracks_dir: "fake/path.json")
-    monkeypatch.setattr(m, "CornerMap", type("CM", (), {"load": staticmethod(lambda p: fake_cmap)}))
+    monkeypatch.setattr(entry, "LmuRest", BrokenRest)
 
     from fastapi.testclient import TestClient
 

@@ -14,6 +14,13 @@ import unicodedata
 from pathlib import Path
 
 from simcoach.analysis import CORNER_GEOMETRY_KEYS, measurable_geometry
+from simcoach.car_lookup import resolve_car
+from simcoach.corners import CornerMap
+from simcoach.mapbuild import build_map
+
+# Shipped corner-map JSONs (curated defaults), used as the default `tracks_dir` for
+# `resolve_context` below.
+TRACKS_DIR = Path(__file__).parent / "tracks"
 
 # Annotation fields a user may customize on a SHIPPED track (saved to app-data and
 # merged over the shipped map on read). Everything else — path/dist/edges/sectors
@@ -222,6 +229,33 @@ def load_map_data(
             corners.append({**c, **geo} if geo else c)
         merged["corners"] = corners
     return merged
+
+
+def resolve_context(rest, tracks_dir, track_name: str, vehicle: str, channels=None,
+                    user_dir=None):
+    """Resolve the coaching context (corner map, car display name, track-note slug)
+    for a live (track, car). Builds+saves a numbered map (named by the track slug, so
+    it resolves next time) from `channels` if none exists yet. Returns
+    (CornerMap | None, car, note_slug); cmap is None when no map exists and no lap is
+    available to build one from.
+
+    Used by the desktop app's sidecar (`simcoach/server/app.py`) to orient the coach
+    to the live session."""
+    car_class = None
+    if rest is not None:
+        try:
+            car_class = rest.get_setup().get("carClass")
+        except Exception:
+            car_class = None
+    car = resolve_car(vehicle, car_class)
+    slug = track_slug(track_name)
+    data = load_map_data(track_name, str(tracks_dir), user_dir=user_dir)
+    if not data.get("corners") and channels is not None:
+        data = build_map(slug, channels)
+        (Path(tracks_dir) / f"{slug}.json").write_text(json.dumps(data, indent=2))
+    if not data.get("corners"):
+        return None, car, slug
+    return CornerMap.from_data(data), car, slug
 
 
 def corner_apex_key(corner: dict) -> float | None:
