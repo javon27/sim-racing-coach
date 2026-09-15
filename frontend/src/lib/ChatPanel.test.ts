@@ -10,6 +10,38 @@ vi.mock("./api", async () => {
   return { ...actual, getChatMessages: vi.fn(), getChatUsage: vi.fn(), getSettings: vi.fn() };
 });
 
+// Only used by the mic-device-change test below (#104): every other voice test
+// injects a `voice` prop, which short-circuits ChatPanel before it ever builds a
+// real MicRecorder, so exercising the dispose-on-device-change path needs the
+// real ./audio module replaced instead.
+const { micInstances } = vi.hoisted(() => ({
+  micInstances: [] as { deviceId: string | null; dispose: () => Promise<void> }[],
+}));
+vi.mock("./audio", async () => {
+  const actual = await vi.importActual<typeof import("./audio")>("./audio");
+  class FakeMicRecorder {
+    deviceId: string | null;
+    dispose = vi.fn(async () => {});
+    constructor(deviceId: string | null = null) {
+      this.deviceId = deviceId;
+      micInstances.push(this);
+    }
+    async start() {}
+    async stop() {
+      return { pcm: new Float32Array(0), sampleRate: 16000 };
+    }
+  }
+  class FakeSynthSpeaker {
+    static available() { return true; }
+    voiceName: string | null = null;
+    rate = 1;
+    async speak() {}
+    cancel() {}
+    earcon() {}
+  }
+  return { ...actual, MicRecorder: FakeMicRecorder, SynthSpeaker: FakeSynthSpeaker };
+});
+
 function usage(overrides: Partial<ChatUsage> = {}): ChatUsage {
   return { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, messages: 0, ...overrides };
 }
@@ -57,6 +89,7 @@ describe("ChatPanel", () => {
     vi.mocked(getChatUsage).mockResolvedValue({ usage: usage(), cost: 0, cost_complete: true });
     vi.mocked(getSettings).mockReset();
     vi.mocked(getSettings).mockResolvedValue({ show_cost: true } as SettingsResponse);
+    micInstances.length = 0;
   });
 
   afterEach(cleanup);
@@ -588,6 +621,31 @@ describe("ChatPanel", () => {
     const ta = screen.getByLabelText("Ask your engineer");
     await fireEvent.keyDown(ta, { code: "F9" });
     expect(voice.state).not.toBe("listening");
+  });
+
+  it("switching voice.mic_device_id disposes the previous MicRecorder", async () => {
+    Object.defineProperty(navigator, "mediaDevices", { value: {}, configurable: true });
+    const voiceSettings = (mic_device_id: string) => ({
+      enabled: true, ptt_key: "F9", ptt_wheel: null, ptt_gamepad: null, tts_voice: null, tts_rate: 1,
+      vad_threshold: 0.02, vad_silence_ms: 1000, vad_max_s: 20, conversation_idle_s: 30, mic_device_id,
+    });
+    vi.mocked(getSettings).mockResolvedValue({
+      show_cost: true, voice: voiceSettings("device-1"),
+    } as unknown as SettingsResponse);
+    render(ChatPanel, { props: { stream: new FakeStream() } });
+    await waitFor(() => expect(micInstances.length).toBe(1));
+    expect(micInstances[0].deviceId).toBe("device-1");
+
+    vi.mocked(getSettings).mockResolvedValue({
+      show_cost: true, voice: voiceSettings("device-2"),
+    } as unknown as SettingsResponse);
+    window.dispatchEvent(new Event("settings-changed"));
+
+    await waitFor(() => expect(micInstances.length).toBe(2));
+    expect(micInstances[0].dispose).toHaveBeenCalled();
+    expect(micInstances[1].deviceId).toBe("device-2");
+
+    delete (navigator as { mediaDevices?: unknown }).mediaDevices;
   });
 });
 

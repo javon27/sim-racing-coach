@@ -128,6 +128,10 @@
   // in-page listeners -- both firing at once would double-trigger a hold.
   let shellAttached = $state(false);
   let detachShell: (() => void) | null = null;
+  // Tracks the real MicRecorder across loadVoice() reruns (settings-changed) so a
+  // changed input device disposes the old stream instead of leaking it.
+  let currentRecorder: MicRecorder | null = null;
+  let currentMicDeviceId: string | null = null;
 
   async function syncShell() {
     detachShell?.();
@@ -156,8 +160,15 @@
       const speaker = new SynthSpeaker();
       speaker.voiceName = v.tts_voice;
       speaker.rate = v.tts_rate;
+      const micDeviceId = v.mic_device_id ?? null;
+      if (currentRecorder && micDeviceId !== currentMicDeviceId) {
+        void currentRecorder.dispose();
+        currentRecorder = null;
+      }
+      currentRecorder ??= new MicRecorder(micDeviceId);
+      currentMicDeviceId = micDeviceId;
       activeVoice = new VoiceLoop({
-        recorder: new MicRecorder(),
+        recorder: currentRecorder,
         transcriber: new HttpTranscriber(),
         speaker,
         // The actual send happens from the voice-state subscribe below (keyed on
