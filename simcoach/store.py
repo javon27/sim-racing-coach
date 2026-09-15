@@ -1103,11 +1103,19 @@ class LapStore:
                 f"FROM laps WHERE {where} GROUP BY session_id "
                 "ORDER BY MAX(ts) DESC LIMIT ? OFFSET ?",
                 params + [limit, offset]).fetchall()
+            # Which of this page's sessions have a saved chat -- one query over just
+            # this page's ids (page size is small; the alternative is a correlated
+            # EXISTS per row in the query above, which needs an index to stay fast).
+            ids = [r[0] for r in rows]
+            with_chat = {r[0] for r in self.conn.execute(
+                "SELECT DISTINCT session_id FROM coach_chat WHERE session_id IN "
+                f"({','.join('?' * len(ids))})", ids).fetchall()} if ids else set()
         keys = ("session_id", "track", "car", "laps", "best", "started", "last")
         out = []
         for r in rows:
             d = dict(zip(keys, r))
             d["car_model"] = resolve_car(d["car"]) if d["car"] else None
+            d["has_chat"] = d["session_id"] in with_chat
             out.append(d)
         return {"rows": out, "total": total}
 

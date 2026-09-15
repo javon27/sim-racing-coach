@@ -282,6 +282,24 @@ def test_facets_group_by_class_and_class_filter(tmp_path, synthetic_lap, monkeyp
     assert [r["session_id"] for r in s.race_sessions_page(car="BMW M4 LMGT3")["rows"]] == ["gt3s"]
 
 
+def test_race_sessions_page_has_chat_flag(tmp_path, synthetic_lap):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path/"c.sqlite"), str(tmp_path/"data"))
+    s.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "no-chat",
+                        "timestamp": synthetic_lap.timestamp}))
+    s.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "with-chat",
+                        "timestamp": synthetic_lap.timestamp + 100}))
+    s.save_chat(s.create_chat(), "with-chat", "t", "c", None, "q", "a")
+
+    page = s.race_sessions_page()
+    by_id = {r["session_id"]: r for r in page["rows"]}
+    assert by_id["with-chat"]["has_chat"] is True
+    assert by_id["no-chat"]["has_chat"] is False
+    # total/ordering unaffected (newest first, by MAX(ts))
+    assert page["total"] == 2
+    assert [r["session_id"] for r in page["rows"]] == ["with-chat", "no-chat"]
+
+
 def test_best_lap_phase_filter(tmp_path, synthetic_lap):
     from simcoach.store import LapStore
     s = LapStore(str(tmp_path/"c.sqlite"), str(tmp_path/"data"))
