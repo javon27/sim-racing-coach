@@ -241,6 +241,21 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
         all three are already fractions/percent-scale per the struct fields
         (mVirtualEnergy, mSoC, mBatteryChargeFraction), unlike fuel (liters)
         or temps (Kelvin) which need conversion.
+      [RIG] per-wheel, issue #38 Phase 0/2 capture-only channels -- raw, no
+        conversion except Kelvin->C on the tread pair. Whether LMU fills these
+        is UNVERIFIED; the first rig lap after this lands settles it. Nothing
+        reads them yet:
+          ride_height_{w} <- mRideHeight
+          susp_defl_{w} <- mSuspensionDeflection
+          susp_force_{w} <- mSuspForce
+          tire_defl_{w} <- mVerticalTireDeflection
+          lat_patch_vel_{w} <- mLateralPatchVel
+          camber_{w} <- mCamber
+          tire_temp_l_{w} <- mTemperature[0] - 273.15, tire_temp_r_{w} <-
+            mTemperature[2] - 273.15. The header's mTemperature is
+            left/center/right, NOT inside/center/outside -- for the right-side
+            wheels "left" is the outside, so these are named _l/_r, not
+            _in/_out. tire_temp_{w} (center, mTemperature[1]) is unchanged.
     """
     wheels = telem.mWheel
     # #33: at frame 1, in the garage, this whole block reads pre-population state --
@@ -346,6 +361,15 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
         sample[f"wheel_rot_{name}"] = w.mRotation
         sample[f"brake_temp_{name}"] = w.mBrakeTemp - 273.15
         sample[f"brake_press_{name}"] = w.mBrakePressure
+        # #38 Phase 0: setup-channel capture add, [RIG] UNVERIFIED -- see docstring.
+        sample[f"ride_height_{name}"] = w.mRideHeight
+        sample[f"susp_defl_{name}"] = w.mSuspensionDeflection
+        sample[f"susp_force_{name}"] = w.mSuspForce
+        sample[f"tire_defl_{name}"] = w.mVerticalTireDeflection
+        sample[f"lat_patch_vel_{name}"] = w.mLateralPatchVel
+        sample[f"camber_{name}"] = w.mCamber
+        sample[f"tire_temp_l_{name}"] = w.mTemperature[0] - 273.15
+        sample[f"tire_temp_r_{name}"] = w.mTemperature[2] - 273.15
     return sample
 
 

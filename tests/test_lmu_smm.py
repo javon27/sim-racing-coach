@@ -162,6 +162,37 @@ def test_sample_from_telem_maps_extended_channels():
     assert s["tire_wear_fr"] == 0.98
 
 
+def test_sample_from_telem_maps_setup_channels():
+    """Issue #38 Phase 0: capture-only setup channels (ride height, suspension
+    deflection/force, tire deflection, lateral patch velocity, camber, and the
+    tread-edge temp pair). Raw passthrough except Kelvin->C on the tread pair.
+    tire_temp_l/r use the header's actual left/center/right order -- NOT
+    in/out, since for the right-side wheels "left" is the outside."""
+    t = make_telem()
+    for i in range(4):
+        t.mWheel[i].mRideHeight = 0.045
+        t.mWheel[i].mSuspensionDeflection = 0.012
+        t.mWheel[i].mSuspForce = 3500.0
+        t.mWheel[i].mVerticalTireDeflection = 0.008
+        t.mWheel[i].mLateralPatchVel = 0.15
+        t.mWheel[i].mCamber = -0.03
+        t.mWheel[i].mTemperature[0] = 273.15 + 85.0
+        t.mWheel[i].mTemperature[2] = 273.15 + 75.0
+    t = roundtrip(t)
+    s = sample_from_telem(t, lap_dist=0.0)
+    for name in ("fl", "fr", "rl", "rr"):
+        assert s[f"ride_height_{name}"] == pytest.approx(0.045)
+        assert s[f"susp_defl_{name}"] == pytest.approx(0.012)
+        assert s[f"susp_force_{name}"] == pytest.approx(3500.0)
+        assert s[f"tire_defl_{name}"] == pytest.approx(0.008)
+        assert s[f"lat_patch_vel_{name}"] == pytest.approx(0.15)
+        assert s[f"camber_{name}"] == pytest.approx(-0.03)
+        assert s[f"tire_temp_l_{name}"] == pytest.approx(85.0)
+        assert s[f"tire_temp_r_{name}"] == pytest.approx(75.0)
+        # center temp (tire_temp_{w}) is unchanged by this addition
+        assert s[f"tire_temp_{name}"] == pytest.approx(80.0)
+
+
 def test_sample_from_telem_maps_energy_channels():
     t = roundtrip(make_telem(mVirtualEnergy=0.75, mSoC=0.6, mBatteryChargeFraction=0.42))
     sample = sample_from_telem(t, lap_dist=0.0)
