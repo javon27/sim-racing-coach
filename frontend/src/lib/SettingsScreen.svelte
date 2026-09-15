@@ -21,7 +21,7 @@
     type VoiceStatus,
   } from "./api";
   import InfoTip from "./InfoTip.svelte";
-  import { isTauri as isTauriShell, captureNext, pushBinds } from "./voice-shell";
+  import { isTauri as isTauriShell, captureNext, describeBind, listDevices, pushBinds, type DeviceInfo } from "./voice-shell";
 
   const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -49,6 +49,7 @@
   let capturingWheel = $state(false);
   let capturingGamepad = $state(false);
   let hotkeyError: string | null = $state(null);
+  let devices: DeviceInfo[] = $state([]);
 
   // Model setup dialog: shown only when Enable is turned on and the model
   // isn't installed yet -- an already-installed model just enables in place.
@@ -107,6 +108,7 @@
   async function syncVoiceShell() {
     if (!settings || !isTauriShell()) return;
     hotkeyError = await pushBinds(settings.voice);
+    devices = await listDevices();
   }
 
   async function saveVoiceConfig() {
@@ -572,7 +574,7 @@
         <div class="field">
           <span class="lbl">Wheel button<InfoTip text="A wheel button held to talk, in addition to the keyboard key." /></span>
           <div class="control">
-            <span class="val">{settings.voice.ptt_wheel ?? "not set"}</span>
+            <span class="val" title={settings.voice.ptt_wheel ?? undefined}>{describeBind(settings.voice.ptt_wheel, devices)}</span>
             <button type="button" onclick={captureWheel}>{capturingWheel ? "Press a button…" : "Capture"}</button>
             <button type="button" onclick={clearWheel} disabled={!settings.voice.ptt_wheel}>Clear</button>
           </div>
@@ -580,7 +582,7 @@
         <div class="field">
           <span class="lbl">Gamepad button<InfoTip text="A gamepad button held to talk, in addition to the keyboard key." /></span>
           <div class="control">
-            <span class="val">{settings.voice.ptt_gamepad ?? "not set"}</span>
+            <span class="val" title={settings.voice.ptt_gamepad ?? undefined}>{describeBind(settings.voice.ptt_gamepad, devices)}</span>
             <button type="button" onclick={captureGamepad}>{capturingGamepad ? "Press a button…" : "Capture"}</button>
             <button type="button" onclick={clearGamepad} disabled={!settings.voice.ptt_gamepad}>Clear</button>
           </div>

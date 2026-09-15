@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { attachShell, captureNext, pushBinds, type ShellApi } from "./voice-shell";
+import { attachShell, captureNext, describeBind, pushBinds, type ShellApi } from "./voice-shell";
 
 function fakeShell() {
   const handlers = new Map<string, (p: unknown) => void>();
@@ -35,5 +35,12 @@ describe("voice-shell", () => {
     handlers.get("voice:captured")!({ id: "xinput:0:4" });
     expect(await p).toBe("xinput:0:4");
     expect(await captureNext(shell, 10)).toBe(null);
+  });
+  it("describeBind names the device and button, or falls back", () => {
+    const devices = [{ device: "winmm:0", name: "Fanatec DD1" }];
+    expect(describeBind("winmm:0:1", devices)).toBe("Fanatec DD1 · button 2");
+    expect(describeBind("winmm:3:1", devices)).toBe("winmm:3 · button 2");
+    expect(describeBind("garbage", devices)).toBe("garbage");
+    expect(describeBind(null, devices)).toBe("not set");
   });
 });

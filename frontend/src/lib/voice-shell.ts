@@ -48,6 +48,30 @@ export async function pushBinds(
   }
 }
 
+export interface DeviceInfo { device: string; name: string }
+
+/** Lists connected wheel/gamepad devices with their friendly names (#104). Empty on error. */
+export async function listDevices(shell: ShellApi = tauriShell()): Promise<DeviceInfo[]> {
+  try {
+    return (await shell.invoke("voice_list_devices")) as DeviceInfo[];
+  } catch {
+    return [];
+  }
+}
+
+/** Mirrors the Rust `describe_bind`: "<name> · button <N+1>", falling back to the raw
+ * device id when unknown, or the raw bind id when it doesn't parse. */
+export function describeBind(id: string | null, devices: DeviceInfo[]): string {
+  if (id === null) return "not set";
+  const i = id.lastIndexOf(":");
+  if (i === -1) return id;
+  const device = id.slice(0, i);
+  const button = Number(id.slice(i + 1));
+  if (!Number.isInteger(button)) return id;
+  const name = devices.find((d) => d.device === device)?.name ?? device;
+  return `${name} · button ${button + 1}`;
+}
+
 /** Arms capture and resolves with the next pressed bind id, or null on timeout. */
 export async function captureNext(shell: ShellApi = tauriShell(), timeoutMs = 10000): Promise<string | null> {
   return new Promise((resolve) => {
