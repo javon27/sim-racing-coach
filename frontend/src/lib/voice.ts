@@ -68,6 +68,9 @@ export interface VoiceLoopOptions {
 }
 
 const MIC_ERROR = "I can't hear the mic";
+// Barge-in gate (conversation mode): sustained loudness needed to interrupt playback.
+export const BARGE_IN_MS = 400;
+export const BARGE_IN_LEVEL_MULT = 2;
 const DIDNT_CATCH = "Didn't catch that";
 
 export class VoiceLoop {
@@ -87,6 +90,7 @@ export class VoiceLoop {
   #vad: VadState = vadInitial;
   #recording = false;
   #starting: Promise<void> | null = null;
+  #bargeMs = 0;   // consecutive ms above the barge-in level while speaking
   #idleTimer: unknown = null;
   #speakSeq = 0;
   #setTimeout: (fn: () => void, ms: number) => unknown;
@@ -194,7 +198,16 @@ export class VoiceLoop {
     if (this.mode !== "conversation") return;
     const level = rms(frame);
     if (this.state === "speaking") {            // barge-in
-      if (level >= this.#o.vad.threshold) { this.#cancelSpeech(); this.#listen("conversation"); }
+      // The coach's own playback leaks into a desk mic, so a single frame over the
+      // listening threshold is not speech: require a SUSTAINED burst at twice the
+      // threshold before cutting the answer off. ponytail: fixed multiplier and
+      // window; an echo-cancelling reference of the TTS output would be the upgrade.
+      if (level >= this.#o.vad.threshold * BARGE_IN_LEVEL_MULT) {
+        this.#bargeMs += this.#o.frameMs ?? 50;
+        if (this.#bargeMs >= BARGE_IN_MS) { this.#bargeMs = 0; this.#cancelSpeech(); this.#listen("conversation"); }
+      } else {
+        this.#bargeMs = 0;
+      }
       return;
     }
     if (this.state !== "listening") return;

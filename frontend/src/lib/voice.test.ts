@@ -209,6 +209,28 @@ describe("VoiceLoop conversation", () => {
     recorder.frame(0.2); for (let i = 0; i < 20; i++) recorder.frame(0); await flush(); await flush();
     loop.onAnswer("Answer.", null); await flush();
     expect(loop.state).toBe("speaking");
+    // Sustained loud speech (>= 2x threshold for BARGE_IN_MS) interrupts.
+    for (let i = 0; i < 8; i++) recorder.frame(0.3);
+    await flush();
+    expect(speaker.cancels).toBe(1); expect(loop.state).toBe("listening");
+  });
+  it("noise during speaking does not barge in (rig: playback kept cutting itself off)", async () => {
+    const { loop, recorder, speaker } = make();
+    loop.toggleConversation(); await flush();
+    recorder.frame(0.2); for (let i = 0; i < 20; i++) recorder.frame(0); await flush(); await flush();
+    loop.onAnswer("Answer.", null); await flush();
+    expect(loop.state).toBe("speaking");
+    // A single loud frame, a quiet gap, then another: no sustained burst.
+    recorder.frame(0.3); recorder.frame(0); recorder.frame(0.3); await flush();
+    expect(speaker.cancels).toBe(0); expect(loop.state).toBe("speaking");
+    // Sustained but only at the LISTENING threshold (playback bleed): still no.
+    for (let i = 0; i < 20; i++) recorder.frame(0.03);
+    await flush();
+    expect(speaker.cancels).toBe(0); expect(loop.state).toBe("speaking");
+    // 7 loud frames = 350 ms < 400 ms: not yet.
+    for (let i = 0; i < 7; i++) recorder.frame(0.3);
+    await flush();
+    expect(loop.state).toBe("speaking");
     recorder.frame(0.3); await flush();
     expect(speaker.cancels).toBe(1); expect(loop.state).toBe("listening");
   });
