@@ -13,6 +13,8 @@ import {
   addMemory,
   updateMemory,
   distillProfile,
+  voiceStatus,
+  voiceSetup,
   type SettingsResponse,
   type DriverProfileData,
   type StatusResponse,
@@ -36,6 +38,8 @@ vi.mock("./api", async () => {
     addMemory: vi.fn(),
     updateMemory: vi.fn(),
     distillProfile: vi.fn(),
+    voiceStatus: vi.fn(),
+    voiceSetup: vi.fn(),
   };
 });
 
@@ -105,6 +109,8 @@ describe("SettingsScreen", () => {
     vi.mocked(addMemory).mockReset();
     vi.mocked(updateMemory).mockReset();
     vi.mocked(distillProfile).mockReset();
+    vi.mocked(voiceStatus).mockReset();
+    vi.mocked(voiceSetup).mockReset();
     localStorage.clear();
   });
 
@@ -461,5 +467,69 @@ describe("SettingsScreen", () => {
     await waitFor(() =>
       expect(screen.getByText("Braking earlier lap over lap in T4")).toBeTruthy(),
     );
+  });
+
+  // --- Settings -> Voice (#104) ---
+
+  const voiceDefaults = {
+    enabled: false, ptt_key: "F9", ptt_wheel: null, ptt_gamepad: null, tts_voice: null, tts_rate: 1,
+    vad_threshold: 0.02, vad_silence_ms: 1000, vad_max_s: 20, conversation_idle_s: 30,
+  };
+
+  describe("Settings -> Voice", () => {
+    it("enabling voice starts the model download and shows progress until ready", async () => {
+      vi.mocked(getSettings).mockResolvedValue(baseSettings({ voice: voiceDefaults }));
+      vi.mocked(putSettings).mockImplementation(async (cfg) => baseSettings(cfg as Partial<SettingsResponse>));
+      vi.mocked(voiceStatus)
+        .mockResolvedValueOnce({ installed: false, installing: false, progress_bytes: 0, total_bytes: 100, error: null })
+        .mockResolvedValueOnce({ installed: false, installing: true, progress_bytes: 50, total_bytes: 100, error: null })
+        .mockResolvedValue({ installed: true, installing: false, progress_bytes: 100, total_bytes: 100, error: null });
+      vi.mocked(voiceSetup).mockResolvedValue({ started: true, installed: false, installing: true, progress_bytes: 0, total_bytes: 100, error: null });
+
+      render(SettingsScreen);
+      const enable = await screen.findByLabelText("Enable voice");
+      await fireEvent.click(enable);
+
+      await waitFor(() => expect(voiceSetup).toHaveBeenCalled());
+      expect(vi.mocked(putSettings).mock.calls.at(-1)![0]).toMatchObject({ voice: { enabled: true } });
+      await waitFor(() => expect(screen.getByText(/Ready/)).toBeTruthy(), { timeout: 4000 });
+    });
+
+    it("capture sets the PTT key from the next keydown", async () => {
+      vi.mocked(getSettings).mockResolvedValue(baseSettings({ voice: voiceDefaults }));
+      vi.mocked(voiceStatus).mockResolvedValue({ installed: true, installing: false, progress_bytes: 0, total_bytes: null, error: null });
+      vi.mocked(putSettings).mockImplementation(async (cfg) =>
+        baseSettings({ voice: { ...voiceDefaults, ...(cfg.voice as object) } }),
+      );
+
+      render(SettingsScreen);
+      await fireEvent.click(await screen.findByRole("button", { name: "Capture" }));
+      await fireEvent.keyDown(window, { code: "F7" });
+
+      await waitFor(() =>
+        expect(vi.mocked(putSettings).mock.calls.at(-1)![0]).toMatchObject({ voice: { ptt_key: "F7" } }),
+      );
+    });
+
+    it("never shows a wake-word option", async () => {
+      vi.mocked(getSettings).mockResolvedValue(baseSettings({ voice: voiceDefaults }));
+      vi.mocked(voiceStatus).mockResolvedValue({ installed: true, installing: false, progress_bytes: 0, total_bytes: null, error: null });
+
+      render(SettingsScreen);
+      await screen.findByLabelText("Enable voice");
+
+      expect(screen.queryByText(/wake word/i)).toBeNull();
+    });
+
+    it("never shows the wheel/gamepad PTT rows (slice 4)", async () => {
+      vi.mocked(getSettings).mockResolvedValue(baseSettings({ voice: voiceDefaults }));
+      vi.mocked(voiceStatus).mockResolvedValue({ installed: true, installing: false, progress_bytes: 0, total_bytes: null, error: null });
+
+      render(SettingsScreen);
+      await screen.findByLabelText("Enable voice");
+
+      expect(screen.queryByText(/wheel/i)).toBeNull();
+      expect(screen.queryByText(/gamepad/i)).toBeNull();
+    });
   });
 });
