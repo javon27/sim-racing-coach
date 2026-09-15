@@ -975,6 +975,58 @@ def test_agentic_prompt_points_at_get_time_loss(tmp_path, synthetic_lap):
     Coach(model).ask_agentic(ctx, "where am I losing time?", "test_car")
     assert "get_time_loss" in model.last_system
 
+
+# --- get_consistency (#38) ------------------------------------------------------
+
+def _consistency_session(tmp_path, synthetic_lap, scales, phase="practice"):
+    """A stored session of len(scales) valid laps, each a clone of synthetic_lap
+    with T1's min-speed window (900-1100, minimum at 1015 -- see conftest) scaled
+    by that lap's factor -- mirrors test_analysis.py::_consistency_stint but
+    through the store, so get_consistency exercises session_laps/load/
+    _analysis_for like the real tool does."""
+    import dataclasses
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    session_id = "s1--online"
+    ids = []
+    for i, scale in enumerate(scales):
+        ch = {k: v.copy() for k, v in synthetic_lap.channels.items()}
+        d = ch["lap_distance"]
+        win = (d >= 900) & (d <= 1100)
+        ch["speed"][win] = ch["speed"][win] * scale
+        lap = dataclasses.replace(synthetic_lap, channels=ch, lap_time=90.0 + i,
+                                  session_id=session_id, phase=phase, timestamp=90.0 + i)
+        ids.append(store.save(lap))
+    cur = store.load(ids[-1])
+    return CoachContext(store, record=cur, lap_id=ids[-1], cmap=cmap, track=cur.track,
+                        car=cur.car, session_id=session_id, on_track=True)
+
+
+def test_get_consistency_names_the_noisy_corner(tmp_path, synthetic_lap):
+    ctx = _consistency_session(tmp_path, synthetic_lap, [1.0, 0.95, 1.05, 0.90, 1.10])
+    out = ctx.dispatch("get_consistency", {})
+    assert "Lap time" in out
+    assert "T1 Left Hairpin" in out
+
+
+def test_get_consistency_honest_with_two_laps(tmp_path, synthetic_lap):
+    ctx = _consistency_session(tmp_path, synthetic_lap, [1.0, 1.0])
+    out = ctx.get_consistency()
+    assert "2 laps" in out and "consistency" in out.lower()
+
+
+def test_get_consistency_registered_in_tools_and_dispatch(tmp_path, synthetic_lap):
+    assert any(t["name"] == "get_consistency" for t in TOOLS)
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)   # no active session -- still dispatchable
+    assert not ctx.dispatch("get_consistency", {}).startswith("error:")
+
+
+def test_agentic_prompt_points_at_get_consistency(tmp_path, synthetic_lap):
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    model = FakeModel(reply="ok")
+    Coach(model).ask_agentic(ctx, "am I consistent?", "test_car")
+    assert "get_consistency" in model.last_system
+
 # Either side of the #67 fix merging (56aa319). BEFORE is the stored timestamp of the
 # answer that told a P9 -> P18 driver "you started P18 ... No incidents".
 _BEFORE_67_FIX = 1789018942.56

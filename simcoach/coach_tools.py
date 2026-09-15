@@ -12,10 +12,11 @@ from __future__ import annotations
 import re
 import time
 
-from simcoach.analysis import analyze_lap, geometry_clause, time_loss_buckets
+from simcoach.analysis import analyze_lap, geometry_clause, stint_consistency, time_loss_buckets
 from simcoach.coach import _setup_lines
 from simcoach.format import (
     find_corner,
+    format_consistency,
     format_corner_line,
     format_lap_facts,
     format_laptime,
@@ -77,6 +78,22 @@ TOOLS = [
                               "description": "What to compare against: 'best' (default — "
                                              "this session's best, else all-time best) or "
                                              "an in-session lap number."},
+            },
+        },
+    },
+    {
+        "name": "get_consistency",
+        "description": "HOW CONSISTENT the driver is across this stint — lap-time spread "
+                       "and the corners whose min speed / brake point / coasting vary most "
+                       "lap to lap. Use for 'am I consistent', 'which corner do I keep "
+                       "getting wrong', 'is my pace stable'.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "phase": {"type": "string",
+                          "description": "Optional: which phase's laps to measure "
+                                         "('practice'/'qualy'/'race'). Defaults to the "
+                                         "current lap's phase."},
             },
         },
     },
@@ -677,6 +694,31 @@ class CoachContext:
                     "different track length).")
         return format_time_loss(buckets, ref_label)
 
+    def get_consistency(self, phase=None):
+        if not self.session_id:
+            return "No active session — no stint to measure consistency across."
+        if self.cmap is None:
+            return "No corner map for this track yet — can't break laps into corners."
+        if phase is None:
+            cur_rec, _ = self._current_lap()
+            phase = cur_rec.phase if cur_rec is not None else None
+        analyses, lap_times = [], []
+        for row in self.store.session_laps(self.session_id):
+            if not row["valid"] or (phase is not None and row.get("phase") != phase):
+                continue
+            try:
+                record = self.store.load(row["id"])
+            except Exception:
+                record = None   # a result-log row with no telemetry file -- nothing to analyse
+            if record is None:
+                continue
+            analysis = self._analysis_for(record, row["id"])
+            if analysis is None:
+                continue
+            analyses.append(analysis)
+            lap_times.append(record.lap_time)
+        return format_consistency(stint_consistency(analyses, lap_times), self.units)
+
     def list_track_corners(self):
         if self.cmap is None or not self.cmap.corners:
             return "No corner map for this track yet — no corner list available."
@@ -970,6 +1012,7 @@ class CoachContext:
             "get_lap_summary": lambda: self.get_lap_summary(args.get("which", "latest")),
             "get_time_loss": lambda: self.get_time_loss(args.get("which", "latest"),
                                                         args.get("reference", "best")),
+            "get_consistency": lambda: self.get_consistency(args.get("phase")),
             "list_track_corners": lambda: self.list_track_corners(),
             "get_corner": lambda: self.get_corner(args.get("corner", ""), args.get("which", "latest")),
             "get_tire_report": lambda: self.get_tire_report(),
