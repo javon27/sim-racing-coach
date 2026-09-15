@@ -104,6 +104,14 @@
   let answer = $state("");
   let error: string | null = $state(null);
   let scrollEl: HTMLDivElement | undefined = $state();
+  // Jump-to-latest button (#104): shown whenever the driver has scrolled away
+  // from the bottom (same 80px rule the auto-follow effect below uses).
+  let atBottom = $state(true);
+  // Set by loadThread() right before assigning `messages`, so the auto-follow
+  // effect below snaps to the bottom unconditionally for a freshly opened
+  // thread (not just when already near the bottom). Plain (non-reactive) flag:
+  // the effect already re-runs off the `messages.length` change.
+  let forceScrollOnLoad = false;
 
   // Usage/cost meter. Every number here is computed by the core and handed over —
   // this component formats, it never prices.
@@ -303,6 +311,29 @@
     nudgeDismissed = false;
   }
 
+  function nearBottom(el: HTMLDivElement): boolean {
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  }
+
+  // Snap to the bottom, optionally smoothly (jump button). jsdom has no
+  // scrollTo, so fall back to setting scrollTop directly.
+  function scrollToBottom(el: HTMLDivElement, smooth = false) {
+    if (smooth && typeof el.scrollTo === "function") {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    } else {
+      el.scrollTop = el.scrollHeight;
+    }
+    atBottom = true;
+  }
+
+  function onChatScroll() {
+    if (scrollEl) atBottom = nearBottom(scrollEl);
+  }
+
+  function jumpToBottom() {
+    if (scrollEl) scrollToBottom(scrollEl, true);
+  }
+
   // Keep the newest message/streaming text in view, unless the user has
   // scrolled up to read history (within 80px of bottom = "at the bottom").
   $effect(() => {
@@ -310,13 +341,17 @@
     answer;
     const el = scrollEl;
     if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    if (nearBottom) el.scrollTop = el.scrollHeight;
+    if (forceScrollOnLoad || nearBottom(el)) scrollToBottom(el);
+    forceScrollOnLoad = false;
   });
 
   // Populate the thread from a chat's saved messages.
   async function loadThread(id: string) {
     currentChatId = id;
+    // A freshly opened thread always starts at the end, regardless of how
+    // close to the bottom the (empty, pre-load) scroll position happened to
+    // be. Consumed by the auto-follow effect above on the next messages change.
+    forceScrollOnLoad = true;
     try {
       const rows = await getChatMessages(id);
       const hist: Msg[] = [];
@@ -481,59 +516,66 @@
       >×</button>
     </div>
   {/if}
-  <div class="chat-scroll" bind:this={scrollEl}>
-    <div class="thread">
-      {#if messages.length === 0 && !waiting}
-        <p class="chat-empty">New chat — ask a question</p>
-      {/if}
-      {#each messages as m, i (i)}
-        <div class="msg {m.role}">
-          <div class="who">
-            {#if m.role === "you"}
-              <!-- Helmet avatar (the bubble's "You" name already labels the sender, so
-                   a "YOU" badge here doubled it). Profile-image customization: backlog. -->
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="You"><path d="M4 13a8 8 0 0 1 16 0v2a2 2 0 0 1-2 2h-6l-2 3-1.6-3H6a2 2 0 0 1-2-2z"/><path d="M8 12h9"/></svg>
-            {:else}⚑{/if}
-          </div>
-          <div class="bubble">
-            <div class="name">
-              {m.role === "you" ? "You" : "Engineer"}
-              {#if activeVoice && m.role === "coach"}
-                <button
-                  type="button"
-                  class="play"
-                  aria-label={speakingMessage === i ? "Stop" : "Read aloud"}
-                  aria-pressed={speakingMessage === i}
-                  onclick={() => activeVoice?.speakMessage(i, m.text)}
-                >{speakingMessage === i ? "■" : "▶"}</button>
-              {/if}
+  <div class="chat-scroll-wrap">
+    <div class="chat-scroll" bind:this={scrollEl} onscroll={onChatScroll}>
+      <div class="thread">
+        {#if messages.length === 0 && !waiting}
+          <p class="chat-empty">New chat — ask a question</p>
+        {/if}
+        {#each messages as m, i (i)}
+          <div class="msg {m.role}">
+            <div class="who">
+              {#if m.role === "you"}
+                <!-- Helmet avatar (the bubble's "You" name already labels the sender, so
+                     a "YOU" badge here doubled it). Profile-image customization: backlog. -->
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="You"><path d="M4 13a8 8 0 0 1 16 0v2a2 2 0 0 1-2 2h-6l-2 3-1.6-3H6a2 2 0 0 1-2-2z"/><path d="M8 12h9"/></svg>
+              {:else}⚑{/if}
             </div>
-            {#if m.role === "coach"}
-              <div class="body md">{@html renderMarkdown(m.text)}</div>
-            {:else}
-              <div class="body">{m.text}</div>
-            {/if}
-          </div>
-        </div>
-      {/each}
-      {#if waiting}
-        <div class="msg coach">
-          <div class="who">⚑</div>
-          <div class="bubble">
-            <div class="name">Engineer</div>
-            <div class="body md">
-              {#if phase === "tool"}
-                <span class="typing">reading your lap{toolActivity ? ` (${toolActivity.name})` : ""}…</span>
-              {:else if phase === "streaming"}
-                {@html renderMarkdown(answer)}
+            <div class="bubble">
+              <div class="name">
+                {m.role === "you" ? "You" : "Engineer"}
+                {#if activeVoice && m.role === "coach"}
+                  <button
+                    type="button"
+                    class="play"
+                    aria-label={speakingMessage === i ? "Stop" : "Read aloud"}
+                    aria-pressed={speakingMessage === i}
+                    onclick={() => activeVoice?.speakMessage(i, m.text)}
+                  >{speakingMessage === i ? "■" : "▶"}</button>
+                {/if}
+              </div>
+              {#if m.role === "coach"}
+                <div class="body md">{@html renderMarkdown(m.text)}</div>
               {:else}
-                <span class="typing">thinking…</span>
+                <div class="body">{m.text}</div>
               {/if}
             </div>
           </div>
-        </div>
-      {/if}
+        {/each}
+        {#if waiting}
+          <div class="msg coach">
+            <div class="who">⚑</div>
+            <div class="bubble">
+              <div class="name">Engineer</div>
+              <div class="body md">
+                {#if phase === "tool"}
+                  <span class="typing">reading your lap{toolActivity ? ` (${toolActivity.name})` : ""}…</span>
+                {:else if phase === "streaming"}
+                  {@html renderMarkdown(answer)}
+                {:else}
+                  <span class="typing">thinking…</span>
+                {/if}
+              </div>
+            </div>
+          </div>
+        {/if}
+      </div>
     </div>
+    {#if !atBottom}
+      <button type="button" class="jump" aria-label="Jump to latest" onclick={jumpToBottom}>
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+      </button>
+    {/if}
   </div>
   <div class="composer">
     <div class="wrap">
@@ -724,6 +766,35 @@
   }
   .play:hover {
     color: var(--text);
+    border-color: var(--accent);
+  }
+  /* Wraps .chat-scroll (styled globally in app.css, which already sets flex:1)
+     so the jump button can anchor to the scroll area instead of the whole panel. */
+  .chat-scroll-wrap {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .jump {
+    position: absolute;
+    right: 20px;
+    bottom: 12px;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border-radius: 50%;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    color: var(--text);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    cursor: pointer;
+  }
+  .jump:hover {
     border-color: var(--accent);
   }
   .chat-empty {

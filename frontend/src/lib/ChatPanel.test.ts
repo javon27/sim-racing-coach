@@ -649,6 +649,61 @@ describe("ChatPanel", () => {
   });
 });
 
+// #104: opening a past chat should land at the end, with a jump-to-latest
+// button while scrolled up (jsdom has no layout, so scrollHeight/clientHeight
+// are stubbed on the scroll element).
+describe("ChatPanel (scroll to end + jump-to-latest, #104)", () => {
+  beforeEach(() => {
+    vi.mocked(getChatUsage).mockReset();
+    vi.mocked(getChatUsage).mockResolvedValue({ usage: usage(), cost: 0, cost_complete: true });
+    vi.mocked(getSettings).mockReset();
+    vi.mocked(getSettings).mockResolvedValue({ show_cost: true } as SettingsResponse);
+  });
+  afterEach(cleanup);
+
+  function stubLayout(el: HTMLElement, { scrollHeight = 1000, clientHeight = 300 } = {}) {
+    Object.defineProperty(el, "scrollHeight", { value: scrollHeight, configurable: true });
+    Object.defineProperty(el, "clientHeight", { value: clientHeight, configurable: true });
+    if (!("scrollTop" in el) || typeof el.scrollTop !== "number") {
+      Object.defineProperty(el, "scrollTop", { value: 0, writable: true, configurable: true });
+    }
+  }
+
+  it("opens a stored chat scrolled to the end", async () => {
+    vi.mocked(getChatMessages).mockResolvedValue([
+      { ts: 1, session_id: "s1", track: "Le Mans", car: "Corvette", lap_id: null, question: "q1", answer: "a1", tool_calls: null },
+      { ts: 2, session_id: "s1", track: "Le Mans", car: "Corvette", lap_id: null, question: "q2", answer: "a2", tool_calls: null },
+      { ts: 3, session_id: "s1", track: "Le Mans", car: "Corvette", lap_id: null, question: "q3", answer: "a3", tool_calls: null },
+    ]);
+    const { container } = render(ChatPanel, { props: { stream: new FakeStream(), chatId: "c1" } });
+    const scrollEl = container.querySelector(".chat-scroll") as HTMLElement;
+    stubLayout(scrollEl);
+    await screen.findByText("q3");
+    await waitFor(() => expect(scrollEl.scrollTop).toBe(scrollEl.scrollHeight));
+  });
+
+  it("shows the jump button only while scrolled up, and clicking it returns to bottom", async () => {
+    vi.mocked(getChatMessages).mockResolvedValue([
+      { ts: 1, session_id: "s1", track: "Le Mans", car: "Corvette", lap_id: null, question: "q1", answer: "a1", tool_calls: null },
+    ]);
+    const { container } = render(ChatPanel, { props: { stream: new FakeStream(), chatId: "c1" } });
+    const scrollEl = container.querySelector(".chat-scroll") as HTMLElement;
+    stubLayout(scrollEl);
+    await screen.findByText("q1");
+    await waitFor(() => expect(scrollEl.scrollTop).toBe(scrollEl.scrollHeight));
+
+    expect(container.querySelector(".jump")).toBeNull();
+
+    scrollEl.scrollTop = 0; // far from the bottom (scrollHeight 1000, clientHeight 300)
+    await fireEvent.scroll(scrollEl);
+    const jumpBtn = await screen.findByRole("button", { name: /jump to latest/i });
+
+    await fireEvent.click(jumpBtn);
+    expect(scrollEl.scrollTop).toBe(scrollEl.scrollHeight);
+    expect(container.querySelector(".jump")).toBeNull();
+  });
+});
+
 // The chat bar doubles as the Inputs panel's drag handle (#95 round 2): App owns
 // the height/drag state and hands ChatPanel three callbacks + a dragging flag.
 describe("ChatPanel (chat bar as the inputs-pane grab handle)", () => {
