@@ -221,3 +221,33 @@ def test_format_consistency_silent_when_no_corner_clears_the_sample_floor():
         ranking=["T7 Anchor"]))
     assert "Least consistent" not in out
     assert out.startswith("Lap time")
+
+
+# --- handling / lockup / wheelspin suffixes (#38) ---------------------------
+
+def test_format_corner_line_appends_understeer_suffix():
+    cm = _cm(1.0)
+    cm.handling = "understeer"
+    assert "understeer (steering still winding, lat g flat)" in format_corner_line(cm)
+
+
+def test_format_corner_line_appends_oversteer_suffix():
+    cm = _cm(1.0)
+    cm.handling = "oversteer"
+    assert "oversteer (countersteer at exit)" in format_corner_line(cm)
+
+
+def test_format_corner_line_neutral_handling_adds_nothing():
+    cm = _cm(1.0)
+    cm.handling = "neutral"
+    line = format_corner_line(cm)
+    assert "understeer" not in line and "oversteer" not in line
+    assert line == format_corner_line(_cm(1.0))   # default (None) reads the same
+
+
+def test_format_corner_line_appends_lockup_and_wheelspin():
+    cm = _cm(1.0)
+    cm.lockup = True
+    cm.wheelspin = True
+    line = format_corner_line(cm)
+    assert ", lockup" in line and ", wheelspin" in line

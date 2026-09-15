@@ -130,6 +130,16 @@ def format_corner_line(cm, units: str = "metric") -> str:
     if len(aps) > 1 and cm.apex_min_speeds:
         mins = "/".join(f"{spd(s):.0f}" for s in cm.apex_min_speeds)
         line += f", {len(aps)}-apex (per-apex min {mins} {spd_u})"
+    # #38 balance read -- short, the model narrates the detail from get_handling.
+    handling = getattr(cm, "handling", None)
+    if handling == "understeer":
+        line += ", understeer (steering still winding, lat g flat)"
+    elif handling == "oversteer":
+        line += ", oversteer (countersteer at exit)"
+    if getattr(cm, "lockup", None):
+        line += ", lockup"
+    if getattr(cm, "wheelspin", None):
+        line += ", wheelspin"
     if cm.min_spd_delta is not None:
         line += f" (min vs best: {spd(cm.min_spd_delta):+.1f} {spd_u})"
     # #102: every other comparable metric, vs the reference -- relative and

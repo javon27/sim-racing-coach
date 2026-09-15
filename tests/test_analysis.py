@@ -1023,3 +1023,133 @@ def test_stint_consistency_skips_none_and_nan_fields_instead_of_zeroing(syntheti
     result = stint_consistency(analyses, lap_times)
     bp = result["corners"]["T1 Left Hairpin"]["brake_point"]
     assert bp["n"] == 2   # only the two laps that actually braked here count
+
+
+# --- handling_read (#38) ---------------------------------------------------
+
+def test_handling_read_understeer():
+    # Steering keeps winding (0.31 -> 0.6 over the mid phase) while lat_g sits
+    # flat at 1.5 -- the car is adding lock and getting nothing back.
+    import numpy as np
+    from simcoach.analysis import handling_read
+
+    n = 20
+    steer = np.linspace(0.1, 0.6, n)     # peak 0.6, at the min-speed sample
+    lat_g = np.full(n, 1.5)
+    speed = np.linspace(150.0, 50.0, n)  # min speed at the last sample
+    brake = np.zeros(n)
+    throttle = np.zeros(n)
+
+    result = handling_read(steer, lat_g, speed, brake, throttle, None)
+    assert result["handling"] == "understeer"
+    assert "lock" in result["handling_why"] and "lat g" in result["handling_why"]
+    assert result["lockup"] is None and result["wheelspin"] is None
+
+
+def test_handling_read_oversteer_countersteer():
+    # Steering normally sits opposite sign to lat_g (LMU convention, #70); 8
+    # consecutive samples flip to lat_g's OWN sign mid-corner -- countersteer.
+    import numpy as np
+    from simcoach.analysis import handling_read
+
+    n = 20
+    steer = np.full(n, -0.3)
+    steer[6:14] = 0.3   # 8-sample countersteer against the corner's direction
+    lat_g = np.full(n, 1.2)
+    speed = np.linspace(150.0, 50.0, n)
+    brake = np.zeros(n)
+    throttle = np.zeros(n)
+
+    result = handling_read(steer, lat_g, speed, brake, throttle, None)
+    assert result["handling"] == "oversteer"
+    assert "countersteer" in result["handling_why"]
+
+
+def test_handling_read_neutral_on_a_clean_trace():
+    # Steering and lat_g rise and fall together (no plateau, no reversal, no
+    # exit drop) -- a clean, proportional corner.
+    import numpy as np
+    from simcoach.analysis import handling_read
+
+    n = 20
+    steer = np.concatenate([np.linspace(0.0, -0.15, 10), np.linspace(-0.15, 0.0, 10)])
+    lat_g = np.concatenate([np.linspace(0.0, 0.8, 10), np.linspace(0.8, 0.0, 10)])
+    speed = np.concatenate([np.linspace(150.0, 80.0, 10), np.linspace(80.0, 150.0, 10)])
+    brake = np.zeros(n)
+    throttle = np.zeros(n)
+
+    result = handling_read(steer, lat_g, speed, brake, throttle, None)
+    assert result["handling"] == "neutral"
+    assert result["handling_why"] is None
+
+
+def test_handling_read_too_few_samples_is_none():
+    import numpy as np
+    from simcoach.analysis import handling_read
+
+    n = 5
+    result = handling_read(np.zeros(n), np.zeros(n), np.full(n, 100.0),
+                           np.zeros(n), np.zeros(n), None)
+    assert result["handling"] is None and result["handling_why"] is None
+
+
+def test_handling_read_lockup():
+    import numpy as np
+    from simcoach.analysis import handling_read
+
+    n = 15
+    steer, lat_g = np.zeros(n), np.zeros(n)
+    speed = np.full(n, 120.0)
+    brake = np.full(n, 0.6)
+    throttle = np.zeros(n)
+    wheel_rot = {w: np.full(n, 30.0) for w in ("fl", "fr", "rl", "rr")}
+    wheel_rot["fl"][7] = 0.05   # one wheel stopped while the car moves at 120 km/h
+
+    result = handling_read(steer, lat_g, speed, brake, throttle, wheel_rot)
+    assert result["lockup"] is True
+    assert result["wheelspin"] is False
+
+
+def test_handling_read_wheelspin():
+    import numpy as np
+    from simcoach.analysis import handling_read
+
+    n = 15
+    steer, lat_g = np.zeros(n), np.zeros(n)
+    speed = np.full(n, 100.0)
+    brake = np.zeros(n)
+    throttle = np.full(n, 0.8)
+    wheel_rot = {w: np.full(n, 30.0) for w in ("fl", "fr", "rl", "rr")}
+    wheel_rot["rl"][7] = 40.0   # rear-left outpaces the front pair under power
+
+    result = handling_read(steer, lat_g, speed, brake, throttle, wheel_rot)
+    assert result["wheelspin"] is True
+    assert result["lockup"] is False
+
+
+def test_handling_read_none_when_wheel_rot_missing():
+    import numpy as np
+    from simcoach.analysis import handling_read
+
+    n = 15
+    result = handling_read(np.zeros(n), np.zeros(n), np.full(n, 100.0),
+                           np.full(n, 0.6), np.full(n, 0.8), None)
+    assert result["lockup"] is None and result["wheelspin"] is None
+
+
+def test_analyze_lap_carries_handling_fields_neutral_on_synthetic_lap(synthetic_lap):
+    # No wheel_rot channels in the fixture (#38 needs a fresh capture for
+    # lockup/wheelspin) and both corners are clean, proportional cornering --
+    # so the new fields must be present but inert, and the corner line unchanged.
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap
+    from simcoach.format import format_corner_line
+
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    a = analyze_lap(synthetic_lap, cmap)
+    for cm in a.corners:
+        assert cm.handling == "neutral"
+        assert cm.lockup is None and cm.wheelspin is None
+        line = format_corner_line(cm, "metric")
+        assert "understeer" not in line and "oversteer" not in line
+        assert "lockup" not in line and "wheelspin" not in line

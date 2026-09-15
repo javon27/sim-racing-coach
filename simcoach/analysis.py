@@ -64,6 +64,12 @@ class CornerMetrics:
     apexes: Optional[list[float]] = None     # apex lap_distances (>1 = multi-apex)
     apex_min_speeds: Optional[list[float]] = None  # min speed per apex (parallel to apexes)
     section: Optional[str] = None            # named section this corner sits in, if any
+    # #38: balance read. None when steering/lat_g weren't both captured, or the
+    # window was too sparse to read (see handling_read).
+    handling: Optional[str] = None       # "understeer" | "oversteer" | "neutral" | None
+    handling_why: Optional[str] = None   # short driver-facing reason, or None
+    lockup: Optional[bool] = None        # a wheel stopped under braking; None if wheel_rot absent
+    wheelspin: Optional[bool] = None     # a driven wheel outpaced the front axle; None if absent
 
 
 @dataclass
@@ -448,6 +454,120 @@ def _tire_summary(record: LapRecord):
     return means, (early, late)
 
 
+# --- handling read (#38) -------------------------------------------------
+# A heuristic balance index, NOT a vehicle model: steering vs lateral g (plus
+# wheel_rot for lockup/wheelspin) is all this codebase can read (grip_*/
+# tire_load_* are dead -- LMU never fills them, #43). Every threshold below is a
+# tuning knob; a rig session on a corner the driver KNOWS is understeering/
+# oversteering is what settles them, not more code.
+# ponytail: steering-rise threshold (fraction of full lock) for "still winding
+# lock and getting nothing" -- loosen if clean laps false-trigger, tighten if a
+# known understeer corner reads neutral.
+_US_STEER_RISE = 0.10
+# ponytail: how flat lat_g must sit near its own peak to call it "plateaued".
+_US_LATG_PLATEAU = 0.10
+# ponytail: consecutive samples of countersteer (~50 Hz, so 5 ~= 0.1 s) before
+# it's a real correction rather than a twitch.
+_OS_MIN_SAMPLES = 5
+# ponytail: minimum |lat_g| to trust a countersteer/exit read as loaded, not parked.
+_OS_LATG_MIN = 0.5
+# ponytail: how much steering must ease off at the exit (fraction of lock) to
+# read as the car rotating on its own rather than the driver just unwinding normally.
+_OS_STEER_DROP = 0.15
+# ponytail: minimum window size to trust any of the above -- fewer samples is
+# noise, not a read.
+_HANDLING_MIN_SAMPLES = 10
+# ponytail: wheel_rot (rad/s) below this while braking hard at speed reads as
+# a stopped wheel (lockup), not just a slow one.
+_LOCKUP_ROT = 1.0
+# ponytail: how far a driven wheel must outpace the front axle mean to call it
+# wheelspin rather than normal diff/track-surface scatter.
+_SPIN_RATIO = 1.15
+
+
+def _longest_run(mask: np.ndarray) -> int:
+    """Longest run of consecutive True in a 1-D boolean array."""
+    best = run = 0
+    for v in mask:
+        run = run + 1 if v else 0
+        best = max(best, run)
+    return best
+
+
+def handling_read(win_steering, win_lat_g, win_speed, win_brake, win_throttle,
+                  wheel_rot: "dict[str, np.ndarray] | None") -> dict:
+    """Pure per-corner balance read from already-windowed channels (no LLM, no
+    corner identity -- the caller supplies that separately).
+
+    Returns {"handling": "understeer"|"oversteer"|"neutral"|None, "handling_why":
+    str|None, "lockup": bool|None, "wheelspin": bool|None}. `handling`/
+    `handling_why` are None when steering/lat_g/speed aren't all present or the
+    window is too short (`_HANDLING_MIN_SAMPLES`); `lockup`/`wheelspin` are None
+    when `wheel_rot` doesn't carry all four wheels.
+    """
+    handling = handling_why = None
+    n = len(win_steering) if win_steering is not None else 0
+    if (win_steering is not None and win_lat_g is not None and win_speed is not None
+            and n >= _HANDLING_MIN_SAMPLES):
+        steer = np.asarray(win_steering, dtype=float)
+        lat_g = np.asarray(win_lat_g, dtype=float)
+        abs_steer, abs_latg = np.abs(steer), np.abs(lat_g)
+        peak_steer = float(np.nanmax(abs_steer))
+        peak_latg = float(np.nanmax(abs_latg))
+        min_i = int(np.nanargmin(win_speed))
+
+        over = np.where(abs_steer > 0.5 * peak_steer)[0] if peak_steer > 0 else np.array([], dtype=int)
+        mid_start = min(int(over[0]), min_i) if over.size else 0
+
+        understeer = False
+        if min_i > mid_start:
+            mid = slice(mid_start, min_i + 1)
+            steer_rise = abs_steer[min_i] - abs_steer[mid_start]
+            plateau = peak_latg - float(np.nanmin(abs_latg[mid]))
+            if steer_rise > _US_STEER_RISE and plateau <= _US_LATG_PLATEAU:
+                understeer = True
+                handling = "understeer"
+                handling_why = (f"steering still winding +{steer_rise * 100:.0f}% lock "
+                                f"with lat g flat at {peak_latg:.1f}")
+
+        if not understeer:
+            corner_sign = 1.0 if float(np.nanmean(lat_g)) >= 0 else -1.0
+            countersteer = (np.sign(steer) * corner_sign > 0) & (abs_latg >= _OS_LATG_MIN)
+            run = _longest_run(countersteer)
+            oversteer = run >= _OS_MIN_SAMPLES
+            if oversteer:
+                handling_why = f"countersteer against the corner, lat g holding {peak_latg:.1f}"
+            elif min_i < n - 1:
+                exit_drop = abs_steer[min_i] - abs_steer[-1]
+                exit_throttle = float(np.nanmean(win_throttle[min_i:])) if win_throttle is not None else 0.0
+                exit_plateau = peak_latg - float(np.nanmin(abs_latg[min_i:]))
+                if (exit_drop > _OS_STEER_DROP and exit_throttle > 0.3
+                        and exit_plateau <= _US_LATG_PLATEAU):
+                    oversteer = True
+                    handling_why = (f"steering easing off exit while throttle "
+                                    f"{exit_throttle:.0%}, lat g flat at {peak_latg:.1f}")
+            if oversteer:
+                handling = "oversteer"
+        if handling is None:
+            handling = "neutral"
+
+    lockup = wheelspin = None
+    if wheel_rot is not None and all(k in wheel_rot for k in ("fl", "fr", "rl", "rr")):
+        rot = {k: np.asarray(v, dtype=float) for k, v in wheel_rot.items()}
+        if win_brake is not None and win_speed is not None:
+            braking = (np.asarray(win_brake) > 0.3) & (np.asarray(win_speed) > 30.0)
+            lockup = bool(braking.any() and any(
+                np.any(np.abs(rot[w][braking]) < _LOCKUP_ROT) for w in ("fl", "fr", "rl", "rr")))
+        if win_throttle is not None:
+            on_power = np.asarray(win_throttle) > 0.5
+            front_mean = (rot["fl"] + rot["fr"]) / 2.0
+            wheelspin = bool(on_power.any() and any(
+                np.any(rot[w][on_power] > _SPIN_RATIO * front_mean[on_power]) for w in ("rl", "rr")))
+
+    return {"handling": handling, "handling_why": handling_why,
+            "lockup": lockup, "wheelspin": wheelspin}
+
+
 def _metrics_for_corner(
     record: LapRecord, corner: Corner, length: float | None = None
 ) -> CornerMetrics:
@@ -629,6 +749,17 @@ def _metrics_for_corner(
     coast_time, coast_dist = _coast_totals(win_dist, win_speed, win_throttle, win_brake)
     brake_to_throttle_dist = _brake_to_throttle(dist, brake, throttle, idx)
 
+    # #38: balance read (understeer/oversteer/lockup/wheelspin) from steering,
+    # lat_g and wheel_rot -- the only channels LMU actually fills for this
+    # (grip_*/tire_load_* are dead, #43). None of the inputs above; a pure
+    # function on this corner's own window.
+    win_lat_g_arr = win_lat_g[idx] if win_lat_g is not None else None
+    wheel_rot_win = None
+    if all(f"wheel_rot_{w}" in record.channels for w in _WHEELS):
+        wheel_rot_win = {w: record.channels[f"wheel_rot_{w}"][idx] for w in _WHEELS}
+    handling_info = handling_read(win_steering, win_lat_g_arr, win_speed, win_brake,
+                                  win_throttle, wheel_rot_win)
+
     try:
         direction = compute_direction(record, corner.start_dist, corner.end_dist)
     except ValueError:
@@ -675,6 +806,8 @@ def _metrics_for_corner(
         coast_dist=coast_dist,
         brake_to_throttle_dist=brake_to_throttle_dist,
         label=label, apexes=aps, apex_min_speeds=apex_min_speeds,
+        handling=handling_info["handling"], handling_why=handling_info["handling_why"],
+        lockup=handling_info["lockup"], wheelspin=handling_info["wheelspin"],
     )
 
 
