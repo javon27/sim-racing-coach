@@ -77,6 +77,12 @@
        (mouse-only convenience; the real button below already covers keyboard/a11y) -->
   <div class="hdr" onclick={onHdrClick}>
     <h2>Inputs — lap vs best</h2>
+    {#if showingTraces}
+      <ul class="trace-legend" aria-hidden="true">
+        <li><span class="sw selected"></span>selected lap</li>
+        <li><span class="sw best"></span>best</li>
+      </ul>
+    {/if}
     <button
       type="button"
       class="collapse-btn"
@@ -118,7 +124,7 @@
   .hdr {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 10px;
     padding: 8px 20px;
     cursor: pointer;
   }
@@ -130,11 +136,39 @@
     color: var(--faint);
     font-weight: 700;
   }
+  .trace-legend {
+    display: flex;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 10px;
+    font-family: var(--mono);
+    color: var(--faint);
+  }
+  .trace-legend li {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .trace-legend .sw {
+    width: 14px;
+    height: 2px;
+    border-radius: 1px;
+  }
+  .trace-legend .sw.selected {
+    background: var(--accent);
+  }
+  .trace-legend .sw.best {
+    border-top: 2px dashed var(--trace-best);
+    height: 0;
+  }
   .collapse-btn {
     display: grid;
     place-items: center;
     width: 24px;
     height: 24px;
+    margin-left: auto;
     background: none;
     border: 1px solid transparent;
     border-radius: 6px;

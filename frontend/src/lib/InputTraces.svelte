@@ -201,13 +201,6 @@
       </ul>
     {/if}
     <div class="plot">
-      {#if mode === "line"}
-        <!-- HTML, not SVG, so it never scales with the viewBox (#95 round 2). -->
-        <div class="line-legend" aria-hidden="true">
-          <span class="lg-item"><span class="lg-sw selected"></span>selected lap</span>
-          <span class="lg-item"><span class="lg-sw best"></span>best</span>
-        </div>
-      {/if}
       <svg viewBox="0 0 {W} {H}" preserveAspectRatio="none" role="img"
            aria-label="Driver inputs against lap distance">
         {#if hasMarkers}
@@ -319,7 +312,7 @@
     stroke-width: 1.6;
   }
   .mline.best {
-    stroke: var(--faint);
+    stroke: var(--trace-best);
     stroke-width: 1.2;
     opacity: 1;
   }
@@ -349,34 +342,6 @@
     color: var(--faint);
     font-family: var(--mono);
     pointer-events: none;
-  }
-  .line-legend {
-    position: absolute;
-    top: 0;
-    right: 0;
-    z-index: 1;
-    display: flex;
-    gap: 10px;
-    font-size: 10px;
-    color: var(--faint);
-    font-family: var(--mono);
-    pointer-events: none;
-  }
-  .lg-item {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-  }
-  .lg-sw {
-    width: 14px;
-    height: 2px;
-    border-radius: 1px;
-  }
-  .lg-sw.selected {
-    background: var(--accent);
-  }
-  .lg-sw.best {
-    background: var(--faint);
   }
   .legend {
     display: flex;

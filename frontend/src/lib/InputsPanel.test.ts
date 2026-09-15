@@ -131,4 +131,16 @@ describe("InputsPanel", () => {
     expect(container.querySelector('[data-testid="inputs-panel-body"]')).toBeNull();
     expect(localStorage.getItem("inputsPanel.collapsed")).toBe("true");
   });
+
+  it("shows the trace legend in the header when traces are showing (#95 round 3)", async () => {
+    vi.mocked(getLapInputs).mockResolvedValue({ lap: LAP, best: null, corners: [] });
+    render(InputsPanel, { props: { lapId: 9 } });
+    expect(await screen.findByText("selected lap")).toBeTruthy();
+    expect(screen.getByText("best")).toBeTruthy();
+  });
+
+  it("does not show the trace legend when there is nothing to show yet", () => {
+    render(InputsPanel, { props: { lapId: null } });
+    expect(screen.queryByText("selected lap")).toBeNull();
+  });
 });
