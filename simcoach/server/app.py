@@ -931,15 +931,30 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         return _map_payload(*_slug_map_key(slug))
 
     def _persist_map(track: str, car: str, body: dict) -> dict:
-        # SAVE the editor's corner map + sectors as shipped owned data. Direction
-        # is ALWAYS re-derived from the averaged path geometry here (never trusted
-        # from the client) -- the CLAUDE.md corner-direction invariant. Keyed on
-        # (track, car); the lap route resolves those from a lap, the slug route
+        # SAVE the editor's corner map + sectors as shipped owned data. Direction is
+        # NEVER trusted from the client -- the CLAUDE.md corner-direction invariant --
+        # and is derived from the averaged/frozen path geometry here for any corner
+        # that is new or whose apex moved; a corner matched by apex to an existing one
+        # keeps its stored direction instead of re-deriving it (#87 -- see the carry-
+        # forward below, same identity rule as the baked-geometry carry-forward).
+        # Keyed on (track, car); the lap route resolves those from a lap, the slug route
         # passes the slug with no car (a shipped track edits its frozen ribbon path).
         # If the track already has a reconstructed ribbon, its centerline IS the
         # canonical geometry -- keep it (and re-derive direction on it), don't
         # revert path to the racing-line average on a corner/label/section edit.
         existing = _track_file_data(track)
+        if not _frozen_outline(track)[0] and existing.get("corners"):
+            # Corners with no stored outline (shipped Spa, #82): any outline this editor
+            # shows is BORROWED from driven laps. Saving would store their average and
+            # re-derive every curated corner's direction from it -- on shipped Spa that
+            # flips T19 Bus Stop right -> left and drops the file's provenance notes.
+            # Baking an outline into owned data is a reviewed commit, not a side effect of
+            # renaming a corner. Both routes reach the same file this way (#87): the lap
+            # route resolves (track, car) to the same live name, so the same refusal
+            # applies there too, not just the Tracks-screen slug route.
+            raise HTTPException(422, "this track's map file has no stored outline (any "
+                                     "outline shown is drawn from your laps), so its map "
+                                     "can't be saved from here yet")
         keep_ribbon = existing.get("ribbon")
         ep, epd = existing.get("path"), existing.get("path_dist")
         if keep_ribbon and isinstance(ep, list) and ep and isinstance(epd, list) and len(ep) == len(epd):
@@ -1088,6 +1103,13 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         prior = {corner_apex_key(pc): pc for pc in (existing.get("corners") or [])}
         for i, c in enumerate(corners):
             baked = prior.get(corner_apex_key(c), {})
+            # Direction is owned data too (#87): a corner matched by apex keeps its
+            # existing curated direction rather than re-deriving it from the averaged/
+            # frozen path, which is ambiguous at a chicane (Spa T19 Bus Stop flips
+            # right -> left in the average). Same identity and the same "moved apex
+            # re-measures" rule as the geometry carry-forward just below.
+            if baked.get("direction") in ("left", "right"):
+                c["direction"] = baked["direction"]
             for k in CORNER_GEOMETRY_KEYS:
                 # elev_delta_m is never in `geo` here (no pos_y on a corner/label edit),
                 # so for it this is the carry-forward it always was.
@@ -1097,7 +1119,18 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 if v is not None:
                     c[k] = v
 
-        out = {
+        # Start from the existing file, not a fixed key set (#87): any top-level key this
+        # function doesn't know about (Spa's `_config_note`/`_distances_note`/`length_m`,
+        # or a future one) survives the save. This is also what carries `ribbon` and
+        # `built_from` forward unchanged -- an editor save (names, apexes, sections) keeps
+        # a map this app BUILT re-buildable from later laps; dropping the mark would lock
+        # a lap-built map against every future live-lap rebuild the first time someone
+        # names a corner in it. `notes` is excluded: _write_track_json carries the authored
+        # overlay across a rebuild (#37/#64) for every writer via its own guard, which only
+        # runs when `notes` is ABSENT from `out` -- carrying it forward here would be this
+        # caller opting OUT of that guard.
+        out = {k: v for k, v in existing.items() if k != "notes"}
+        out.update({
             "track": track_slug(track),
             "corners": corners,
             "path": path,
@@ -1106,19 +1139,9 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             "sections": body.get("sections"),
             "length": length,
             "rotation": _track_rotation(track),  # preserve existing rotation
-        }
+        })
         if name:
             out["name"] = name
-        if keep_ribbon:
-            out["ribbon"] = keep_ribbon  # keep the reconstructed surface across edits
-        if existing.get("built_from"):
-            # An editor save (names, apexes, sections) keeps a map this app BUILT
-            # re-buildable from later laps. Dropping the mark here would make naming one
-            # corner on a lap-built map lock it against every future live-lap rebuild.
-            out["built_from"] = existing["built_from"]
-        # No `notes` key, deliberately: _write_track_json carries the authored overlay
-        # across a rebuild (#37/#64) for every writer, so passing one here would be the
-        # caller opting OUT of the guard that exists for this exact path.
         dropped = _write_track_json(track, out)
         # Invalidate cmap + canonical caches so the next GET returns the new
         # canonical map (now frozen into the file).
@@ -1140,21 +1163,10 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     def save_track_map(slug: str, body: dict = Body(...)):
         # Edit a track's owned layout by slug -- the Tracks-screen editor, no driven
         # lap required (a shipped track edits its frozen ribbon path directly).
+        # The #82/#87 no-stored-outline refusal lives in `_persist_map` itself, shared
+        # with the lap route below.
         if track_slug(slug) != slug:
             raise HTTPException(400, "invalid slug")
-        if not _frozen_outline(slug)[0] and _track_file_data(slug).get("corners"):
-            # Corners with no stored outline (shipped Spa, #82): any outline this screen
-            # shows is BORROWED from driven laps. Saving would store their average and
-            # re-derive every curated corner's direction from it -- on shipped Spa that
-            # flips T19 Bus Stop right -> left and drops the file's provenance notes.
-            # Baking an outline into owned data is a reviewed commit, not a side effect of
-            # renaming a corner. (Without this the save still wrote nothing -- laps are
-            # keyed by live name + car, not slug -- but 422'd "no clean laps" under a map
-            # drawn from clean laps.) Decided from the FILE, never by building its map: a
-            # file the map can't be built from must stay saveable (the editor fixes it).
-            raise HTTPException(422, "this track's map file has no stored outline (any "
-                                     "outline shown is drawn from your laps), so its map "
-                                     "can't be saved from here yet")
         return _persist_map(slug, "", body)
 
     @app.post("/tracks/{slug}/draft-notes")
