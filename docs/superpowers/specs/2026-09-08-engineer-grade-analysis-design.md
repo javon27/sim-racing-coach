@@ -5,6 +5,21 @@ Status: spec only. To be built **after** the longitudinal driver-profile work
 Source: `docs/research/2026-09-08-race-engineer-lap-analysis-gaps.md` (the research spike
 this implements). Read that first for the "why."
 
+## Status 2026-09-15
+
+Phase 1 shipped in full: P1.1 delta-t (`time_loss_buckets` / `get_time_loss`),
+P1.2 coasting + brake→throttle gap (folded into `analyze_lap`/`get_corner`),
+P1.3 handling read (`handling_read` / `get_handling`), P1.4 traction-circle
+utilization (`grip_envelope`, `gg_used`/`gg_dead_middle` on the corner line),
+P1.5 consistency (`stint_consistency` / `get_consistency`), P1.6 tire-deg trend
+(`stint_tire_trend` / `get_tire_trend`), P1.7 gear/RPM sanity (`gear_read`),
+P1.8 input shape — brake release + modulation counts (`input_shape`). §3's
+`grip_{fl,fr,rl,rr}` signal never shipped: `mGripFract`/`mTireLoad` are dead
+channels in LMU (#43), so `handling_read` runs on `steering`/`lat_g`/
+`wheel_rot` only. The distance axis is now de-staircased to ~1 m with exact
+`elapsed_time` alongside it (#101). Phase 0 (setup-channel capture) and
+Phase 2 (setup diagnostics) are still pending, rig-verify.
+
 ## Problem
 
 Nestor captures nearly every channel a MoTeC log has, but the coach only sees a per-corner
