@@ -46,6 +46,12 @@ _DELTA_SPEED_KMH = 3.0   # entry/exit speed deltas, in the native km/h channel
 # #38 P1.4: below this a corner's dead-middle fraction isn't worth a clause.
 _GG_DEAD_REPORT = 0.30
 
+# #38 P1.8: input-shape report floors.
+# ponytail: tuning knobs -- a rig read on a known-pumping/sawing corner settles them.
+_DUMPED_FRAC = 0.7      # brake_release_steep_frac at/above this reads as "dumped"
+_MOD_REPORT = 2         # brake/throttle reversal count floor before it's worth a clause
+_MOD_REPORT_STEER = 3   # steering reversal floor -- sawing is noisier, needs more
+
 
 def ordinal(n: int) -> str:
     """1 -> '1st', 2 -> '2nd', 3 -> '3rd', 4 -> '4th', 11-13 -> 'Nth' (not 'Nst'/'Nnd'/'Nrd')."""
@@ -85,6 +91,36 @@ def _speed_delta_txt(label: str, delta, spd, spd_u: str) -> str:
     if delta is None or abs(delta) < _DELTA_SPEED_KMH:
         return ""
     return f", {label} {spd(delta):+.0f} {spd_u} vs best"
+
+
+def _release_txt(m, delta) -> str:
+    if m is None:
+        return ""
+    txt = f", released brake over {m:.0f} m"
+    if delta is not None and abs(delta) >= _DELTA_DIST_M:
+        txt += f" ({delta:+.0f} m vs best)"
+    return txt
+
+
+def _brake_reversals_txt(n, delta) -> str:
+    if n is None or n < _MOD_REPORT:
+        return ""
+    txt = f", {n} brake reversals"
+    if delta is not None:
+        txt += f" (best {n - delta})"
+    return txt
+
+
+def _throttle_reversals_txt(n) -> str:
+    if n is None or n < _MOD_REPORT:
+        return ""
+    return f", {n} throttle stabs"
+
+
+def _steer_reversals_txt(n) -> str:
+    if n is None or n < _MOD_REPORT_STEER:
+        return ""
+    return f", steering sawing ({n})"
 
 
 def format_corner_line(cm, units: str = "metric") -> str:
@@ -181,6 +217,16 @@ def format_corner_line(cm, units: str = "metric") -> str:
     line += _g_delta_txt("peak", getattr(cm, "peak_lat_g_delta", None))
     line += _speed_delta_txt("entry", getattr(cm, "entry_spd_delta", None), spd, spd_u)
     line += _speed_delta_txt("exit", getattr(cm, "exit_spd_delta", None), spd, spd_u)
+    # #38 P1.8: input-shape facts -- silent without a braking phase / channel.
+    line += _release_txt(getattr(cm, "brake_release_m", None),
+                         getattr(cm, "brake_release_m_delta", None))
+    steep_frac = getattr(cm, "brake_release_steep_frac", None)
+    if steep_frac is not None and steep_frac >= _DUMPED_FRAC:
+        line += ", brake dumped"
+    line += _brake_reversals_txt(getattr(cm, "brake_reversals", None),
+                                 getattr(cm, "brake_reversals_delta", None))
+    line += _throttle_reversals_txt(getattr(cm, "throttle_reversals", None))
+    line += _steer_reversals_txt(getattr(cm, "steer_reversals", None))
     return line
 
 

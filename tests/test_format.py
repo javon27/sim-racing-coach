@@ -371,3 +371,89 @@ def test_format_corner_line_silent_without_gear_fields():
     line = format_corner_line(_cm(1.0))
     assert "gear at min speed" not in line
     assert "bogged" not in line and "short-shifted" not in line
+
+
+# --- input-shape facts (#38 P1.8) ---------------------------------------
+
+def test_format_corner_line_renders_brake_release_distance():
+    cm = _cm(1.0)
+    cm.brake_release_m = 45.0
+    assert "released brake over 45 m" in format_corner_line(cm)
+
+
+def test_format_corner_line_renders_brake_release_delta_over_floor():
+    cm = _cm(1.0)
+    cm.brake_release_m = 45.0
+    cm.brake_release_m_delta = 25.0   # clears _DELTA_DIST_M (3.0)
+    assert "released brake over 45 m (+25 m vs best)" in format_corner_line(cm)
+
+
+def test_format_corner_line_silent_on_brake_release_delta_under_floor():
+    cm = _cm(1.0)
+    cm.brake_release_m = 45.0
+    cm.brake_release_m_delta = 1.0   # under _DELTA_DIST_M
+    line = format_corner_line(cm)
+    assert "released brake over 45 m" in line
+    assert "vs best" not in line
+
+
+def test_format_corner_line_silent_without_brake_release():
+    line = format_corner_line(_cm(1.0))
+    assert "released brake" not in line
+
+
+def test_format_corner_line_shows_brake_dumped_at_the_floor():
+    cm = _cm(1.0)
+    cm.brake_release_m = 20.0
+    cm.brake_release_steep_frac = 0.7
+    assert ", brake dumped" in format_corner_line(cm)
+
+
+def test_format_corner_line_silent_on_dumped_under_the_floor():
+    cm = _cm(1.0)
+    cm.brake_release_m = 20.0
+    cm.brake_release_steep_frac = 0.5
+    assert "dumped" not in format_corner_line(cm)
+
+
+def test_format_corner_line_renders_brake_reversals_at_the_floor():
+    cm = _cm(1.0)
+    cm.brake_reversals = 2
+    assert ", 2 brake reversals" in format_corner_line(cm)
+
+
+def test_format_corner_line_silent_on_one_brake_reversal():
+    cm = _cm(1.0)
+    cm.brake_reversals = 1
+    assert "brake reversals" not in format_corner_line(cm)
+
+
+def test_format_corner_line_renders_brake_reversals_best_with_delta():
+    cm = _cm(1.0)
+    cm.brake_reversals = 3
+    cm.brake_reversals_delta = 3   # 3 more than the reference -> ref had 0
+    assert ", 3 brake reversals (best 0)" in format_corner_line(cm)
+
+
+def test_format_corner_line_renders_throttle_stabs_at_the_floor():
+    cm = _cm(1.0)
+    cm.throttle_reversals = 2
+    assert ", 2 throttle stabs" in format_corner_line(cm)
+
+
+def test_format_corner_line_silent_on_one_throttle_stab():
+    cm = _cm(1.0)
+    cm.throttle_reversals = 1
+    assert "throttle stabs" not in format_corner_line(cm)
+
+
+def test_format_corner_line_renders_steering_sawing_at_the_floor():
+    cm = _cm(1.0)
+    cm.steer_reversals = 3
+    assert ", steering sawing (3)" in format_corner_line(cm)
+
+
+def test_format_corner_line_silent_on_two_steer_reversals():
+    cm = _cm(1.0)
+    cm.steer_reversals = 2
+    assert "sawing" not in format_corner_line(cm)
