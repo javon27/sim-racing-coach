@@ -21,6 +21,7 @@ from simcoach.analysis import (
     time_loss_buckets,
 )
 from simcoach.coach import _setup_lines
+from simcoach.corners import CornerMap
 from simcoach.format import (
     find_corner,
     format_consistency,
@@ -760,7 +761,7 @@ class CoachContext:
                     "different track length).")
         return format_time_loss(buckets, ref_label)
 
-    def _stint_analyses(self, phase=None):
+    def _stint_analyses(self, phase=None, need_corners=True):
         """(analyses, lap_times) for one stint -- session + phase, valid laps only,
         telemetry-backed laps only, in lap order. Shared by `get_consistency` and
         `get_tire_trend`, which only differ in which pure function they feed it to."""
@@ -777,7 +778,13 @@ class CoachContext:
                 record = None   # a result-log row with no telemetry file -- nothing to analyse
             if record is None:
                 continue
-            analysis = self._analysis_for(record, row["id"])
+            if self.cmap is None and not need_corners:
+                # Lap-level reads (tires) don't need a corner map; a track with no map
+                # still gets its stint trend. Not cached -- _analysis_for's cache is
+                # keyed on the corner map this context has.
+                analysis = analyze_lap(record, CornerMap([]))
+            else:
+                analysis = self._analysis_for(record, row["id"])
             if analysis is None:
                 continue
             analyses.append(analysis)
@@ -795,9 +802,7 @@ class CoachContext:
     def get_tire_trend(self, phase=None):
         if not self.session_id:
             return "No active session — no stint to measure tire trend across."
-        if self.cmap is None:
-            return "No corner map for this track yet — can't break laps into corners."
-        analyses, lap_times = self._stint_analyses(phase)
+        analyses, lap_times = self._stint_analyses(phase, need_corners=False)
         return format_tire_trend(stint_tire_trend(analyses, lap_times), self.units)
 
     def get_handling(self, which="latest"):

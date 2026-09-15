@@ -1236,3 +1236,12 @@ def test_get_race_result_names_the_track_of_the_session_it_reports(tmp_path, syn
 ])
 def test_scrub_leaves_every_other_answer_untouched(excerpt):
     assert scrub_stored_answer(excerpt, _BEFORE_67_FIX) == excerpt
+
+
+def test_get_tire_trend_works_without_a_corner_map(tmp_path, synthetic_lap):
+    # Tire trend is a lap-level read: a track with no corner map (26% of stored
+    # telemetry laps) must still get its stint trend, not a "no corner map" refusal.
+    ctx = _tire_trend_session(tmp_path, synthetic_lap, n=5)
+    ctx.cmap = None
+    out = ctx.dispatch("get_tire_trend", {})
+    assert "s/lap" in out and "corner map" not in out
