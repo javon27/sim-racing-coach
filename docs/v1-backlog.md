@@ -8,6 +8,7 @@ Handy filters:
 - `rig-verify` — needs a live eyeball at the rig
 - `bug` / `enhancement` / `chore` — kind of work
 - `future` — roadmap, not scoped yet
+- `deprioritized` — parked by the #99 course-correct, revisited only when a coaching feature needs it
 
 Other trackers, so nothing overlaps:
 - **`docs/vision.md`** — the north star / product direction (not a task list).
