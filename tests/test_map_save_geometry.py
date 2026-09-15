@@ -31,6 +31,7 @@ from simcoach.model.fake import FakeModel
 from simcoach.server.app import create_app
 from simcoach.store import LapStore
 from simcoach.track_lookup import load_map_data
+from simcoach.trackmap import direction_from_path
 
 SHIPPED = Path(simcoach.__file__).resolve().parent / "tracks"
 IMOLA = "autodromo_enzo_e_dino_ferrari"
@@ -173,6 +174,75 @@ def test_laguna_keeps_its_point_cloud_width_and_banking_across_a_save(tmp_path):
     assert [(c.get("width_m"), c.get("banking_deg")) for c in after["corners"]] == pairs
     corkscrew = next(c for c in after["corners"] if str(c["label"]) == "9")
     assert (corkscrew["width_m"], corkscrew["banking_deg"]) == (9.4, 4.1)
+
+
+def _flip(direction: str) -> str:
+    return "left" if direction == "right" else "right"
+
+
+def test_a_save_carries_the_stored_direction_forward_instead_of_re_deriving_it(tmp_path):
+    """#87's headline case (Spa T19 Bus Stop): direction used to be re-derived from the
+    averaged/frozen path on every save, which is ambiguous at a chicane and flipped a
+    curated direction. Carry the existing direction forward for a corner matched by
+    apex, the same identity rule #62 established for baked geometry -- only re-derive
+    for a corner that is new or whose apex moved (see the next test).
+
+    Flips one shipped corner's stored direction to the WRONG value on disk: carry-
+    forward must hand it back untouched. Re-deriving would "correct" it back to what
+    the path actually shows, so an unflipped fixture couldn't tell the two apart --
+    same technique as test_a_save_carries_a_stored_radius_forward_instead_of_re_deriving_it."""
+    shipped = _shipped(IMOLA)["corners"]
+    flipped = _flip(shipped[0]["direction"])
+    on_disk = [dict(c, direction=flipped) if i == 0 else dict(c)
+               for i, c in enumerate(shipped)]
+    sent = [{k: c[k] for k in ("number", "label", "name", "apex_dist", "start_dist", "end_dist")}
+            for c in on_disk]
+    after = _editor_save(tmp_path, IMOLA, sent, on_disk=on_disk)
+    assert after[0]["direction"] == flipped                     # carried, not re-measured
+    assert after[0]["direction"] != shipped[0]["direction"]     # what re-deriving would give
+
+
+def test_moving_a_corners_apex_re_derives_only_its_own_direction(tmp_path):
+    """The carry-forward must not become "never re-derive": moving an apex is the
+    curator changing the geometry, in a diff they can see, and that corner's direction
+    must come back from the path like every other owned metric does (#62's apex-move
+    corollary). Every OTHER corner, apex unchanged, keeps its stored value."""
+    d = _shipped(IMOLA)
+    shipped = d["corners"]
+    flipped = _flip(shipped[0]["direction"])
+    on_disk = [dict(c, direction=flipped) if i == 0 else dict(c)
+               for i, c in enumerate(shipped)]
+    sent = [{k: c[k] for k in ("number", "label", "name", "apex_dist")}
+            for c in on_disk]
+    moved_apex = sent[0]["apex_dist"] + 5.0
+    sent[0] = dict(sent[0], apex_dist=moved_apex)
+    after = _editor_save(tmp_path, IMOLA, sent, on_disk=on_disk)
+    expected = direction_from_path(d["path"], d["path_dist"], moved_apex)
+    assert after[0]["direction"] == expected     # re-derived at the NEW apex
+    assert after[0]["direction"] != flipped       # not the stale on-disk value
+    assert after[1]["direction"] == on_disk[1]["direction"]   # untouched corner: carried
+
+
+def test_a_save_preserves_unknown_top_level_provenance_keys(tmp_path):
+    """#87: `_persist_map` used to build its output from a fixed key set, so any key it
+    didn't know about vanished on the next save -- on shipped Spa, `_config_note`,
+    `_distances_note` and `length_m`. Add one to a shipped map's tmp copy and self-save
+    it: it must survive, byte-identical."""
+    tracks = tmp_path / "tracks"
+    tracks.mkdir(parents=True, exist_ok=True)
+    d = {**_shipped(IMOLA), "_config_note": "curated; T2 driver-confirmed",
+         "length_m": 4909}
+    (tracks / f"{IMOLA}.json").write_text(json.dumps(d), encoding="utf-8")
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    app = create_app(store, Coach(FakeModel("{}")), tracks_dir=str(tracks))
+    client = TestClient(app, base_url="http://127.0.0.1")
+    got = client.get(f"/tracks/{IMOLA}/map")
+    assert got.status_code == 200, got.text
+    saved = client.put(f"/tracks/{IMOLA}/map", json=got.json())
+    assert saved.status_code == 200, saved.text
+    after = json.loads((tracks / f"{IMOLA}.json").read_text(encoding="utf-8"))
+    assert after["_config_note"] == "curated; T2 driver-confirmed"
+    assert after["length_m"] == 4909
 
 
 @pytest.mark.parametrize("slug", BAKED_MAPS)

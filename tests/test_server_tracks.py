@@ -1428,3 +1428,80 @@ def test_a_slug_write_refreshes_the_borrowed_outline(tmp_path):
     assert client.post(f"/tracks/{_SPA}/rotation", json={"degrees": 90}).status_code == 200
     assert client.get(f"/tracks/{_SPA}/map").json()["rotation"] == 90.0
     assert client.get(f"/laps/{lap}/map").json()["rotation"] == 90.0
+
+
+def test_saving_a_borrowed_outline_by_lap_route_is_refused_and_writes_nothing(tmp_path):
+    # #87: the chat screen's PUT /laps/{id}/map reaches the exact same file the Tracks
+    # screen's PUT /tracks/{slug}/map does (#82) -- it needs the exact same refusal, not
+    # just the slug route.
+    client, store, f = _spa_client(tmp_path)
+    before = f.read_bytes()
+    lap = None
+    for _ in range(3):
+        lap = _circuit_lap(store, "Car A")
+    shown = client.get(f"/laps/{lap}/map").json()
+    assert shown.get("path")
+    body = {"corners": [{k: c[k] for k in ("number", "name", "apex_dist", "start_dist", "end_dist")}
+                        for c in shown["corners"]], "sectors": [], "sections": []}
+    r = client.put(f"/laps/{lap}/map", json=body)
+    assert r.status_code == 422, r.text
+    assert "no stored outline" in r.json()["detail"]
+    assert f.read_bytes() == before
+
+
+def _spa_client_with_outline(tmp_path):
+    """Same shape as `_spa_client` (curated corners, provenance keys) but WITH a stored
+    outline (#87): bypasses the #82/#87 guard so a save actually reaches `_persist_map`'s
+    direction carry-forward and top-level-key preservation on real curated data, instead
+    of being refused before it gets there."""
+    tracks = tmp_path / "tracks"
+    tracks.mkdir(parents=True, exist_ok=True)
+    f = tracks / f"{_SPA}.json"
+    t = np.linspace(0.0, 2 * np.pi, 200)
+    # The same CCW circle shape _circuit_lap draws -- pure LEFT geometry throughout (a
+    # full lap only turns one way around a circle), so T1's curated "right" disagrees
+    # with whatever a re-derivation off this path would say, same as the real Spa
+    # chicane (#87): a divergent fixture is the only one that can tell carry-forward
+    # apart from re-derivation.
+    path = [[60.0 * float(x), 60.0 * float(z)] for x, z in zip(np.cos(t), np.sin(t))]
+    dist = [float(v) for v in np.linspace(0.0, 400.0, 200)]
+    f.write_text(json.dumps({
+        "track": _SPA,
+        "_config_note": "curated from the track guide; T2 driver-confirmed",
+        "_distances_note": "apex from lap-averaged steering peaks",
+        "length_m": 400,
+        "path": path,
+        "path_dist": dist,
+        "corners": [
+            {"number": 1, "name": "La Source", "direction": "right",
+             "start_dist": 40, "apex_dist": 60.0, "end_dist": 80},
+            {"number": 2, "name": "Eau Rouge", "direction": "left",
+             "start_dist": 240, "apex_dist": 260.0, "end_dist": 280},
+        ],
+    }, indent=2), encoding="utf-8")
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    client = TestClient(create_app(store, Coach(FakeModel("{}")), tracks_dir=str(tracks)),
+                        base_url="http://127.0.0.1")
+    return client, store, f
+
+
+def test_saving_an_unchanged_spa_shaped_fixture_by_lap_route_keeps_directions_and_provenance(tmp_path):
+    # #87: with the guard bypassed (a stored outline present), an unchanged save must
+    # leave every corner's curated direction and every top-level provenance key
+    # byte-identical -- not re-derived from the frozen path (ambiguous/wrong for a
+    # chicane-shaped average), not dropped by a writer that rebuilds from a fixed key set.
+    client, store, f = _spa_client_with_outline(tmp_path)
+    before = json.loads(f.read_text(encoding="utf-8"))
+    # No position telemetry -> _clean_lap_channels finds nothing -> the save falls back
+    # to the file's own stored path, same as a slug edit with no driven lap.
+    lap = _circuit_lap(store, "Car A", track=_SPA_NAME, position=False)
+    body = {"corners": [{k: c[k] for k in ("number", "name", "apex_dist", "start_dist", "end_dist")}
+                        for c in before["corners"]], "sectors": [], "sections": []}
+    r = client.put(f"/laps/{lap}/map", json=body)
+    assert r.status_code == 200, r.text
+    after = json.loads(f.read_text(encoding="utf-8"))
+    assert [(c["number"], c["direction"]) for c in after["corners"]] == \
+           [(c["number"], c["direction"]) for c in before["corners"]]
+    assert after["_config_note"] == before["_config_note"]
+    assert after["_distances_note"] == before["_distances_note"]
+    assert after["length_m"] == before["length_m"]
