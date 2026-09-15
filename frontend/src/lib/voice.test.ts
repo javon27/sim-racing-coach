@@ -254,6 +254,33 @@ describe("VoiceLoop conversation", () => {
   });
 });
 
+describe("mic release after idle", () => {
+  it("disposes the recorder after MIC_RELEASE_S idle, not while active, and re-acquires on the next press", async () => {
+    const recorder = new FakeRecorder(), transcriber = new FakeTranscriber(), speaker = new FakeSpeaker();
+    let disposed = 0;
+    (recorder as unknown as { dispose: () => Promise<void> }).dispose = async () => { disposed++; };
+    const timers: { fn: () => void; ms: number }[] = [];
+    const loop = new VoiceLoop({
+      recorder, transcriber, speaker, ask: () => {},
+      vad: { threshold: 0.02, silenceMs: 1000, maxS: 20 }, conversationIdleS: 30, frameMs: 50, micReleaseS: 60,
+      setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout: () => {},
+    });
+    loop.press(); await flush(); loop.release(); await flush(); await flush();
+    loop.onAnswer("A.", "A."); await flush(); speaker.end(); await flush();
+    expect(loop.state).toBe("idle");
+    const release = timers.filter((t) => t.ms === 60000).at(-1);
+    expect(release).toBeTruthy();
+    release!.fn(); await flush();
+    expect(disposed).toBe(1);
+    // A press after release re-acquires (start called again) and a release timer
+    // armed while listening must not fire a dispose.
+    loop.press(); await flush();
+    expect(recorder.started).toBe(2);
+    release!.fn(); await flush();
+    expect(disposed).toBe(1);
+  });
+});
+
 describe("speakMessage (▶)", () => {
   it("toggles, is exclusive, and a PTT press stops it", async () => {
     const { loop, speaker } = make();

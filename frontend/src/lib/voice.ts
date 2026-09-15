@@ -57,6 +57,8 @@ export type Earcon = "listen-start" | "listen-end" | "error";
 export interface Recorder {
   start(onFrame: (frame: Float32Array) => void): Promise<void>;
   stop(): Promise<{ pcm: Float32Array; sampleRate: number }>;
+  /** Release the mic/stream entirely; the next start() re-acquires it. Optional. */
+  dispose?(): Promise<void>;
 }
 export interface Transcriber { transcribe(wav: Uint8Array): Promise<{ text: string; seconds: number }> }
 export interface Speaker { speak(text: string): Promise<void>; cancel(): void; earcon(kind: Earcon): void }
@@ -64,6 +66,8 @@ export interface VoiceLoopOptions {
   recorder: Recorder; transcriber: Transcriber; speaker: Speaker;
   ask(text: string, mode: VoiceMode): void;
   vad: VadConfig; conversationIdleS: number; frameMs?: number;
+  /** Seconds idle before the recorder's dispose() is called (default MIC_RELEASE_S). */
+  micReleaseS?: number;
   setTimeout?: (fn: () => void, ms: number) => unknown; clearTimeout?: (h: unknown) => void;
 }
 
@@ -71,6 +75,8 @@ const MIC_ERROR = "I can't hear the mic";
 // Barge-in gate (conversation mode): sustained loudness needed to interrupt playback.
 export const BARGE_IN_MS = 400;
 export const BARGE_IN_LEVEL_MULT = 2;
+// Idle seconds before the held-open mic stream is released (OS indicator goes off).
+export const MIC_RELEASE_S = 60;
 const DIDNT_CATCH = "Didn't catch that";
 
 export class VoiceLoop {
@@ -91,6 +97,7 @@ export class VoiceLoop {
   #recording = false;
   #starting: Promise<void> | null = null;
   #bargeMs = 0;   // consecutive ms above the barge-in level while speaking
+  #releaseTimer: unknown = null;
   #idleTimer: unknown = null;
   #speakSeq = 0;
   #setTimeout: (fn: () => void, ms: number) => unknown;
@@ -106,7 +113,20 @@ export class VoiceLoop {
     this.#listeners.add(run); run(this);
     return () => this.#listeners.delete(run);
   }
-  #set(state: VoiceState) { this.state = state; this.#notify(); }
+  #set(state: VoiceState) {
+    this.state = state;
+    // The recorder holds the mic open between presses so a press starts instantly
+    // (and the OS mic indicator stays lit). Give it back after a quiet spell; the
+    // next press re-acquires it (one slow start, as before the keep-open fix).
+    if (this.#releaseTimer !== null) { this.#clearTimeout(this.#releaseTimer); this.#releaseTimer = null; }
+    if (state === "idle" && this.#o.recorder.dispose) {
+      this.#releaseTimer = this.#setTimeout(() => {
+        this.#releaseTimer = null;
+        if (this.state === "idle" && !this.#recording && !this.#starting) void this.#o.recorder.dispose?.();
+      }, (this.#o.micReleaseS ?? MIC_RELEASE_S) * 1000);
+    }
+    this.#notify();
+  }
   #notify() { for (const l of this.#listeners) l(this); }
 
   // ---- PTT ----
