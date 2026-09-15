@@ -8,6 +8,7 @@ import {
   getSessionsSummary,
   getSessionLaps,
   getLapAnalysis,
+  getLapInputs,
   getSetup,
   getChats,
   getSessionChats,
@@ -35,6 +36,7 @@ vi.mock("./api", async () => {
     getSessionsSummary: vi.fn(),
     getSessionLaps: vi.fn(),
     getLapAnalysis: vi.fn(),
+    getLapInputs: vi.fn(),
     getSetup: vi.fn(),
     getChats: vi.fn(),
     getSessionChats: vi.fn(),
@@ -115,6 +117,7 @@ describe("Coach screen assembly", () => {
     });
     vi.mocked(getSessionLaps).mockResolvedValue([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
     vi.mocked(getLapAnalysis).mockResolvedValue({ lap_time: 216.0, corners: [] });
+    vi.mocked(getLapInputs).mockResolvedValue({ lap: {}, best: null, corners: [] });
     vi.mocked(getSetup).mockResolvedValue({});
     vi.mocked(getChats).mockResolvedValue([]);
     vi.mocked(getSessionChats).mockResolvedValue([]);
@@ -132,6 +135,7 @@ describe("Coach screen assembly", () => {
     expect(screen.getByText("Corners")).toBeTruthy(); // tabs
     expect(screen.getByText("Setup")).toBeTruthy();
     expect(screen.getByPlaceholderText(/ask your engineer/i)).toBeTruthy(); // chat composer
+    expect(await screen.findByText(/inputs.*lap vs best/i)).toBeTruthy(); // inputs panel (#95)
   });
 
   it("flows a selected lap's id into the corner panel and highlights the row", async () => {

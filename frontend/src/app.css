@@ -740,6 +740,17 @@ body {
 }
 
 /* ---------- chat ---------- */
+/* Coach screen's centre column: the Inputs panel (bounded height, #95) stacked
+   above the chat, which takes the remaining height and scrolls internally. */
+.coach-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.coach-main > .chat {
+  flex: 1 1 auto;
+  min-height: 0;
+}
 .chat {
   display: flex;
   flex-direction: column;

@@ -6,6 +6,7 @@
   import RaceStrip from "./RaceStrip.svelte";
   import LapList from "./LapList.svelte";
   import ChatPanel from "./ChatPanel.svelte";
+  import InputsPanel from "./InputsPanel.svelte";
   import CornerSetupTabs from "./CornerSetupTabs.svelte";
   import TrackMapPane from "./TrackMapPane.svelte";
   import SessionsScreen from "./SessionsScreen.svelte";
@@ -225,7 +226,10 @@
             ></div>
             <TrackMapPane sessionId={selectedSessionId} />
           </aside>
-          <ChatPanel lapId={selectedLapId} sessionId={selectedSessionId} chatId={activeChatId} onnewsession={handleNewSession} />
+          <div class="coach-main">
+            <InputsPanel lapId={selectedLapId ?? null} />
+            <ChatPanel lapId={selectedLapId} sessionId={selectedSessionId} chatId={activeChatId} onnewsession={handleNewSession} />
+          </div>
         </div>
       </div>
     </section>
