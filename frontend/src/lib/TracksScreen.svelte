@@ -1,9 +1,18 @@
+<script module lang="ts">
+  import type { TrackRow } from "./api";
+  // #105: App remounts this screen on every visit (no persistent instance), so a
+  // re-visit used to show "No tracks yet." for as long as the refetch took. Module
+  // scope survives that remount -- seed the next mount from here and refetch behind it.
+  let cached: TrackRow[] | null = null;
+</script>
+
 <script lang="ts">
-  import { listTracks, draftNotes, saveNotes, getTrackNotes, getTrackMap, type TrackRow, type TrackNotes, type TrackMap } from "./api";
+  import { listTracks, draftNotes, saveNotes, getTrackNotes, getTrackMap, type TrackNotes, type TrackMap } from "./api";
   import TrackMapEditor from "./TrackMapEditor.svelte";
   import TrackMapView from "./TrackMap.svelte";
 
-  let tracks: TrackRow[] = $state([]);
+  let tracks: TrackRow[] = $state(cached ?? []);
+  let loading = $state(cached === null);
   let selected: TrackRow | null = $state(null);
   let notes: TrackNotes = $state({ overview: "", corners: {}, reference_times: {}, source: "" });
   let map: TrackMap | null = $state(null);
@@ -109,8 +118,8 @@
 
   $effect(() => {
     listTracks()
-      .then((rows) => (tracks = rows))
-      .catch(() => (tracks = []));
+      .then((rows) => { tracks = rows; cached = rows; loading = false; })
+      .catch(() => { tracks = []; cached = null; loading = false; });
   });
 
   async function selectTrack(t: TrackRow) {
@@ -252,7 +261,9 @@
 <div class="page">
   <div class="list">
     <h1>Tracks</h1>
-    {#if tracks.length === 0}
+    {#if tracks.length === 0 && loading}
+      <p class="empty">Loading tracks…</p>
+    {:else if tracks.length === 0}
       <p class="empty">No tracks yet.</p>
     {:else}
       <ul>

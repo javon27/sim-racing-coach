@@ -1,6 +1,7 @@
 # tests/test_server_tracks.py
 import json
 import logging
+import os
 import random
 import shutil
 import string
@@ -989,6 +990,45 @@ def test_get_tracks_mapped_track_row_shape_unchanged(tmp_path):
     assert row["user_edited"] is False
     assert row["captures"] == 0        # 40 result laps are not captures
     assert row["live_laps"] == 0
+
+
+def test_tracks_cloud_check_cache_skips_unchanged_files(tmp_path, monkeypatch):
+    # #105: GET /tracks used to np.load every live lap's .npz on every open, however
+    # often the screen is revisited. Cache the per-lap usable-cloud check on
+    # (telemetry_path, mtime) so a re-open only reads files that changed.
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    _live_lap(store, "Silverstone National Circuit", 2)
+
+    calls: list[str] = []
+    real_load = np.load
+
+    def counting_load(path, *a, **kw):
+        calls.append(str(path))
+        return real_load(path, *a, **kw)
+
+    monkeypatch.setattr("simcoach.server.app.np.load", counting_load)
+
+    r1 = client.get("/tracks")
+    assert r1.status_code == 200
+    assert len(calls) == 2   # both live laps read on the first open
+
+    r2 = client.get("/tracks")
+    assert r2.status_code == 200
+    assert len(calls) == 2   # unchanged files: nothing re-read
+    row = next(t for t in r2.json() if t["slug"] == "silverstone_national_circuit")
+    assert row["captures"] == 2   # count semantics identical to the uncached path
+
+    # Touch one lap's file forward so only it looks changed.
+    (path,) = store.conn.execute(
+        "SELECT telemetry_path FROM laps WHERE track = 'Silverstone National Circuit' "
+        "ORDER BY id LIMIT 1").fetchone()
+    touched = Path(path)
+    new_mtime = touched.stat().st_mtime + 5
+    os.utime(touched, (new_mtime, new_mtime))
+
+    r3 = client.get("/tracks")
+    assert r3.status_code == 200
+    assert len(calls) == 3   # only the touched file was re-read
 
 
 def test_get_tracks_driven_mapped_track_listed_once_with_count(tmp_path):

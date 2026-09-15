@@ -276,6 +276,10 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     app.state.transcriber = transcriber or WhisperTranscriber(store.data_dir)
     app.state.voice_installer = installer or ModelInstaller(store.data_dir)
     app.state.tracks_dir = Path(tracks_dir) if tracks_dir else _DEFAULT_TRACKS_DIR
+    # #105: GET /tracks' per-lap usable-cloud check, keyed on (telemetry_path, mtime).
+    # Only /tracks reads this (via _rebuild_clouds(..., cache=...)) -- the build path
+    # calls _rebuild_clouds with no cache and is unaffected.
+    app.state.cloud_check_cache: dict[tuple[str, float], dict] = {}
     app.state.cmap = cmap            # fallback map when no resolver is wired
     app.state.rest = rest            # cached live REST client once connected
     app.state.rest_probed_at = 0.0   # time.monotonic() of the last liveness probe
@@ -394,8 +398,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 "ORDER BY id").fetchall()
         return [(track_slug(n), n, p) for n, p in rows if track_slug(n)]
 
-    def _rebuild_clouds(track: str, rows=None, *, capture: bool = True
-                        ) -> tuple[list[dict], bool]:
+    def _rebuild_clouds(track: str, rows=None, *, capture: bool = True,
+                        cache: dict | None = None) -> tuple[list[dict], bool]:
         # (laps, from_capture): EXACTLY the usable clouds a rebuild of `track` consumes.
         # /tracks counts this and /mapcapture/rebuild builds from it, so the badge and
         # the build cannot disagree (#69) -- e.g. a save-cloud capture of 2 laps beside 7
@@ -411,6 +415,9 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # usable lap in it). It still wins -- never a silent fall-back to other data (#69)
         # -- so callers must name it, not read it as "no laps with position data" (#84).
         # capture=False skips the capture, to count what deleting it would leave.
+        # cache (#105): an optional {(telemetry_path, mtime): ch} dict, checked/filled
+        # per live lap so a re-open only reads files that changed. Only /tracks passes
+        # one; the build path leaves it None and is byte-for-byte unaffected.
         slug = track_slug(track)
         if not slug:
             # A map file name with nothing to slug ("---.json" dropped into app-data
@@ -425,15 +432,26 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         for lap_slug, _name, p in (_live_lap_paths() if rows is None else rows):
             if lap_slug != slug:
                 continue
-            try:
-                with np.load(p) as z:
-                    ch = {c: z[c] for c in _POS_CHANNELS if c in z.files}
-            except Exception as e:
-                # Skip THIS lap, never the listing or the rebuild. Not a narrow tuple: a
-                # zero-byte file raises EOFError and a corrupt member zlib.error, and
-                # either one used to 500 all of GET /tracks. Same stance as _load_cloud.
-                logging.getLogger(__name__).warning("skipping unreadable lap %s: %r", p, e)
-                continue
+            key = None
+            if cache is not None:
+                try:
+                    key = (p, os.stat(p).st_mtime)
+                except OSError:
+                    key = None
+            if key is not None and key in cache:
+                ch = cache[key]
+            else:
+                try:
+                    with np.load(p) as z:
+                        ch = {c: z[c] for c in _POS_CHANNELS if c in z.files}
+                except Exception as e:
+                    # Skip THIS lap, never the listing or the rebuild. Not a narrow tuple:
+                    # a zero-byte file raises EOFError and a corrupt member zlib.error, and
+                    # either one used to 500 all of GET /tracks. Same stance as _load_cloud.
+                    logging.getLogger(__name__).warning("skipping unreadable lap %s: %r", p, e)
+                    continue
+                if key is not None:
+                    cache[key] = ch
             if _usable_cloud(ch):
                 laps.append(ch)
         return laps, False
@@ -1367,10 +1385,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # is there and unbuildable ("none with position data") -- the driver needs to know
         # those laps are unrecoverable and the track wants re-driving (#66).
         #
-        # ponytail: loads every live lap's position channels on each open (the badge has
-        # to see zero-length/all-NaN arrays, which the zip directory alone cannot show).
-        # /tracks is opened by hand, not polled; cache on (telemetry_path, mtime) if the
-        # store grows enough for that to be felt.
+        # Per-lap position-channel reads are cached on (telemetry_path, mtime) on
+        # app.state (#105) -- a re-open only re-reads laps whose file actually changed.
         rows = _live_lap_paths()
         live: dict[str, int] = {}
         names: dict[str, str] = {}
@@ -1382,7 +1398,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         for slug in sorted(slugs):
             merged = _track_file_data(slug)
             notes = merged.get("notes") or {}
-            clouds, from_capture = _rebuild_clouds(slug, rows)
+            clouds, from_capture = _rebuild_clouds(slug, rows, cache=app.state.cloud_check_cache)
             out.append({
                 "slug": slug,
                 # No map file yet -> the live name the laps were recorded under beats a

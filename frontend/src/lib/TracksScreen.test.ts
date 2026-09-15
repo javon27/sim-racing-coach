@@ -18,6 +18,36 @@ vi.spyOn(api, "listTracks").mockResolvedValue([
 vi.spyOn(api, "getTrackNotes").mockResolvedValue({ overview: "", corners: {}, reference_times: {}, source: "" });
 vi.spyOn(api, "getTrackMap").mockResolvedValue({});
 
+// #105: these two run FIRST and in order -- the module-level `cached` var they exercise
+// is shared across every test in this file (it lives in TracksScreen.svelte's <script
+// module>, loaded once), so the loading-state assertion needs to run before any other
+// test's render() has already populated it.
+test("shows a loading state instead of 'No tracks yet' while the initial fetch is pending", async () => {
+  let resolveList!: (rows: api.TrackRow[]) => void;
+  vi.spyOn(api, "listTracks").mockReturnValue(new Promise((r) => { resolveList = r; }));
+  render(TracksScreen);
+  expect(screen.getByText(/loading tracks/i)).toBeTruthy();
+  expect(screen.queryByText(/no tracks yet/i)).toBeNull();
+  resolveList([
+    { slug: "algarve_international_circuit", name: "Algarve", has_map: true, has_notes: false, user_edited: false, captures: 0, live_laps: 0 },
+  ]);
+  await screen.findByText("Algarve");
+});
+
+test("a re-visit renders the cached rows synchronously before the new fetch resolves", async () => {
+  const { unmount } = render(TracksScreen);
+  await screen.findByText("Algarve"); // seeded by the previous test's now-cached fetch
+  unmount();
+
+  let resolveList!: (rows: api.TrackRow[]) => void;
+  vi.spyOn(api, "listTracks").mockReturnValue(new Promise((r) => { resolveList = r; }));
+  render(TracksScreen);
+  expect(screen.getByText("Algarve")).toBeTruthy(); // from cache, before the new fetch resolves
+  resolveList([
+    { slug: "algarve_international_circuit", name: "Algarve", has_map: true, has_notes: false, user_edited: false, captures: 0, live_laps: 0 },
+  ]);
+});
+
 test("lists tracks with coverage badges", async () => {
   render(TracksScreen);
   expect(await screen.findByText("Algarve")).toBeTruthy();
@@ -505,5 +535,7 @@ test("an unreadable saved capture with no live laps says only that", async () =>
   ]);
   render(TracksScreen);
   const row = (await screen.findByText("Fuji")).closest("li")!;
-  expect(within(row).getByText("saved capture unreadable")).toBeTruthy();   // exact text
+  // findByText, not getByText: the previous test's now-cached Fuji row (#105) renders
+  // synchronously first, so this must wait for the fresh fetch to replace it.
+  expect(await within(row).findByText("saved capture unreadable")).toBeTruthy();   // exact text
 });
