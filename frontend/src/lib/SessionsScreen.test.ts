@@ -189,4 +189,17 @@ describe("SessionsScreen", () => {
 
     expect(await within(sessList(container)).findByText("3:36.512")).toBeTruthy();
   });
+
+  it("shows the chat indicator only on rows with has_chat", async () => {
+    fakeBackend([
+      { ...SESSIONS[0], has_chat: true },
+      { ...SESSIONS[1], has_chat: false },
+    ]);
+    const { container } = render(SessionsScreen);
+    await waitFor(() => expect(container.querySelectorAll(".srow").length).toBe(2));
+
+    const rows = container.querySelectorAll(".srow");
+    expect(rows[0].querySelector(".chat-flag")).toBeTruthy();
+    expect(rows[1].querySelector(".chat-flag")).toBeNull();
+  });
 });

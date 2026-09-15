@@ -209,7 +209,7 @@
           {#each rows as s (s.session_id)}
             <div class="srow" role="button" tabindex="0" onclick={() => selectSession(s.session_id)} onkeydown={(e) => e.key === "Enter" && selectSession(s.session_id)}>
               <div class="d">{formatDate(s.started)}</div>
-              <div class="tk">{s.track}<div class="ln"><small>{s.car_model ?? s.car}</small></div></div>
+              <div class="tk">{s.track}{#if s.has_chat}<span class="chat-flag" title="has coaching chat" aria-label="has coaching chat">💬</span>{/if}<div class="ln"><small>{s.car_model ?? s.car}</small></div></div>
               <div class="lp">{s.laps} laps</div>
               <div class="bt">{formatBest(s.best)}</div>
             </div>
@@ -398,6 +398,10 @@
   }
   .srow .tk .ln {
     margin-top: 2px;
+  }
+  .srow .tk .chat-flag {
+    margin-left: 6px;
+    font-size: 12px;
   }
   .srow .lp {
     font-family: var(--mono);

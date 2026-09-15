@@ -30,6 +30,7 @@ export interface SessionRow {
   best: number | null;
   started: number;
   last: number;
+  has_chat?: boolean;
 }
 
 export interface LapRow {
