@@ -67,4 +67,72 @@ describe("InputsPanel", () => {
     await screen.findByText(/inputs/i);
     expect(container.querySelector('[data-testid="inputs-panel-body"]')).toBeNull();
   });
+
+  it("empty state has no fixed --inputs-h height", () => {
+    const { container } = render(InputsPanel, { props: { lapId: null } });
+    const panel = container.querySelector(".panel") as HTMLElement;
+    expect(panel.style.getPropertyValue("--inputs-h")).toBe("");
+  });
+
+  it("applies --inputs-h only once a lap's traces are showing", async () => {
+    vi.mocked(getLapInputs).mockResolvedValue({ lap: LAP, best: null, corners: [] });
+    const { container } = render(InputsPanel, { props: { lapId: 9 } });
+    const panel = container.querySelector(".panel") as HTMLElement;
+    await waitFor(() => expect(panel.style.getPropertyValue("--inputs-h")).toBe("220px"));
+  });
+
+  it("collapse hides the body and flips aria-expanded", async () => {
+    vi.mocked(getLapInputs).mockResolvedValue({ lap: LAP, best: null, corners: [] });
+    const { container } = render(InputsPanel, { props: { lapId: 9 } });
+    await screen.findByText(/inputs/i);
+
+    const toggle = screen.getByRole("button", { name: /collapse|expand/i });
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+
+    await fireEvent.click(toggle);
+    expect(container.querySelector('[data-testid="inputs-panel-body"]')).toBeNull();
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("drag on the handle changes the pane height", async () => {
+    vi.mocked(getLapInputs).mockResolvedValue({ lap: LAP, best: null, corners: [] });
+    const { container } = render(InputsPanel, { props: { lapId: 9 } });
+    const panel = container.querySelector(".panel") as HTMLElement;
+    await waitFor(() => expect(panel.style.getPropertyValue("--inputs-h")).toBe("220px"));
+
+    const handle = container.querySelector(".rail-resizer") as HTMLElement;
+    expect(handle).toBeTruthy();
+    await fireEvent.pointerDown(handle, { clientY: 100 });
+    await fireEvent.pointerMove(handle, { clientY: 160 });
+
+    expect(panel.style.getPropertyValue("--inputs-h")).toBe("280px");
+  });
+
+  it("height clamps at 120 minimum", async () => {
+    vi.mocked(getLapInputs).mockResolvedValue({ lap: LAP, best: null, corners: [] });
+    const { container } = render(InputsPanel, { props: { lapId: 9 } });
+    const panel = container.querySelector(".panel") as HTMLElement;
+    await waitFor(() => expect(panel.style.getPropertyValue("--inputs-h")).toBe("220px"));
+
+    const handle = container.querySelector(".rail-resizer") as HTMLElement;
+    await fireEvent.pointerDown(handle, { clientY: 100 });
+    await fireEvent.pointerMove(handle, { clientY: -500 });
+
+    expect(panel.style.getPropertyValue("--inputs-h")).toBe("120px");
+  });
+
+  it("height persists to localStorage", async () => {
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    vi.mocked(getLapInputs).mockResolvedValue({ lap: LAP, best: null, corners: [] });
+    const { container } = render(InputsPanel, { props: { lapId: 9 } });
+    const panel = container.querySelector(".panel") as HTMLElement;
+    await waitFor(() => expect(panel.style.getPropertyValue("--inputs-h")).toBe("220px"));
+
+    const handle = container.querySelector(".rail-resizer") as HTMLElement;
+    await fireEvent.pointerDown(handle, { clientY: 100 });
+    await fireEvent.pointerMove(handle, { clientY: 160 });
+
+    expect(setItem).toHaveBeenCalledWith("inputsPanel.height", "280");
+    setItem.mockRestore();
+  });
 });

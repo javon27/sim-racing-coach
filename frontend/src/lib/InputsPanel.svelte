@@ -34,6 +34,44 @@
     saveCollapsed(collapsed);
   }
 
+  const HEIGHT_KEY = "inputsPanel.height";
+  function loadHeight(): number {
+    try {
+      const v = Number(localStorage.getItem(HEIGHT_KEY));
+      return v > 0 ? v : 220;
+    } catch {
+      return 220;
+    }
+  }
+  function saveHeight(h: number) {
+    try {
+      localStorage.setItem(HEIGHT_KEY, String(h));
+    } catch {
+      /* private mode / storage disabled — height just won't persist */
+    }
+  }
+
+  let height = $state(loadHeight());
+  let dragging = $state(false);
+  let dragStartY = 0;
+  let dragStartH = 0;
+  function resizeDown(e: PointerEvent) {
+    dragging = true;
+    dragStartY = e.clientY;
+    dragStartH = height;
+    const el = e.currentTarget as HTMLElement;
+    if (typeof el.setPointerCapture === "function") el.setPointerCapture(e.pointerId);
+  }
+  function resizeMove(e: PointerEvent) {
+    if (!dragging) return;
+    const max = typeof window !== "undefined" ? window.innerHeight * 0.7 : 700;
+    height = Math.max(120, Math.min(dragStartH + (e.clientY - dragStartY), max));
+    saveHeight(height);
+  }
+  function resizeUp() {
+    dragging = false;
+  }
+
   $effect(() => {
     const id = lapId;
     if (id === null) {
@@ -56,9 +94,10 @@
   });
 
   const hasChannels = $derived(!!data?.lap && "dist" in data.lap && (data.lap.dist?.length ?? 0) > 0);
+  const showingTraces = $derived((phase as string) === "ok" && hasChannels);
 </script>
 
-<div class="panel">
+<div class="panel" style={showingTraces ? `--inputs-h: ${height}px` : undefined}>
   <div class="hdr">
     <h2>Inputs — lap vs best</h2>
     <button
@@ -70,7 +109,7 @@
     >{collapsed ? "▸" : "▾"}</button>
   </div>
   {#if !collapsed}
-    <div class="body" data-testid="inputs-panel-body">
+    <div class="body" class:sized={showingTraces} data-testid="inputs-panel-body">
       {#if phase === "empty"}
         <p class="empty">Select a lap to see its inputs.</p>
       {:else if phase === "loading"}
@@ -83,6 +122,18 @@
         <InputTraces mode="line" traces={data!.lap} best={data!.best} corners={data!.corners} />
       {/if}
     </div>
+    {#if showingTraces}
+      <div
+        class="rail-resizer"
+        class:dragging
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Resize inputs panel"
+        onpointerdown={resizeDown}
+        onpointermove={resizeMove}
+        onpointerup={resizeUp}
+      ></div>
+    {/if}
   {/if}
 </div>
 
@@ -90,7 +141,7 @@
   .panel {
     display: flex;
     flex-direction: column;
-    min-height: 0;
+    flex: 0 0 auto;
     border-bottom: 1px solid var(--line);
   }
   .hdr {
@@ -116,9 +167,10 @@
     padding: 2px 6px;
   }
   .body {
-    height: 220px;
     padding: 0 20px 12px;
-    min-height: 0;
+  }
+  .body.sized {
+    height: var(--inputs-h, 220px);
   }
   .empty {
     margin: 0;
