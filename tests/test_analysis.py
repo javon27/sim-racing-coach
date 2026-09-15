@@ -1365,3 +1365,106 @@ def test_analyze_lap_falls_back_to_self_referenced_envelope(synthetic_lap):
     a = analyze_lap(synthetic_lap, cmap)
     assert a.gg_envelope is not None
     assert a.gg_used is not None
+
+
+# --- gear/RPM sanity (#38 P1.7) ----------------------------------------------
+
+def test_gear_read_gear_min_at_min_speed_sample():
+    import numpy as np
+    from simcoach.analysis import gear_read
+
+    n = 10
+    gear = np.array([3.0] * 5 + [2.0] + [3.0] * 4)   # 2nd at the min-speed sample
+    rpm = np.full(n, 6000.0)
+    speed = np.concatenate([np.linspace(100.0, 40.0, 6), np.linspace(50.0, 90.0, 4)])
+    throttle = np.zeros(n)
+    result = gear_read(gear, rpm, throttle, speed, min_i=5, rpm_max_lap=7000.0)
+    assert result["gear_min"] == 2
+
+
+def test_gear_read_bog_true_when_exit_rpm_is_low():
+    import numpy as np
+    from simcoach.analysis import gear_read
+
+    n = 10
+    gear = np.full(n, 2.0)
+    speed = np.concatenate([np.linspace(100.0, 40.0, 6), np.linspace(45.0, 90.0, 4)])
+    throttle = np.zeros(n)
+    throttle[6:] = 1.0   # first pickup at index 6, one past min_i
+    rpm_max_lap = 7000.0
+    rpm = np.full(n, rpm_max_lap)
+    rpm[6] = 0.4 * rpm_max_lap   # 40% of peak -- below the 55% bog floor
+    result = gear_read(gear, rpm, throttle, speed, min_i=5, rpm_max_lap=rpm_max_lap)
+    assert result["bog"] is True
+
+
+def test_gear_read_bog_false_when_exit_rpm_clears_the_band():
+    import numpy as np
+    from simcoach.analysis import gear_read
+
+    n = 10
+    gear = np.full(n, 2.0)
+    speed = np.concatenate([np.linspace(100.0, 40.0, 6), np.linspace(45.0, 90.0, 4)])
+    throttle = np.zeros(n)
+    throttle[6:] = 1.0
+    rpm_max_lap = 7000.0
+    rpm = np.full(n, rpm_max_lap)
+    rpm[6] = 0.7 * rpm_max_lap   # 70% of peak -- clears the 55% bog floor
+    result = gear_read(gear, rpm, throttle, speed, min_i=5, rpm_max_lap=rpm_max_lap)
+    assert result["bog"] is False
+
+
+def test_gear_read_short_shift_true_at_low_rpm():
+    import numpy as np
+    from simcoach.analysis import gear_read
+
+    n = 10
+    gear = np.array([1.0] * 4 + [2.0] * 6)   # upshift at index 3 -> 4
+    rpm_max_lap = 7000.0
+    rpm = np.full(n, rpm_max_lap)
+    rpm[3] = 0.6 * rpm_max_lap   # shifted at 60% of peak -- below the 80% floor
+    speed = np.linspace(100.0, 150.0, n)
+    throttle = np.full(n, 0.8)
+    result = gear_read(gear, rpm, throttle, speed, min_i=0, rpm_max_lap=rpm_max_lap)
+    assert result["short_shift"] is True
+
+
+def test_gear_read_short_shift_false_near_redline():
+    import numpy as np
+    from simcoach.analysis import gear_read
+
+    n = 10
+    gear = np.array([1.0] * 4 + [2.0] * 6)
+    rpm_max_lap = 7000.0
+    rpm = np.full(n, rpm_max_lap)
+    rpm[3] = 0.9 * rpm_max_lap   # shifted at 90% of peak -- clears the 80% floor
+    speed = np.linspace(100.0, 150.0, n)
+    throttle = np.full(n, 0.8)
+    result = gear_read(gear, rpm, throttle, speed, min_i=0, rpm_max_lap=rpm_max_lap)
+    assert result["short_shift"] is False
+
+
+def test_gear_read_none_when_channels_absent():
+    import numpy as np
+    from simcoach.analysis import gear_read
+
+    n = 5
+    result = gear_read(None, None, np.zeros(n), np.full(n, 100.0), min_i=2, rpm_max_lap=None)
+    assert result == {"gear_min": None, "bog": None, "short_shift": None}
+
+
+def test_analyze_lap_gear_fields_none_without_rpm_channel(synthetic_lap):
+    # synthetic_lap carries "gear" but no "rpm" channel (conftest) -- gear_read
+    # needs both, so every corner's new fields stay None and the corner line is
+    # silent, same shape as the #38 handling fields on this fixture.
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap
+    from simcoach.format import format_corner_line
+
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    a = analyze_lap(synthetic_lap, cmap)
+    for cm in a.corners:
+        assert cm.gear_min is None and cm.bog is None and cm.short_shift is None
+        line = format_corner_line(cm, "metric")
+        assert "gear at min speed" not in line
+        assert "bogged" not in line and "short-shifted" not in line

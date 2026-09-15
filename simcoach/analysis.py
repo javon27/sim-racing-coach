@@ -75,6 +75,12 @@ class CornerMetrics:
     # `grip_envelope` / `_gg_used_and_dead`).
     gg_used: Optional[float] = None          # p95 combined g in the cornering phase / envelope
     gg_dead_middle: Optional[float] = None   # fraction of the phase under half the envelope
+    # #38 P1.7: gear/RPM sanity. None when gear/rpm weren't both captured (see
+    # `gear_read`); gear_min is also None if the car was in neutral/reverse at
+    # the min-speed sample.
+    gear_min: Optional[int] = None       # forward gear at the min-speed sample
+    bog: Optional[bool] = None           # rpm below its power band at the exit throttle pickup
+    short_shift: Optional[bool] = None   # an upshift inside the window well below redline
 
 
 @dataclass
@@ -581,6 +587,63 @@ def handling_read(win_steering, win_lat_g, win_speed, win_brake, win_throttle,
             "lockup": lockup, "wheelspin": wheelspin}
 
 
+# --- gear/RPM sanity (#38 P1.7) ------------------------------------------
+# ponytail: tuning knobs -- a rig read on a car with a known redline/power band
+# settles them.
+_BOG_RPM_FRAC = 0.55     # exit rpm below this fraction of the lap's peak rpm = bogged
+_SHORT_SHIFT_FRAC = 0.80  # upshift rpm below this fraction of the lap's peak = short-shifted
+
+
+def gear_read(win_gear, win_rpm, win_throttle, win_speed, min_i, rpm_max_lap) -> dict:
+    """Pure per-corner gear/RPM read from already-windowed channels + this lap's
+    own peak rpm (`rpm_max_lap`, computed once over the whole lap by the caller).
+
+    Returns {"gear_min", "bog", "short_shift"}, all None when gear or rpm wasn't
+    captured for this lap (or the lap never showed a positive rpm).
+
+    gear_min: the forward gear at the min-speed sample (`min_i`); None if the
+    car was in neutral/reverse there (gear <= 0 -- smm.py: 0 neutral, -1 reverse).
+    bog: at the first throttle pickup (throttle > 0.5) after `min_i`, whether
+    rpm sat below `_BOG_RPM_FRAC` of the lap's peak -- engine below its power
+    band on exit. None with no such pickup in the window.
+    short_shift: whether any upshift inside the window (gear rising between
+    consecutive samples) happened at rpm below `_SHORT_SHIFT_FRAC` of the lap's
+    peak. None with no upshift in the window.
+    """
+    none = {"gear_min": None, "bog": None, "short_shift": None}
+    if (win_gear is None or win_rpm is None or rpm_max_lap is None
+            or not math.isfinite(rpm_max_lap) or rpm_max_lap <= 0):
+        return none
+    gear = np.asarray(win_gear, dtype=float)
+    rpm = np.asarray(win_rpm, dtype=float)
+    n = min(gear.size, rpm.size)
+    if min_i >= n:
+        return none
+
+    g_min = gear[min_i]
+    gear_min = round(g_min) if np.isfinite(g_min) and g_min > 0 else None
+
+    bog = None
+    if win_throttle is not None:
+        throttle = np.asarray(win_throttle, dtype=float)[:n]
+        after = np.where(throttle[min_i + 1:] > 0.5)[0]
+        if after.size:
+            r = rpm[min_i + 1 + int(after[0])]
+            if np.isfinite(r):
+                bog = bool(r < _BOG_RPM_FRAC * rpm_max_lap)
+
+    short_shift = None
+    if n >= 2:
+        gear, rpm = gear[:n], rpm[:n]
+        up = np.where(np.diff(gear) > 0)[0]      # index i where gear[i+1] > gear[i]
+        shift_rpm = rpm[up]
+        valid = shift_rpm[np.isfinite(shift_rpm)]
+        if valid.size:
+            short_shift = bool(np.any(valid < _SHORT_SHIFT_FRAC * rpm_max_lap))
+
+    return {"gear_min": gear_min, "bog": bog, "short_shift": short_shift}
+
+
 # --- traction-circle (G-G) utilization (#38 P1.4) ------------------------
 # lat_g/long_g are the only load channels LMU actually fills (grip_*/tire_load_*
 # are dead, #43): "how much of the car's own grip is being used" has to come
@@ -653,7 +716,7 @@ def _gg_used_and_dead(lat_g, long_g, envelope: float | None) -> "tuple[float | N
 
 def _metrics_for_corner(
     record: LapRecord, corner: Corner, length: float | None = None,
-    envelope: float | None = None,
+    envelope: float | None = None, rpm_max_lap: float | None = None,
 ) -> CornerMetrics:
     dist = _interp_lap_distance(record)
     speed = record.channels["speed"]
@@ -846,6 +909,13 @@ def _metrics_for_corner(
     handling_info = handling_read(win_steering, win_lat_g_arr, win_speed, win_brake,
                                   win_throttle, wheel_rot_win)
 
+    # #38 P1.7: gear/RPM sanity from already-windowed channels + the lap's own
+    # peak rpm (see `gear_read`).
+    gear_ch, rpm_ch = record.channels.get("gear"), record.channels.get("rpm")
+    win_gear = gear_ch[idx] if gear_ch is not None else None
+    win_rpm = rpm_ch[idx] if rpm_ch is not None else None
+    gear_info = gear_read(win_gear, win_rpm, win_throttle, win_speed, min_i, rpm_max_lap)
+
     try:
         direction = compute_direction(record, corner.start_dist, corner.end_dist)
     except ValueError:
@@ -895,6 +965,8 @@ def _metrics_for_corner(
         handling=handling_info["handling"], handling_why=handling_info["handling_why"],
         lockup=handling_info["lockup"], wheelspin=handling_info["wheelspin"],
         gg_used=gg_used, gg_dead_middle=gg_dead_middle,
+        gear_min=gear_info["gear_min"], bog=gear_info["bog"],
+        short_shift=gear_info["short_shift"],
     )
 
 
@@ -924,7 +996,15 @@ def analyze_lap(
         envelope = grip_envelope([record] + ([reference] if reference else []))
 
     length = cmap.length
-    corners = [_metrics_for_corner(record, corner, length, envelope) for corner in cmap.corners]
+    # #38 P1.7: computed once here (not per-corner) -- every corner's gear_read
+    # needs the SAME lap-wide peak rpm to judge "below the power band" against.
+    rpm_ch = record.channels.get("rpm")
+    rpm_max_lap = None
+    if rpm_ch is not None:
+        peak = float(np.nanmax(rpm_ch))
+        rpm_max_lap = peak if math.isfinite(peak) else None
+    corners = [_metrics_for_corner(record, corner, length, envelope, rpm_max_lap)
+              for corner in cmap.corners]
 
     # Tag each corner with the named section its apex falls in (e.g. "The Corkscrew").
     for cm in corners:

@@ -47,6 +47,15 @@ _DELTA_SPEED_KMH = 3.0   # entry/exit speed deltas, in the native km/h channel
 _GG_DEAD_REPORT = 0.30
 
 
+def ordinal(n: int) -> str:
+    """1 -> '1st', 2 -> '2nd', 3 -> '3rd', 4 -> '4th', 11-13 -> 'Nth' (not 'Nst'/'Nnd'/'Nrd')."""
+    if 10 <= n % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
 def _dist_delta_txt(label: str, delta) -> str:
     if delta is None or abs(delta) < _DELTA_DIST_M:
         return ""
@@ -118,6 +127,14 @@ def format_corner_line(cm, units: str = "metric") -> str:
         aids.append(f"TC {cm.tc_pct:.0%}")
     if aids:
         line += ", " + " ".join(aids)
+    # #38 P1.7: gear/RPM sanity -- silent when the lap lacks gear/rpm channels.
+    gear_min = getattr(cm, "gear_min", None)
+    if gear_min is not None:
+        line += f", {ordinal(gear_min)} gear at min speed"
+    if getattr(cm, "bog", None):
+        line += ", bogged on exit"
+    if getattr(cm, "short_shift", None):
+        line += ", short-shifted"
     # track_edge_min is computed but NOT rendered (#99 second review): the
     # mPathLateral/mTrackEdge units and sign are still PENDING LIVE VALIDATION
     # (smm.py), and the rule is cut, don't hedge. Restore once rig-verified.

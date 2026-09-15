@@ -349,3 +349,25 @@ def test_format_lap_facts_silent_without_gg_fields():
     a = LapAnalysis(lap_time=90.0, corners=[], has_reference=False)
     out = format_lap_facts(a)
     assert "envelope" not in out
+
+
+# --- gear/RPM sanity (#38 P1.7) ----------------------------------------------
+
+def test_format_corner_line_appends_gear_min():
+    cm = _cm(1.0)
+    cm.gear_min = 2
+    assert "2nd gear at min speed" in format_corner_line(cm)
+
+
+def test_format_corner_line_appends_bog_and_short_shift():
+    cm = _cm(1.0)
+    cm.bog = True
+    cm.short_shift = True
+    line = format_corner_line(cm)
+    assert ", bogged on exit" in line and ", short-shifted" in line
+
+
+def test_format_corner_line_silent_without_gear_fields():
+    line = format_corner_line(_cm(1.0))
+    assert "gear at min speed" not in line
+    assert "bogged" not in line and "short-shifted" not in line
