@@ -6,7 +6,7 @@
 # Build from the repo root:  pyinstaller packaging/simcoach-sidecar.spec
 import os
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 ROOT = os.path.dirname(SPECPATH)  # packaging/ -> repo root
 
@@ -17,12 +17,23 @@ for _sub in ("tracks", "cars"):
     if os.path.isdir(_dir):
         datas.append((_dir, f"simcoach/{_sub}"))
 
+# voice.py's `from faster_whisper import WhisperModel` is function-local (deferred),
+# but PyInstaller's static analysis still finds it via AST scan and pulls in the
+# ctranslate2 native DLL through it -- collect_all is for what that scan misses:
+# package DATA (faster_whisper ships the silero VAD onnx model its `vad_filter`
+# needs at runtime) plus tokenizers/huggingface_hub's own binaries (#104).
+_fw_datas, _fw_binaries, _fw_hidden = collect_all("faster_whisper")
+_ct_datas, _ct_binaries, _ct_hidden = collect_all("ctranslate2")
+datas += _fw_datas + _ct_datas
+binaries = _fw_binaries + _ct_binaries
+hiddenimports = collect_submodules("simcoach") + _fw_hidden + _ct_hidden
+
 a = Analysis(
     [os.path.join(ROOT, "packaging", "run_sidecar.py")],
     pathex=[ROOT],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
-    hiddenimports=collect_submodules("simcoach"),
+    hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
     excludes=[],

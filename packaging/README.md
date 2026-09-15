@@ -38,9 +38,33 @@ cargo tauri build
 
 ## Voice
 
-The frozen sidecar needs `pip install -e .[voice]` before the freeze and
-`collect_all("faster_whisper")` + `collect_all("ctranslate2")` in the spec
-(`hiddenimports`/`binaries`) — not yet verified in CI; tracked on #104.
+The frozen sidecar bundles faster-whisper + ctranslate2 (#104): CI installs
+`.[voice]` before the freeze, and `packaging/simcoach-sidecar.spec` merges
+`collect_all("faster_whisper")` + `collect_all("ctranslate2")` into the
+`Analysis` (datas/binaries/hiddenimports — the native ctranslate2 DLLs,
+tokenizers, huggingface_hub, and the bundled silero VAD onnx model faster
+Whisper's `vad_filter` needs at runtime).
+
+To verify locally: freeze with `.[voice]` installed, then run the frozen exe
+against an isolated data dir and a free port (never the port your dev sidecar
+is using) and exercise `/voice/status` and `/voice/transcribe`:
+
+```sh
+pip install -e ".[voice]"
+pyinstaller packaging/simcoach-sidecar.spec --distpath dist-sidecar --workpath build-sidecar
+SIMCOACH_DATA_DIR=/path/to/scratch-data dist-sidecar/simcoach-sidecar.exe &
+# copy a downloaded model into <SIMCOACH_DATA_DIR>/telemetry/whisper/small/
+# (model_dir() keys off store.data_dir, which is the telemetry dir, not the
+# app-data root) then:
+curl http://127.0.0.1:8765/voice/status        # installed: true
+curl -X POST --data-binary @clip.wav http://127.0.0.1:8765/voice/transcribe
+```
+
+A clean transcribe (HTTP 200, `text` possibly empty on silence/a tone — VAD
+filters it) with no `ImportError`/traceback in the sidecar log confirms
+ctranslate2's native library and the model load correctly from the frozen
+exe. `tests/test_packaging_spec.py` guards the spec against losing the
+collects.
 
 ## Release
 
