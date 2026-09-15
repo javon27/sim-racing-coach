@@ -137,6 +137,7 @@ export interface VoiceSettings {
   ptt_gamepad: string | null;
   tts_voice: string | null;
   tts_rate: number;
+  mic_device_id: string | null;
   vad_threshold: number;
   vad_silence_ms: number;
   vad_max_s: number;

@@ -64,12 +64,16 @@ def test_voice_defaults_and_partial_nested_merge(tmp_path):
     from simcoach import config
     p = str(tmp_path / "config.json")
     assert config.load_config(p)["voice"]["enabled"] is False
+    assert config.load_config(p)["voice"]["mic_device_id"] is None
     config.save_config({"voice": {"enabled": True}}, p)
     v = config.load_config(p)["voice"]
     assert v["enabled"] is True and v["ptt_key"] == "F9" and v["vad_silence_ms"] == 1000
     config.save_config({"voice": {"tts_rate": 1.2}}, p)
     v = config.load_config(p)["voice"]
     assert v["enabled"] is True and v["tts_rate"] == 1.2      # both partial saves kept
+    config.save_config({"voice": {"mic_device_id": "abc123"}}, p)
+    v = config.load_config(p)["voice"]
+    assert v["mic_device_id"] == "abc123" and v["enabled"] is True  # round-trips, keeps prior partials
 
 
 def test_driver_merge_still_works_after_generalising(tmp_path):
