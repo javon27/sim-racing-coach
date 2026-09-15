@@ -130,6 +130,19 @@ export interface DriverProfile {
   risk_tolerance: string | null;
 }
 
+export interface VoiceSettings {
+  enabled: boolean;
+  ptt_key: string;
+  ptt_wheel: string | null;
+  ptt_gamepad: string | null;
+  tts_voice: string | null;
+  tts_rate: number;
+  vad_threshold: number;
+  vad_silence_ms: number;
+  vad_max_s: number;
+  conversation_idle_s: number;
+}
+
 export interface SettingsResponse {
   units: "metric" | "imperial";
   input_device: "wheel" | "controller";
@@ -138,6 +151,7 @@ export interface SettingsResponse {
   show_cost: boolean;
   log_level: string;
   driver: DriverProfile;
+  voice: VoiceSettings;
   api_key_set: boolean;
   data_dir: string;
   app_version: string;
@@ -751,5 +765,48 @@ export function distillProfile(sessionId: string): Promise<DistillProposals> {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify({ session_id: sessionId }),
+  });
+}
+
+// --- Voice
+
+export interface VoiceStatus {
+  installed: boolean;
+  installing: boolean;
+  progress_bytes: number;
+  total_bytes: number | null;
+  error: string | null;
+}
+
+// Dedicated fetch (not `request()`): the thrown message must be the server's
+// `detail` alone, with no "API request failed: ..." prefix, because it gets spoken.
+export async function transcribe(wav: Uint8Array): Promise<{ text: string; seconds: number }> {
+  const res = await fetch(`${BASE}/voice/transcribe`, {
+    method: "POST",
+    headers: { "content-type": "audio/wav" },
+    body: wav as BodyInit,  // Uint8Array is a valid fetch body at runtime; TS's stricter typed-array generics disagree
+  });
+  if (!res.ok) {
+    let detail = res.status === 409 ? "voice isn't set up yet — enable it in Settings" : "couldn't transcribe that";
+    try {
+      const body = await res.json();
+      if (typeof body?.detail === "string") detail = body.detail;
+    } catch {
+      /* non-JSON / empty body -- keep the default */
+    }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+export function voiceStatus(): Promise<VoiceStatus> {
+  return request<VoiceStatus>("/voice/status");
+}
+
+export function voiceSetup(): Promise<VoiceStatus & { started: boolean }> {
+  return request<VoiceStatus & { started: boolean }>("/voice/setup", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({}),
   });
 }

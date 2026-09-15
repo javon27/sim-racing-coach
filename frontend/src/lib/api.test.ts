@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { getSessions, putSettings, setApiKey, testApiKey, clearData, ingestHistory, getChatUsage,
-         rebuildFromCapture } from "./api";
+         rebuildFromCapture, transcribe } from "./api";
 
 const BASE = "http://127.0.0.1:8765";
 const JSON_HEADERS = { "Content-Type": "application/json" };
@@ -188,5 +188,26 @@ describe("api client", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(clearData()).rejects.toThrow();
+  });
+
+  it("transcribe posts raw wav and surfaces 409 detail", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true, status: 200, json: async () => ({ text: "hi there", seconds: 1 }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const r = await transcribe(new Uint8Array([1, 2, 3]));
+    expect(r.text).toBe("hi there");
+    expect(fetchMock).toHaveBeenCalledWith(`${BASE}/voice/transcribe`, {
+      method: "POST",
+      headers: { "content-type": "audio/wav" },
+      body: new Uint8Array([1, 2, 3]),
+    });
+
+    const fetchMock2 = vi.fn().mockResolvedValueOnce({
+      ok: false, status: 409, json: async () => ({ detail: "voice isn't set up yet — enable it in Settings" }),
+    });
+    vi.stubGlobal("fetch", fetchMock2);
+    await expect(transcribe(new Uint8Array([1]))).rejects.toThrow(/set up yet/);
   });
 });

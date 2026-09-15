@@ -12,10 +12,13 @@
     addMemory,
     updateMemory,
     distillProfile,
+    voiceStatus,
+    voiceSetup,
     type SettingsResponse,
     type IngestResult,
     type DriverProfileData,
     type DriverMemory,
+    type VoiceStatus,
   } from "./api";
   import InfoTip from "./InfoTip.svelte";
 
@@ -39,6 +42,71 @@
   let importing = $state(false);
   let lmuStatus: string | null = $state(null);
 
+  // --- Voice (#104) ---
+  let voiceStatusInfo: VoiceStatus | null = $state(null);
+  let capturingKey = $state(false);
+
+  function voiceStatusText(): string {
+    const st = voiceStatusInfo;
+    if (!st) return "";
+    if (st.error) return st.error;
+    if (st.installing) {
+      const pct = st.total_bytes ? Math.round((st.progress_bytes / st.total_bytes) * 100) : 0;
+      return `Downloading speech model… ${pct}%`;
+    }
+    return st.installed ? "Ready" : "";
+  }
+
+  async function ensureVoiceReady() {
+    try {
+      let st: VoiceStatus = await voiceStatus();
+      if (!st.installed) st = await voiceSetup();
+      voiceStatusInfo = st;
+      while (voiceStatusInfo.installing) {
+        await new Promise((r) => setTimeout(r, 1000));
+        voiceStatusInfo = await voiceStatus();
+      }
+    } catch {
+      /* leave whatever status we last had */
+    }
+  }
+
+  async function onVoiceEnabledChange() {
+    await saveConfig();
+    if (settings?.voice.enabled) await ensureVoiceReady();
+  }
+
+  function startCapture() {
+    capturingKey = true;
+  }
+
+  // getVoices() is empty until the async `voiceschanged` event fires in
+  // Chromium/WebView2, so a one-shot read at mount would show a false "no
+  // speech voices installed" warning on every startup. Re-read on the event
+  // and keep it in state so the template re-renders once the real list lands.
+  let ttsVoices: SpeechSynthesisVoice[] = $state(
+    typeof speechSynthesis !== "undefined" ? speechSynthesis.getVoices() : [],
+  );
+
+  $effect(() => {
+    if (typeof speechSynthesis === "undefined") return;
+    const refresh = () => { ttsVoices = speechSynthesis.getVoices(); };
+    speechSynthesis.addEventListener("voiceschanged", refresh);
+    return () => speechSynthesis.removeEventListener("voiceschanged", refresh);
+  });
+
+  $effect(() => {
+    if (!capturingKey) return;
+    const onCapture = (e: KeyboardEvent) => {
+      capturingKey = false;
+      if (!settings) return;
+      settings = { ...settings, voice: { ...settings.voice, ptt_key: e.code } };
+      saveConfig();
+    };
+    window.addEventListener("keydown", onCapture);
+    return () => window.removeEventListener("keydown", onCapture);
+  });
+
   $effect(() => {
     (async () => {
       try {
@@ -59,12 +127,14 @@
       input_device: settings.input_device,
       model: settings.model,
       driver: settings.driver,
+      voice: settings.voice,
       lmu_dir: settings.lmu_dir,
       lmu_player_names: settings.lmu_player_names,
       log_level: settings.log_level,
     };
     return putSettings(cfg).then((res) => {
       settings = res;
+      window.dispatchEvent(new CustomEvent("settings-changed"));
     });
   }
 
@@ -345,6 +415,72 @@
       {#if keyStatus || testStatus}
         <p class="status">{[keyStatus, testStatus].filter(Boolean).join(" · ")}</p>
       {/if}
+    </section>
+
+    <section class="grp">
+      <h3>Voice</h3>
+      <div class="field">
+        <span class="lbl">Enable voice<InfoTip text="Push-to-talk and hands-free conversation mode. Downloads a local speech-recognition model on first use." /></span>
+        <div class="control">
+          <input
+            type="checkbox"
+            aria-label="Enable voice"
+            bind:checked={settings.voice.enabled}
+            onchange={onVoiceEnabledChange}
+          />
+        </div>
+      </div>
+      {#if voiceStatusInfo}
+        <p class="status">{voiceStatusText()}</p>
+      {/if}
+      <div class="field">
+        <span class="lbl">Push-to-talk key<InfoTip text="Held to talk; tap to start hands-free conversation mode." /></span>
+        <div class="control">
+          <span class="val">{settings.voice.ptt_key}</span>
+          <button type="button" onclick={startCapture}>{capturingKey ? "Press a key…" : "Capture"}</button>
+        </div>
+      </div>
+      <div class="field">
+        <span class="lbl">Voice<InfoTip text="Which installed system voice reads answers aloud." /></span>
+        <div class="control">
+          {#if ttsVoices.length === 0}
+            <span class="status inline">No speech voices installed — answers will be shown only.</span>
+          {:else}
+            <select bind:value={settings.voice.tts_voice} onchange={saveConfig}>
+              <option value={null}>Browser default</option>
+              {#each ttsVoices as v (v.name)}
+                <option value={v.name}>{v.name}</option>
+              {/each}
+            </select>
+          {/if}
+        </div>
+      </div>
+      <div class="field">
+        <span class="lbl">Rate</span>
+        <div class="control">
+          <input type="range" min="0.6" max="1.6" step="0.1" bind:value={settings.voice.tts_rate} onchange={saveConfig} />
+          <span class="val">{settings.voice.tts_rate.toFixed(1)}x</span>
+        </div>
+      </div>
+      <div class="field">
+        <span class="lbl">Silence threshold<InfoTip text="How loud speech must be (0-1) to count as talking." /></span>
+        <div class="control">
+          <input type="range" min="0.005" max="0.1" step="0.005" bind:value={settings.voice.vad_threshold} onchange={saveConfig} />
+          <span class="val">{settings.voice.vad_threshold}</span>
+        </div>
+      </div>
+      <div class="field">
+        <span class="lbl">Silence to end (ms)<InfoTip text="How long a pause ends an utterance and sends it." /></span>
+        <div class="control"><input type="number" bind:value={settings.voice.vad_silence_ms} onchange={saveConfig} /></div>
+      </div>
+      <div class="field">
+        <span class="lbl">Max utterance (s)<InfoTip text="Hard cap on how long a single utterance can run." /></span>
+        <div class="control"><input type="number" bind:value={settings.voice.vad_max_s} onchange={saveConfig} /></div>
+      </div>
+      <div class="field">
+        <span class="lbl">Conversation idle (s)<InfoTip text="How long conversation mode listens with no speech before it stops." /></span>
+        <div class="control"><input type="number" bind:value={settings.voice.conversation_idle_s} onchange={saveConfig} /></div>
+      </div>
     </section>
 
     <section class="grp">
