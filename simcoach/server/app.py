@@ -856,6 +856,31 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             "corners": [asdict(c) for c in a.corners],
         })
 
+    @app.get("/laps/{lap_id}/inputs")
+    def lap_inputs(lap_id: int):
+        # Lap-keyed input traces for the coaching screen's Inputs panel (#95):
+        # selected lap vs its track/car best, both resampled the same way as
+        # /track/inputs (which stays the Pit Wall's live-keyed version).
+        try:
+            rec = store.load(lap_id)
+        except KeyError:
+            raise HTTPException(404, "lap not found")
+        except FileNotFoundError:
+            raise HTTPException(404, "lap has no telemetry")
+        lap = input_traces(rec)
+        best_rec = store.best_lap(rec.track, rec.car, exclude_lap_id=lap_id)
+        best = input_traces(best_rec) if best_rec is not None else None
+        cmap = _map_for(rec.track)
+        corners = [] if cmap is None else [{
+            "label": c.label or str(c.number),
+            "name": c.name,
+            "start_dist": round(float(c.start_dist), 1),
+            "apex_dist": round(float(c.apex_dist), 1),
+            "end_dist": round(float(c.end_dist), 1),
+        } for c in cmap.corners]
+        return {"lap": lap, "best": best or None, "corners": corners,
+                "length": lap.get("length")}
+
     @app.get("/laps/{lap_id}/map")
     def lap_map(lap_id: int, avg: int = 0):
         # The map is the track's CANONICAL layout, the same for every lap -- the

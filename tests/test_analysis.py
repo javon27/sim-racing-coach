@@ -792,6 +792,20 @@ def test_input_traces_unaffected_by_lap_distance_interpolation_cache():
         assert after[k] == v
 
 
+def test_input_traces_mean_and_speed(synthetic_lap):
+    """#95: each channel gets a `mean` band alongside `lo`/`hi`, and a `speed`
+    channel (km/h) is added on the same bins."""
+    from simcoach.analysis import input_traces
+
+    tr = input_traces(synthetic_lap, bins=50)
+    assert "speed" in tr
+    for ch in ("throttle", "brake", "steering", "speed"):
+        band = tr[ch]
+        assert len(band["mean"]) == len(band["lo"]) == len(band["hi"]) == 50
+        for lo, mean, hi in zip(band["lo"], band["mean"], band["hi"]):
+            assert lo <= mean <= hi
+
+
 def test_time_loss_buckets_flag_exact_when_both_laps_carry_elapsed_time():
     import numpy as np
 

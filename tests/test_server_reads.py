@@ -144,6 +144,51 @@ def test_analysis_404_missing_lap(tmp_path, synthetic_lap):
     assert r.status_code == 404
 
 
+def test_lap_inputs_happy_path(tmp_path, synthetic_lap):
+    import dataclasses
+
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    slower_id = store.save(synthetic_lap)
+    faster = dataclasses.replace(synthetic_lap, lap_time=80.0, timestamp=1.0)
+    store.save(faster)
+    coach = Coach(FakeModel())
+    app = create_app(store, coach, cmap=cmap)
+    body = _tc(app).get(f"/laps/{slower_id}/inputs").json()
+    assert body["length"] == body["lap"]["length"]
+    assert body["lap"]["throttle"]["mean"]
+    assert body["best"] is not None
+    assert body["best"]["throttle"]["mean"]
+    assert body["corners"] == [
+        {"label": "1", "name": "Left Hairpin", "start_dist": 800.0,
+         "apex_dist": 1000.0, "end_dist": 1200.0},
+        {"label": "2", "name": "Right Sweeper", "start_dist": 2000.0,
+         "apex_dist": 2200.0, "end_dist": 2400.0},
+    ]
+
+
+def test_lap_inputs_no_map_no_corners(tmp_path, synthetic_lap):
+    app, lap_id, cid = _app(tmp_path, synthetic_lap)  # no cmap
+    body = _tc(app).get(f"/laps/{lap_id}/inputs").json()
+    assert body["corners"] == []
+    assert body["best"] is None  # only one lap saved
+
+
+def test_lap_inputs_404_missing_lap(tmp_path, synthetic_lap):
+    app, lap_id, cid = _app(tmp_path, synthetic_lap)
+    r = _tc(app).get("/laps/99999/inputs")
+    assert r.status_code == 404
+    assert r.json()["detail"] == "lap not found"
+
+
+def test_lap_inputs_404_no_telemetry(tmp_path):
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    lap_id = _result_log_lap(store)
+    coach = Coach(FakeModel())
+    r = _tc(create_app(store, coach)).get(f"/laps/{lap_id}/inputs")
+    assert r.status_code == 404
+
+
 def _pos_lap():
     x = np.array([0.0, 100.0, 100.0, 0.0, 0.0])
     z = np.array([0.0, 0.0, 100.0, 100.0, 0.0])

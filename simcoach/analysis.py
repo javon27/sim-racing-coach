@@ -1196,16 +1196,17 @@ def geometry_clause(metrics: dict, direction: str | None) -> str:
 # The envelope keeps both extremes of each bin, so no input event can fall between
 # grid points, at any phase. Raising `bins` narrows the bins but does not remove
 # the aliasing; the envelope does.
-_INPUT_CHANNELS = ("throttle", "brake", "steering")
+_INPUT_CHANNELS = ("throttle", "brake", "steering", "speed")
 
 
 def input_traces(record: LapRecord, bins: int = 500) -> dict:
-    """Throttle/brake/steering resampled onto a uniform lap_distance grid.
+    """Throttle/brake/steering/speed resampled onto a uniform lap_distance grid.
 
     Pure and deterministic; UI-facing only (never fed to the model). Returns
-    ``{"length", "dist", "throttle", "brake", "steering"}`` where `dist` is the
-    `bins` bin centres and each channel is ``{"lo": [...], "hi": [...]}`` — the
-    min/max of the samples in each bin. Returns ``{}`` when the lap lacks a
+    ``{"length", "dist", "throttle", "brake", "steering", "speed"}`` where `dist`
+    is the `bins` bin centres and each channel is
+    ``{"lo": [...], "hi": [...], "mean": [...]}`` — the min/max/mean of the
+    samples in each bin (speed in km/h). Returns ``{}`` when the lap lacks a
     channel or is too short.
 
     `bins` bounds the payload: a full lap at 48.6 Hz is 4k-10k samples per channel.
@@ -1259,7 +1260,8 @@ def input_traces(record: LapRecord, bins: int = 500) -> dict:
     edges = np.linspace(float(dist[0]), float(dist[-1]), bins + 1)
     centres = (edges[:-1] + edges[1:]) / 2.0
     idx = np.clip(np.searchsorted(edges, dist, side="right") - 1, 0, bins - 1)
-    empty = np.bincount(idx, minlength=bins) == 0
+    counts = np.bincount(idx, minlength=bins)
+    empty = counts == 0
 
     out: dict = {"length": round(float(dist[-1]), 1),
                  "dist": [round(float(v), 1) for v in centres]}
@@ -1269,12 +1271,16 @@ def input_traces(record: LapRecord, bins: int = 500) -> dict:
         hi = np.full(bins, -np.inf)
         np.minimum.at(lo, idx, v)
         np.maximum.at(hi, idx, v)
+        mean = np.divide(np.bincount(idx, weights=v, minlength=bins), counts,
+                         out=np.zeros(bins), where=~empty)
         if empty.any():
             # Bins finer than the sample spacing hold nothing; interpolate them so
             # the chart has no holes.
             pt = np.interp(centres, dist, v)
             lo = np.where(empty, pt, lo)
             hi = np.where(empty, pt, hi)
+            mean = np.where(empty, pt, mean)
         out[k] = {"lo": [round(float(x), 3) for x in lo],
-                  "hi": [round(float(x), 3) for x in hi]}
+                  "hi": [round(float(x), 3) for x in hi],
+                  "mean": [round(float(x), 3) for x in mean]}
     return out
