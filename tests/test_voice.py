@@ -1,6 +1,8 @@
 import io
+import sys
 import threading
 import time
+import types
 import wave
 from pathlib import Path
 
@@ -9,6 +11,7 @@ import pytest
 
 from simcoach.voice import (
     MAX_SECONDS,
+    WHISPER_PROMPT,
     FakeTranscriber,
     ModelInstaller,
     NotInstalled,
@@ -112,6 +115,35 @@ def test_installer_reports_error_and_is_restartable(tmp_path):
         time.sleep(0.05)
     assert inst.status()["error"] == "no network" and inst.status()["installed"] is False
     assert inst.start() is True and len(calls) >= 1  # a failed install can be retried
+
+
+def test_whisper_transcriber_uses_beam_size_and_racing_prompt(tmp_path, monkeypatch):
+    d = model_dir(str(tmp_path))
+    d.mkdir(parents=True)
+    (d / "model.bin").write_bytes(b"x")
+
+    captured = {}
+
+    class Segment:
+        text = "mic check"
+
+    class StubWhisperModel:
+        def __init__(self, *_a, **_kw):
+            pass
+
+        def transcribe(self, _pcm16k, **kw):
+            captured.update(kw)
+            return [Segment()], None
+
+    monkeypatch.setitem(sys.modules, "faster_whisper", types.SimpleNamespace(WhisperModel=StubWhisperModel))
+
+    result = WhisperTranscriber(str(tmp_path)).transcribe(np.zeros(160, np.float32))
+
+    assert result == "mic check"
+    assert captured["beam_size"] == 5
+    assert captured["initial_prompt"] == WHISPER_PROMPT
+    assert captured["vad_filter"] is True
+    assert captured["language"] == "en"
 
 
 def test_installer_start_is_idempotent_while_running(tmp_path):
