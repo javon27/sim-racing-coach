@@ -1,13 +1,13 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { render, cleanup } from "@testing-library/svelte";
 import InputTraces from "./InputTraces.svelte";
-import type { InputTrace, InputTraces as Traces } from "./api";
+import type { CornerMarker, InputTrace, InputTraces as Traces } from "./api";
 
 // jsdom does not lay out or paint SVG, so these assert the geometry the component
 // COMPUTES — the `d` attribute it writes — not how it looks. Computed styles are
 // worthless here (vitest doesn't process app.css, so every CSS var is empty).
 
-const flat = (v: number[]) => ({ lo: [...v], hi: [...v] });
+const flat = (v: number[]) => ({ lo: [...v], hi: [...v], mean: [...v] });
 
 function trace(over: Partial<InputTrace> = {}): InputTrace {
   return {
@@ -101,5 +101,65 @@ describe("InputTraces (Pit Wall driver-input graphs)", () => {
     });
     expect(queryByTestId("trace-throttle-best")).toBeNull();
     expect(getByTestId("inputs-last-time").textContent).toBe("1:32.500");
+  });
+});
+
+describe("InputTraces (line mode, coaching-screen lap-vs-best)", () => {
+  afterEach(() => cleanup());
+
+  const corners: CornerMarker[] = [
+    { label: "T1", name: "Turn 1", start_dist: 50, end_dist: 150, apex_dist: 100 },
+    { label: "T2", name: "Turn 2", start_dist: 800, end_dist: 900, apex_dist: 850 },
+  ];
+
+  it("draws a lap line and an underlying best line per channel row when best is given", () => {
+    const lap = trace();
+    const best = trace({ lap_id: 8, dist: [0, 500, 1000], throttle: flat([0.5, 0.8, 0.5]) });
+    const { getByTestId } = render(InputTraces, { props: { mode: "line", traces: lap, best } });
+
+    const lapPath = getByTestId("trace-throttle-last").getAttribute("d")!;
+    const bestPath = getByTestId("trace-throttle-best").getAttribute("d")!;
+    // A polyline, not a closed band: starts with M, no trailing Z.
+    expect(lapPath.trimEnd()).not.toMatch(/Z$/);
+    expect(bestPath.trimEnd()).not.toMatch(/Z$/);
+    expect(lapPath).not.toEqual(bestPath);
+  });
+
+  it("draws only the lap line when no best is given", () => {
+    const { getByTestId, queryByTestId } = render(InputTraces, {
+      props: { mode: "line", traces: trace(), best: null },
+    });
+    expect(getByTestId("trace-throttle-last")).toBeTruthy();
+    expect(queryByTestId("trace-throttle-best")).toBeNull();
+  });
+
+  it("draws a 4th row for speed in line mode", () => {
+    const lap = trace({ speed: flat([100, 150, 120]) });
+    const { getByTestId } = render(InputTraces, { props: { mode: "line", traces: lap, best: null } });
+    expect(getByTestId("trace-speed-last")).toBeTruthy();
+  });
+
+  it("renders corner apex ticks with T-labels when corners are given", () => {
+    const { getByTestId } = render(InputTraces, {
+      props: { mode: "line", traces: trace(), best: null, corners },
+    });
+    expect(getByTestId("corner-tick-T1")).toBeTruthy();
+    expect(getByTestId("corner-tick-T2")).toBeTruthy();
+    expect(getByTestId("corner-label-T1").textContent).toBe("T1");
+    expect(getByTestId("corner-label-T2").textContent).toBe("T2");
+  });
+
+  it("renders no corner markers when corners is not given", () => {
+    const { queryByTestId } = render(InputTraces, {
+      props: { mode: "line", traces: trace(), best: null },
+    });
+    expect(queryByTestId("corner-tick-T1")).toBeNull();
+  });
+
+  it("still renders as a filled band in the default mode (Pit Wall unchanged)", () => {
+    const { getByTestId } = render(InputTraces, {
+      props: { traces: { last: trace(), best: null } as Traces },
+    });
+    expect(getByTestId("trace-throttle-last").getAttribute("d")!.trimEnd()).toMatch(/Z$/);
   });
 });
