@@ -149,6 +149,26 @@ describe("InputTraces (line mode, coaching-screen lap-vs-best)", () => {
     expect(getByTestId("corner-label-T2").textContent).toBe("T2");
   });
 
+  it("prefixes a purely-numeric corner label with T (e.g. \"4\" -> \"T4\")", () => {
+    const numbered: CornerMarker[] = [
+      { label: "4", name: "Turn 4", start_dist: 50, end_dist: 150, apex_dist: 100 },
+    ];
+    const { getByTestId } = render(InputTraces, {
+      props: { mode: "line", traces: trace(), best: null, corners: numbered },
+    });
+    expect(getByTestId("corner-label-4").textContent).toBe("T4");
+  });
+
+  it("leaves a named corner label unchanged", () => {
+    const named: CornerMarker[] = [
+      { label: "Eau Rouge", name: "Eau Rouge", start_dist: 50, end_dist: 150, apex_dist: 100 },
+    ];
+    const { getByTestId } = render(InputTraces, {
+      props: { mode: "line", traces: trace(), best: null, corners: named },
+    });
+    expect(getByTestId("corner-label-Eau Rouge").textContent).toBe("Eau Rouge");
+  });
+
   it("renders no corner markers when corners is not given", () => {
     const { queryByTestId } = render(InputTraces, {
       props: { mode: "line", traces: trace(), best: null },

@@ -161,8 +161,15 @@
     const d0 = d[0];
     const span = d[d.length - 1] - d0 || 1;
     const x = (v: number) => ((v - d0) / span) * W;
+    // "4" reads as T4 on the plot; a name like "Eau Rouge" is left alone.
     const raw = corners
-      .map((c) => ({ label: c.label, x: x(c.apex_dist), xStart: x(c.start_dist), xEnd: x(c.end_dist) }))
+      .map((c) => ({
+        label: c.label,
+        displayLabel: /^\d+[A-Za-z]?$/.test(c.label) ? `T${c.label}` : c.label,
+        x: x(c.apex_dist),
+        xStart: x(c.start_dist),
+        xEnd: x(c.end_dist),
+      }))
       .sort((a, b) => a.x - b.x);
     // Narrow panels crowd adjacent T-labels; skip every other one where two
     // consecutive apexes sit under ~24 px apart (measured in viewBox units).
@@ -223,7 +230,7 @@
           {#each markers as m (m.label)}
             <line x1={m.x} y1={topPad} x2={m.x} y2={H - AXIS_H} class="corner-tick" data-testid="corner-tick-{m.label}" />
             {#if m.showLabel}
-              <text x={m.x} y={topPad - 3} text-anchor="middle" class="corner-label" data-testid="corner-label-{m.label}">{m.label}</text>
+              <text x={m.x} y={topPad - 3} text-anchor="middle" class="corner-label" data-testid="corner-label-{m.label}">{m.displayLabel}</text>
             {/if}
           {/each}
         {/if}
