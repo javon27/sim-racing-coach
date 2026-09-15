@@ -34,6 +34,7 @@ from ..analysis import (
 )
 from ..car_lookup import resolve_car
 from ..car_notes import load_car_notes, load_setup_concepts
+from ..coach import first_paragraph, split_spoken
 from ..coach_tools import CoachContext, race_result_text, scrub_stored_answer
 from ..corners import CornerMap, in_window, validated_sections, validated_sectors
 from ..driver import DriverProfile
@@ -1797,6 +1798,9 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             await ws.send_json({"type": "error", "message": "empty question"})
             await ws.close(code=1003);  return
 
+        voice = req.get("voice")
+        voice = voice if voice in ("ptt", "conversation") else None
+
         # Coerce lap_id ONCE (used for load AND persisted context stamp).
         lap_id = req.get("lap_id")
         try: lap_id = int(lap_id) if lap_id is not None else None
@@ -1950,7 +1954,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             try:
                 for ev in app.state.coach.ask_agentic_stream(
                         ctx, question, car=car, input_device=req.get("input_device"),
-                        history=history, units=ctx.units, driver_profile=driver_profile):
+                        history=history, units=ctx.units, driver_profile=driver_profile,
+                        voice=voice):
                     if ev["type"] == "usage":
                         # Keep the per-turn breakdown server-side (noise on the wire);
                         # the client gets one cumulative figure on `done`. The model id
@@ -1962,7 +1967,13 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                     if ev["type"] == "text":
                         text += ev["text"]       # accumulate streamed deltas into the full answer
                     _emit(ev)
-                terminal = {"type": "done"}
+                spoken = None
+                if voice == "ptt":
+                    text, spoken = split_spoken(text)
+                    spoken = spoken or first_paragraph(text)
+                terminal = {"type": "done", "answer": text}
+                if voice == "ptt":
+                    terminal["spoken"] = spoken
             except Exception as e:
                 # Surface our own curated user-facing errors verbatim; hide any
                 # other internal error text (and generic RuntimeError/ValueError)
@@ -1975,8 +1986,9 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             if terminal["type"] == "done" or text:
                 try:
                     chat_id = chat_id_in or app.state.store.create_chat()
+                    stored_question = ("🎤 " + question) if voice else question
                     app.state.store.save_chat(chat_id, ctx.session_id, ctx.track, ctx.car, ctx.lap_id,
-                                              question, text, ctx.tool_calls,
+                                              stored_question, text, ctx.tool_calls,
                                               usage=turn_usage.as_dict(), model=used_model)
                     terminal["chat_id"] = chat_id
                     # Report the CHAT cumulative total, read back from the store after

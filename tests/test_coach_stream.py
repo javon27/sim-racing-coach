@@ -1,6 +1,6 @@
 from simcoach.coach import Coach
-from simcoach.model.fake import FakeModel
 from simcoach.coach_tools import CoachContext
+from simcoach.model.fake import FakeModel
 
 
 def test_ask_agentic_stream_passes_events_and_dispatches(tmp_path):
@@ -36,3 +36,14 @@ def test_ask_agentic_and_stream_build_same_system_prompt(tmp_path):
     system_from_stream = stream_model.last_system
 
     assert system_from_ask == system_from_stream
+
+
+def test_spoken_sentence_only_for_ptt(tmp_path):
+    from simcoach.coach import SPOKEN_SENTENCE
+    from simcoach.store import LapStore
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    for voice, expected in ((None, False), ("conversation", False), ("ptt", True)):
+        m = FakeModel(reply="ok")
+        ctx = CoachContext(store, track="T", car="C")
+        list(Coach(m).ask_agentic_stream(ctx, "q", car="c", voice=voice))
+        assert (SPOKEN_SENTENCE in m.last_system) is expected, voice

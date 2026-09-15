@@ -82,3 +82,48 @@ def test_setup_starts_download_and_status_tracks_it(tmp_path, monkeypatch):
 def test_setup_requires_json_body(tmp_path, monkeypatch):
     c, _ = _app(tmp_path, monkeypatch, installer=ModelInstaller(str(tmp_path), downloader=lambda d: None))
     assert c.post("/voice/setup").status_code == 422    # CSRF guard, same as /ingest
+
+
+def _ask(c, body):
+    with c.websocket_connect("/coach", headers={"host": "127.0.0.1",
+                                                 "origin": "http://127.0.0.1:8765"}) as ws:
+        ws.send_json(body)
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"):
+                return ev
+
+
+def test_ptt_strips_spoken_line_and_sends_it_on_done(tmp_path, monkeypatch):
+    monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    model = FakeModel(reply="Brake later.\n\nMore detail.\n\n[spoken] Brake later into four.")
+    c = TestClient(create_app(store, Coach(model)), base_url="http://127.0.0.1")
+    ev = _ask(c, {"question": "where am I losing time", "voice": "ptt"})
+    assert ev["type"] == "done"
+    assert ev["spoken"] == "Brake later into four."
+    assert ev["answer"] == "Brake later.\n\nMore detail."
+    assert "VOICE:" in model.last_system
+    rows = store.chat_messages(ev["chat_id"])
+    assert rows[0]["question"] == "🎤 where am I losing time"
+    assert rows[0]["answer"] == "Brake later.\n\nMore detail."      # never stored with the tag
+
+
+def test_ptt_falls_back_to_first_paragraph_when_tag_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    c = TestClient(create_app(store, Coach(FakeModel(reply="First para.\n\nSecond."))), base_url="http://127.0.0.1")
+    ev = _ask(c, {"question": "q", "voice": "ptt"})
+    assert ev["spoken"] == "First para." and ev["answer"] == "First para.\n\nSecond."
+
+
+def test_conversation_and_typed_add_nothing(tmp_path, monkeypatch):
+    monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    model = FakeModel(reply="Answer.")
+    c = TestClient(create_app(store, Coach(model)), base_url="http://127.0.0.1")
+    ev = _ask(c, {"question": "q", "voice": "conversation"})
+    assert "spoken" not in ev and ev["answer"] == "Answer." and "VOICE:" not in model.last_system
+    assert store.chat_messages(ev["chat_id"])[0]["question"] == "🎤 q"
+    ev = _ask(c, {"question": "typed", "voice": "bogus"})
+    assert "spoken" not in ev and store.chat_messages(ev["chat_id"])[0]["question"] == "typed"
