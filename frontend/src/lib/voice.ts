@@ -237,7 +237,10 @@ export class VoiceLoop {
     this.#cancelSpeech();
     this.error = keepError ? message : null;
     this.mode = null; this.speakingMessage = null;
-    this.#o.speaker.earcon("error");
+    // Not for the mic-permission failure: the driver already knows the mic
+    // didn't open, and a harsh beep on top of that first prompt is worse than
+    // just hearing the spoken message.
+    if (message !== MIC_ERROR) this.#o.speaker.earcon("error");
     void this.#o.speaker.speak(message);
     this.#set("idle");
   }

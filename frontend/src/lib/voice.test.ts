@@ -169,6 +169,11 @@ describe("VoiceLoop errors always end idle with the mic closed", () => {
     expect(loop.state).toBe("idle"); expect(recorder.open).toBe(false);
     expect(speaker.spoken[0]).toMatch(/can't hear the mic/i); expect(loop.error).toBeTruthy();
   });
+  it("mic denied does not play the error earcon", async () => {
+    const { loop, recorder, speaker } = make(); recorder.failStart = true;
+    loop.press(); await flush();
+    expect(speaker.earcons).not.toContain("error");
+  });
   it("409 from transcribe", async () => {
     const { loop, recorder, transcriber, speaker } = make();
     transcriber.fail = new Error("voice isn't set up yet — enable it in Settings");

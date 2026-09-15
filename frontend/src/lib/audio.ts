@@ -104,10 +104,17 @@ export class SynthSpeaker implements Speaker {
   earcon(kind: Earcon): void {
     if (!this.#beepCtx) this.#beepCtx = new AudioContext();
     const ctx = this.#beepCtx;
+    if (ctx.state === "suspended") void ctx.resume();
     const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
     osc.frequency.value = EARCON_HZ[kind];
-    osc.connect(ctx.destination);
+    const t = ctx.currentTime;
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.08, t + 0.01);
+    gain.gain.linearRampToValueAtTime(0, t + 0.08);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
     osc.start();
-    osc.stop(ctx.currentTime + 0.08);
+    osc.stop(t + 0.08);
   }
 }
