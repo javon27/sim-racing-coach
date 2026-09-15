@@ -36,6 +36,12 @@ cp dist-sidecar/simcoach-sidecar.exe src-tauri/binaries/simcoach-sidecar-x86_64-
 cargo tauri build
 ```
 
+## Voice
+
+The frozen sidecar needs `pip install -e .[voice]` before the freeze and
+`collect_all("faster_whisper")` + `collect_all("ctranslate2")` in the spec
+(`hiddenimports`/`binaries`) — not yet verified in CI; tracked on #104.
+
 ## Release
 
 Push a `vX.Y.Z` tag. CI builds the installers and drafts a GitHub release with them

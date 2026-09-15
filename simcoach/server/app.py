@@ -261,10 +261,19 @@ def _capture_loop(source, store, app_state) -> None:
 
 
 def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_factory=None,
-               tracks_dir=None) -> FastAPI:
+               tracks_dir=None, *, transcriber=None, installer=None) -> FastAPI:
     app = FastAPI(title="SimCoach", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store = store
     app.state.coach = coach
+    from ..voice import (
+        ModelInstaller,
+        NotInstalled,
+        VoiceInputError,
+        WhisperTranscriber,
+        decode_wav,
+    )
+    app.state.transcriber = transcriber or WhisperTranscriber(store.data_dir)
+    app.state.voice_installer = installer or ModelInstaller(store.data_dir)
     app.state.tracks_dir = Path(tracks_dir) if tracks_dir else _DEFAULT_TRACKS_DIR
     app.state.cmap = cmap            # fallback map when no resolver is wired
     app.state.rest = rest            # cached live REST client once connected
@@ -2228,6 +2237,37 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             return {"ok": True, "error": None}
         except Exception as e:
             return {"ok": False, "error": str(e)}
+
+    VOICE_MAX_BODY = 8_000_000   # bytes; a 30 s 16 kHz mono WAV is ~1 MB
+
+    @app.post("/voice/transcribe")
+    async def voice_transcribe(request: Request):
+        # Raw WAV body (not JSON). Localhost-only + the Host/Origin middleware already
+        # gate this; a cross-origin no-cors POST could only cost local CPU.
+        data = await request.body()
+        if len(data) > VOICE_MAX_BODY:
+            raise HTTPException(413, "audio body too large")
+        try:
+            pcm, seconds = decode_wav(data)
+        except VoiceInputError as e:
+            raise HTTPException(422, str(e))
+        loop = asyncio.get_running_loop()
+        try:
+            # whisper is CPU-bound for ~1-3 s: keep the event loop (and /status polls) free
+            text = await loop.run_in_executor(None, app.state.transcriber.transcribe, pcm)
+        except NotInstalled as e:
+            raise HTTPException(409, str(e))
+        return {"text": text, "seconds": seconds}
+
+    @app.post("/voice/setup")
+    def voice_setup(body: dict = Body(...)):
+        # Body(...) forces a JSON content-type -- CSRF guard, same mechanism as /ingest.
+        started = app.state.voice_installer.start()
+        return {"started": started, **app.state.voice_installer.status()}
+
+    @app.get("/voice/status")
+    def voice_status():
+        return app.state.voice_installer.status()
 
     @app.post("/ingest")
     def ingest(body: dict = Body(...)):
