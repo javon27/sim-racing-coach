@@ -107,4 +107,28 @@ describe("InputsPanel", () => {
     await waitFor(() => expect(container.querySelector(".panel")).toBeTruthy());
     expect(container.querySelector(".rail-resizer")).toBeNull();
   });
+
+  it("clicking anywhere on the header row toggles collapse, not just the button", async () => {
+    vi.mocked(getLapInputs).mockResolvedValue({ lap: LAP, best: null, corners: [] });
+    const { container } = render(InputsPanel, { props: { lapId: 9 } });
+    await screen.findByText(/inputs/i);
+
+    const hdr = container.querySelector(".hdr h2") as HTMLElement;
+    await fireEvent.click(hdr);
+
+    expect(container.querySelector('[data-testid="inputs-panel-body"]')).toBeNull();
+    expect(localStorage.getItem("inputsPanel.collapsed")).toBe("true");
+  });
+
+  it("clicking the collapse button toggles exactly once (no double-toggle from the header handler)", async () => {
+    vi.mocked(getLapInputs).mockResolvedValue({ lap: LAP, best: null, corners: [] });
+    const { container } = render(InputsPanel, { props: { lapId: 9 } });
+    await screen.findByText(/inputs/i);
+
+    const toggle = screen.getByRole("button", { name: /collapse|expand/i });
+    await fireEvent.click(toggle);
+
+    expect(container.querySelector('[data-testid="inputs-panel-body"]')).toBeNull();
+    expect(localStorage.getItem("inputsPanel.collapsed")).toBe("true");
+  });
 });

@@ -39,6 +39,14 @@
     saveCollapsed(collapsed);
   }
 
+  // Whole header row toggles too; the button click already handles it and
+  // bubbles up here, so ignore clicks that originated on the button itself
+  // (otherwise it would toggle twice and cancel out).
+  function onHdrClick(e: MouseEvent) {
+    if ((e.target as HTMLElement).closest(".collapse-btn")) return;
+    toggle();
+  }
+
   $effect(() => {
     const id = lapId;
     if (id === null) {
@@ -65,15 +73,23 @@
 </script>
 
 <div class="panel" style={showingTraces ? `--inputs-h: ${height}px` : undefined}>
-  <div class="hdr">
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions
+       (mouse-only convenience; the real button below already covers keyboard/a11y) -->
+  <div class="hdr" onclick={onHdrClick}>
     <h2>Inputs — lap vs best</h2>
     <button
       type="button"
       class="collapse-btn"
+      class:collapsed
       aria-label={collapsed ? "Expand inputs panel" : "Collapse inputs panel"}
       aria-expanded={!collapsed}
       onclick={toggle}
-    >{collapsed ? "▸" : "▾"}</button>
+    >
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+           stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <polyline points="6 9 12 15 18 9" />
+      </svg>
+    </button>
   </div>
   {#if !collapsed}
     <div class="body" class:sized={showingTraces} data-testid="inputs-panel-body">
@@ -104,6 +120,7 @@
     align-items: center;
     justify-content: space-between;
     padding: 8px 20px;
+    cursor: pointer;
   }
   .hdr h2 {
     margin: 0;
@@ -114,12 +131,26 @@
     font-weight: 700;
   }
   .collapse-btn {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
     background: none;
-    border: none;
+    border: 1px solid transparent;
+    border-radius: 6px;
     color: var(--faint);
     cursor: pointer;
-    font-size: 12px;
-    padding: 2px 6px;
+    padding: 0;
+  }
+  .collapse-btn:hover {
+    color: var(--text);
+    border-color: var(--line);
+  }
+  .collapse-btn svg {
+    transition: transform 0.15s;
+  }
+  .collapse-btn.collapsed svg {
+    transform: rotate(-90deg);
   }
   .body {
     padding: 0 20px 12px;
