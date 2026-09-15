@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 v1.0 desktop app, built and unit-tested; remaining before release is code
 signing and a full live shakedown at the rig. The v0.1 core (live capture →
-per-corner analysis → coach) is done and shipped behind two clients: the
-original terminal REPL and a Tauri + Svelte desktop app driven by a localhost
-FastAPI sidecar (`simcoach/server`). See `README.md` for how to run either.
+per-corner analysis → coach) is done and shipped behind a Tauri + Svelte
+desktop app driven by a localhost FastAPI sidecar (`simcoach/server`). See
+`README.md` for how to run it.
 
 Design specs (read before changing the areas they cover):
 - `docs/superpowers/specs/2026-08-27-lmu-ai-coach-design.md` — v0.1 core.
@@ -34,7 +34,7 @@ Design specs (read before changing the areas they cover):
 An AI sim-racing coach for Le Mans Ultimate (LMU). It captures laps live from
 the game's shared memory, then answers between-laps setup and driving questions
 in a running conversation, grounded in the driver's own telemetry and current
-setup. Two clients (terminal REPL, desktop app) share one core.
+setup. The desktop app is the one client on top of that shared core.
 
 ## Build & test
 
@@ -57,9 +57,9 @@ cd frontend && npm test                 # frontend
   LLM) produces a structured per-corner summary; only that summary reaches the
   LLM. Never feed raw ~50 Hz telemetry to the model.
 - **UI-agnostic core.** Capture, lap store, feature extractor, knowledge, and
-  coach sit behind an internal function API. Both clients — the terminal REPL
-  and the desktop app's FastAPI sidecar (`simcoach/server`) — are thin and reuse
-  that core unchanged. Keep coach/analysis logic out of the UI layer.
+  coach sit behind an internal function API. The desktop app's FastAPI sidecar
+  (`simcoach/server`) is thin and reuses that core unchanged. Keep coach/analysis
+  logic out of the UI layer.
 - **Swappable model.** The LLM sits behind a `Model` interface (Claude API now,
   local model later). No direct SDK calls scattered through the code.
 - **Storage split by access pattern.** Cross-session/history data (laps,

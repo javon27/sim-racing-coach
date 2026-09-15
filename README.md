@@ -25,8 +25,6 @@ as fact and is told never to infer them. See the design doc:
 
 ## Running the coach
 
-Two interfaces share the same core (capture → analysis → coach).
-
 ### Desktop app (v1)
 
 A Tauri shell with a Svelte UI and a localhost FastAPI sidecar — coach chat, a
@@ -46,21 +44,6 @@ laps, telemetry, logs — lives under `%APPDATA%\SimCoach` (override with
 result logs (`UserData/Log/Results/*.xml`) — no live capture needed. Set your LMU
 profile name(s) there so it can pick out your own laps.
 
-### Terminal
-
-The original CLI coach loop. Needs **LMU running with you on track** (it reads the
-live shared memory to detect track + car; exits if no session is found):
-
-```
-.venv/Scripts/python.exe -m simcoach
-```
-
-It loads (or auto-builds) the corner map, captures laps in the background while you
-drive, and between laps answers questions — e.g. `where am I losing time?` — against
-your best stored lap on that track/car and your current setup. Type `quit` to exit.
-The API key comes from the keyring (set it once in the app) or an `ANTHROPIC_API_KEY`
-override.
-
 The sidecar alone, for frontend dev: `python -m simcoach.server` (→ `127.0.0.1:8765`).
 
 ## Corner maps
@@ -75,10 +58,6 @@ these by hand:
   from the saved capture without re-driving. Your edits merge over the shipped
   geometry as a user annotation overlay — the reconstructed layout stays
   authoritative and only changes on a new app release.
-- **Automatic (terminal)** — if you drive a track with no map, the CLI coach builds
-  one from your first lap (numbered corners, real directions/distances from
-  telemetry) and continues. `Turn N` names are the default and are honestly useful
-  while you're still learning a circuit.
 - **From a saved lap (CLI)** — `python -m simcoach.mapbuild <lap.npz> [--slug SLUG]
   [--length METRES]` writes a validated map and self-checks corner directions.
 
