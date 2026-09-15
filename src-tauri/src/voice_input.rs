@@ -207,6 +207,127 @@ pub fn voice_set_hotkey(app: tauri::AppHandle, key: Option<String>) -> Result<()
     Ok(())
 }
 
+/// A poll-able device with a friendly name, for the Settings PTT-bind display (#104).
+#[derive(Clone, serde::Serialize)]
+pub struct DeviceInfo { pub device: String, pub name: String }
+
+/// Turns a `<device>:<button>` bind id into `"<name> · button <N+1>"`, falling back to
+/// the raw device id when it's not in `devices`, or the raw bind id when it doesn't
+/// parse as `<device>:<N>`.
+pub fn describe_bind(id: &str, devices: &[DeviceInfo]) -> String {
+    let Some((device, button_str)) = id.rsplit_once(':') else { return id.to_string(); };
+    let Ok(button) = button_str.parse::<u32>() else { return id.to_string(); };
+    let name = devices.iter().find(|d| d.device == device).map(|d| d.name.as_str()).unwrap_or(device);
+    format!("{name} · button {}", button + 1)
+}
+
+/// winmm's `szPname` fallback: the real product name unless it's the generic driver
+/// string winmm reports when no OEM name was registered, in which case a numbered
+/// placeholder is more honest than repeating "Microsoft PC-joystick driver" for every
+/// unbranded stick.
+pub fn oem_name_from(sz_pname: &str, i: u32) -> String {
+    let trimmed = sz_pname.trim_end_matches('\0').trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("Microsoft PC-joystick driver") {
+        format!("Joystick {}", i + 1)
+    } else {
+        trimmed.to_string()
+    }
+}
+
+#[cfg(windows)]
+fn reg_get_string(hive: windows::Win32::System::Registry::HKEY, subkey: &str, value: &str) -> Option<String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::System::Registry::{RegGetValueW, RRF_RT_REG_SZ};
+    let subkey_w: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
+    let value_w: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut buf = [0u16; 256];
+    let mut size = (buf.len() * 2) as u32;
+    let ok = unsafe {
+        RegGetValueW(
+            hive,
+            PCWSTR(subkey_w.as_ptr()),
+            PCWSTR(value_w.as_ptr()),
+            RRF_RT_REG_SZ,
+            None,
+            Some(buf.as_mut_ptr() as *mut _),
+            Some(&mut size),
+        )
+    };
+    if ok.is_ok() {
+        let chars = (size as usize / 2).min(buf.len());
+        let end = buf[..chars].iter().position(|&c| c == 0).unwrap_or(chars);
+        Some(String::from_utf16_lossy(&buf[..end]))
+    } else {
+        None
+    }
+}
+
+/// Windows stores the wheel/pad's driver-registered product name in the registry,
+/// keyed by USB VID/PID, under HKCU (per-user) then HKLM (machine-wide) -- winmm's own
+/// `szPname` is often just "Microsoft PC-joystick driver" for a generic HID device.
+#[cfg(windows)]
+fn registry_oem_name(vid: u16, pid: u16) -> Option<String> {
+    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    let subkey = format!(
+        "System\\CurrentControlSet\\Control\\MediaProperties\\PrivateProperties\\Joystick\\OEM\\VID_{vid:04X}&PID_{pid:04X}"
+    );
+    for hive in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
+        if let Some(name) = reg_get_string(hive, &subkey, "OEMName") {
+            if !name.is_empty() {
+                return Some(name);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn winmm_device_name(i: u32) -> Option<String> {
+    use windows::Win32::Media::Multimedia::{joyGetDevCapsW, JOYCAPSW};
+    let mut caps = JOYCAPSW::default();
+    let size = std::mem::size_of::<JOYCAPSW>() as u32;
+    if unsafe { joyGetDevCapsW(i as usize, &mut caps, size) } != 0 {
+        return None;
+    }
+    if let Some(name) = registry_oem_name(caps.wMid, caps.wPid) {
+        return Some(name);
+    }
+    let sz_pname = caps.szPname; // JOYCAPSW is packed: copy to a local before use
+    let pname = String::from_utf16_lossy(&sz_pname);
+    Some(oem_name_from(&pname, i))
+}
+
+/// Lists every winmm/XInput slot that currently answers a poll -- unplugged devices are
+/// left out, same as the poller itself skips them silently.
+#[tauri::command]
+pub fn voice_list_devices() -> Vec<DeviceInfo> {
+    let mut out = vec![];
+    #[cfg(windows)]
+    {
+        use windows::Win32::Media::Multimedia::{joyGetNumDevs, joyGetPosEx, JOYINFOEX, JOY_RETURNBUTTONS};
+        use windows::Win32::UI::Input::XboxController::{XInputGetState, XINPUT_STATE};
+        let n = unsafe { joyGetNumDevs() };
+        for i in 0..n {
+            let mut ji = JOYINFOEX {
+                dwSize: std::mem::size_of::<JOYINFOEX>() as u32,
+                dwFlags: JOY_RETURNBUTTONS as u32,
+                ..Default::default()
+            };
+            if unsafe { joyGetPosEx(i, &mut ji) } == 0 {
+                let name = winmm_device_name(i).unwrap_or_else(|| format!("Joystick {}", i + 1));
+                out.push(DeviceInfo { device: format!("winmm:{i}"), name });
+            }
+        }
+        for i in 0..4u32 {
+            let mut st = XINPUT_STATE::default();
+            if unsafe { XInputGetState(i, &mut st) } == 0 {
+                out.push(DeviceInfo { device: format!("xinput:{i}"), name: format!("Xbox controller {}", i + 1) });
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -274,5 +395,32 @@ mod tests {
         assert_eq!(hotkey_name("F9"), "F9");
         assert_eq!(hotkey_name("Digit3"), "3");
         assert_eq!(hotkey_name("Space"), "Space");
+    }
+
+    #[test]
+    fn describe_bind_uses_the_known_device_name() {
+        let devices = [DeviceInfo { device: "winmm:0".into(), name: "Fanatec DD1".into() }];
+        assert_eq!(describe_bind("winmm:0:1", &devices), "Fanatec DD1 · button 2");
+    }
+
+    #[test]
+    fn describe_bind_falls_back_to_the_raw_device_id_when_unknown() {
+        let devices = [DeviceInfo { device: "winmm:0".into(), name: "Fanatec DD1".into() }];
+        assert_eq!(describe_bind("winmm:3:1", &devices), "winmm:3 · button 2");
+    }
+
+    #[test]
+    fn describe_bind_returns_the_raw_id_when_it_does_not_parse() {
+        assert_eq!(describe_bind("garbage", &[]), "garbage");
+    }
+
+    #[test]
+    fn oem_name_from_keeps_a_real_product_name() {
+        assert_eq!(oem_name_from("Fanatec Podium DD1\0", 0), "Fanatec Podium DD1");
+    }
+
+    #[test]
+    fn oem_name_from_replaces_the_generic_driver_name() {
+        assert_eq!(oem_name_from("Microsoft PC-joystick driver\0", 2), "Joystick 3");
     }
 }

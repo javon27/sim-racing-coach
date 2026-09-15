@@ -211,7 +211,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             voice_input::voice_set_binds,
             voice_input::voice_capture_next,
-            voice_input::voice_set_hotkey
+            voice_input::voice_set_hotkey,
+            voice_input::voice_list_devices
         ])
         .plugin(
             tauri_plugin_window_state::Builder::default()
