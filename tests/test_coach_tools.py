@@ -43,6 +43,49 @@ def test_get_corner_targets_a_specific_lap(tmp_path, synthetic_lap):
     assert "no lap" in ctx.get_corner("1", which="race lap 9").lower()
 
 
+# --- get_corner "usually" gear comparison (#38 P1.7) ------------------------
+
+def _gear_session(tmp_path, synthetic_lap, gears, phase="practice"):
+    """A stored session of len(gears) valid laps, each a clone of synthetic_lap
+    with a constant gear (and a constant rpm, since gear_read needs both) --
+    so a lap's gear_min reads that lap's own constant everywhere, T1's
+    min-speed sample included."""
+    import dataclasses
+    import numpy as np
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    session_id = "s1--online"
+    n = len(synthetic_lap.channels["lap_distance"])
+    ids = []
+    for i, gear in enumerate(gears):
+        ch = {**synthetic_lap.channels, "gear": np.full(n, float(gear)), "rpm": np.full(n, 6000.0)}
+        lap = dataclasses.replace(synthetic_lap, channels=ch, lap_time=90.0 + i,
+                                  session_id=session_id, phase=phase, timestamp=90.0 + i)
+        ids.append(store.save(lap))
+    cur = store.load(ids[-1])
+    return CoachContext(store, record=cur, lap_id=ids[-1], cmap=cmap, track=cur.track,
+                        car=cur.car, session_id=session_id, on_track=True)
+
+
+def test_get_corner_usually_line_when_gear_differs_from_stint_mode(tmp_path, synthetic_lap):
+    # 4 laps take T1 in 2nd, the queried (latest) lap in 3rd.
+    ctx = _gear_session(tmp_path, synthetic_lap, [2, 2, 2, 2, 3])
+    out = ctx.dispatch("get_corner", {"corner": "T1"})
+    assert "You took T1 in 3rd (usually 2nd)." in out
+
+
+def test_get_corner_silent_when_all_laps_agree(tmp_path, synthetic_lap):
+    ctx = _gear_session(tmp_path, synthetic_lap, [2, 2, 2, 2, 2])
+    out = ctx.dispatch("get_corner", {"corner": "T1"})
+    assert "usually" not in out
+
+
+def test_get_corner_silent_with_fewer_than_three_laps(tmp_path, synthetic_lap):
+    ctx = _gear_session(tmp_path, synthetic_lap, [2, 3])
+    out = ctx.dispatch("get_corner", {"corner": "T1"})
+    assert "usually" not in out
+
+
 def test_get_lap_summary_and_tires(tmp_path, synthetic_lap):
     ctx, _, _ = _ctx(tmp_path, synthetic_lap)
     summary = ctx.get_lap_summary("latest")

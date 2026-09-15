@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections import Counter
 
 from simcoach.analysis import (
     analyze_lap,
@@ -32,6 +33,7 @@ from simcoach.format import (
     format_tire_report,
     format_tire_trend,
     format_wheel_report,
+    ordinal,
 )
 from simcoach.fuel import fuel_per_lap_from_channel, laps_remaining
 from simcoach.track_lookup import load_track_knowledge, note_key_binds
@@ -852,6 +854,9 @@ class CoachContext:
             names = ", ".join(f"T{c.label or c.corner_no} {c.name}" for c in analysis.corners)
             return f"No corner matching {corner!r}. Corners this track: {names}"
         line = format_corner_line(cm, self.units)
+        usually = self._gear_usually_line(cm)
+        if usually:
+            line += f"\n{usually}"
         label = cm.label or cm.corner_no
         note = self._corner_note(label)
         if note:
@@ -860,6 +865,25 @@ class CoachContext:
         if geo:
             line += f"\nGeometry (baked from the track map): {geo}"
         return line
+
+    def _gear_usually_line(self, cm) -> str | None:
+        """#38 P1.7: "You took T{label} in {gear} (usually {mode})." when this
+        lap's gear_min at this corner disagrees with the stint's mode -- silent
+        with no gear_min, <3 comparable laps (`_stint_analyses`), or agreement."""
+        if cm.gear_min is None:
+            return None
+        analyses, _ = self._stint_analyses()
+        if len(analyses) < 3:
+            return None
+        counts = Counter(other.gear_min for a in analyses for other in a.corners
+                         if other.corner_no == cm.corner_no and other.gear_min is not None)
+        if not counts:
+            return None
+        mode = counts.most_common(1)[0][0]
+        if mode == cm.gear_min:
+            return None
+        tag = f"T{cm.label or cm.corner_no}"
+        return f"You took {tag} in {ordinal(cm.gear_min)} (usually {ordinal(mode)})."
 
     def _corner_note(self, label) -> str | None:
         """Authored note for one corner label from the merged map, or None.
