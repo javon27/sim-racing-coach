@@ -49,3 +49,183 @@ export function stripForSpeech(md: string): string {
     .replace(/\s+/g, " ")
     .trim();
 }
+
+export type VoiceState = "idle" | "listening" | "transcribing" | "asking" | "speaking";
+export type VoiceMode = "ptt" | "conversation";
+export type Earcon = "listen-start" | "listen-end" | "error";
+
+export interface Recorder {
+  start(onFrame: (frame: Float32Array) => void): Promise<void>;
+  stop(): Promise<{ pcm: Float32Array; sampleRate: number }>;
+}
+export interface Transcriber { transcribe(wav: Uint8Array): Promise<{ text: string; seconds: number }> }
+export interface Speaker { speak(text: string): Promise<void>; cancel(): void; earcon(kind: Earcon): void }
+export interface VoiceLoopOptions {
+  recorder: Recorder; transcriber: Transcriber; speaker: Speaker;
+  ask(text: string, mode: VoiceMode): void;
+  vad: VadConfig; conversationIdleS: number; frameMs?: number;
+  setTimeout?: (fn: () => void, ms: number) => unknown; clearTimeout?: (h: unknown) => void;
+}
+
+const MIC_ERROR = "I can't hear the mic";
+const DIDNT_CATCH = "Didn't catch that";
+
+export class VoiceLoop {
+  state: VoiceState = "idle";
+  mode: VoiceMode | null = null;
+  error: string | null = null;
+  speakingMessage: number | null = null;
+
+  #o: VoiceLoopOptions;
+  #listeners = new Set<(v: VoiceLoop) => void>();
+  #vad: VadState = vadInitial;
+  #recording = false;
+  #idleTimer: unknown = null;
+  #speakSeq = 0;
+  #setTimeout: (fn: () => void, ms: number) => unknown;
+  #clearTimeout: (h: unknown) => void;
+
+  constructor(o: VoiceLoopOptions) {
+    this.#o = o;
+    this.#setTimeout = o.setTimeout ?? ((fn, ms) => setTimeout(fn, ms));
+    this.#clearTimeout = o.clearTimeout ?? ((h) => clearTimeout(h as number));
+  }
+
+  subscribe(run: (v: VoiceLoop) => void): () => void {
+    this.#listeners.add(run); run(this);
+    return () => this.#listeners.delete(run);
+  }
+  #set(state: VoiceState) { this.state = state; this.#notify(); }
+  #notify() { for (const l of this.#listeners) l(this); }
+
+  // ---- PTT ----
+  press(): void {
+    if (this.state === "speaking") { this.#cancelSpeech(); this.speakingMessage = null; this.#listen("ptt"); return; }
+    if (this.state !== "idle") return;
+    this.#listen("ptt");
+  }
+  release(): void {
+    if (this.state !== "listening" || this.mode !== "ptt") return;
+    void this.#finishUtterance();
+  }
+
+  // ---- conversation ----
+  toggleConversation(): void {
+    if (this.state === "idle") { this.#listen("conversation"); return; }
+    this.stop();
+  }
+
+  stop(): void {
+    this.#clearIdle();
+    this.#cancelSpeech();
+    void this.#stopRecorder();
+    this.mode = null;
+    this.speakingMessage = null;
+    this.#set("idle");
+  }
+
+  // ---- coach events ----
+  onAnswer(answer: string, spoken?: string | null): void {
+    if (this.state !== "asking") return;
+    const text = this.mode === "ptt" ? (spoken ?? firstParagraph(answer)) : answer;
+    void this.#speakThen(stripForSpeech(text), () => {
+      if (this.mode === "conversation") this.#listen("conversation"); else { this.mode = null; this.#set("idle"); }
+    });
+  }
+  onError(message: string): void {
+    if (this.state !== "asking") return;
+    this.#fail(message);
+  }
+
+  // ---- ▶ on a message ----
+  speakMessage(index: number, text: string): void {
+    if (this.speakingMessage === index) { this.#cancelSpeech(); this.speakingMessage = null; this.#set("idle"); return; }
+    if (this.state !== "idle" && this.state !== "speaking") return;
+    if (this.state === "speaking") this.#cancelSpeech();
+    this.speakingMessage = index;
+    void this.#speakThen(stripForSpeech(text), () => { this.speakingMessage = null; this.#set("idle"); });
+  }
+
+  // ---- internals ----
+  #listen(mode: VoiceMode): void {
+    this.mode = mode; this.error = null; this.#vad = vadInitial;
+    this.#set("listening");
+    this.#o.speaker.earcon("listen-start");
+    this.#armIdle();
+    this.#startRecorder().catch(() => this.#fail(MIC_ERROR));
+  }
+
+  async #startRecorder(): Promise<void> {
+    if (this.#recording) return;
+    await this.#o.recorder.start((frame) => this.#onFrame(frame));
+    this.#recording = true;
+  }
+  async #stopRecorder(): Promise<{ pcm: Float32Array; sampleRate: number } | null> {
+    if (!this.#recording) return null;
+    this.#recording = false;
+    return this.#o.recorder.stop();
+  }
+
+  #onFrame(frame: Float32Array): void {
+    if (this.mode !== "conversation") return;
+    const level = rms(frame);
+    if (this.state === "speaking") {            // barge-in
+      if (level >= this.#o.vad.threshold) { this.#cancelSpeech(); this.#listen("conversation"); }
+      return;
+    }
+    if (this.state !== "listening") return;
+    const r = vadStep(this.#vad, level, this.#o.frameMs ?? 50, this.#o.vad);
+    this.#vad = r.state;
+    if (r.state.speaking) this.#clearIdle();
+    if (r.action === "end") void this.#finishUtterance();
+  }
+
+  async #finishUtterance(): Promise<void> {
+    this.#clearIdle();
+    this.#set("transcribing");
+    this.#o.speaker.earcon("listen-end");
+    const rec = await this.#stopRecorder();
+    if (!rec) { this.#fail(MIC_ERROR); return; }
+    let text: string;
+    try {
+      text = (await this.#o.transcriber.transcribe(encodeWav(rec.pcm, rec.sampleRate))).text.trim();
+    } catch (e) {
+      this.#fail(e instanceof Error ? e.message : String(e)); return;
+    }
+    if (text.split(/\s+/).filter(Boolean).length < 2) { this.#fail(DIDNT_CATCH, false); return; }
+    this.#set("asking");
+    this.#o.ask(text, this.mode ?? "ptt");
+  }
+
+  async #speakThen(text: string, after: () => void): Promise<void> {
+    const seq = ++this.#speakSeq;
+    this.#set("speaking");
+    if (this.mode === "conversation") this.#startRecorder().catch(() => {});  // keep the mic open for barge-in
+    await this.#o.speaker.speak(text);
+    if (seq === this.#speakSeq) after();
+  }
+  #cancelSpeech(): void { this.#speakSeq++; this.#o.speaker.cancel(); }
+
+  #fail(message: string, keepError = true): void {
+    this.#clearIdle();
+    void this.#stopRecorder();
+    this.#cancelSpeech();
+    this.error = keepError ? message : null;
+    this.mode = null; this.speakingMessage = null;
+    this.#o.speaker.earcon("error");
+    void this.#o.speaker.speak(message);
+    this.#set("idle");
+  }
+
+  #armIdle(): void {
+    this.#clearIdle();
+    if (this.mode !== "conversation") return;
+    this.#idleTimer = this.#setTimeout(() => this.stop(), this.#o.conversationIdleS * 1000);
+  }
+  #clearIdle(): void { if (this.#idleTimer !== null) { this.#clearTimeout(this.#idleTimer); this.#idleTimer = null; } }
+}
+
+export function firstParagraph(text: string): string {
+  for (const block of text.split(/\n\s*\n/)) if (block.trim()) return block.trim();
+  return "";
+}

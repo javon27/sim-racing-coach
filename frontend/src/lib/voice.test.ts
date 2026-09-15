@@ -67,3 +67,147 @@ describe("rms", () => {
     expect(rms(new Float32Array([0.5, -0.5]))).toBeCloseTo(0.5, 5);
   });
 });
+
+import { VoiceLoop, type Recorder, type Speaker, type Transcriber, type VoiceMode } from "./voice";
+
+class FakeRecorder implements Recorder {
+  started = 0; stopped = 0; onFrame: ((f: Float32Array) => void) | null = null; failStart = false;
+  async start(onFrame: (f: Float32Array) => void) { if (this.failStart) throw new Error("NotAllowedError"); this.started++; this.onFrame = onFrame; }
+  async stop() { this.stopped++; this.onFrame = null; return { pcm: new Float32Array(160), sampleRate: 16000 }; }
+  get open() { return this.started > this.stopped; }
+  frame(level: number) { this.onFrame?.(new Float32Array(800).fill(level)); }
+}
+class FakeTranscriber implements Transcriber {
+  text = "where am I losing time"; fail: Error | null = null; calls = 0;
+  async transcribe() { this.calls++; if (this.fail) throw this.fail; return { text: this.text, seconds: 1 }; }
+}
+class FakeSpeaker implements Speaker {
+  spoken: string[] = []; earcons: string[] = []; cancels = 0; resolve: (() => void) | null = null;
+  speak(text: string) { this.spoken.push(text); return new Promise<void>((r) => (this.resolve = r)); }
+  cancel() { this.cancels++; this.resolve?.(); this.resolve = null; }
+  earcon(k: "listen-start" | "listen-end" | "error") { this.earcons.push(k); }
+  end() { this.resolve?.(); this.resolve = null; }
+}
+const flush = () => new Promise((r) => setTimeout(r, 0));
+
+function make(over: Partial<{ idle: number }> = {}) {
+  const recorder = new FakeRecorder(), transcriber = new FakeTranscriber(), speaker = new FakeSpeaker();
+  const asked: [string, VoiceMode][] = [];
+  const timers: { fn: () => void; ms: number }[] = [];
+  const loop = new VoiceLoop({
+    recorder, transcriber, speaker, ask: (t, m) => asked.push([t, m]),
+    vad: { threshold: 0.02, silenceMs: 1000, maxS: 20 }, conversationIdleS: over.idle ?? 30, frameMs: 50,
+    setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout: () => {},
+  });
+  return { loop, recorder, transcriber, speaker, asked, timers };
+}
+
+describe("VoiceLoop PTT", () => {
+  it("press → listening, release → transcribing → asking, done → speaks spoken → idle", async () => {
+    const { loop, recorder, speaker, asked } = make();
+    loop.press(); await flush();
+    expect(loop.state).toBe("listening"); expect(recorder.open).toBe(true); expect(speaker.earcons).toEqual(["listen-start"]);
+    loop.release(); await flush(); await flush();
+    expect(recorder.open).toBe(false);
+    expect(asked).toEqual([["where am I losing time", "ptt"]]); expect(loop.state).toBe("asking");
+    loop.onAnswer("Full **answer**.\n\nMore.", "Brake later."); await flush();
+    expect(loop.state).toBe("speaking"); expect(speaker.spoken).toEqual(["Brake later."]);
+    speaker.end(); await flush();
+    expect(loop.state).toBe("idle");
+  });
+  it("falls back to the first paragraph when spoken is missing", async () => {
+    const { loop, speaker } = make();
+    loop.press(); await flush(); loop.release(); await flush(); await flush();
+    loop.onAnswer("First **para**.\n\nSecond.", null); await flush();
+    expect(speaker.spoken).toEqual(["First para."]);
+  });
+  it("short transcript: says didn't catch that, sends nothing, idle", async () => {
+    const { loop, transcriber, speaker, asked } = make();
+    transcriber.text = "uh";
+    loop.press(); await flush(); loop.release(); await flush(); await flush();
+    expect(asked).toEqual([]); expect(loop.state).toBe("idle");
+    expect(speaker.spoken[0]).toMatch(/didn't catch/i); expect(speaker.earcons).toContain("error");
+  });
+  it("press during speaking cancels speech and listens again (barge-in)", async () => {
+    const { loop, speaker, recorder } = make();
+    loop.press(); await flush(); loop.release(); await flush(); await flush();
+    loop.onAnswer("A.", "A."); await flush();
+    loop.press(); await flush();
+    expect(speaker.cancels).toBe(1); expect(loop.state).toBe("listening"); expect(recorder.open).toBe(true);
+  });
+  it("release without press, or press while asking, is ignored", async () => {
+    const { loop, recorder, asked } = make();
+    loop.release(); expect(loop.state).toBe("idle");
+    loop.press(); await flush(); loop.release(); await flush(); await flush();
+    loop.press(); await flush();
+    expect(loop.state).toBe("asking"); expect(recorder.started).toBe(1); expect(asked.length).toBe(1);
+  });
+});
+
+describe("VoiceLoop errors always end idle with the mic closed", () => {
+  it("mic denied", async () => {
+    const { loop, recorder, speaker } = make(); recorder.failStart = true;
+    loop.press(); await flush();
+    expect(loop.state).toBe("idle"); expect(recorder.open).toBe(false);
+    expect(speaker.spoken[0]).toMatch(/can't hear the mic/i); expect(loop.error).toBeTruthy();
+  });
+  it("409 from transcribe", async () => {
+    const { loop, recorder, transcriber, speaker } = make();
+    transcriber.fail = new Error("voice isn't set up yet — enable it in Settings");
+    loop.press(); await flush(); loop.release(); await flush(); await flush();
+    expect(loop.state).toBe("idle"); expect(recorder.open).toBe(false);
+    expect(speaker.spoken[0]).toMatch(/set up/); expect(speaker.earcons).toContain("error");
+  });
+  it("coach error", async () => {
+    const { loop, speaker } = make();
+    loop.press(); await flush(); loop.release(); await flush(); await flush();
+    loop.onError("coach error"); await flush();
+    expect(loop.state).toBe("idle"); expect(speaker.spoken).toContain("coach error");
+  });
+});
+
+describe("VoiceLoop conversation", () => {
+  it("tap → listening; VAD end → ask; answer spoken in full; then listening again", async () => {
+    const { loop, recorder, speaker, asked } = make();
+    loop.toggleConversation(); await flush();
+    expect(loop.state).toBe("listening"); expect(loop.mode).toBe("conversation");
+    recorder.frame(0.2);                       // speech
+    for (let i = 0; i < 20; i++) recorder.frame(0);   // 1000 ms silence
+    await flush(); await flush();
+    expect(asked).toEqual([["where am I losing time", "conversation"]]);
+    loop.onAnswer("Full **answer**.\n\n- one", null); await flush();
+    expect(speaker.spoken).toEqual(["Full answer. one."]);
+    speaker.end(); await flush();
+    expect(loop.state).toBe("listening"); expect(recorder.open).toBe(true);
+  });
+  it("speech during speaking barges in", async () => {
+    const { loop, recorder, speaker } = make();
+    loop.toggleConversation(); await flush();
+    recorder.frame(0.2); for (let i = 0; i < 20; i++) recorder.frame(0); await flush(); await flush();
+    loop.onAnswer("Answer.", null); await flush();
+    expect(loop.state).toBe("speaking");
+    recorder.frame(0.3); await flush();
+    expect(speaker.cancels).toBe(1); expect(loop.state).toBe("listening");
+  });
+  it("tap again → idle with the mic closed; idle timeout → idle", async () => {
+    const { loop, recorder, timers } = make({ idle: 30 });
+    loop.toggleConversation(); await flush();
+    loop.toggleConversation(); await flush();
+    expect(loop.state).toBe("idle"); expect(recorder.open).toBe(false);
+    loop.toggleConversation(); await flush();
+    const t = timers.find((x) => x.ms === 30000); expect(t).toBeTruthy();
+    t!.fn(); await flush();
+    expect(loop.state).toBe("idle"); expect(recorder.open).toBe(false);
+  });
+});
+
+describe("speakMessage (▶)", () => {
+  it("toggles, is exclusive, and a PTT press stops it", async () => {
+    const { loop, speaker } = make();
+    loop.speakMessage(0, "**One**"); expect(loop.speakingMessage).toBe(0); expect(speaker.spoken).toEqual(["One"]);
+    loop.speakMessage(1, "Two"); expect(speaker.cancels).toBe(1); expect(loop.speakingMessage).toBe(1);
+    loop.speakMessage(1, "Two"); expect(loop.speakingMessage).toBe(null); expect(loop.state).toBe("idle");
+    loop.speakMessage(2, "Three"); loop.press(); await flush();
+    expect(loop.speakingMessage).toBe(null); expect(loop.state).toBe("listening");
+  });
+});
