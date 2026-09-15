@@ -44,7 +44,8 @@ Python on Windows; frontend is Svelte + TypeScript under `frontend/`.
 .venv/Scripts/python.exe -m pip install -e ".[dev]"
 .venv/Scripts/python.exe -m pytest      # backend
 ruff check                              # lint
-cd frontend && npm test                 # frontend
+cd frontend && npm test                 # frontend (vitest)
+cd frontend && npx svelte-check         # frontend types
 ```
 
 ## Architecture invariants (do not violate without updating the spec)
@@ -67,15 +68,24 @@ cd frontend && npm test                 # frontend
   per-lap files keyed on a **lap-distance axis** (the alignment key a future
   replay/side-by-side overlay needs). Preserve this fidelity even though v0.1
   does not consume it.
+- **The coach only states measured values.** An unverified or stale value is
+  cut from the prompt, not hedged — this is why baked corner radius/width and
+  `track_edge` were pulled from `format_corner_line` rather than caveated.
+- **Code extracts, the model narrates.** Deltas vs best, rankings, consistency,
+  and balance reads are computed in `analysis.py`/`format.py`; the model is
+  never asked to infer early/late or which corner cost time.
 
 ## Layout
 
 - `simcoach/` — the core. `source.py`/`lmu/smm.py` (shared-memory capture),
   `store.py` (SQLite + `.npz` laps), `analysis.py`/`corners.py`/`format.py`
-  (per-corner feature extraction), `coach.py`/`coach_tools.py` (tool-use coach),
-  `model/` (swappable `Model`), `trackmap.py`/`mapbuild.py`/`ribbon.py`/
-  `raceline.py` (corner maps + point-cloud track reconstruction),
-  `track_lookup.py`/`car_lookup.py` (live-name → map/model resolution).
+  (per-corner feature extraction — entry points that matter: `analyze_lap`,
+  `time_loss_buckets`, `stint_consistency`, `stint_tire_trend`, `handling_read`,
+  `grip_envelope`, `input_shape`, `_interp_lap_distance`), `coach.py`/
+  `coach_tools.py` (tool-use coach), `model/` (swappable `Model`),
+  `trackmap.py`/`mapbuild.py`/`ribbon.py`/`raceline.py` (corner maps +
+  point-cloud track reconstruction), `track_lookup.py` (live-name → map/model
+  resolution + `resolve_context`), `car_lookup.py` (live-name → car model).
 - `simcoach/server/` — the FastAPI sidecar the desktop app talks to.
 - `simcoach/tracks/*.json` — committed shipped corner maps (curated defaults).
 - `frontend/` — Svelte + TypeScript desktop UI; `src-tauri/` — the Tauri shell.
