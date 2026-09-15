@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/svelte";
-import { isTauri, captureNext, pushBinds } from "./voice-shell";
+import { isTauri, captureNext, listDevices, pushBinds } from "./voice-shell";
 import {
   getSettings,
   putSettings,
@@ -51,7 +51,14 @@ vi.mock("./theme", async () => {
 
 vi.mock("./voice-shell", async () => {
   const actual = await vi.importActual<typeof import("./voice-shell")>("./voice-shell");
-  return { ...actual, isTauri: vi.fn(() => false), captureNext: vi.fn(), pushBinds: vi.fn(), attachShell: vi.fn() };
+  return {
+    ...actual,
+    isTauri: vi.fn(() => false),
+    captureNext: vi.fn(),
+    pushBinds: vi.fn(),
+    attachShell: vi.fn(),
+    listDevices: vi.fn(() => Promise.resolve([])),
+  };
 });
 
 function baseSettings(overrides: Partial<SettingsResponse> = {}): SettingsResponse {
@@ -120,6 +127,7 @@ describe("SettingsScreen", () => {
     vi.mocked(isTauri).mockReset().mockReturnValue(false);
     vi.mocked(captureNext).mockReset();
     vi.mocked(pushBinds).mockReset();
+    vi.mocked(listDevices).mockReset().mockResolvedValue([]);
     localStorage.clear();
   });
 
@@ -579,6 +587,22 @@ describe("SettingsScreen", () => {
       await fireEvent.click(within(row.closest(".field")!).getByRole("button", { name: "Capture" }));
       await waitFor(() =>
         expect(vi.mocked(putSettings).mock.calls.at(-1)![0]).toMatchObject({ voice: { ptt_wheel: "winmm:0:7" } }),
+      );
+    });
+
+    it("shows the device name + button number for a bound wheel PTT (#104)", async () => {
+      vi.mocked(isTauri).mockReturnValue(true);
+      vi.mocked(listDevices).mockResolvedValue([{ device: "winmm:0", name: "Fanatec DD1" }]);
+      vi.mocked(getSettings).mockResolvedValue(
+        baseSettings({ voice: { ...voiceDefaults, ptt_wheel: "winmm:0:1" } }),
+      );
+      vi.mocked(voiceStatus).mockResolvedValue({ installed: true, installing: false, progress_bytes: 0, total_bytes: null, error: null });
+
+      render(SettingsScreen);
+      const row = await screen.findByText("Wheel button");
+
+      await waitFor(() =>
+        expect(within(row.closest(".field")!).getByText("Fanatec DD1 · button 2")).toBeTruthy(),
       );
     });
   });
