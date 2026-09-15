@@ -191,6 +191,31 @@
     return () => speechSynthesis.removeEventListener("voiceschanged", refresh);
   });
 
+  // Mic input devices for the Microphone select (#104). Labels are empty until
+  // mic permission has been granted once (same getUserMedia-gated quirk as
+  // ttsVoices above), so refresh whenever that might have changed: on mount, on
+  // devicechange, and after a settings save.
+  let micDevices: MediaDeviceInfo[] = $state([]);
+
+  async function refreshMicDevices() {
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.enumerateDevices) {
+      micDevices = [];
+      return;
+    }
+    try {
+      micDevices = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audioinput");
+    } catch {
+      micDevices = [];
+    }
+  }
+
+  $effect(() => {
+    refreshMicDevices();
+    if (typeof navigator === "undefined" || !navigator.mediaDevices) return;
+    navigator.mediaDevices.addEventListener("devicechange", refreshMicDevices);
+    return () => navigator.mediaDevices.removeEventListener("devicechange", refreshMicDevices);
+  });
+
   $effect(() => {
     if (!capturingKey) return;
     const onCapture = (e: KeyboardEvent) => {
@@ -232,6 +257,7 @@
     return putSettings(cfg).then((res) => {
       settings = res;
       window.dispatchEvent(new CustomEvent("settings-changed"));
+      refreshMicDevices();
     });
   }
 
@@ -588,6 +614,20 @@
           </div>
         </div>
       {/if}
+      <div class="field">
+        <span class="lbl">Microphone<InfoTip text="Which input device voice capture records from." /></span>
+        <div class="control">
+          <select aria-label="Microphone" bind:value={settings.voice.mic_device_id} onchange={saveConfig}>
+            <option value={null}>System default</option>
+            {#each micDevices as d, i (d.deviceId)}
+              <option value={d.deviceId}>{d.label || `Microphone ${i + 1}`}</option>
+            {/each}
+          </select>
+          {#if micDevices.length > 0 && micDevices.every((d) => !d.label)}
+            <span class="status inline">Names appear after the first voice use grants mic access.</span>
+          {/if}
+        </div>
+      </div>
       <div class="field">
         <span class="lbl">Voice<InfoTip text="Which installed system voice reads answers aloud." /></span>
         <div class="control">
