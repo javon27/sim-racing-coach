@@ -93,4 +93,46 @@ describe("InputsPanel", () => {
     expect(container.querySelector('[data-testid="inputs-panel-body"]')).toBeNull();
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
   });
+
+  it("drag on the handle changes the pane height", async () => {
+    vi.mocked(getLapInputs).mockResolvedValue({ lap: LAP, best: null, corners: [] });
+    const { container } = render(InputsPanel, { props: { lapId: 9 } });
+    const panel = container.querySelector(".panel") as HTMLElement;
+    await waitFor(() => expect(panel.style.getPropertyValue("--inputs-h")).toBe("220px"));
+
+    const handle = container.querySelector(".rail-resizer") as HTMLElement;
+    expect(handle).toBeTruthy();
+    await fireEvent.pointerDown(handle, { clientY: 100 });
+    await fireEvent.pointerMove(handle, { clientY: 160 });
+
+    expect(panel.style.getPropertyValue("--inputs-h")).toBe("280px");
+  });
+
+  it("height clamps at 120 minimum", async () => {
+    vi.mocked(getLapInputs).mockResolvedValue({ lap: LAP, best: null, corners: [] });
+    const { container } = render(InputsPanel, { props: { lapId: 9 } });
+    const panel = container.querySelector(".panel") as HTMLElement;
+    await waitFor(() => expect(panel.style.getPropertyValue("--inputs-h")).toBe("220px"));
+
+    const handle = container.querySelector(".rail-resizer") as HTMLElement;
+    await fireEvent.pointerDown(handle, { clientY: 100 });
+    await fireEvent.pointerMove(handle, { clientY: -500 });
+
+    expect(panel.style.getPropertyValue("--inputs-h")).toBe("120px");
+  });
+
+  it("height persists to localStorage", async () => {
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    vi.mocked(getLapInputs).mockResolvedValue({ lap: LAP, best: null, corners: [] });
+    const { container } = render(InputsPanel, { props: { lapId: 9 } });
+    const panel = container.querySelector(".panel") as HTMLElement;
+    await waitFor(() => expect(panel.style.getPropertyValue("--inputs-h")).toBe("220px"));
+
+    const handle = container.querySelector(".rail-resizer") as HTMLElement;
+    await fireEvent.pointerDown(handle, { clientY: 100 });
+    await fireEvent.pointerMove(handle, { clientY: 160 });
+
+    expect(setItem).toHaveBeenCalledWith("inputsPanel.height", "280");
+    setItem.mockRestore();
+  });
 });
