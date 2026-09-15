@@ -53,6 +53,10 @@ function baseSettings(overrides: Partial<SettingsResponse> = {}): SettingsRespon
     show_cost: true,
     log_level: "INFO",
     driver: { braking_style: null, balance_preference: null, risk_tolerance: null },
+    voice: {
+      enabled: false, ptt_key: "F9", ptt_wheel: null, ptt_gamepad: null, tts_voice: null, tts_rate: 1.0,
+      vad_threshold: 0.02, vad_silence_ms: 1000, vad_max_s: 20, conversation_idle_s: 30,
+    },
     api_key_set: false,
     data_dir: "C:/data",
     app_version: "0.1.0",

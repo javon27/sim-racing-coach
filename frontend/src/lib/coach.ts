@@ -2,6 +2,7 @@
 // UI-agnostic core rule: this file only streams + shapes coach events, no analysis logic.
 
 import type { ChatUsage } from "./api";
+import type { VoiceMode } from "./voice";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8765";
 const WS_BASE = API_BASE.replace(/^http/, "ws"); // http -> ws, https -> wss
@@ -17,6 +18,7 @@ export interface AskOptions {
   sessionId?: string;
   lapId?: number;
   chatId?: string; // continue an existing thread; omit to start a new one (server mints the id)
+  voice?: VoiceMode;
 }
 
 // Svelte store contract (subscribe returns an unsubscribe fn, called immediately
@@ -26,6 +28,7 @@ export class CoachStream {
   phase: CoachPhase = "idle";
   toolActivity: ToolActivity | null = null;
   answer = "";
+  spoken: string | null = null;
   chatId: string | null = null;
   error: string | null = null;
   // The CHAT cumulative usage + estimated $ the server reports on `done`. Null
@@ -51,6 +54,7 @@ export class CoachStream {
     this.phase = "connecting";
     this.toolActivity = null;
     this.answer = "";
+    this.spoken = null;
     this.chatId = null;
     this.error = null;
     this.usage = null;
@@ -64,7 +68,9 @@ export class CoachStream {
     this.#ws = ws;
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ question, session_id: opts.sessionId, lap_id: opts.lapId, chat_id: opts.chatId }));
+      ws.send(JSON.stringify({
+        question, session_id: opts.sessionId, lap_id: opts.lapId, chat_id: opts.chatId, voice: opts.voice,
+      }));
     };
 
     ws.onmessage = (event: MessageEvent) => {
@@ -81,6 +87,8 @@ export class CoachStream {
             break;
           case "done":
             this.phase = "done";
+            this.answer = data.answer ?? this.answer;
+            this.spoken = data.spoken ?? null;
             this.chatId = data.chat_id ?? null;
             this.usage = data.usage ?? null;
             this.cost = data.cost ?? null;
