@@ -107,6 +107,10 @@
 
   // Usage/cost meter. Every number here is computed by the core and handed over —
   // this component formats, it never prices.
+  // #104: one composer button -- mic while empty, Send once there's text (unless
+  // mid-utterance, when the mic/state button must stay so a hold-to-stop still works).
+  let hasText = $derived(question.trim().length > 0);
+
   let usedTokens = $state(0);
   let cost: number | null = $state(null);
   let costComplete = $state(true);
@@ -530,7 +534,7 @@
         oninput={autoGrow}
         onkeydown={onKeydown}
       ></textarea>
-      {#if activeVoice}
+      {#if activeVoice && (!hasText || voiceState !== "idle")}
         <button
           type="button"
           class="mic"
@@ -541,8 +545,11 @@
           onpointerleave={onMicLeave}
         >{voiceState === "speaking" ? "■" : "🎤"}</button>
         <span class="voice-status" role="status">{voiceStatusText()}</span>
+      {:else}
+        <button type="button" class="send" aria-label="Send" onclick={send} disabled={waiting}>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+        </button>
       {/if}
-      <button type="button" class="send" onclick={send} disabled={waiting}>Send</button>
     </div>
   </div>
 </section>
@@ -638,19 +645,40 @@
   .nudge-x:hover {
     color: var(--text);
   }
+  .mic,
+  .send {
+    flex: none;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border-radius: 50%;
+    cursor: pointer;
+    touch-action: none;
+  }
   .mic {
     font-size: 16px;
     line-height: 1;
     color: var(--text);
     background: var(--surface);
     border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: 6px 10px;
-    cursor: pointer;
-    touch-action: none;
   }
   .mic:hover {
     border-color: var(--accent);
+  }
+  .send {
+    background: var(--accent);
+    border: none;
+    color: #fff;
+  }
+  .send:hover {
+    opacity: 0.85;
+  }
+  .send:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
   .mic[data-voice-state="listening"] {
     border-color: var(--accent);
