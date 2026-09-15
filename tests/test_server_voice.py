@@ -63,6 +63,18 @@ def test_default_transcriber_is_whisper_and_409s_without_a_model(tmp_path, monke
     assert _post_wav(c, _wav()).status_code == 409
 
 
+def test_voice_model_lives_at_the_app_data_root_and_migrates_from_telemetry(tmp_path, monkeypatch):
+    # First release keyed the model off the store's telemetry dir (<data>/whisper);
+    # it belongs next to the config. An existing install is moved, not re-downloaded.
+    old = tmp_path / "data" / "whisper" / "small"
+    old.mkdir(parents=True)
+    (old / "model.bin").write_bytes(b"x")
+    c, _ = _app(tmp_path, monkeypatch)          # SIMCOACH_DATA_DIR = tmp_path
+    assert (tmp_path / "whisper" / "small" / "model.bin").exists()
+    assert not old.exists()
+    assert c.get("/voice/status").json()["installed"] is True
+
+
 def test_setup_starts_download_and_status_tracks_it(tmp_path, monkeypatch):
     def fake_download(dest: Path):
         dest.mkdir(parents=True, exist_ok=True); (dest / "model.bin").write_bytes(b"0" * 10)

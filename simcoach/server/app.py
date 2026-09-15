@@ -273,8 +273,14 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         WhisperTranscriber,
         decode_wav,
     )
-    app.state.transcriber = transcriber or WhisperTranscriber(store.data_dir)
-    app.state.voice_installer = installer or ModelInstaller(store.data_dir)
+    # The whisper model lives at the app-data ROOT (next to the config), not in the
+    # telemetry dir the store owns; move an install from the first release across.
+    from .. import paths as _paths
+    from ..voice import migrate_model_dir
+    voice_root = str(_paths.app_data_dir())
+    migrate_model_dir(store.data_dir, voice_root)
+    app.state.transcriber = transcriber or WhisperTranscriber(voice_root)
+    app.state.voice_installer = installer or ModelInstaller(voice_root)
     app.state.tracks_dir = Path(tracks_dir) if tracks_dir else _DEFAULT_TRACKS_DIR
     # #105: GET /tracks' per-lap usable-cloud check, keyed on (telemetry_path, mtime).
     # Only /tracks reads this (via _rebuild_clouds(..., cache=...)) -- the build path

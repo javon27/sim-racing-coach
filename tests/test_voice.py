@@ -73,6 +73,19 @@ def test_fake_transcriber_records_and_can_be_uninstalled():
         FakeTranscriber(installed=False).transcribe(np.zeros(10, np.float32))
 
 
+def test_migrate_model_dir_moves_once_and_never_clobbers(tmp_path):
+    from simcoach.voice import migrate_model_dir
+    old, new = tmp_path / "old", tmp_path / "new"
+    (old / "whisper" / "small").mkdir(parents=True)
+    (old / "whisper" / "small" / "model.bin").write_bytes(b"x")
+    assert migrate_model_dir(str(old), str(new)) is True
+    assert (new / "whisper" / "small" / "model.bin").exists() and not (old / "whisper").exists()
+    assert migrate_model_dir(str(old), str(new)) is False          # nothing left to move
+    (old / "whisper").mkdir()
+    assert migrate_model_dir(str(old), str(new)) is False          # target exists: untouched
+    assert migrate_model_dir(str(new), str(new)) is False          # same dir: no-op
+
+
 def test_model_installed_means_model_bin_exists(tmp_path):
     assert model_installed(str(tmp_path)) is False
     d = model_dir(str(tmp_path)); d.mkdir(parents=True)

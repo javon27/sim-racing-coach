@@ -90,6 +90,23 @@ def model_installed(data_dir: str) -> bool:
     return (model_dir(data_dir) / "model.bin").exists()
 
 
+def migrate_model_dir(old_root: str, new_root: str) -> bool:
+    """One-time move of `<old_root>/whisper` to `<new_root>/whisper`. The first
+    release keyed the model off the telemetry dir by accident; the model belongs
+    at the app-data root next to the config. Best-effort: returns True only when a
+    move happened; never raises (a failed move just means a re-download)."""
+    old, new = Path(old_root) / "whisper", Path(new_root) / "whisper"
+    if old == new or not old.is_dir() or new.exists():
+        return False
+    try:
+        import shutil
+        new.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(old), str(new))
+        return True
+    except OSError:
+        return False
+
+
 def _default_download(dest: Path) -> None:
     from faster_whisper import download_model  # optional extra; imported only here
     dest.mkdir(parents=True, exist_ok=True)
