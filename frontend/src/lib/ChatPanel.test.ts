@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/svelte";
 import { getChatMessages, getChatUsage, getSettings, type ChatUsage, type SettingsResponse } from "./api";
 import type { CoachPhase, ToolActivity } from "./coach";
+import { VoiceLoop, type VoiceMode } from "./voice";
 import ChatPanel from "./ChatPanel.svelte";
 
 vi.mock("./api", async () => {
@@ -18,13 +19,17 @@ class FakeStream {
   phase: CoachPhase = "idle";
   toolActivity: ToolActivity | null = null;
   answer = "";
+  spoken: string | null = null;
   chatId: string | null = null;
   error: string | null = null;
   usage: ChatUsage | null = null;
   cost: number | null = null;
   costComplete = true;
   longChat = false;
-  ask = vi.fn();
+  lastAsk: { question: string; opts: { sessionId?: string; lapId?: number; chatId?: string; voice?: VoiceMode } } | null = null;
+  ask = vi.fn((question: string, opts: { sessionId?: string; lapId?: number; chatId?: string; voice?: VoiceMode } = {}) => {
+    this.lastAsk = { question, opts };
+  });
   #listeners = new Set<(value: this) => void>();
 
   subscribe(run: (value: this) => void): () => void {
@@ -35,6 +40,13 @@ class FakeStream {
 
   notify(): void {
     for (const listener of this.#listeners) listener(this);
+  }
+
+  // Sets fields from `patch` then notifies -- a terser `notify()` for tests that
+  // don't need to inspect intermediate states.
+  emit(patch: Partial<FakeStream>): void {
+    Object.assign(this, patch);
+    this.notify();
   }
 }
 
@@ -386,5 +398,111 @@ describe("ChatPanel", () => {
 
     await waitFor(() => expect(screen.queryByTestId("usage-meter")).toBeTruthy());
     expect(screen.queryByTestId("long-chat-nudge")).toBeNull();
+  });
+
+  // --- voice (#104) ---
+
+  function fakeVoice() {
+    const speaker = {
+      spoken: [] as string[], cancels: 0,
+      speak(text: string) { this.spoken.push(text); return new Promise<void>(() => {}); },
+      cancel() { this.cancels++; },
+      earcon() { /* no-op */ },
+    };
+    const recorder = {
+      async start() { /* no-op */ },
+      async stop() { return { pcm: new Float32Array(16000), sampleRate: 16000 }; },
+    };
+    const transcriber = { async transcribe() { return { text: "where am I losing time", seconds: 1 }; } };
+    const asked: [string, VoiceMode][] = [];
+    const voice = new VoiceLoop({
+      recorder, transcriber, speaker, ask: (t, m) => asked.push([t, m]),
+      vad: { threshold: 0.02, silenceMs: 1000, maxS: 20 }, conversationIdleS: 30,
+    });
+    return { voice, speaker, asked };
+  }
+
+  const rowDefaults = { ts: 1, session_id: "s1", track: "Le Mans", car: "Corvette", lap_id: null, tool_calls: null };
+
+  it("shows a play button on every coach message and toggles it", async () => {
+    vi.mocked(getChatMessages).mockResolvedValue([
+      { question: "q1", answer: "**A1**", ...rowDefaults },
+      { question: "q2", answer: "A2", ...rowDefaults },
+    ]);
+    const { voice, speaker } = fakeVoice();
+    render(ChatPanel, { props: { stream: new FakeStream(), chatId: "c1", voice } });
+
+    const plays = await screen.findAllByRole("button", { name: "Read aloud" });
+    expect(plays).toHaveLength(2);
+
+    await fireEvent.click(plays[0]);
+    expect(speaker.spoken).toEqual(["A1"]);
+    expect(screen.getAllByRole("button", { name: "Stop" })).toHaveLength(1);
+
+    await fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(speaker.cancels).toBe(1);
+  });
+
+  it("hold on the mic = PTT: adds a 🎤 message and asks with voice=ptt", async () => {
+    const stream = new FakeStream();
+    const { voice, asked } = fakeVoice();
+    render(ChatPanel, { props: { stream, voice } });
+
+    const mic = screen.getByRole("button", { name: /hold to talk/i });
+    await fireEvent.pointerDown(mic);
+    await new Promise((r) => setTimeout(r, 300));
+    await fireEvent.pointerUp(mic);
+
+    await waitFor(() => expect(asked).toEqual([["where am I losing time", "ptt"]]));
+    expect(screen.getByText("🎤 where am I losing time")).toBeTruthy();
+    expect(stream.lastAsk?.opts.voice).toBe("ptt");
+  });
+
+  it("tap on the mic = conversation mode; the button reflects state", async () => {
+    const { voice } = fakeVoice();
+    render(ChatPanel, { props: { stream: new FakeStream(), voice } });
+
+    const mic = screen.getByRole("button", { name: /hold to talk/i });
+    await fireEvent.pointerDown(mic);
+    await fireEvent.pointerUp(mic);
+
+    await waitFor(() => expect(mic.getAttribute("data-voice-state")).toBe("listening"));
+    expect(voice.mode).toBe("conversation");
+  });
+
+  it("done with spoken hands the answer to the loop", async () => {
+    const stream = new FakeStream();
+    const { voice, speaker } = fakeVoice();
+    render(ChatPanel, { props: { stream, voice } });
+
+    const mic = screen.getByRole("button", { name: /hold to talk/i });
+    await fireEvent.pointerDown(mic);
+    await new Promise((r) => setTimeout(r, 300));
+    await fireEvent.pointerUp(mic);
+
+    await waitFor(() => expect(voice.state).toBe("asking"));
+    stream.emit({ phase: "done", answer: "Full answer.", spoken: "Short cue.", chatId: "c1" });
+
+    await waitFor(() => expect(speaker.spoken).toContain("Short cue."));
+    expect(screen.getByText("Full answer.")).toBeTruthy(); // written chat is the full answer
+  });
+
+  it("keyboard PTT key presses and releases the loop, but not while typing", async () => {
+    vi.mocked(getSettings).mockResolvedValue({
+      show_cost: true,
+      voice: { enabled: true, ptt_key: "F9" },
+    } as unknown as SettingsResponse);
+    const { voice } = fakeVoice();
+    render(ChatPanel, { props: { stream: new FakeStream(), voice } });
+    await waitFor(() => expect(getSettings).toHaveBeenCalled());
+
+    await fireEvent.keyDown(window, { code: "F9" });
+    await waitFor(() => expect(voice.state).toBe("listening"));
+    await fireEvent.keyUp(window, { code: "F9" });
+    await waitFor(() => expect(voice.state).not.toBe("listening"));
+
+    const ta = screen.getByLabelText("Ask your engineer");
+    await fireEvent.keyDown(ta, { code: "F9" });
+    expect(voice.state).not.toBe("listening");
   });
 });

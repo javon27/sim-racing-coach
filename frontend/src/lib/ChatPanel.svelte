@@ -2,6 +2,8 @@
   import { onMount, tick } from "svelte";
   import { CoachStream, type CoachPhase, type ToolActivity } from "./coach";
   import { getChatMessages, getChatUsage, getSettings, type ChatUsage } from "./api";
+  import { VoiceLoop, type VoiceMode, type VoiceState } from "./voice";
+  import { MicRecorder, HttpTranscriber, SynthSpeaker } from "./audio";
 
   let {
     sessionId,
@@ -9,6 +11,7 @@
     chatId,
     onnewsession,
     stream = new CoachStream(),
+    voice,
   }: {
     sessionId?: string;
     lapId?: number;
@@ -20,15 +23,19 @@
       phase: CoachPhase;
       toolActivity: ToolActivity | null;
       answer: string;
+      spoken?: string | null;
       chatId: string | null;
       error: string | null;
       usage?: ChatUsage | null;
       cost?: number | null;
       costComplete?: boolean;
       longChat?: boolean;
-      ask(question: string, opts: { sessionId?: string; lapId?: number; chatId?: string }): void;
+      ask(question: string, opts: { sessionId?: string; lapId?: number; chatId?: string; voice?: VoiceMode }): void;
       subscribe(run: (value: unknown) => void): () => void;
     };
+    // Injected in tests (built on fakes). Left unset in the real app: ChatPanel
+    // builds its own from Settings once they resolve (null = voice off / unsupported).
+    voice?: VoiceLoop | null;
   } = $props();
 
   type Msg = { role: "you" | "coach"; text: string };
@@ -101,6 +108,116 @@
   // Settings `show_cost` hides only the dollar figure; tokens always show. Read the
   // same way CornerPanel reads `units` — defaults on, so a settings hiccup shows it.
   let showCost = $state(true);
+
+  // --- voice (#104) ---
+  let activeVoice: VoiceLoop | null = $state(null);
+  let pttKey = $state("F9");
+  let voiceState: VoiceState = $state("idle");
+  let speakingMessage: number | null = $state(null);
+  let holdTimer: ReturnType<typeof setTimeout> | null = null;
+
+  async function loadVoice() {
+    // Set synchronously (before the await below) so an injected voice prop is
+    // already wired by the time a synchronous test assertion runs post-render.
+    if (voice !== undefined) activeVoice = voice ?? null;
+    try {
+      const settings = await getSettings();
+      pttKey = settings.voice?.ptt_key ?? "F9";
+      if (voice !== undefined) return; // prop wins -- tests inject a VoiceLoop on fakes
+      const v = settings.voice;
+      if (!v?.enabled || typeof navigator === "undefined" || !navigator.mediaDevices || !SynthSpeaker.available()) {
+        activeVoice = null;
+        return;
+      }
+      const speaker = new SynthSpeaker();
+      speaker.voiceName = v.tts_voice;
+      speaker.rate = v.tts_rate;
+      activeVoice = new VoiceLoop({
+        recorder: new MicRecorder(),
+        transcriber: new HttpTranscriber(),
+        speaker,
+        // The actual send happens from the voice-state subscribe below (keyed on
+        // lastQuestion) so an injected test loop drives the same hookup -- this
+        // callback exists only because VoiceLoopOptions requires one.
+        ask: () => {},
+        vad: { threshold: v.vad_threshold, silenceMs: v.vad_silence_ms, maxS: v.vad_max_s },
+        conversationIdleS: v.conversation_idle_s,
+      });
+    } catch {
+      if (voice === undefined) activeVoice = null;
+    }
+  }
+
+  let lastSentQuestion: string | null = null;
+  $effect(() => {
+    const v = activeVoice;
+    if (!v) {
+      voiceState = "idle";
+      speakingMessage = null;
+      lastSentQuestion = null;
+      return;
+    }
+    return v.subscribe((s) => {
+      voiceState = s.state;
+      speakingMessage = s.speakingMessage;
+      // Learned purely from public state (see VoiceLoop.lastQuestion) so this
+      // fires the same way whether ChatPanel built the loop or a caller/test
+      // injected one with its own `ask` wiring.
+      if (s.state === "asking" && s.lastQuestion && s.lastQuestion !== lastSentQuestion) {
+        lastSentQuestion = s.lastQuestion;
+        sendVoice(s.lastQuestion, s.mode ?? "ptt");
+      }
+    });
+  });
+
+  function sendVoice(text: string, mode: VoiceMode) {
+    messages = [...messages, { role: "you", text: "🎤 " + text }];
+    waiting = true;
+    stream.ask(text, { sessionId, lapId, chatId: currentChatId, voice: mode });
+  }
+
+  function micLabel(): string {
+    switch (voiceState) {
+      case "listening": return "Listening…";
+      case "transcribing": return "Transcribing…";
+      case "asking": return "Asking…";
+      case "speaking": return "Stop speaking";
+      default: return "Hold to talk, tap for conversation";
+    }
+  }
+
+  function onMicDown() {
+    if (!activeVoice) return;
+    if (voiceState === "speaking") { activeVoice.stop(); return; }
+    // ponytail: defer press() past the hold-vs-tap threshold so a quick tap can
+    // start a persisted conversation listen (toggleConversation, below) instead
+    // of firing -- and immediately having to abort -- a PTT release. Costs the
+    // first ~250ms of audio on a genuine hold; revisit if that's ever felt.
+    holdTimer = setTimeout(() => { holdTimer = null; activeVoice?.press(); }, 250);
+  }
+
+  function onMicUp() {
+    if (!activeVoice) return;
+    if (holdTimer) {
+      clearTimeout(holdTimer);
+      holdTimer = null;
+      activeVoice.toggleConversation();
+      return;
+    }
+    activeVoice.release();
+  }
+
+  function onWindowKeydown(e: KeyboardEvent) {
+    if (!activeVoice || e.code !== pttKey || e.repeat) return;
+    if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
+    activeVoice.press();
+  }
+
+  function onWindowKeyup(e: KeyboardEvent) {
+    if (!activeVoice || e.code !== pttKey) return;
+    if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
+    activeVoice.release();
+  }
 
   function formatTokens(n: number): string {
     return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
@@ -206,8 +323,12 @@
 
   onMount(() => {
     loadShowCost();
+    loadVoice();
+    window.addEventListener("settings-changed", loadVoice);
+    window.addEventListener("keydown", onWindowKeydown);
+    window.addEventListener("keyup", onWindowKeyup);
     const unsubscribe = stream.subscribe((s) => {
-      const snap = s as { phase: CoachPhase; toolActivity: ToolActivity | null; answer: string; chatId: string | null; error: string | null; usage?: ChatUsage | null; cost?: number | null; costComplete?: boolean; longChat?: boolean };
+      const snap = s as { phase: CoachPhase; toolActivity: ToolActivity | null; answer: string; spoken?: string | null; chatId: string | null; error: string | null; usage?: ChatUsage | null; cost?: number | null; costComplete?: boolean; longChat?: boolean };
       phase = snap.phase;
       toolActivity = snap.toolActivity;
       answer = snap.answer;
@@ -224,12 +345,20 @@
           costComplete = snap.costComplete ?? true;
           longChat = snap.longChat === true;
         }
+        activeVoice?.onAnswer(snap.answer, snap.spoken ?? null);
       } else if (snap.phase === "error") {
-        messages = [...messages, { role: "coach", text: snap.error ?? "Something went wrong." }];
+        const message = snap.error ?? "Something went wrong.";
+        messages = [...messages, { role: "coach", text: message }];
         waiting = false;
+        activeVoice?.onError(message);
       }
     });
-    return unsubscribe;
+    return () => {
+      unsubscribe();
+      window.removeEventListener("settings-changed", loadVoice);
+      window.removeEventListener("keydown", onWindowKeydown);
+      window.removeEventListener("keyup", onWindowKeyup);
+    };
   });
 
   async function send() {
@@ -300,7 +429,18 @@
             {:else}⚑{/if}
           </div>
           <div class="bubble">
-            <div class="name">{m.role === "you" ? "You" : "Engineer"}</div>
+            <div class="name">
+              {m.role === "you" ? "You" : "Engineer"}
+              {#if activeVoice && m.role === "coach"}
+                <button
+                  type="button"
+                  class="play"
+                  aria-label={speakingMessage === i ? "Stop" : "Read aloud"}
+                  aria-pressed={speakingMessage === i}
+                  onclick={() => activeVoice?.speakMessage(i, m.text)}
+                >{speakingMessage === i ? "■" : "▶"}</button>
+              {/if}
+            </div>
             {#if m.role === "coach"}
               <div class="body md">{@html renderMarkdown(m.text)}</div>
             {:else}
@@ -338,6 +478,17 @@
         oninput={autoGrow}
         onkeydown={onKeydown}
       ></textarea>
+      {#if activeVoice}
+        <button
+          type="button"
+          class="mic"
+          aria-label={micLabel()}
+          data-voice-state={voiceState}
+          onpointerdown={onMicDown}
+          onpointerup={onMicUp}
+          onpointerleave={onMicUp}
+        >{voiceState === "speaking" ? "■" : "🎤"}</button>
+      {/if}
       <button type="button" class="send" onclick={send} disabled={waiting}>Send</button>
     </div>
   </div>
@@ -411,6 +562,43 @@
   }
   .nudge-x:hover {
     color: var(--text);
+  }
+  .mic {
+    font-size: 16px;
+    line-height: 1;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 6px 10px;
+    cursor: pointer;
+    touch-action: none;
+  }
+  .mic:hover {
+    border-color: var(--accent);
+  }
+  .mic[data-voice-state="listening"] {
+    border-color: var(--accent);
+    animation: mic-pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes mic-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+  }
+  .play {
+    margin-left: 6px;
+    font-size: 10px;
+    line-height: 1;
+    color: var(--faint);
+    background: none;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 1px 5px;
+    cursor: pointer;
+  }
+  .play:hover {
+    color: var(--text);
+    border-color: var(--accent);
   }
   .chat-empty {
     color: var(--faint);

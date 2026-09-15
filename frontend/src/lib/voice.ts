@@ -75,6 +75,12 @@ export class VoiceLoop {
   mode: VoiceMode | null = null;
   error: string | null = null;
   speakingMessage: number | null = null;
+  // The text of the most recently completed utterance, set right before the
+  // asking transition. Lets a host (ChatPanel) learn what was asked purely from
+  // `subscribe()`, independent of whatever `ask` callback it was constructed
+  // with -- so an injected loop (tests) and a self-built one (the app) both
+  // drive the same UI hookup instead of duplicating it in two places.
+  lastQuestion: string | null = null;
 
   #o: VoiceLoopOptions;
   #listeners = new Set<(v: VoiceLoop) => void>();
@@ -193,6 +199,7 @@ export class VoiceLoop {
       this.#fail(e instanceof Error ? e.message : String(e)); return;
     }
     if (text.split(/\s+/).filter(Boolean).length < 2) { this.#fail(DIDNT_CATCH, false); return; }
+    this.lastQuestion = text;
     this.#set("asking");
     this.#o.ask(text, this.mode ?? "ptt");
   }
