@@ -483,6 +483,16 @@ describe("ChatPanel", () => {
     expect(stream.ask).toHaveBeenCalledTimes(2);
   });
 
+  it("press shows a readable Listening… status", async () => {
+    const { voice } = fakeVoice();
+    render(ChatPanel, { props: { stream: new FakeStream(), voice } });
+
+    const mic = screen.getByRole("button", { name: /hold to talk/i });
+    await fireEvent.pointerDown(mic);
+
+    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Listening…"));
+  });
+
   it("tap on the mic = conversation mode; the button reflects state", async () => {
     const { voice } = fakeVoice();
     render(ChatPanel, { props: { stream: new FakeStream(), voice } });

@@ -53,6 +53,15 @@ def decode_wav(data: bytes) -> tuple[np.ndarray, float]:
 MODEL_SIZE = "small"
 EXPECTED_MODEL_BYTES = 250_000_000   # ponytail: bar estimate; the hub has no cheap total
 
+# Biases whisper's decoder toward sim-racing vocabulary it otherwise mishears
+# (e.g. "mic check" -> "check my check my check"). Natural sentences, not a
+# bare word list -- faster-whisper conditions on it as prior text.
+WHISPER_PROMPT = (
+    "Mic check. Nestor, where am I losing time? Brake bias, brake balance, "
+    "understeer, oversteer, trail braking, lockup, apex, Eau Rouge, "
+    "Mulsanne, Turn 4, T4, lap time, tire temps, pit stop, fuel."
+)
+
 
 class NotInstalled(RuntimeError):
     """The STT model is not on disk yet (maps to HTTP 409)."""
@@ -139,5 +148,7 @@ class WhisperTranscriber:
             if self._model is None:
                 from faster_whisper import WhisperModel
                 self._model = WhisperModel(str(model_dir(self.data_dir)), device="cpu", compute_type="int8")
-            segments, _info = self._model.transcribe(pcm16k, language="en", beam_size=1, vad_filter=True)
+            segments, _info = self._model.transcribe(
+                pcm16k, language="en", beam_size=5, vad_filter=True, initial_prompt=WHISPER_PROMPT
+            )
             return " ".join(s.text.strip() for s in segments).strip()

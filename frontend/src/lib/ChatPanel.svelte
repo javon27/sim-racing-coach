@@ -210,6 +210,18 @@
     }
   }
 
+  // Readable alongside the (small) mic button, since its own state is only a
+  // color/animation change otherwise.
+  function voiceStatusText(): string {
+    switch (voiceState) {
+      case "listening": return "Listening…";
+      case "transcribing": return "Transcribing…";
+      case "asking": return "Asking…";
+      case "speaking": return "Speaking…";
+      default: return "";
+    }
+  }
+
   function onMicDown() {
     if (!activeVoice) return;
     if (voiceState === "speaking") { activeVoice.stop(); return; }
@@ -514,6 +526,7 @@
           onpointerup={onMicUp}
           onpointerleave={onMicLeave}
         >{voiceState === "speaking" ? "■" : "🎤"}</button>
+        <span class="voice-status" role="status">{voiceStatusText()}</span>
       {/if}
       <button type="button" class="send" onclick={send} disabled={waiting}>Send</button>
     </div>
@@ -605,11 +618,23 @@
   }
   .mic[data-voice-state="listening"] {
     border-color: var(--accent);
+    background: var(--accent);
+    color: #fff;
     animation: mic-pulse 1.2s ease-in-out infinite;
+  }
+  .mic[data-voice-state="transcribing"],
+  .mic[data-voice-state="asking"] {
+    border-color: var(--accent);
   }
   @keyframes mic-pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.6; }
+  }
+  .voice-status {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--faint);
+    white-space: nowrap;
   }
   .play {
     margin-left: 6px;

@@ -86,6 +86,7 @@ export class VoiceLoop {
   #listeners = new Set<(v: VoiceLoop) => void>();
   #vad: VadState = vadInitial;
   #recording = false;
+  #starting: Promise<void> | null = null;
   #idleTimer: unknown = null;
   #speakSeq = 0;
   #setTimeout: (fn: () => void, ms: number) => unknown;
@@ -173,12 +174,17 @@ export class VoiceLoop {
     this.#startRecorder().catch(() => this.#fail(MIC_ERROR));
   }
 
-  async #startRecorder(): Promise<void> {
-    if (this.#recording) return;
-    await this.#o.recorder.start((frame) => this.#onFrame(frame));
-    this.#recording = true;
+  #startRecorder(): Promise<void> {
+    if (this.#recording) return Promise.resolve();
+    if (!this.#starting) {
+      this.#starting = this.#o.recorder.start((frame) => this.#onFrame(frame))
+        .then(() => { this.#recording = true; })
+        .finally(() => { this.#starting = null; });
+    }
+    return this.#starting;
   }
   async #stopRecorder(): Promise<{ pcm: Float32Array; sampleRate: number } | null> {
+    if (this.#starting) await this.#starting.catch(() => {});
     if (!this.#recording) return null;
     this.#recording = false;
     return this.#o.recorder.stop();
@@ -231,7 +237,10 @@ export class VoiceLoop {
     this.#cancelSpeech();
     this.error = keepError ? message : null;
     this.mode = null; this.speakingMessage = null;
-    this.#o.speaker.earcon("error");
+    // Not for the mic-permission failure: the driver already knows the mic
+    // didn't open, and a harsh beep on top of that first prompt is worse than
+    // just hearing the spoken message.
+    if (message !== MIC_ERROR) this.#o.speaker.earcon("error");
     void this.#o.speaker.speak(message);
     this.#set("idle");
   }

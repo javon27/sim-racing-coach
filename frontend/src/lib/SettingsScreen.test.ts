@@ -499,9 +499,32 @@ describe("SettingsScreen", () => {
       const enable = await screen.findByLabelText("Enable voice");
       await fireEvent.click(enable);
 
+      const dialog = await screen.findByRole("dialog");
+      const download = within(dialog).getByRole("button", { name: "Download" });
+      await fireEvent.click(download);
+
       await waitFor(() => expect(voiceSetup).toHaveBeenCalled());
       expect(vi.mocked(putSettings).mock.calls.at(-1)![0]).toMatchObject({ voice: { enabled: true } });
       await waitFor(() => expect(screen.getByText(/Ready/)).toBeTruthy(), { timeout: 4000 });
+    });
+
+    it("Not now reverts enable", async () => {
+      vi.mocked(getSettings).mockResolvedValue(baseSettings({ voice: voiceDefaults }));
+      vi.mocked(putSettings).mockImplementation(async (cfg) => baseSettings(cfg as Partial<SettingsResponse>));
+      vi.mocked(voiceStatus).mockResolvedValue({ installed: false, installing: false, progress_bytes: 0, total_bytes: 100, error: null });
+
+      render(SettingsScreen);
+      const enable = await screen.findByLabelText("Enable voice");
+      await fireEvent.click(enable);
+
+      const dialog = await screen.findByRole("dialog");
+      const notNow = within(dialog).getByRole("button", { name: "Not now" });
+      await fireEvent.click(notNow);
+
+      await waitFor(() =>
+        expect(vi.mocked(putSettings).mock.calls.at(-1)![0]).toMatchObject({ voice: { enabled: false } }),
+      );
+      expect(voiceSetup).not.toHaveBeenCalled();
     });
 
     it("capture sets the PTT key from the next keydown", async () => {
