@@ -4,6 +4,7 @@
   import { getChatMessages, getChatUsage, getSettings, type ChatUsage } from "./api";
   import { VoiceLoop, type VoiceMode, type VoiceState } from "./voice";
   import { MicRecorder, HttpTranscriber, SynthSpeaker } from "./audio";
+  import { attachShell, isTauri } from "./voice-shell";
 
   let {
     sessionId,
@@ -115,6 +116,20 @@
   let voiceState: VoiceState = $state("idle");
   let speakingMessage: number | null = $state(null);
   let downAt = 0;
+  // Under Tauri, the shell's global hotkey drives press/release instead of these
+  // in-page listeners -- both firing at once would double-trigger a hold.
+  let shellAttached = $state(false);
+  let detachShell: (() => void) | null = null;
+
+  async function syncShell() {
+    detachShell?.();
+    detachShell = null;
+    shellAttached = false;
+    if (isTauri() && activeVoice) {
+      detachShell = await attachShell(activeVoice);
+      shellAttached = true;
+    }
+  }
 
   async function loadVoice() {
     // Set synchronously (before the await below) so an injected voice prop is
@@ -123,10 +138,11 @@
     try {
       const settings = await getSettings();
       pttKey = settings.voice?.ptt_key ?? "F9";
-      if (voice !== undefined) return; // prop wins -- tests inject a VoiceLoop on fakes
+      if (voice !== undefined) { await syncShell(); return; } // prop wins -- tests inject a VoiceLoop on fakes
       const v = settings.voice;
       if (!v?.enabled || typeof navigator === "undefined" || !navigator.mediaDevices || !SynthSpeaker.available()) {
         activeVoice = null;
+        await syncShell();
         return;
       }
       const speaker = new SynthSpeaker();
@@ -143,8 +159,10 @@
         vad: { threshold: v.vad_threshold, silenceMs: v.vad_silence_ms, maxS: v.vad_max_s },
         conversationIdleS: v.conversation_idle_s,
       });
+      await syncShell();
     } catch {
       if (voice === undefined) activeVoice = null;
+      await syncShell();
     }
   }
 
@@ -215,13 +233,13 @@
   }
 
   function onWindowKeydown(e: KeyboardEvent) {
-    if (!activeVoice || e.code !== pttKey || e.repeat) return;
+    if (shellAttached || !activeVoice || e.code !== pttKey || e.repeat) return;
     if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
     activeVoice.press();
   }
 
   function onWindowKeyup(e: KeyboardEvent) {
-    if (!activeVoice || e.code !== pttKey) return;
+    if (shellAttached || !activeVoice || e.code !== pttKey) return;
     if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
     activeVoice.release();
   }
@@ -365,6 +383,7 @@
       window.removeEventListener("settings-changed", loadVoice);
       window.removeEventListener("keydown", onWindowKeydown);
       window.removeEventListener("keyup", onWindowKeyup);
+      detachShell?.();
     };
   });
 

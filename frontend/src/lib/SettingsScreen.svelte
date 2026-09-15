@@ -21,6 +21,7 @@
     type VoiceStatus,
   } from "./api";
   import InfoTip from "./InfoTip.svelte";
+  import { isTauri as isTauriShell, captureNext, pushBinds } from "./voice-shell";
 
   const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -45,6 +46,51 @@
   // --- Voice (#104) ---
   let voiceStatusInfo: VoiceStatus | null = $state(null);
   let capturingKey = $state(false);
+  let capturingWheel = $state(false);
+  let capturingGamepad = $state(false);
+  let hotkeyError: string | null = $state(null);
+
+  // Pushes the current binds + hotkey to the shell (no-op outside Tauri).
+  // Called on Settings load and after every voice save (#104 slice 4).
+  async function syncVoiceShell() {
+    if (!settings || !isTauriShell()) return;
+    hotkeyError = await pushBinds(settings.voice);
+  }
+
+  async function saveVoiceConfig() {
+    await saveConfig();
+    await syncVoiceShell();
+  }
+
+  async function captureWheel() {
+    capturingWheel = true;
+    const id = await captureNext();
+    capturingWheel = false;
+    if (!settings || id === null) return;
+    settings = { ...settings, voice: { ...settings.voice, ptt_wheel: id } };
+    await saveVoiceConfig();
+  }
+
+  async function captureGamepad() {
+    capturingGamepad = true;
+    const id = await captureNext();
+    capturingGamepad = false;
+    if (!settings || id === null) return;
+    settings = { ...settings, voice: { ...settings.voice, ptt_gamepad: id } };
+    await saveVoiceConfig();
+  }
+
+  function clearWheel() {
+    if (!settings) return;
+    settings = { ...settings, voice: { ...settings.voice, ptt_wheel: null } };
+    saveVoiceConfig();
+  }
+
+  function clearGamepad() {
+    if (!settings) return;
+    settings = { ...settings, voice: { ...settings.voice, ptt_gamepad: null } };
+    saveVoiceConfig();
+  }
 
   function voiceStatusText(): string {
     const st = voiceStatusInfo;
@@ -72,7 +118,7 @@
   }
 
   async function onVoiceEnabledChange() {
-    await saveConfig();
+    await saveVoiceConfig();
     if (settings?.voice.enabled) await ensureVoiceReady();
   }
 
@@ -101,7 +147,7 @@
       capturingKey = false;
       if (!settings) return;
       settings = { ...settings, voice: { ...settings.voice, ptt_key: e.code } };
-      saveConfig();
+      saveVoiceConfig();
     };
     window.addEventListener("keydown", onCapture);
     return () => window.removeEventListener("keydown", onCapture);
@@ -112,6 +158,7 @@
       try {
         settings = await getSettings();
         phase = "ok";
+        await syncVoiceShell();
       } catch {
         phase = "error";
       }
@@ -440,6 +487,27 @@
           <button type="button" onclick={startCapture}>{capturingKey ? "Press a key…" : "Capture"}</button>
         </div>
       </div>
+      {#if hotkeyError}
+        <p class="status">Couldn't register {settings.voice.ptt_key} globally: {hotkeyError}</p>
+      {/if}
+      {#if isTauriShell()}
+        <div class="field">
+          <span class="lbl">Wheel button<InfoTip text="A wheel button held to talk, in addition to the keyboard key." /></span>
+          <div class="control">
+            <span class="val">{settings.voice.ptt_wheel ?? "not set"}</span>
+            <button type="button" onclick={captureWheel}>{capturingWheel ? "Press a button…" : "Capture"}</button>
+            <button type="button" onclick={clearWheel} disabled={!settings.voice.ptt_wheel}>Clear</button>
+          </div>
+        </div>
+        <div class="field">
+          <span class="lbl">Gamepad button<InfoTip text="A gamepad button held to talk, in addition to the keyboard key." /></span>
+          <div class="control">
+            <span class="val">{settings.voice.ptt_gamepad ?? "not set"}</span>
+            <button type="button" onclick={captureGamepad}>{capturingGamepad ? "Press a button…" : "Capture"}</button>
+            <button type="button" onclick={clearGamepad} disabled={!settings.voice.ptt_gamepad}>Clear</button>
+          </div>
+        </div>
+      {/if}
       <div class="field">
         <span class="lbl">Voice<InfoTip text="Which installed system voice reads answers aloud." /></span>
         <div class="control">
