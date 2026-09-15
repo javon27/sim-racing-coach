@@ -17,6 +17,7 @@ from simcoach.analysis import (
     geometry_clause,
     grip_envelope,
     stint_consistency,
+    stint_tire_trend,
     time_loss_buckets,
 )
 from simcoach.coach import _setup_lines
@@ -28,6 +29,7 @@ from simcoach.format import (
     format_laptime,
     format_time_loss,
     format_tire_report,
+    format_tire_trend,
     format_wheel_report,
 )
 from simcoach.fuel import fuel_per_lap_from_channel, laps_remaining
@@ -93,6 +95,23 @@ TOOLS = [
                        "and the corners whose min speed / brake point / coasting vary most "
                        "lap to lap. Use for 'am I consistent', 'which corner do I keep "
                        "getting wrong', 'is my pace stable'.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "phase": {"type": "string",
+                          "description": "Optional: which phase's laps to measure "
+                                         "('practice'/'qualifying'/'race'). Defaults to the "
+                                         "current lap's phase."},
+            },
+        },
+    },
+    {
+        "name": "get_tire_trend",
+        "description": "HOW THE TIRES ARE TRENDING across this stint — per-wheel temp / "
+                       "pressure / wear slope per lap and pace drift, and whether the pace "
+                       "loss is tire-limited. Use for 'are my tires going off', 'is the pace "
+                       "dropping because of deg', 'which tire is wearing', 'how many laps "
+                       "do I have'.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -741,11 +760,10 @@ class CoachContext:
                     "different track length).")
         return format_time_loss(buckets, ref_label)
 
-    def get_consistency(self, phase=None):
-        if not self.session_id:
-            return "No active session — no stint to measure consistency across."
-        if self.cmap is None:
-            return "No corner map for this track yet — can't break laps into corners."
+    def _stint_analyses(self, phase=None):
+        """(analyses, lap_times) for one stint -- session + phase, valid laps only,
+        telemetry-backed laps only, in lap order. Shared by `get_consistency` and
+        `get_tire_trend`, which only differ in which pure function they feed it to."""
         if phase is None:
             cur_rec, _ = self._current_lap()
             phase = cur_rec.phase if cur_rec is not None else None
@@ -764,7 +782,23 @@ class CoachContext:
                 continue
             analyses.append(analysis)
             lap_times.append(record.lap_time)
+        return analyses, lap_times
+
+    def get_consistency(self, phase=None):
+        if not self.session_id:
+            return "No active session — no stint to measure consistency across."
+        if self.cmap is None:
+            return "No corner map for this track yet — can't break laps into corners."
+        analyses, lap_times = self._stint_analyses(phase)
         return format_consistency(stint_consistency(analyses, lap_times), self.units)
+
+    def get_tire_trend(self, phase=None):
+        if not self.session_id:
+            return "No active session — no stint to measure tire trend across."
+        if self.cmap is None:
+            return "No corner map for this track yet — can't break laps into corners."
+        analyses, lap_times = self._stint_analyses(phase)
+        return format_tire_trend(stint_tire_trend(analyses, lap_times), self.units)
 
     def get_handling(self, which="latest"):
         record, lap_id = self._resolve_lap(which)
@@ -1084,6 +1118,7 @@ class CoachContext:
             "get_time_loss": lambda: self.get_time_loss(args.get("which", "latest"),
                                                         args.get("reference", "best")),
             "get_consistency": lambda: self.get_consistency(args.get("phase")),
+            "get_tire_trend": lambda: self.get_tire_trend(args.get("phase")),
             "get_handling": lambda: self.get_handling(args.get("which", "latest")),
             "list_track_corners": lambda: self.list_track_corners(),
             "get_corner": lambda: self.get_corner(args.get("corner", ""), args.get("which", "latest")),

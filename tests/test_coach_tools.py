@@ -1069,6 +1069,51 @@ def test_agentic_prompt_points_at_get_consistency(tmp_path, synthetic_lap):
     assert "get_consistency" in model.last_system
 
 
+# --- get_tire_trend (#38 P1.6) ----------------------------------------------
+
+def _tire_trend_session(tmp_path, synthetic_lap, n, phase="practice"):
+    """A stored session of n valid laps -- same shape as `_consistency_session`,
+    but without the T1 speed-window scaling (get_tire_trend reads tire/wheel
+    channels, which synthetic_lap already carries on every lap)."""
+    import dataclasses
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    session_id = "s1--online"
+    ids = []
+    for i in range(n):
+        lap = dataclasses.replace(synthetic_lap, lap_time=90.0 + i,
+                                  session_id=session_id, phase=phase, timestamp=90.0 + i)
+        ids.append(store.save(lap))
+    cur = store.load(ids[-1])
+    return CoachContext(store, record=cur, lap_id=ids[-1], cmap=cmap, track=cur.track,
+                        car=cur.car, session_id=session_id, on_track=True)
+
+
+def test_get_tire_trend_five_laps_reports_pace(tmp_path, synthetic_lap):
+    ctx = _tire_trend_session(tmp_path, synthetic_lap, n=5)
+    out = ctx.dispatch("get_tire_trend", {})
+    assert "s/lap" in out
+
+
+def test_get_tire_trend_honest_with_two_laps(tmp_path, synthetic_lap):
+    ctx = _tire_trend_session(tmp_path, synthetic_lap, n=2)
+    out = ctx.get_tire_trend()
+    assert "2 laps" in out and "tire trend" in out.lower()
+
+
+def test_get_tire_trend_registered_in_tools_and_dispatch(tmp_path, synthetic_lap):
+    assert any(t["name"] == "get_tire_trend" for t in TOOLS)
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)   # no active session -- still dispatchable
+    assert not ctx.dispatch("get_tire_trend", {}).startswith("error:")
+
+
+def test_agentic_prompt_points_at_get_tire_trend(tmp_path, synthetic_lap):
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    model = FakeModel(reply="ok")
+    Coach(model).ask_agentic(ctx, "are my tires going off?", "test_car")
+    assert "get_tire_trend" in model.last_system
+
+
 # --- get_handling (#38) ----------------------------------------------------
 
 def _understeer_lap(synthetic_lap):
