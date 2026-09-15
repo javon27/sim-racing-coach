@@ -522,6 +522,55 @@ describe("ChatPanel", () => {
     expect(screen.getByText("Full answer.")).toBeTruthy(); // written chat is the full answer
   });
 
+  it("composer: voice enabled + empty box shows the mic, no Send button", async () => {
+    const { voice } = fakeVoice();
+    render(ChatPanel, { props: { stream: new FakeStream(), voice } });
+
+    expect(await screen.findByRole("button", { name: /hold to talk/i })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+  });
+
+  it("composer: typing swaps the mic for Send; clearing brings the mic back", async () => {
+    const { voice } = fakeVoice();
+    render(ChatPanel, { props: { stream: new FakeStream(), voice } });
+    const textarea = await screen.findByPlaceholderText(/ask your engineer/i);
+
+    await fireEvent.input(textarea, { target: { value: "hello" } });
+    expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /hold to talk/i })).toBeNull();
+
+    await fireEvent.input(textarea, { target: { value: "" } });
+    expect(await screen.findByRole("button", { name: /hold to talk/i })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+  });
+
+  it("composer: voice disabled always shows Send, never the mic", async () => {
+    render(ChatPanel, { props: { stream: new FakeStream(), voice: null } });
+    const textarea = await screen.findByPlaceholderText(/ask your engineer/i);
+
+    expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /hold to talk/i })).toBeNull();
+
+    await fireEvent.input(textarea, { target: { value: "hello" } });
+    expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /hold to talk/i })).toBeNull();
+  });
+
+  it("composer: mid-utterance the state button stays even once text is typed", async () => {
+    const { voice } = fakeVoice();
+    render(ChatPanel, { props: { stream: new FakeStream(), voice } });
+    const mic = screen.getByRole("button", { name: /hold to talk/i });
+    const textarea = await screen.findByPlaceholderText(/ask your engineer/i);
+
+    await fireEvent.pointerDown(mic);
+    await waitFor(() => expect(mic.getAttribute("data-voice-state")).toBe("listening"));
+
+    await fireEvent.input(textarea, { target: { value: "typed mid utterance" } });
+
+    expect(mic.getAttribute("data-voice-state")).toBe("listening");
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+  });
+
   it("keyboard PTT key presses and releases the loop, but not while typing", async () => {
     vi.mocked(getSettings).mockResolvedValue({
       show_cost: true,
