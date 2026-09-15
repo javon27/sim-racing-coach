@@ -11,12 +11,18 @@ A deterministic pipeline does the measuring; the LLM only ever coaches on facts:
 
 1. **Capture** — live lap telemetry (~50 Hz) is read from LMU's shared memory and
    stored (SQLite for history + queryable per-corner metrics, `.npz` for the raw
-   per-lap channel stream keyed on lap-distance).
-2. **Analyze** — a per-corner summary (min speed, brake point, trail-brake overlap,
-   deltas vs. your best lap) is computed from the telemetry and a per-track
-   **corner map**.
-3. **Coach** — that summary, your current setup, and car/track knowledge notes go
-   to the model, which returns prioritized, specific advice.
+   per-lap channel stream keyed on a de-staircased ~1 m lap-distance axis, with
+   exact elapsed time alongside it).
+2. **Analyze** — per-corner facts and deltas vs. your best lap, plus stint-level
+   reads — ranked time loss (where a lap gained or lost time, by corner and
+   straight), consistency, car balance (understeer/oversteer, lockup, wheelspin),
+   tire-deg trend, traction-circle/grip envelope use, and input shape (brake
+   release, modulation) — are all computed from the telemetry and a per-track
+   **corner map**. No AI in this step.
+3. **Coach** — the model narrates: it calls tools to fetch exactly the computed
+   facts a question needs (plus your current setup and car/track knowledge
+   notes) and returns prioritized, specific advice. It never infers a delta,
+   ranking, or corner identity itself.
 
 **Corner identity is owned data, never guessed.** A corner's number, name, and
 direction come from the corner map + telemetry geometry — the model receives them
@@ -48,18 +54,21 @@ The sidecar alone, for frontend dev: `python -m simcoach.server` (→ `127.0.0.1
 
 ## Corner maps
 
-Each track needs a corner map under `simcoach/tracks/<slug>.json`. You don't build
-these by hand:
+Each track needs a corner map under `simcoach/tracks/<slug>.json`. It's what the
+coach consumes for a corner's identity: number/label, name, direction, its
+along-track window (start/end/apex distance), and any authored notes. Radius,
+width, and banking bake are not a feature the coach uses — the map-building
+pipeline is parked (`deprioritized`).
 
-- **In the desktop app** — a track-map editor reconstructs the track surface from a
-  point cloud of free-driving passes (weave across the width; no left/right to
-  designate), detects corners by curvature, and seeds sectors from the game's real
-  boundaries. You can then rename corners, add labels/sections, rotate, and rebuild
-  from the saved capture without re-driving. Your edits merge over the shipped
-  geometry as a user annotation overlay — the reconstructed layout stays
-  authoritative and only changes on a new app release.
-- **From a saved lap (CLI)** — `python -m simcoach.mapbuild <lap.npz> [--slug SLUG]
-  [--length METRES]` writes a validated map and self-checks corner directions.
+You don't build maps by hand: an in-app track-map editor reconstructs the track
+surface from a point cloud of free-driving passes (weave across the width; no
+left/right to designate), detects corners by curvature, and seeds sectors from
+the game's real boundaries. You can then rename corners, add labels/sections,
+rotate, and rebuild from the saved capture without re-driving. Your edits merge
+over the shipped geometry as a user annotation overlay — the reconstructed
+layout stays authoritative and only changes on a new app release. From a saved
+lap you can also build one via CLI: `python -m simcoach.mapbuild <lap.npz>
+[--slug SLUG] [--length METRES]`.
 
 Real corner **names** (Copse, Ferradura, …) are an optional enrichment from the LMU
 wiki / a circuit diagram / your own knowledge — the geometry works without them.
@@ -100,13 +109,12 @@ and brand assets, and the deploy + CNAME details.
 
 ## Status
 
-v1.0 is the standalone desktop app (Tauri + Svelte + FastAPI sidecar) built over the
-v0.1 core: live capture → per-corner analysis → streaming coach chat, plus a sessions
-browser, an in-app track-map editor (point-cloud reconstruction + curvature-based
-corner detection), a settings screen (keyring-backed key, driver profile, data
-reset), and LMU result-log history import. Unit-tested (Python + frontend). Installer
-packaging has landed — CI freezes the sidecar and builds MSI/NSIS bundles on a
-`vX.Y.Z` tag (see `packaging/README.md`). Remaining: code signing (installers are
-unsigned, so SmartScreen warns) and a full live shakedown at the rig. Deferred by
-design: voice, side-by-side replay, multi-provider models beyond Anthropic, and
-automated corner-name enrichment.
+As of 2026-09-15: v1.0 desktop app (Tauri + Svelte + FastAPI sidecar), built and
+unit-tested (Python + frontend). The #99 course-correct is done — the coach only
+states measured values, and Phase 1 of the engineer-grade analysis is complete
+(ranked time loss, consistency, handling, tire trend, grip envelope, input
+shape all live as tools). Installer packaging has landed — CI freezes the
+sidecar and builds MSI/NSIS bundles on a `vX.Y.Z` tag (see
+`packaging/README.md`). Remaining: code signing (installers are unsigned, so
+SmartScreen warns), a full live shakedown at the rig, this docs pass, Phase 0
+setup-channel capture, and the voice loop.
