@@ -3,6 +3,20 @@
 Status: approved in chat for an overnight build; this doc is for morning review.
 Branch: `feat/agentic-tool-coach`.
 
+## Status 2026-09-15
+
+The tool surface has grown well past this doc's original six. Current `TOOLS`
+in `simcoach/coach_tools.py`: `get_session_status`, `list_recent_laps`,
+`get_lap_summary`, `get_time_loss`, `get_consistency`, `get_tire_trend`,
+`get_handling`, `list_track_corners`, `get_corner`, `get_tire_report`,
+`get_wheel_report`, `get_setup`, `get_track_notes`, `get_car_notes`,
+`get_energy_report`, `get_race_result`, `record_driver_learning`,
+`get_driver_memories`, `get_personal_best`, `get_progress`,
+`list_past_sessions`, `get_last_setup`. Routing changed with #102:
+`get_lap_summary` now leads its reply with the `get_time_loss` ranking against
+the reference lap before the per-corner facts, rather than a plain corner
+table.
+
 ## Problem
 
 The coach dumps the full 15-corner table + tires + setup into **every** prompt,
