@@ -80,9 +80,20 @@
     capturingKey = true;
   }
 
-  function speechVoices(): SpeechSynthesisVoice[] {
-    return typeof speechSynthesis !== "undefined" ? speechSynthesis.getVoices() : [];
-  }
+  // getVoices() is empty until the async `voiceschanged` event fires in
+  // Chromium/WebView2, so a one-shot read at mount would show a false "no
+  // speech voices installed" warning on every startup. Re-read on the event
+  // and keep it in state so the template re-renders once the real list lands.
+  let ttsVoices: SpeechSynthesisVoice[] = $state(
+    typeof speechSynthesis !== "undefined" ? speechSynthesis.getVoices() : [],
+  );
+
+  $effect(() => {
+    if (typeof speechSynthesis === "undefined") return;
+    const refresh = () => { ttsVoices = speechSynthesis.getVoices(); };
+    speechSynthesis.addEventListener("voiceschanged", refresh);
+    return () => speechSynthesis.removeEventListener("voiceschanged", refresh);
+  });
 
   $effect(() => {
     if (!capturingKey) return;
@@ -432,12 +443,12 @@
       <div class="field">
         <span class="lbl">Voice<InfoTip text="Which installed system voice reads answers aloud." /></span>
         <div class="control">
-          {#if speechVoices().length === 0}
+          {#if ttsVoices.length === 0}
             <span class="status inline">No speech voices installed — answers will be shown only.</span>
           {:else}
             <select bind:value={settings.voice.tts_voice} onchange={saveConfig}>
               <option value={null}>Browser default</option>
-              {#each speechVoices() as v (v.name)}
+              {#each ttsVoices as v (v.name)}
                 <option value={v.name}>{v.name}</option>
               {/each}
             </select>

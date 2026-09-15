@@ -118,6 +118,18 @@ export class VoiceLoop {
   // ---- conversation ----
   toggleConversation(): void {
     if (this.state === "idle") { this.#listen("conversation"); return; }
+    // A quick tap while a PTT press is already listening (mic already open):
+    // convert this SAME listen into conversation mode in place -- no stop/start
+    // of the recorder, no earcon, so nothing at the start of the utterance is
+    // lost. Any other in-flight state (transcribing/asking/speaking) still
+    // just stops.
+    if (this.state === "listening" && this.mode === "ptt") {
+      this.mode = "conversation";
+      this.#vad = vadInitial;
+      this.#armIdle();
+      this.#notify();
+      return;
+    }
     this.stop();
   }
 

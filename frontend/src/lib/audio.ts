@@ -57,8 +57,14 @@ export class SynthSpeaker implements Speaker {
   rate = 1.0;
   #beepCtx: AudioContext | null = null;
 
+  // getVoices() is empty until the async `voiceschanged` event fires in
+  // Chromium/WebView2 -- gating on its length here made loadVoice() at
+  // startup see "unavailable" and silently disable voice until something
+  // (e.g. opening Settings) happened to trigger a re-check. speechSynthesis
+  // existing is enough; the actual voice list is read lazily by speak()/the
+  // Settings screen once it's populated.
   static available(): boolean {
-    return typeof speechSynthesis !== "undefined" && speechSynthesis.getVoices().length > 0;
+    return typeof speechSynthesis !== "undefined";
   }
 
   speak(text: string): Promise<void> {

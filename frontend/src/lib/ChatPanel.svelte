@@ -114,7 +114,7 @@
   let pttKey = $state("F9");
   let voiceState: VoiceState = $state("idle");
   let speakingMessage: number | null = $state(null);
-  let holdTimer: ReturnType<typeof setTimeout> | null = null;
+  let downAt = 0;
 
   async function loadVoice() {
     // Set synchronously (before the await below) so an injected voice prop is
@@ -166,6 +166,12 @@
       if (s.state === "asking" && s.lastQuestion && s.lastQuestion !== lastSentQuestion) {
         lastSentQuestion = s.lastQuestion;
         sendVoice(s.lastQuestion, s.mode ?? "ptt");
+      } else if (s.state !== "asking") {
+        // Leaving "asking" (answered, erred, or a fresh utterance started)
+        // clears the guard -- otherwise asking the SAME question twice in a
+        // row (very common: "how was that lap?") would never send the second
+        // one, since lastQuestion would still equal the prior value.
+        lastSentQuestion = null;
       }
     });
   });
@@ -189,22 +195,23 @@
   function onMicDown() {
     if (!activeVoice) return;
     if (voiceState === "speaking") { activeVoice.stop(); return; }
-    // ponytail: defer press() past the hold-vs-tap threshold so a quick tap can
-    // start a persisted conversation listen (toggleConversation, below) instead
-    // of firing -- and immediately having to abort -- a PTT release. Costs the
-    // first ~250ms of audio on a genuine hold; revisit if that's ever felt.
-    holdTimer = setTimeout(() => { holdTimer = null; activeVoice?.press(); }, 250);
+    // Start listening immediately -- no audio is lost at the front of a hold.
+    // onMicUp below decides, from the elapsed time, whether this was a tap
+    // (convert to conversation mode in place) or a genuine PTT hold (release).
+    downAt = Date.now();
+    activeVoice.press();
   }
 
   function onMicUp() {
     if (!activeVoice) return;
-    if (holdTimer) {
-      clearTimeout(holdTimer);
-      holdTimer = null;
-      activeVoice.toggleConversation();
-      return;
-    }
-    activeVoice.release();
+    if (Date.now() - downAt < 250) activeVoice.toggleConversation();
+    else activeVoice.release();
+  }
+
+  // Pointer leaving the button mid-press (e.g. dragged off while holding) is
+  // never a tap -- always end the PTT hold, whatever the elapsed time.
+  function onMicLeave() {
+    activeVoice?.release();
   }
 
   function onWindowKeydown(e: KeyboardEvent) {
@@ -486,7 +493,7 @@
           data-voice-state={voiceState}
           onpointerdown={onMicDown}
           onpointerup={onMicUp}
-          onpointerleave={onMicUp}
+          onpointerleave={onMicLeave}
         >{voiceState === "speaking" ? "■" : "🎤"}</button>
       {/if}
       <button type="button" class="send" onclick={send} disabled={waiting}>Send</button>

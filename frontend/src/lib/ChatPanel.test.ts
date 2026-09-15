@@ -458,6 +458,31 @@ describe("ChatPanel", () => {
     expect(stream.lastAsk?.opts.voice).toBe("ptt");
   });
 
+  it("asking the same question twice in a row (PTT) sends both times", async () => {
+    const stream = new FakeStream();
+    const { voice, asked } = fakeVoice();
+    render(ChatPanel, { props: { stream, voice } });
+    const mic = screen.getByRole("button", { name: /hold to talk/i });
+
+    await fireEvent.pointerDown(mic);
+    await new Promise((r) => setTimeout(r, 300));
+    await fireEvent.pointerUp(mic);
+    await waitFor(() => expect(asked).toEqual([["where am I losing time", "ptt"]]));
+    stream.emit({ phase: "done", answer: "Answer one.", chatId: "c1" });
+    await waitFor(() => expect(voice.state).toBe("speaking"));
+    voice.stop(); // finish speaking, back to idle
+
+    await fireEvent.pointerDown(mic);
+    await new Promise((r) => setTimeout(r, 300));
+    await fireEvent.pointerUp(mic);
+
+    await waitFor(() => expect(asked).toEqual([
+      ["where am I losing time", "ptt"],
+      ["where am I losing time", "ptt"],
+    ]));
+    expect(stream.ask).toHaveBeenCalledTimes(2);
+  });
+
   it("tap on the mic = conversation mode; the button reflects state", async () => {
     const { voice } = fakeVoice();
     render(ChatPanel, { props: { stream: new FakeStream(), voice } });

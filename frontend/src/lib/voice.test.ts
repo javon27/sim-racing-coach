@@ -199,6 +199,14 @@ describe("VoiceLoop conversation", () => {
     t!.fn(); await flush();
     expect(loop.state).toBe("idle"); expect(recorder.open).toBe(false);
   });
+  it("tap converts a PTT listen into conversation without stopping the recorder", async () => {
+    const { loop, recorder } = make();
+    loop.press(); await flush();
+    expect(loop.state).toBe("listening"); expect(loop.mode).toBe("ptt");
+    loop.toggleConversation();
+    expect(loop.state).toBe("listening"); expect(loop.mode).toBe("conversation");
+    expect(recorder.started).toBe(1); expect(recorder.stopped).toBe(0);
+  });
 });
 
 describe("speakMessage (▶)", () => {
