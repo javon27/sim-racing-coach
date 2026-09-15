@@ -43,6 +43,9 @@ _DELTA_PTS = 0.05        # trail/ABS/TC deltas (fraction points; 0.05 = 5 pts)
 _DELTA_G = 0.2           # peak brake/lat g deltas
 _DELTA_SPEED_KMH = 3.0   # entry/exit speed deltas, in the native km/h channel
 
+# #38 P1.4: below this a corner's dead-middle fraction isn't worth a clause.
+_GG_DEAD_REPORT = 0.30
+
 
 def _dist_delta_txt(label: str, delta) -> str:
     if delta is None or abs(delta) < _DELTA_DIST_M:
@@ -140,6 +143,13 @@ def format_corner_line(cm, units: str = "metric") -> str:
         line += ", lockup"
     if getattr(cm, "wheelspin", None):
         line += ", wheelspin"
+    # #38 P1.4: traction-circle utilization -- silent without an envelope read.
+    gg_used = getattr(cm, "gg_used", None)
+    if gg_used is not None:
+        line += f", grip {gg_used:.0%} of envelope"
+        dead = getattr(cm, "gg_dead_middle", None)
+        if dead is not None and dead >= _GG_DEAD_REPORT:
+            line += f", {dead:.0%} of corner under half grip (inputs not combined)"
     if cm.min_spd_delta is not None:
         line += f" (min vs best: {spd(cm.min_spd_delta):+.1f} {spd_u})"
     # #102: every other comparable metric, vs the reference -- relative and
@@ -301,6 +311,11 @@ def format_lap_facts(analysis, units: str = "metric", corner_order=None, top_los
             continue
         mark = "\N{BLACK UP-POINTING TRIANGLE} " if no in top_loss else ""
         lines.append(mark + format_corner_line(cm, units))
+    env = getattr(analysis, "gg_envelope", None)
+    lap_gg_used = getattr(analysis, "gg_used", None)
+    if env is not None and lap_gg_used is not None:
+        lines.append(f"Grip envelope ~{env:.1f} g (observed); this lap used "
+                     f"{lap_gg_used:.0%} of it in the corners.")
     coast = getattr(analysis, "coast_total", None)
     if coast and coast[0] > _COAST_REPORT_S:
         lines.append(f"Coasting this lap: {coast[0]:.1f} s ({coast[1]:.0f} m) with "

@@ -70,6 +70,11 @@ class CornerMetrics:
     handling_why: Optional[str] = None   # short driver-facing reason, or None
     lockup: Optional[bool] = None        # a wheel stopped under braking; None if wheel_rot absent
     wheelspin: Optional[bool] = None     # a driven wheel outpaced the front axle; None if absent
+    # #38 P1.4: traction-circle utilization. None when the envelope or the
+    # corner's own cornering-phase sample count couldn't support a read (see
+    # `grip_envelope` / `_gg_used_and_dead`).
+    gg_used: Optional[float] = None          # p95 combined g in the cornering phase / envelope
+    gg_dead_middle: Optional[float] = None   # fraction of the phase under half the envelope
 
 
 @dataclass
@@ -83,6 +88,11 @@ class LapAnalysis:
     tire_warmup: Optional[tuple[float, float]] = None  # (early °C, late °C), all-wheel mean
     wheels: Optional[dict] = None  # lap-level brake/pressure/wear from extended capture
     coast_total: "tuple[float, float] | None" = None   # (seconds, meters) with neither pedal
+    # #38 P1.4: the car's usable grip radius in g (see `grip_envelope`) and this
+    # lap's own p95 combined g in cornering samples / that envelope. None when
+    # lat_g/long_g weren't captured or gave no usable samples.
+    gg_envelope: Optional[float] = None
+    gg_used: Optional[float] = None
 
 
 _TIRE_KEYS = ("tire_temp_fl", "tire_temp_fr", "tire_temp_rl", "tire_temp_rr")
@@ -571,8 +581,79 @@ def handling_read(win_steering, win_lat_g, win_speed, win_brake, win_throttle,
             "lockup": lockup, "wheelspin": wheelspin}
 
 
+# --- traction-circle (G-G) utilization (#38 P1.4) ------------------------
+# lat_g/long_g are the only load channels LMU actually fills (grip_*/tire_load_*
+# are dead, #43): "how much of the car's own grip is being used" has to come
+# from those two, combined.
+_GG_LOAD_GATE = 0.3       # ponytail: |lat_g| or |long_g| below this is parked/straight-line noise
+_GG_ENVELOPE_PCTL = 98.0  # ponytail: p98, not max -- a single crash spike must not set the
+                          # envelope (#78: a raw max was set by one 40g spike)
+_GG_USED_PCTL = 95.0      # ponytail: p95 of the cornering phase, not its own max
+_GG_DEAD_FRAC = 0.5       # ponytail: below half the envelope reads as "inputs not combined"
+_GG_MIN_SAMPLES = 10      # ponytail: fewer cornering-phase samples is noise, not a read
+
+
+def combined_g(lat_g, long_g) -> np.ndarray:
+    """Combined lateral+longitudinal load magnitude (g), elementwise."""
+    return np.hypot(np.asarray(lat_g, dtype=float), np.asarray(long_g, dtype=float))
+
+
+def grip_envelope(records: "list[LapRecord]") -> float | None:
+    """The car's usable grip radius (g), estimated from lat_g/long_g over all
+    the given laps' samples where |lat_g| or |long_g| clears `_GG_LOAD_GATE`
+    (drops parked/straight-line noise).
+
+    ponytail: naive percentile-of-observed-max -- a fitted circle would be more
+    accurate later. p98 rather than max because a single crash spike otherwise
+    sets the envelope (#78 measured a raw max of long_g at 40g from one such
+    sample). None when no record supplies both channels, or no sample clears
+    the gate.
+    """
+    samples = []
+    for r in records or []:
+        if r is None:
+            continue
+        lat_g, long_g = r.channels.get("lat_g"), r.channels.get("long_g")
+        if lat_g is None or long_g is None:
+            continue
+        n = min(len(lat_g), len(long_g))
+        lat_g = np.asarray(lat_g[:n], dtype=float)
+        long_g = np.asarray(long_g[:n], dtype=float)
+        cg = combined_g(lat_g, long_g)
+        used = (np.abs(lat_g) > _GG_LOAD_GATE) | (np.abs(long_g) > _GG_LOAD_GATE)
+        used &= np.isfinite(cg)
+        if used.any():
+            samples.append(cg[used])
+    if not samples:
+        return None
+    return float(np.percentile(np.concatenate(samples), _GG_ENVELOPE_PCTL))
+
+
+def _gg_used_and_dead(lat_g, long_g, envelope: float | None) -> "tuple[float | None, float | None]":
+    """(gg_used, gg_dead_middle) for one phase (a corner window or a whole lap):
+    p95 combined g over cornering-phase samples (|lat_g| > `_GG_LOAD_GATE`)
+    divided by `envelope`, and the fraction of that phase below
+    `_GG_DEAD_FRAC` of the envelope (coasting/inputs-not-combined). (None, None)
+    when the envelope, or either channel, is missing, or fewer than
+    `_GG_MIN_SAMPLES` cornering-phase samples survive."""
+    if envelope is None or lat_g is None or long_g is None:
+        return None, None
+    n = min(len(lat_g), len(long_g))
+    lat_g = np.asarray(lat_g[:n], dtype=float)
+    long_g = np.asarray(long_g[:n], dtype=float)
+    cg = combined_g(lat_g, long_g)
+    phase = (np.abs(lat_g) > _GG_LOAD_GATE) & np.isfinite(cg)
+    if int(np.sum(phase)) < _GG_MIN_SAMPLES:
+        return None, None
+    cg_phase = cg[phase]
+    used = float(np.percentile(cg_phase, _GG_USED_PCTL)) / envelope
+    dead = float(np.mean(cg_phase < _GG_DEAD_FRAC * envelope))
+    return used, dead
+
+
 def _metrics_for_corner(
-    record: LapRecord, corner: Corner, length: float | None = None
+    record: LapRecord, corner: Corner, length: float | None = None,
+    envelope: float | None = None,
 ) -> CornerMetrics:
     dist = _interp_lap_distance(record)
     speed = record.channels["speed"]
@@ -757,6 +838,8 @@ def _metrics_for_corner(
     # (grip_*/tire_load_* are dead, #43). None of the inputs above; a pure
     # function on this corner's own window.
     win_lat_g_arr = win_lat_g[idx] if win_lat_g is not None else None
+    win_long_g_arr = long_g[idx] if long_g is not None else None
+    gg_used, gg_dead_middle = _gg_used_and_dead(win_lat_g_arr, win_long_g_arr, envelope)
     wheel_rot_win = None
     if all(f"wheel_rot_{w}" in record.channels for w in _WHEELS):
         wheel_rot_win = {w: record.channels[f"wheel_rot_{w}"][idx] for w in _WHEELS}
@@ -811,6 +894,7 @@ def _metrics_for_corner(
         label=label, apexes=aps, apex_min_speeds=apex_min_speeds,
         handling=handling_info["handling"], handling_why=handling_info["handling_why"],
         lockup=handling_info["lockup"], wheelspin=handling_info["wheelspin"],
+        gg_used=gg_used, gg_dead_middle=gg_dead_middle,
     )
 
 
@@ -825,13 +909,22 @@ def _delta(cur, ref) -> float | None:
 
 
 def analyze_lap(
-    record: LapRecord, cmap: CornerMap, reference: Optional[LapRecord] = None
+    record: LapRecord, cmap: CornerMap, reference: Optional[LapRecord] = None,
+    envelope: float | None = None,
 ) -> LapAnalysis:
     if reference is not None and reference.track != record.track:
         raise ValueError(f"reference lap track {reference.track!r} != {record.track!r}")
 
+    if envelope is None:
+        # ponytail: self-referenced envelope (this lap, plus its reference if any) is
+        # optimistic -- it's a single lap standing in for the stint history a real
+        # envelope would use. `coach_tools._analysis_for` passes a real one estimated
+        # across recent laps; this is just a fallback so a lap still gets a read
+        # before that history exists.
+        envelope = grip_envelope([record] + ([reference] if reference else []))
+
     length = cmap.length
-    corners = [_metrics_for_corner(record, corner, length) for corner in cmap.corners]
+    corners = [_metrics_for_corner(record, corner, length, envelope) for corner in cmap.corners]
 
     # Tag each corner with the named section its apex falls in (e.g. "The Corkscrew").
     for cm in corners:
@@ -861,10 +954,13 @@ def analyze_lap(
             cm.exit_spd_delta = _delta(cm.exit_spd, ref.exit_spd)
 
     tire_means, tire_warmup = _tire_summary(record)
+    gg_used, _ = _gg_used_and_dead(
+        record.channels.get("lat_g"), record.channels.get("long_g"), envelope)
     return LapAnalysis(
         lap_time=record.lap_time, corners=corners, has_reference=has_reference,
         tire_means=tire_means, tire_warmup=tire_warmup, wheels=_wheel_summary(record),
         coast_total=lap_coast_total(record),
+        gg_envelope=envelope, gg_used=gg_used,
     )
 
 

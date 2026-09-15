@@ -109,7 +109,10 @@ def test_min_grip_is_not_a_field_or_output(synthetic_lap):
     assert "min_grip" not in CornerMetrics.__dataclass_fields__
     cmap = CornerMap.load("simcoach/tracks/test_track.json")
     a = analyze_lap(synthetic_lap, cmap)
-    assert "grip" not in format_lap_facts(a).lower()
+    # #38 P1.4 added a legitimate "grip envelope" reading from lat_g/long_g (a
+    # real signal, unlike dead mGripFract) -- the word "grip" now appears
+    # honestly. What must still never appear is the old fabricated wording.
+    assert "min grip" not in format_lap_facts(a).lower()
 
 
 def test_corner_metrics_fields_vary_or_are_allowlisted(synthetic_lap):
@@ -1174,3 +1177,113 @@ def test_wheelspin_and_lockup_read_magnitude_not_sign():
     braking = np.full(n, 0.8)
     locked = {"fl": np.full(n, -0.2), "fr": front, "rl": front, "rr": front}
     assert handling_read(steer, lat_g, speed, braking, np.zeros(n), locked)["lockup"] is True
+
+
+# --- traction-circle (G-G) utilization (#38 P1.4) ---------------------------
+
+def test_grip_envelope_p98_of_usable_samples(synthetic_lap):
+    import dataclasses
+    import numpy as np
+    from simcoach.analysis import grip_envelope
+
+    n = 1000
+    lat_g = np.linspace(0.31, 1.8, n)   # a spread of loaded samples, all past the gate
+    long_g = np.zeros(n)
+    lap = dataclasses.replace(synthetic_lap, channels={
+        **synthetic_lap.channels, "lat_g": lat_g, "long_g": long_g})
+    env = grip_envelope([lap])
+    assert env is not None
+    assert abs(env - float(np.percentile(lat_g, 98.0))) < 1e-6
+
+
+def test_grip_envelope_ignores_a_single_crash_spike(synthetic_lap):
+    # #78: a raw max of long_g was set by one 40g crash-spike sample. p98
+    # must barely move when that single sample is injected.
+    import dataclasses
+    import numpy as np
+    from simcoach.analysis import grip_envelope
+
+    n = 1000
+    lat_g = np.linspace(0.31, 1.8, n)
+    long_g = np.zeros(n)
+    baseline = dataclasses.replace(synthetic_lap, channels={
+        **synthetic_lap.channels, "lat_g": lat_g, "long_g": long_g})
+    env_before = grip_envelope([baseline])
+
+    spiked_long = long_g.copy()
+    spiked_long[500] = 40.0
+    spiked = dataclasses.replace(baseline, channels={**baseline.channels, "long_g": spiked_long})
+    env_after = grip_envelope([spiked])
+
+    assert env_before is not None and env_after is not None
+    assert abs(env_after - env_before) / env_before < 0.05
+
+
+def test_grip_envelope_none_without_load_channels(synthetic_lap):
+    import dataclasses
+    from simcoach.analysis import grip_envelope
+
+    ch = {k: v for k, v in synthetic_lap.channels.items() if k not in ("lat_g", "long_g")}
+    lap = dataclasses.replace(synthetic_lap, channels=ch)
+    assert grip_envelope([lap]) is None
+    assert grip_envelope([]) is None
+
+
+def test_gg_used_and_dead_middle_per_corner(synthetic_lap):
+    import dataclasses
+    import numpy as np
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap
+
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    dist = synthetic_lap.channels["lap_distance"]
+    env = 2.0
+    lat_g = np.zeros_like(dist)
+    long_g = np.zeros_like(dist)
+
+    # Corner 1 (800-1200): flat at 95% of a known envelope throughout.
+    m1 = (dist >= 800) & (dist <= 1200)
+    lat_g[m1] = 0.95 * env
+
+    # Corner 2 (2000-2400): the first 60% of the window coasts under half the
+    # envelope (weak trail-brake blend), the rest is loaded.
+    idx2 = np.where((dist >= 2000) & (dist <= 2400))[0]
+    split = int(len(idx2) * 0.6)
+    lat_g[idx2[:split]] = 0.4          # combined 0.4g < 0.5 * env (1.0) -- dead
+    lat_g[idx2[split:]] = 0.95 * env
+
+    lap = dataclasses.replace(synthetic_lap, channels={
+        **synthetic_lap.channels, "lat_g": lat_g, "long_g": long_g})
+    a = analyze_lap(lap, cmap, envelope=env)
+    c1, c2 = a.corners
+
+    assert abs(c1.gg_used - 0.95) < 0.02
+    assert c1.gg_dead_middle == 0.0
+    assert abs(c2.gg_dead_middle - 0.6) < 0.05
+    assert a.gg_envelope == env
+    assert a.gg_used is not None
+
+
+def test_analyze_lap_gg_fields_none_without_envelope_or_load_channels(synthetic_lap):
+    import dataclasses
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap
+
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    ch = {k: v for k, v in synthetic_lap.channels.items() if k not in ("lat_g", "long_g")}
+    lap = dataclasses.replace(synthetic_lap, channels=ch)
+    a = analyze_lap(lap, cmap)
+    assert a.gg_envelope is None and a.gg_used is None
+    assert all(cm.gg_used is None and cm.gg_dead_middle is None for cm in a.corners)
+
+
+def test_analyze_lap_falls_back_to_self_referenced_envelope(synthetic_lap):
+    # Real lat_g/long_g on the fixture (~1.25g/1.53g peaks) give both corners a
+    # usable, if optimistic, envelope read when no history-based envelope is passed.
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap
+
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    a = analyze_lap(synthetic_lap, cmap)
+    assert a.gg_envelope is not None
+    assert a.gg_used is not None
