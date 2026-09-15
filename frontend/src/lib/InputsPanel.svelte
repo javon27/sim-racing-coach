@@ -56,9 +56,10 @@
   });
 
   const hasChannels = $derived(!!data?.lap && "dist" in data.lap && (data.lap.dist?.length ?? 0) > 0);
+  const showingTraces = $derived((phase as string) === "ok" && hasChannels);
 </script>
 
-<div class="panel">
+<div class="panel" style={showingTraces ? "--inputs-h: 220px" : undefined}>
   <div class="hdr">
     <h2>Inputs — lap vs best</h2>
     <button
@@ -70,7 +71,7 @@
     >{collapsed ? "▸" : "▾"}</button>
   </div>
   {#if !collapsed}
-    <div class="body" data-testid="inputs-panel-body">
+    <div class="body" class:sized={showingTraces} data-testid="inputs-panel-body">
       {#if phase === "empty"}
         <p class="empty">Select a lap to see its inputs.</p>
       {:else if phase === "loading"}
@@ -90,7 +91,7 @@
   .panel {
     display: flex;
     flex-direction: column;
-    min-height: 0;
+    flex: 0 0 auto;
     border-bottom: 1px solid var(--line);
   }
   .hdr {
@@ -116,9 +117,10 @@
     padding: 2px 6px;
   }
   .body {
-    height: 220px;
     padding: 0 20px 12px;
-    min-height: 0;
+  }
+  .body.sized {
+    height: var(--inputs-h, 220px);
   }
   .empty {
     margin: 0;

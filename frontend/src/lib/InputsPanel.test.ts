@@ -67,4 +67,30 @@ describe("InputsPanel", () => {
     await screen.findByText(/inputs/i);
     expect(container.querySelector('[data-testid="inputs-panel-body"]')).toBeNull();
   });
+
+  it("empty state has no fixed --inputs-h height", () => {
+    const { container } = render(InputsPanel, { props: { lapId: null } });
+    const panel = container.querySelector(".panel") as HTMLElement;
+    expect(panel.style.getPropertyValue("--inputs-h")).toBe("");
+  });
+
+  it("applies --inputs-h only once a lap's traces are showing", async () => {
+    vi.mocked(getLapInputs).mockResolvedValue({ lap: LAP, best: null, corners: [] });
+    const { container } = render(InputsPanel, { props: { lapId: 9 } });
+    const panel = container.querySelector(".panel") as HTMLElement;
+    await waitFor(() => expect(panel.style.getPropertyValue("--inputs-h")).toBe("220px"));
+  });
+
+  it("collapse hides the body and flips aria-expanded", async () => {
+    vi.mocked(getLapInputs).mockResolvedValue({ lap: LAP, best: null, corners: [] });
+    const { container } = render(InputsPanel, { props: { lapId: 9 } });
+    await screen.findByText(/inputs/i);
+
+    const toggle = screen.getByRole("button", { name: /collapse|expand/i });
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+
+    await fireEvent.click(toggle);
+    expect(container.querySelector('[data-testid="inputs-panel-body"]')).toBeNull();
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  });
 });
