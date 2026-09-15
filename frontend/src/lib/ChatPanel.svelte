@@ -249,9 +249,16 @@
     }
   }
 
-  function onMicDown() {
+  function onMicDown(e: PointerEvent) {
     if (!activeVoice) return;
     if (voiceState === "speaking") { activeVoice.stop(); return; }
+    // Capture the pointer: pressing restyles the button and reveals the status
+    // text, and that layout shift used to fire pointerleave under a still-held
+    // finger, releasing a near-empty utterance ("Didn't catch that") before the
+    // pointerup could turn the tap into conversation mode. With capture, the
+    // button keeps receiving pointerup/pointercancel wherever the pointer goes.
+    const el = e.currentTarget as HTMLElement;
+    if (typeof el.setPointerCapture === "function") el.setPointerCapture(e.pointerId);
     // Start listening immediately -- no audio is lost at the front of a hold.
     // onMicUp below decides, from the elapsed time, whether this was a tap
     // (convert to conversation mode in place) or a genuine PTT hold (release).
@@ -265,9 +272,9 @@
     else activeVoice.release();
   }
 
-  // Pointer leaving the button mid-press (e.g. dragged off while holding) is
-  // never a tap -- always end the PTT hold, whatever the elapsed time.
-  function onMicLeave() {
+  // A cancelled pointer (touch interrupted, window lost the pointer) is never a
+  // tap -- always end the PTT hold, whatever the elapsed time.
+  function onMicCancel() {
     activeVoice?.release();
   }
 
@@ -595,7 +602,7 @@
           data-voice-state={voiceState}
           onpointerdown={onMicDown}
           onpointerup={onMicUp}
-          onpointerleave={onMicLeave}
+          onpointercancel={onMicCancel}
         >{voiceState === "speaking" ? "■" : "🎤"}</button>
         <span class="voice-status" role="status">{voiceStatusText()}</span>
       {:else}

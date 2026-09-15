@@ -538,6 +538,23 @@ describe("ChatPanel", () => {
     expect(voice.mode).toBe("conversation");
   });
 
+  it("a pointerleave during a tap does not release the utterance (rig: 'Didn't catch that' on tap)", async () => {
+    // Pressing restyles the button and reveals the status text; the layout shift
+    // fired pointerleave under a held finger. The pointer is captured now, so a
+    // stray leave must neither release nor transcribe.
+    const { voice, asked } = fakeVoice();
+    render(ChatPanel, { props: { stream: new FakeStream(), voice } });
+
+    const mic = screen.getByRole("button", { name: /hold to talk/i });
+    await fireEvent.pointerDown(mic);
+    await fireEvent.pointerLeave(mic);
+    await fireEvent.pointerUp(mic);
+
+    await waitFor(() => expect(mic.getAttribute("data-voice-state")).toBe("listening"));
+    expect(voice.mode).toBe("conversation");
+    expect(asked).toEqual([]);
+  });
+
   it("done with spoken hands the answer to the loop", async () => {
     const stream = new FakeStream();
     const { voice, speaker } = fakeVoice();
