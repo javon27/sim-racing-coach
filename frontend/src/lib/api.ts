@@ -391,6 +391,7 @@ export interface RibbonPreview {
 export interface InputBand {
   lo: number[];
   hi: number[];
+  mean: number[];
 }
 
 export interface InputTrace {
@@ -401,6 +402,7 @@ export interface InputTrace {
   throttle: InputBand;
   brake: InputBand;
   steering: InputBand;
+  speed?: InputBand;
 }
 
 export interface InputTraces {
@@ -410,6 +412,27 @@ export interface InputTraces {
 
 export function getInputTraces(): Promise<InputTraces> {
   return request<InputTraces>("/track/inputs");
+}
+
+// Lap-keyed input traces for the coaching screen's Inputs panel (#95): the
+// selected lap vs its track/car best, plus corner markers to overlay.
+export interface CornerMarker {
+  label: string;
+  name: string;
+  start_dist: number;
+  apex_dist: number;
+  end_dist: number;
+}
+
+export interface LapInputs {
+  lap: InputTrace | Record<string, never>;
+  best: InputTrace | null;
+  corners: CornerMarker[];
+  length?: number;
+}
+
+export function getLapInputs(lapId: number): Promise<LapInputs> {
+  return request<LapInputs>(`/laps/${lapId}/inputs`);
 }
 
 export function startMapCapture(): Promise<{ active: boolean }> {
