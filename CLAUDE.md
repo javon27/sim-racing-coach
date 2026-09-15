@@ -85,10 +85,14 @@ cd frontend && npx svelte-check         # frontend types
   `coach_tools.py` (tool-use coach), `model/` (swappable `Model`),
   `trackmap.py`/`mapbuild.py`/`ribbon.py`/`raceline.py` (corner maps +
   point-cloud track reconstruction), `track_lookup.py` (live-name → map/model
-  resolution + `resolve_context`), `car_lookup.py` (live-name → car model).
+  resolution + `resolve_context`), `car_lookup.py` (live-name → car model),
+  `voice.py` (local speech-to-text model download/transcription).
 - `simcoach/server/` — the FastAPI sidecar the desktop app talks to.
 - `simcoach/tracks/*.json` — committed shipped corner maps (curated defaults).
 - `frontend/` — Svelte + TypeScript desktop UI; `src-tauri/` — the Tauri shell.
+  Voice loop: `voice.ts` (state machine), `audio.ts` (browser mic/TTS adapters),
+  `voice-shell.ts` (Tauri bridge — global hotkey + wheel/gamepad binds/capture);
+  `src-tauri/src/voice_input.rs` (Win32 button poller + global shortcut).
 - `packaging/` — PyInstaller sidecar freeze + installer notes (see its README).
 
 ## Scope discipline
