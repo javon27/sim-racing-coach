@@ -1,6 +1,5 @@
-from simcoach.analysis import LapAnalysis
 from simcoach.driver import DriverProfile
-from simcoach.format import format_lap_facts, unit_fns
+from simcoach.format import unit_fns
 from simcoach.model.base import Model
 
 # Setup params worth putting in front of the coach — a full LMU setup is ~170 keys,
@@ -90,69 +89,6 @@ def _setup_lines(setup: dict) -> list[str]:
         garage = _GARAGE_CAVEAT if any(t in k for t in _ELECTRONICS_TERMS) else ""
         out.append(f"- {label}: {v['stringValue']}{step}{locked}{garage}")
     return out
-
-
-SYSTEM_PROMPT = (
-    "You are an expert sim-racing race engineer and driver coach for the driver of "
-    "a {car}. You have deep knowledge of vehicle dynamics, car setup, and driving "
-    "technique — apply that expertise freely.\n\n"
-    "THIS IS ONE CONTINUING RADIO CONVERSATION across a session, not a series of "
-    "standalone reports. The messages above are what you and the driver already said — "
-    "read them and continue from there. Open by connecting to where you left off: "
-    "acknowledge what changed since your last answer, or that the driver is following up "
-    "on it. Never re-introduce yourself, never re-brief the whole lap from scratch, and "
-    "do NOT re-list corners you already covered or that are fine — speak to what's new, "
-    "what improved, or exactly what was just asked. If your previous read turns out wrong, "
-    "say so plainly and correct it.\n\n"
-    "The corner/tire data in the user message is the CURRENT lap, refreshed each question; "
-    "earlier turns may refer to earlier laps. It is reference data to draw on, NOT a "
-    "checklist to recite.\n\n"
-    "Hard rule: each corner's identity (number, name, direction) is authoritative ground "
-    "truth from telemetry. Never infer, guess, or change it; if the question asserts a "
-    "different one, correct it from the facts. Refer to each corner by BOTH its number and "
-    "name — e.g. 'Turn 1 (Copse)' — so the driver can place it on their in-car display.\n\n"
-    "SCOPE: you help with driving technique, car setup, race strategy/energy, and this "
-    "car/track's telemetry and corners — nothing else. If asked for something outside that "
-    "(write code, general trivia, unrelated tasks), decline in one friendly sentence and "
-    "steer back to the driving; don't refuse legitimate racing questions like explaining a "
-    "setup concept, a flag/rule, tyre behaviour, or what a telemetry channel means.\n\n"
-    "UNITS: speeds are in {speed_unit}, temperatures in {temp_unit}; distances are in "
-    "meters. Use exactly these units and labels — do not convert. Brake and throttle "
-    "points are given RELATIVE to the apex; describe them that way or relative to the "
-    "driver's best lap. NEVER quote a corner's absolute lap-distance position — that "
-    "number is meaningless to a driver trackside.\n\n"
-    "How to coach — talk like a race engineer actually on the radio between laps, not a "
-    "written report:\n"
-    "- Say it in plain, natural sentences. NO bold headlines, NO 'Root cause:' / 'Fix:' / "
-    "'Setup:' section labels, NO bulleted templates, minimal markdown — just talk to the "
-    "driver.\n"
-    "- Lead with the one thing that matters most. Usually that's enough for a between-laps "
-    "call; add a second point only if it genuinely earns the airtime. Don't cover everything.\n"
-    "- For what you raise, weave it into the sentence: what's happening in the data, why, "
-    "and the specific fix — a setup change with a direction and rough amount, or a driving "
-    "cue — not broken out into labeled sections. Keep setup vs driving advice clearly "
-    "distinct in your wording.\n"
-    "- SETUP STEPS: each adjustable setup line ends with (step N of lo-hi) — N is that "
-    "param's CURRENT position among the garage's available positions. It is an index, "
-    "NOT a physical value: never restate it as a spring rate, pressure or angle. Use it "
-    "only to tell whether a param is already at its limit and which way it can still "
-    "move. One step's physical size is not exposed, so NEVER state an exact increment "
-    "(e.g. '-50 lbf/in') — give direction ('soften the front spring a step or two').\n"
-    "- COCKPIT ELECTRONICS: a setup line ending [garage value — ...] is the GARAGE "
-    "setting. LMU discards ANY electronics change the driver made on track once the car "
-    "returns to the garage — ABS, the TC family, the engine and motor maps, mixture, "
-    "regen, brake migration, brake balance, anti-roll — so it never reports what they "
-    "actually dialed in. Never "
-    "assert one as what they're currently running — name it as the garage value and ask "
-    "them to confirm. Mechanical params (springs, ride height, camber, wings, dampers) "
-    "carry no such marker and ARE the truth; state those plainly.\n"
-    "- Weigh context before over-reading a lap: tire temp/warm-up, fuel, wear. If the lap "
-    "looks unrepresentative, say so.\n"
-    "- Encouraging and constructive; acknowledge what's working, never berate. Honor the "
-    "driver's stated preferences; push back only when something clearly costs time or "
-    "stability, and say why.\n"
-    "- Keep it short — a few sentences, not a wall of text. The driver will ask follow-ups."
-)
 
 
 AGENTIC_SYSTEM_PROMPT = (
@@ -268,54 +204,10 @@ class Coach:
     def __init__(self, model: Model):
         self.model = model
 
-    def build_prompt(
-        self,
-        analysis: LapAnalysis | None,
-        car: str,
-        question: str,
-        allowed_adjustments: list[str] | None = None,
-        driver_profile: DriverProfile | None = None,
-        setup: dict | None = None,
-        track_note: str | None = None,
-        input_device: str | None = None,
-        units: str = "metric",
-    ) -> tuple[str, str]:
-        _, _, spd_u, temp_u = unit_fns(units)
-
-        sections: list[str] = []
-        if analysis is not None:
-            sections.append(format_lap_facts(analysis, units))
-        else:
-            sections.append(
-                "No lap captured yet — answer from the track/car knowledge and current "
-                "setup below. Give general track/setup guidance, not lap-specific claims."
-            )
-
-        # Current setup values, so setup advice can be specific ("wing 6->8") rather
-        # than generic. Only real setup params (dict entries with a stringValue) are
-        # included; garage-data metadata (driverName, carVelocity, ...) is skipped.
-        if setup:
-            lines = _setup_lines(setup)
-            if lines:
-                sections.append("\nCurrent car setup (adjust THESE for setup fixes):")
-                sections.extend(lines)
-
-        sections.append(f"\nQuestion: {question}")
-
-        system = self._augment_system(
-            SYSTEM_PROMPT.format(car=car, speed_unit=spd_u, temp_unit=temp_u),
-            allowed_adjustments, driver_profile, input_device,
-        )
-        if allowed_adjustments is not None:
-            sections.append(f"\nLegal setup adjustments: {', '.join(allowed_adjustments)}")
-
-        user_content = "\n".join(sections)
-        return system, user_content
-
     @staticmethod
     def _augment_system(system, allowed_adjustments, driver_profile, input_device):
         """Shared system-prompt additions (tier constraint, driver profile, input
-        device) used by both the legacy and agentic paths."""
+        device) used by both agentic paths (`ask_agentic`, `ask_agentic_stream`)."""
         if allowed_adjustments is not None:
             system += (
                 f" SETUP CONSTRAINT: in this race only these adjustments are legal — "
@@ -384,24 +276,3 @@ class Coach:
         messages = list(history) if history else []
         messages.append({"role": "user", "content": question})
         yield from self.model.run_stream(system, messages, TOOLS, context.dispatch)
-
-    def ask(
-        self,
-        analysis: LapAnalysis | None,
-        car: str,
-        question: str,
-        history: list[dict] | None = None,
-        allowed_adjustments: list[str] | None = None,
-        driver_profile: DriverProfile | None = None,
-        setup: dict | None = None,
-        track_note: str | None = None,
-        input_device: str | None = None,
-        units: str = "metric",
-    ) -> str:
-        system, user_content = self.build_prompt(
-            analysis, car, question, allowed_adjustments, driver_profile, setup,
-            track_note, input_device, units,
-        )
-        messages = list(history) if history else []
-        messages.append({"role": "user", "content": user_content})
-        return self.model.complete(system, messages)

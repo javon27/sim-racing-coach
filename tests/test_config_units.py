@@ -2,10 +2,9 @@
 import json
 
 from simcoach.analysis import analyze_lap
-from simcoach.coach import Coach
 from simcoach.config import DEFAULTS, load_config
 from simcoach.corners import CornerMap
-from simcoach.model.fake import FakeModel
+from simcoach.format import format_lap_facts
 
 
 def _analysis(lap):
@@ -29,16 +28,14 @@ def test_config_reads_file_and_survives_garbage(tmp_path):
 
 
 def test_metric_prompt_uses_kmh(synthetic_lap):
-    c = Coach(FakeModel())
-    _, user = c.build_prompt(_analysis(synthetic_lap), "test_car", "q", units="metric")
+    user = format_lap_facts(_analysis(synthetic_lap), units="metric")
     assert "km/h" in user and "mph" not in user
     assert "°C" in user
 
 
 def test_imperial_prompt_converts_speed_and_temp(synthetic_lap):
-    c = Coach(FakeModel())
     a = _analysis(synthetic_lap)
-    _, user = c.build_prompt(a, "test_car", "q", units="imperial")
+    user = format_lap_facts(a, units="imperial")
     assert "mph" in user and "km/h" not in user
     assert "°F" in user and "°C" not in user
     # Both corners' minima must be CONVERTED, not passed through: the hairpin's
@@ -48,14 +45,12 @@ def test_imperial_prompt_converts_speed_and_temp(synthetic_lap):
     # (the two used to share a single min speed, so one number covered both).
     assert "min 31" in user and "min 58" in user
     assert "min 50" not in user and "min 94" not in user
-    # system prompt tells the model the units
-    system, _ = c.build_prompt(a, "test_car", "q", units="imperial")
-    assert "mph" in system and "°F" in system
+    # The agentic system prompt telling the model the units is covered by
+    # test_coach_tools.py's ask_agentic units test.
 
 
 def test_corner_line_has_richer_inputs(synthetic_lap):
-    c = Coach(FakeModel())
-    _, user = c.build_prompt(_analysis(synthetic_lap), "test_car", "q")
+    user = format_lap_facts(_analysis(synthetic_lap))
     t1 = [l for l in user.splitlines() if l.startswith("T1 ")][0]
     assert "peak" in t1 and "g" in t1        # peak lateral g surfaced
     assert "trail" in t1

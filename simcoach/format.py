@@ -1,7 +1,6 @@
 """Deterministic rendering of analysis facts for the coach — corner lines, tire
-report, unit conversion. Shared by the legacy injected prompt (coach.build_prompt)
-and the on-demand tools (coach_tools), so both speak identically. All numbers are
-computed facts; nothing here is model-guessed."""
+report, unit conversion. Used by the on-demand tools (coach_tools). All numbers
+are computed facts; nothing here is model-guessed."""
 from __future__ import annotations
 
 import math

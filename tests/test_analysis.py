@@ -73,9 +73,8 @@ def test_no_brake_clause_when_the_driver_never_brakes(synthetic_lap):
 
 def test_tire_summary_and_prompt(synthetic_lap):
     from simcoach.analysis import analyze_lap
-    from simcoach.coach import Coach
     from simcoach.corners import CornerMap
-    from simcoach.model.fake import FakeModel
+    from simcoach.format import format_lap_facts
     cmap = CornerMap.load("simcoach/tracks/test_track.json")
     a = analyze_lap(synthetic_lap, cmap)
     # synthetic tires: 80°C base, +5 under braking (in corners) -> mean between 80 and 85
@@ -83,7 +82,7 @@ def test_tire_summary_and_prompt(synthetic_lap):
     assert all(80.0 <= v <= 85.0 for v in a.tire_means.values())
     assert a.tire_warmup is not None
 
-    _, user = Coach(FakeModel()).build_prompt(a, "car", "how were my tires?")
+    user = format_lap_facts(a, units="metric")
     assert "Tire temps" in user and "FL" in user and "warm-up" in user.lower()
 
 
