@@ -50,6 +50,58 @@
   let capturingGamepad = $state(false);
   let hotkeyError: string | null = $state(null);
 
+  // Model setup dialog: shown only when Enable is turned on and the model
+  // isn't installed yet -- an already-installed model just enables in place.
+  type VoiceDialogPhase = "ask" | "progress" | "ready" | "error";
+  let showSetupDialog = $state(false);
+  let dialogPhase: VoiceDialogPhase = $state("ask");
+  let dialogError: string | null = $state(null);
+
+  function voiceSetupPct(): number {
+    const st = voiceStatusInfo;
+    if (!st?.total_bytes) return 0;
+    return Math.round((st.progress_bytes / st.total_bytes) * 100);
+  }
+
+  function openVoiceDialog(el: HTMLDialogElement) {
+    // jsdom (tests) has no showModal -- the `open` attribute alone is enough
+    // for the dialog to be findable and visible there.
+    if (typeof el.showModal === "function") el.showModal();
+    el.setAttribute("open", "");
+  }
+
+  async function downloadVoiceModel() {
+    dialogPhase = "progress";
+    dialogError = null;
+    try {
+      voiceStatusInfo = await voiceSetup();
+      while (voiceStatusInfo.installing) {
+        await new Promise((r) => setTimeout(r, 1000));
+        voiceStatusInfo = await voiceStatus();
+      }
+      if (voiceStatusInfo.error) {
+        dialogError = voiceStatusInfo.error;
+        dialogPhase = "error";
+      } else {
+        dialogPhase = "ready";
+      }
+    } catch (e) {
+      dialogError = e instanceof Error ? e.message : String(e);
+      dialogPhase = "error";
+    }
+  }
+
+  function closeSetupDialog() {
+    showSetupDialog = false;
+  }
+
+  async function notNowVoiceSetup() {
+    showSetupDialog = false;
+    if (!settings) return;
+    settings = { ...settings, voice: { ...settings.voice, enabled: false } };
+    await saveVoiceConfig();
+  }
+
   // Pushes the current binds + hotkey to the shell (no-op outside Tauri).
   // Called on Settings load and after every voice save (#104 slice 4).
   async function syncVoiceShell() {
@@ -103,23 +155,19 @@
     return st.installed ? "Ready" : "";
   }
 
-  async function ensureVoiceReady() {
-    try {
-      let st: VoiceStatus = await voiceStatus();
-      if (!st.installed) st = await voiceSetup();
-      voiceStatusInfo = st;
-      while (voiceStatusInfo.installing) {
-        await new Promise((r) => setTimeout(r, 1000));
-        voiceStatusInfo = await voiceStatus();
-      }
-    } catch {
-      /* leave whatever status we last had */
-    }
-  }
-
   async function onVoiceEnabledChange() {
     await saveVoiceConfig();
-    if (settings?.voice.enabled) await ensureVoiceReady();
+    if (!settings?.voice.enabled) return;
+    try {
+      const st = await voiceStatus();
+      voiceStatusInfo = st;
+      if (st.installed) return;
+    } catch {
+      /* fall through -- still offer the dialog so the driver can retry */
+    }
+    dialogPhase = "ask";
+    dialogError = null;
+    showSetupDialog = true;
   }
 
   function startCapture() {
@@ -477,8 +525,38 @@
           />
         </div>
       </div>
-      {#if voiceStatusInfo}
+      {#if voiceStatusInfo && !showSetupDialog}
         <p class="status">{voiceStatusText()}</p>
+      {/if}
+      {#if showSetupDialog}
+        <dialog use:openVoiceDialog aria-label="Set up voice">
+          <h3>Set up voice</h3>
+          <p>
+            Nestor downloads a speech-recognition model (about 250 MB, one time) into your app data
+            folder so voice works offline.
+          </p>
+          {#if dialogPhase === "ask"}
+            <div class="dialog-actions">
+              <button type="button" onclick={downloadVoiceModel}>Download</button>
+              <button type="button" onclick={notNowVoiceSetup}>Not now</button>
+            </div>
+          {:else if dialogPhase === "progress"}
+            <progress value={voiceStatusInfo?.progress_bytes ?? 0} max={voiceStatusInfo?.total_bytes ?? 100}
+            ></progress>
+            <p>{voiceSetupPct()}%</p>
+          {:else if dialogPhase === "ready"}
+            <p>Ready</p>
+            <div class="dialog-actions">
+              <button type="button" onclick={closeSetupDialog}>Done</button>
+            </div>
+          {:else if dialogPhase === "error"}
+            <p class="status">{dialogError}</p>
+            <div class="dialog-actions">
+              <button type="button" onclick={downloadVoiceModel}>Retry</button>
+              <button type="button" onclick={closeSetupDialog}>Close</button>
+            </div>
+          {/if}
+        </dialog>
       {/if}
       <div class="field">
         <span class="lbl">Push-to-talk key<InfoTip text="Held to talk; tap to start hands-free conversation mode." /></span>
