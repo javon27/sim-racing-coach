@@ -183,18 +183,11 @@ describe("InputTraces (line mode, coaching-screen lap-vs-best)", () => {
     expect(getByTestId("trace-throttle-last").getAttribute("d")!.trimEnd()).toMatch(/Z$/);
   });
 
-  it("shows a selected-lap-vs-best legend over the plot when a best lap is given", () => {
+  it("no longer renders its own legend (moved to InputsPanel's header, #95 round 3)", () => {
     const best = trace({ lap_id: 8 });
-    const { getByText } = render(InputTraces, { props: { mode: "line", traces: trace(), best } });
-    expect(getByText("selected lap")).toBeTruthy();
-    expect(getByText("best")).toBeTruthy();
-  });
-
-  it("does not show the line-mode legend in band (Pit Wall) mode", () => {
-    const { queryByText } = render(InputTraces, {
-      props: { traces: { last: trace(), best: null } as Traces },
-    });
+    const { queryByText } = render(InputTraces, { props: { mode: "line", traces: trace(), best } });
     expect(queryByText("selected lap")).toBeNull();
+    expect(queryByText("best")).toBeNull();
   });
 
   it("marks the best polyline dashed and distinct from the selected line", () => {
