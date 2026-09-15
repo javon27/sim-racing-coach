@@ -899,7 +899,9 @@ body {
   margin: 0 auto;
   display: flex;
   gap: 10px;
-  align-items: flex-end;
+  /* The single round mic/send button is shorter than a one-line box, so center it
+     rather than pinning it to the box's bottom edge (looked dropped). */
+  align-items: center;
 }
 .composer textarea {
   flex: 1;
