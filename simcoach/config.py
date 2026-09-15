@@ -36,6 +36,7 @@ DEFAULTS = {
         "ptt_gamepad": None,
         "tts_voice": None,        # speechSynthesis voice name; None = browser default
         "tts_rate": 1.0,
+        "mic_device_id": None,    # MediaDevices deviceId; None = system default
         "vad_threshold": 0.02,    # RMS, 0-1
         "vad_silence_ms": 1000,
         "vad_max_s": 20,

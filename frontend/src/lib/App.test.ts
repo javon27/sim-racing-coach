@@ -93,7 +93,7 @@ describe("Coach screen assembly", () => {
       driver: { braking_style: null, balance_preference: null, risk_tolerance: null },
       voice: {
         enabled: false, ptt_key: "F9", ptt_wheel: null, ptt_gamepad: null, tts_voice: null, tts_rate: 1.0,
-        vad_threshold: 0.02, vad_silence_ms: 1000, vad_max_s: 20, conversation_idle_s: 30,
+        vad_threshold: 0.02, vad_silence_ms: 1000, vad_max_s: 20, conversation_idle_s: 30, mic_device_id: null,
       },
       api_key_set: true,
       data_dir: "x",

@@ -11,14 +11,31 @@ export class MicRecorder implements Recorder {
   #source: MediaStreamAudioSourceNode | null = null;
   #node: ScriptProcessorNode | null = null;
   #chunks: Float32Array[] = [];
+  #deviceId: string | null;
+
+  constructor(deviceId: string | null = null) {
+    this.#deviceId = deviceId;
+  }
 
   // Acquired once, lazily, and kept for the life of the page -- getUserMedia +
   // AudioContext creation costs hundreds of ms, which used to run on every press.
   async #ensureStream(): Promise<void> {
     if (this.#stream && this.#ctx) return;
-    this.#stream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-    });
+    const base = { channelCount: 1, echoCancellation: true, noiseSuppression: true };
+    try {
+      this.#stream = await navigator.mediaDevices.getUserMedia({
+        audio: this.#deviceId ? { ...base, deviceId: { exact: this.#deviceId } } : base,
+      });
+    } catch (err) {
+      // Configured device unplugged/gone -- fall back to the system default
+      // rather than leaving voice dead.
+      const name = (err as { name?: string })?.name;
+      if (this.#deviceId && (name === "OverconstrainedError" || name === "NotFoundError")) {
+        this.#stream = await navigator.mediaDevices.getUserMedia({ audio: base });
+      } else {
+        throw err;
+      }
+    }
     this.#ctx = new AudioContext({ sampleRate: 16000 });
     this.#source = this.#ctx.createMediaStreamSource(this.#stream);
   }

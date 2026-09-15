@@ -72,7 +72,7 @@ function baseSettings(overrides: Partial<SettingsResponse> = {}): SettingsRespon
     driver: { braking_style: null, balance_preference: null, risk_tolerance: null },
     voice: {
       enabled: false, ptt_key: "F9", ptt_wheel: null, ptt_gamepad: null, tts_voice: null, tts_rate: 1.0,
-      vad_threshold: 0.02, vad_silence_ms: 1000, vad_max_s: 20, conversation_idle_s: 30,
+      vad_threshold: 0.02, vad_silence_ms: 1000, vad_max_s: 20, conversation_idle_s: 30, mic_device_id: null,
     },
     api_key_set: false,
     data_dir: "C:/data",
@@ -129,6 +129,7 @@ describe("SettingsScreen", () => {
     vi.mocked(pushBinds).mockReset();
     vi.mocked(listDevices).mockReset().mockResolvedValue([]);
     localStorage.clear();
+    delete (navigator as { mediaDevices?: unknown }).mediaDevices; // set per-test (#104 mic select)
   });
 
   afterEach(cleanup);
@@ -490,7 +491,7 @@ describe("SettingsScreen", () => {
 
   const voiceDefaults = {
     enabled: false, ptt_key: "F9", ptt_wheel: null, ptt_gamepad: null, tts_voice: null, tts_rate: 1,
-    vad_threshold: 0.02, vad_silence_ms: 1000, vad_max_s: 20, conversation_idle_s: 30,
+    vad_threshold: 0.02, vad_silence_ms: 1000, vad_max_s: 20, conversation_idle_s: 30, mic_device_id: null,
   };
 
   describe("Settings -> Voice", () => {
@@ -604,6 +605,68 @@ describe("SettingsScreen", () => {
       await waitFor(() =>
         expect(within(row.closest(".field")!).getByText("Fanatec DD1 · button 2")).toBeTruthy(),
       );
+    });
+
+    it("Microphone select lists System default plus each audioinput device", async () => {
+      Object.defineProperty(navigator, "mediaDevices", {
+        configurable: true,
+        value: {
+          enumerateDevices: vi.fn().mockResolvedValue([
+            { deviceId: "d1", kind: "audioinput", label: "Headset Mic" },
+            { deviceId: "d2", kind: "audioinput", label: "Webcam Mic" },
+            { deviceId: "d3", kind: "videoinput", label: "Webcam" },
+          ]),
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        },
+      });
+      vi.mocked(getSettings).mockResolvedValue(baseSettings({ voice: voiceDefaults }));
+      vi.mocked(voiceStatus).mockResolvedValue({ installed: true, installing: false, progress_bytes: 0, total_bytes: null, error: null });
+
+      render(SettingsScreen);
+      const select = await screen.findByLabelText("Microphone");
+
+      await waitFor(() => expect(within(select).getAllByRole("option")).toHaveLength(3));
+      const labels = within(select).getAllByRole("option").map((o) => o.textContent);
+      expect(labels).toEqual(["System default", "Headset Mic", "Webcam Mic"]);
+    });
+
+    it("choosing a microphone saves voice.mic_device_id", async () => {
+      Object.defineProperty(navigator, "mediaDevices", {
+        configurable: true,
+        value: {
+          enumerateDevices: vi.fn().mockResolvedValue([
+            { deviceId: "d1", kind: "audioinput", label: "Headset Mic" },
+          ]),
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        },
+      });
+      vi.mocked(getSettings).mockResolvedValue(baseSettings({ voice: voiceDefaults }));
+      vi.mocked(putSettings).mockImplementation(async (cfg) =>
+        baseSettings({ voice: { ...voiceDefaults, ...(cfg.voice as object) } }),
+      );
+      vi.mocked(voiceStatus).mockResolvedValue({ installed: true, installing: false, progress_bytes: 0, total_bytes: null, error: null });
+
+      render(SettingsScreen);
+      const select = await screen.findByLabelText("Microphone");
+      await waitFor(() => expect(within(select).getAllByRole("option")).toHaveLength(2));
+
+      await fireEvent.change(select, { target: { value: "d1" } });
+
+      await waitFor(() =>
+        expect(vi.mocked(putSettings).mock.calls.at(-1)![0]).toMatchObject({ voice: { mic_device_id: "d1" } }),
+      );
+    });
+
+    it("with no mediaDevices the Microphone select still renders only System default", async () => {
+      vi.mocked(getSettings).mockResolvedValue(baseSettings({ voice: voiceDefaults }));
+      vi.mocked(voiceStatus).mockResolvedValue({ installed: true, installing: false, progress_bytes: 0, total_bytes: null, error: null });
+
+      render(SettingsScreen);
+      const select = await screen.findByLabelText("Microphone");
+
+      expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual(["System default"]);
     });
   });
 });
