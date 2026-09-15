@@ -207,6 +207,12 @@ fn recenter_if_offscreen(window: &tauri::Window) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .invoke_handler(tauri::generate_handler![
+            voice_input::voice_set_binds,
+            voice_input::voice_capture_next,
+            voice_input::voice_set_hotkey
+        ])
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 // Visibility is OURS, not the plugin's. The plugin restores state from
@@ -297,6 +303,10 @@ pub fn run() {
 
             // Geometry restore + off-screen recovery + reveal now happen in
             // on_page_load (above), once the webview has actually painted.
+
+            let voice_state = std::sync::Arc::new(Mutex::new(voice_input::PollerState::default()));
+            app.manage(voice_state.clone());
+            voice_input::start_poller(app.handle().clone(), voice_state);
 
             Ok(())
         })
