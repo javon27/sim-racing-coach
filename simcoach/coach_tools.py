@@ -98,6 +98,19 @@ TOOLS = [
         },
     },
     {
+        "name": "get_handling",
+        "description": "The car's BALANCE per corner on a lap — understeer / oversteer read "
+                       "from steering vs lateral g, plus lockup and wheelspin flags. Use for "
+                       "'is the car understeering', 'why does the rear step out', 'am I "
+                       "locking up', and before any setup advice about balance.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"which": {"type": "string",
+                                     "description": "Which lap: 'latest' (default), 'best', or "
+                                                    "an in-session lap number like 'lap 2'."}},
+        },
+    },
+    {
         "name": "list_track_corners",
         "description": "The AUTHORITATIVE corner list for the current track from its saved "
                        "corner map: each corner's number/label, name, and direction (and any "
@@ -719,6 +732,30 @@ class CoachContext:
             lap_times.append(record.lap_time)
         return format_consistency(stint_consistency(analyses, lap_times), self.units)
 
+    def get_handling(self, which="latest"):
+        record, lap_id = self._resolve_lap(which)
+        if record is None:
+            return self._no_lap_msg(which)
+        if self.cmap is None:
+            return "No corner map for this track yet — can't break the lap into corners."
+        analysis = self._analysis_for(record, lap_id)
+        lines = []
+        for cm in analysis.corners:
+            flags = []
+            if cm.handling and cm.handling != "neutral":
+                flags.append(f"entry {cm.handling} — {cm.handling_why}")
+            if cm.lockup:
+                flags.append("lockup under braking")
+            if cm.wheelspin:
+                flags.append("wheelspin under throttle")
+            if flags:
+                tag = f"T{cm.label or cm.corner_no} {cm.name}"
+                lines.append(f"{tag}: " + ". ".join(flags) + ".")
+        if not lines:
+            return (f"No handling flags on this lap — balance read neutral in all "
+                    f"{len(analysis.corners)} corners.")
+        return "\n".join(lines)
+
     def list_track_corners(self):
         if self.cmap is None or not self.cmap.corners:
             return "No corner map for this track yet — no corner list available."
@@ -1013,6 +1050,7 @@ class CoachContext:
             "get_time_loss": lambda: self.get_time_loss(args.get("which", "latest"),
                                                         args.get("reference", "best")),
             "get_consistency": lambda: self.get_consistency(args.get("phase")),
+            "get_handling": lambda: self.get_handling(args.get("which", "latest")),
             "list_track_corners": lambda: self.list_track_corners(),
             "get_corner": lambda: self.get_corner(args.get("corner", ""), args.get("which", "latest")),
             "get_tire_report": lambda: self.get_tire_report(),

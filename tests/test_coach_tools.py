@@ -1027,6 +1027,49 @@ def test_agentic_prompt_points_at_get_consistency(tmp_path, synthetic_lap):
     Coach(model).ask_agentic(ctx, "am I consistent?", "test_car")
     assert "get_consistency" in model.last_system
 
+
+# --- get_handling (#38) ----------------------------------------------------
+
+def _understeer_lap(synthetic_lap):
+    """A clone of synthetic_lap with T1 (800-1200, min speed at 1015) forced
+    into an understeer signature: steering keeps winding to the min-speed
+    sample while lat_g sits flat -- see analysis.handling_read."""
+    import dataclasses
+
+    import numpy as np
+    ch = {k: v.copy() for k, v in synthetic_lap.channels.items()}
+    d = ch["lap_distance"]
+    winding = (d >= 800) & (d <= 1015)
+    ch["steering"][winding] = np.linspace(0.1, 0.6, int(winding.sum()))
+    ch["lat_g"][(d >= 800) & (d <= 1200)] = 1.5
+    return dataclasses.replace(synthetic_lap, channels=ch)
+
+
+def test_get_handling_names_the_understeer_corner(tmp_path, synthetic_lap):
+    ctx, _, _ = _ctx(tmp_path, _understeer_lap(synthetic_lap))
+    out = ctx.dispatch("get_handling", {})
+    assert "T1 Left Hairpin" in out
+    assert "understeer" in out.lower()
+
+
+def test_get_handling_honest_on_a_clean_lap(tmp_path, synthetic_lap):
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    out = ctx.dispatch("get_handling", {})
+    assert "no handling flags" in out.lower() and "neutral" in out.lower()
+
+
+def test_get_handling_registered_in_tools_and_dispatch(tmp_path, synthetic_lap):
+    assert any(t["name"] == "get_handling" for t in TOOLS)
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    assert not ctx.dispatch("get_handling", {}).startswith("error:")
+
+
+def test_agentic_prompt_points_at_get_handling(tmp_path, synthetic_lap):
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    model = FakeModel(reply="ok")
+    Coach(model).ask_agentic(ctx, "is the car understeering?", "test_car")
+    assert "get_handling" in model.last_system
+
 # Either side of the #67 fix merging (56aa319). BEFORE is the stored timestamp of the
 # answer that told a P9 -> P18 driver "you started P18 ... No incidents".
 _BEFORE_67_FIX = 1789018942.56
