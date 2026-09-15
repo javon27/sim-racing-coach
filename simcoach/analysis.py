@@ -736,12 +736,6 @@ def analyze_lap(
 # gives a "spread" (any two numbers differ), and it tells the driver nothing. Same
 # floor `get_consistency` (coach_tools) uses to decide whether to call this at all.
 _MIN_CONSISTENCY_LAPS = 3
-# A per-corner field's own sigma below this many samples is one lap standing in for
-# a trend -- `format_consistency` stays silent on it rather than print a "spread"
-# computed from a single number (or a std of 1 sample, which is always 0.0 and would
-# misread as "perfectly consistent").
-_MIN_FIELD_SAMPLES = 3
-
 _CONSISTENCY_FIELDS = ("min_spd", "brake_point", "coast_time")
 
 

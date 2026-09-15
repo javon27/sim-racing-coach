@@ -190,9 +190,7 @@ def format_time_loss(buckets, reference_label: str = "your best lap") -> str:
 
 
 # A per-field sigma below this many samples is one lap standing in for a trend --
-# stay silent rather than print a "spread" that isn't one (mirrors
-# analysis._MIN_FIELD_SAMPLES; kept here too since a formatter shouldn't import a
-# threshold from the module it's rendering).
+# stay silent rather than print a "spread" that isn't one.
 _MIN_FIELD_SAMPLES = 3
 # How many of the ranked corners to name.
 _TOP_CONSISTENCY_CORNERS = 3

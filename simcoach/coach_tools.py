@@ -92,7 +92,7 @@ TOOLS = [
             "properties": {
                 "phase": {"type": "string",
                           "description": "Optional: which phase's laps to measure "
-                                         "('practice'/'qualy'/'race'). Defaults to the "
+                                         "('practice'/'qualifying'/'race'). Defaults to the "
                                          "current lap's phase."},
             },
         },
