@@ -8,6 +8,8 @@ use std::time::Duration;
 use tauri::Manager;
 use tauri_plugin_window_state::{StateFlags, WindowExt};
 
+mod voice_input;
+
 /// Host:port the sidecar serves on; also used to detect an already-running instance.
 const SIDECAR_ADDR: &str = "127.0.0.1:8765";
 
