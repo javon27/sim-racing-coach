@@ -29,6 +29,18 @@ DEFAULTS = {
         "balance_preference": None,
         "risk_tolerance": None,
     },
+    "voice": {                    # see docs/superpowers/specs/2026-09-15-voice-loop-design.md
+        "enabled": False,
+        "ptt_key": "F9",          # keyboard PTT bind (KeyboardEvent.code / global-shortcut name)
+        "ptt_wheel": None,        # "<device_id>:<button>" from the shell's capture flow (slice 4)
+        "ptt_gamepad": None,
+        "tts_voice": None,        # speechSynthesis voice name; None = browser default
+        "tts_rate": 1.0,
+        "vad_threshold": 0.02,    # RMS, 0-1
+        "vad_silence_ms": 1000,
+        "vad_max_s": 20,
+        "conversation_idle_s": 30,
+    },
 }
 
 ENV_OVERRIDES = {
@@ -53,12 +65,11 @@ def load_config(path: str | None = None) -> dict:
         try:
             loaded = json.loads(p.read_text())
             if isinstance(loaded, dict):
-                driver = loaded.get("driver")
-                if isinstance(driver, dict):
-                    merged = dict(cfg["driver"]); merged.update(driver)
-                    loaded = {**loaded, "driver": merged}
-                else:
-                    loaded = {k: v for k, v in loaded.items() if k != "driver"}
+                for key, default in DEFAULTS.items():
+                    if isinstance(default, dict):
+                        sub = loaded.get(key)
+                        loaded = {**loaded, key: {**cfg[key], **sub}} if isinstance(sub, dict) \
+                            else {k: v for k, v in loaded.items() if k != key}
                 cfg.update({k: v for k, v in loaded.items() if k in DEFAULTS})
         except (json.JSONDecodeError, OSError):
             pass  # malformed/unreadable -> defaults
@@ -88,7 +99,8 @@ def save_config(cfg: dict, path: str | None = None) -> None:
                 on_disk = loaded
         except (json.JSONDecodeError, OSError):
             on_disk = {}
-    if isinstance(on_disk.get("driver"), dict) and isinstance(safe.get("driver"), dict):
-        safe = {**safe, "driver": {**on_disk["driver"], **safe["driver"]}}
+    for key, default in DEFAULTS.items():
+        if isinstance(default, dict) and isinstance(on_disk.get(key), dict) and isinstance(safe.get(key), dict):
+            safe = {**safe, key: {**on_disk[key], **safe[key]}}
     on_disk.update(safe)
     p.write_text(json.dumps(on_disk, indent=2))

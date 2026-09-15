@@ -60,6 +60,27 @@ def test_load_allow_lists_unknown_keys(tmp_path):
     assert "api_key" not in cfg
 
 
+def test_voice_defaults_and_partial_nested_merge(tmp_path):
+    from simcoach import config
+    p = str(tmp_path / "config.json")
+    assert config.load_config(p)["voice"]["enabled"] is False
+    config.save_config({"voice": {"enabled": True}}, p)
+    v = config.load_config(p)["voice"]
+    assert v["enabled"] is True and v["ptt_key"] == "F9" and v["vad_silence_ms"] == 1000
+    config.save_config({"voice": {"tts_rate": 1.2}}, p)
+    v = config.load_config(p)["voice"]
+    assert v["enabled"] is True and v["tts_rate"] == 1.2      # both partial saves kept
+
+
+def test_driver_merge_still_works_after_generalising(tmp_path):
+    from simcoach import config
+    p = str(tmp_path / "config.json")
+    config.save_config({"driver": {"braking_style": "late"}}, p)
+    config.save_config({"driver": {"risk_tolerance": "high"}}, p)
+    d = config.load_config(p)["driver"]
+    assert d["braking_style"] == "late" and d["risk_tolerance"] == "high" and d["balance_preference"] is None
+
+
 def test_save_drops_env_override(tmp_path, monkeypatch):
     p = tmp_path / "c.json"
     monkeypatch.setenv("SIMCOACH_MODEL", "opus")
