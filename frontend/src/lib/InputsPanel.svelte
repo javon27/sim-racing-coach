@@ -1,12 +1,17 @@
 <!-- frontend/src/lib/InputsPanel.svelte
      The coaching screen's primary visual (#95): selected lap vs its track/car
      best, driver-input lines + corner markers, full width above the chat.
-     Collapsible (remembered in localStorage), expanded by default. -->
+     Collapsible (remembered in localStorage), expanded by default. Its height
+     is owned by App (round 2): the chat bar directly below doubles as the
+     drag handle, so App passes `height` down as a prop instead of this panel
+     tracking its own. -->
 <script lang="ts">
   import InputTraces from "./InputTraces.svelte";
   import { getLapInputs, type LapInputs } from "./api";
 
-  let { lapId }: { lapId: number | null } = $props();
+  // height: driven by App (lifted so the chat bar below can double as the drag
+  // handle, #95 round 2); defaults to the same 220px round 1 used.
+  let { lapId, height = 220 }: { lapId: number | null; height?: number } = $props();
 
   const STORAGE_KEY = "inputsPanel.collapsed";
 
@@ -32,44 +37,6 @@
   function toggle() {
     collapsed = !collapsed;
     saveCollapsed(collapsed);
-  }
-
-  const HEIGHT_KEY = "inputsPanel.height";
-  function loadHeight(): number {
-    try {
-      const v = Number(localStorage.getItem(HEIGHT_KEY));
-      return v > 0 ? v : 220;
-    } catch {
-      return 220;
-    }
-  }
-  function saveHeight(h: number) {
-    try {
-      localStorage.setItem(HEIGHT_KEY, String(h));
-    } catch {
-      /* private mode / storage disabled — height just won't persist */
-    }
-  }
-
-  let height = $state(loadHeight());
-  let dragging = $state(false);
-  let dragStartY = 0;
-  let dragStartH = 0;
-  function resizeDown(e: PointerEvent) {
-    dragging = true;
-    dragStartY = e.clientY;
-    dragStartH = height;
-    const el = e.currentTarget as HTMLElement;
-    if (typeof el.setPointerCapture === "function") el.setPointerCapture(e.pointerId);
-  }
-  function resizeMove(e: PointerEvent) {
-    if (!dragging) return;
-    const max = typeof window !== "undefined" ? window.innerHeight * 0.7 : 700;
-    height = Math.max(120, Math.min(dragStartH + (e.clientY - dragStartY), max));
-    saveHeight(height);
-  }
-  function resizeUp() {
-    dragging = false;
   }
 
   $effect(() => {
@@ -122,18 +89,6 @@
         <InputTraces mode="line" traces={data!.lap} best={data!.best} corners={data!.corners} />
       {/if}
     </div>
-    {#if showingTraces}
-      <div
-        class="rail-resizer"
-        class:dragging
-        role="separator"
-        aria-orientation="horizontal"
-        aria-label="Resize inputs panel"
-        onpointerdown={resizeDown}
-        onpointermove={resizeMove}
-        onpointerup={resizeUp}
-      ></div>
-    {/if}
   {/if}
 </div>
 

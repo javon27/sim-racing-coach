@@ -60,6 +60,52 @@
     draggingRail = false;
   }
 
+  // Draggable divider for the Inputs panel (#95 round 2): the chat bar directly
+  // below doubles as the handle, so this state lives here and is threaded down
+  // to InputsPanel (height) and ChatPanel (resize callbacks) as props.
+  let inputsH = $state(loadInputsHeight()); // px; drives --inputs-h on InputsPanel
+  const INPUTS_HEIGHT_KEY = "inputsPanel.height";
+  function loadInputsHeight(): number {
+    try {
+      const v = Number(localStorage.getItem(INPUTS_HEIGHT_KEY));
+      return v > 0 ? v : 220;
+    } catch {
+      return 220;
+    }
+  }
+  function saveInputsHeight(h: number) {
+    try {
+      localStorage.setItem(INPUTS_HEIGHT_KEY, String(h));
+    } catch {
+      /* private mode / storage disabled — height just won't persist */
+    }
+  }
+  let inputsStartY = 0;
+  let inputsStartH = 0;
+  let draggingInputs = $state(false);
+  function inputsResizeDown(e: PointerEvent) {
+    draggingInputs = true;
+    inputsStartY = e.clientY;
+    inputsStartH = inputsH;
+    const el = e.currentTarget as HTMLElement;
+    if (typeof el.setPointerCapture === "function") el.setPointerCapture(e.pointerId);
+  }
+  function inputsResizeMove(e: PointerEvent) {
+    if (!draggingInputs) return;
+    const max = typeof window !== "undefined" ? window.innerHeight * 0.7 : 700;
+    inputsH = Math.max(120, Math.min(inputsStartH + (e.clientY - inputsStartY), max));
+    saveInputsHeight(inputsH);
+  }
+  function inputsResizeUp() {
+    draggingInputs = false;
+  }
+  const inputsResize = $derived({
+    down: inputsResizeDown,
+    move: inputsResizeMove,
+    up: inputsResizeUp,
+    dragging: draggingInputs,
+  });
+
   // Draggable divider above the track-map pane (mirrors the laps handle). The
   // handle sits above the map, so dragging DOWN shrinks it.
   let mapH = $state(200); // px; drives --map-h on the rail
@@ -227,8 +273,14 @@
             <TrackMapPane sessionId={selectedSessionId} />
           </aside>
           <div class="coach-main">
-            <InputsPanel lapId={selectedLapId ?? null} />
-            <ChatPanel lapId={selectedLapId} sessionId={selectedSessionId} chatId={activeChatId} onnewsession={handleNewSession} />
+            <InputsPanel lapId={selectedLapId ?? null} height={inputsH} />
+            <ChatPanel
+              lapId={selectedLapId}
+              sessionId={selectedSessionId}
+              chatId={activeChatId}
+              onnewsession={handleNewSession}
+              resize={inputsResize}
+            />
           </div>
         </div>
       </div>

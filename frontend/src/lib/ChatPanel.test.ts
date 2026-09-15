@@ -541,3 +541,63 @@ describe("ChatPanel", () => {
     expect(voice.state).not.toBe("listening");
   });
 });
+
+// The chat bar doubles as the Inputs panel's drag handle (#95 round 2): App owns
+// the height/drag state and hands ChatPanel three callbacks + a dragging flag.
+describe("ChatPanel (chat bar as the inputs-pane grab handle)", () => {
+  afterEach(cleanup);
+
+  function fakeResize(dragging = false) {
+    return { down: vi.fn(), move: vi.fn(), up: vi.fn(), dragging };
+  }
+
+  it("wires the resize prop's down/move/up onto the chat bar's pointer events", async () => {
+    const resize = fakeResize();
+    const { container } = render(ChatPanel, { props: { stream: new FakeStream(), resize } });
+    const bar = container.querySelector(".chat-bar") as HTMLElement;
+
+    await fireEvent.pointerDown(bar, { clientY: 100 });
+    expect(resize.down).toHaveBeenCalledTimes(1);
+    expect(resize.down.mock.calls[0][0].clientY).toBe(100);
+
+    await fireEvent.pointerMove(bar, { clientY: 160 });
+    expect(resize.move).toHaveBeenCalledTimes(1);
+    expect(resize.move.mock.calls[0][0].clientY).toBe(160);
+
+    await fireEvent.pointerUp(bar);
+    expect(resize.up).toHaveBeenCalledTimes(1);
+  });
+
+  it("reflects resize.dragging as a class on the chat bar", async () => {
+    const { container, rerender } = render(ChatPanel, {
+      props: { stream: new FakeStream(), resize: fakeResize(false) },
+    });
+    const bar = container.querySelector(".chat-bar") as HTMLElement;
+    expect(bar.className).not.toContain("dragging");
+
+    await rerender({ stream: new FakeStream(), resize: fakeResize(true) });
+    expect((container.querySelector(".chat-bar") as HTMLElement).className).toContain("dragging");
+  });
+
+  it("does nothing extra with no resize prop (unchanged bar, no pointer handlers wired)", () => {
+    const { container } = render(ChatPanel, { props: { stream: new FakeStream() } });
+    const bar = container.querySelector(".chat-bar") as HTMLElement;
+    expect(bar.className).not.toContain("dragging");
+    expect(bar.className).not.toContain("resizable");
+  });
+
+  it("a click on New session inside the bar still works (no pointer movement)", async () => {
+    const onnewsession = vi.fn();
+    const resize = fakeResize();
+    const { container } = render(ChatPanel, {
+      props: { stream: new FakeStream(), resize, onnewsession },
+    });
+    const bar = container.querySelector(".chat-bar") as HTMLElement;
+
+    await fireEvent.pointerDown(bar, { clientY: 100 });
+    await fireEvent.pointerUp(bar);
+    await fireEvent.click(screen.getByRole("button", { name: /new session/i }));
+
+    expect(onnewsession).toHaveBeenCalledTimes(1);
+  });
+});
