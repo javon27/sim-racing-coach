@@ -68,7 +68,7 @@ class FakeTranscriber:
 
     def transcribe(self, pcm16k: np.ndarray) -> str:
         if not self.installed:
-            raise NotInstalled("voice isn't set up yet")
+            raise NotInstalled("voice isn't set up yet — enable it in Settings")
         self.calls.append(pcm16k)
         return self.text
 
