@@ -3,6 +3,14 @@
 Date: 2026-09-08
 Status: Design (awaiting review)
 
+## Status 2026-09-15
+
+Superseded by the #99 course-correct: baked corner **radius** and **width**
+no longer render to the coach (`format_corner_line` stopped rendering them —
+they were stale and reached the model as fact). **Elevation** and **banking**
+still render (re-baked, rig-verified). The map-geometry bake pipeline this
+doc designs is parked, labelled `deprioritized` in Issues.
+
 ## Problem
 
 `Generate draft` (`POST /tracks/{slug}/draft-notes`) grounds the model in a
