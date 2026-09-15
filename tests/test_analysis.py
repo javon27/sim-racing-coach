@@ -1533,7 +1533,7 @@ def test_input_shape_pumped_brake_counts_three_reversals():
     import numpy as np
     from simcoach.analysis import input_shape
 
-    brake = np.array([0.9, 0.7, 0.9, 0.7, 0.9])   # 3 reversals of 0.2
+    brake = np.array([0.9, 0.7, 0.9, 0.7, 0.9, 0.7, 0.9])   # 3 re-applications (pumps) of 0.2
     n = brake.size
     result = input_shape(np.linspace(0, 40, n), brake, np.zeros(n), np.zeros(n))
     assert result["brake_reversals"] == 3
@@ -1564,7 +1564,7 @@ def test_input_shape_throttle_stabs_counted():
     import numpy as np
     from simcoach.analysis import input_shape
 
-    throttle = np.array([0.9, 0.6, 0.9, 0.6, 0.9])   # 3 reversals, mirrors brake pumping
+    throttle = np.array([0.9, 0.6, 0.9, 0.6, 0.9, 0.6, 0.9])   # 3 stabs, mirrors brake pumping
     n = throttle.size
     result = input_shape(np.linspace(0, 40, n), np.zeros(n), throttle, np.zeros(n))
     assert result["throttle_reversals"] == 3
@@ -1574,7 +1574,7 @@ def test_input_shape_steering_sawing_counted():
     import numpy as np
     from simcoach.analysis import input_shape
 
-    steer = np.array([0.0, 0.3, -0.3, 0.3, -0.3])
+    steer = np.array([0.0, 0.3, -0.3, 0.3, -0.3, 0.3])   # lock, then 3 saws beyond it
     n = steer.size
     result = input_shape(np.linspace(0, 40, n), np.zeros(n), np.zeros(n), steer)
     assert result["steer_reversals"] == 3

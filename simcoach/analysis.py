@@ -743,19 +743,17 @@ _INPUT_SHAPE_MIN_BRAKE = 0.1
 _MOD_HYST = 0.05
 
 
-def _reversals(x, hyst: float) -> int:
-    """Count direction changes in `x` that exceed `hyst`: a simple state
-    machine tracking the last extreme in the current direction, counting a
-    reversal only once the trace has moved more than `hyst` back against it
-    (then tracking the new direction from there). The very first movement
-    away from `x[0]` only ESTABLISHES a direction, not a reversal, but every
-    turning point after that (including the first) counts -- a single clean
-    apply-then-release is one reversal, which is why the callers below apply
-    a >=2 report floor rather than treating this as a pumping flag."""
+def _turning_points(x, hyst: float) -> "tuple[int, int]":
+    """(ups, downs): direction changes in `x` that exceed `hyst`, split by the
+    direction the trace turns INTO. A state machine tracks the last extreme in
+    the current direction and counts a turn only once the trace has moved more
+    than `hyst` back against it. The first movement away from `x[0]` only
+    establishes a direction. `ups` = the trace turned back upward (a pedal
+    re-applied after easing off); `downs` = it turned back downward."""
     x = np.asarray(x, dtype=float)
     if x.size < 2:
-        return 0
-    count = 0
+        return 0, 0
+    ups = downs = 0
     extreme = x[0]
     direction = 0  # 0 = undetermined, 1 = rising, -1 = falling
     for v in x[1:]:
@@ -768,15 +766,23 @@ def _reversals(x, hyst: float) -> int:
             if v > extreme:
                 extreme = v
             elif extreme - v > hyst:
-                count += 1
+                downs += 1
                 direction, extreme = -1, v
         else:
             if v < extreme:
                 extreme = v
             elif v - extreme > hyst:
-                count += 1
+                ups += 1
                 direction, extreme = 1, v
-    return count
+    return ups, downs
+
+
+def _reversals(x, hyst: float) -> int:
+    """Pedal re-applications: the number of times `x` turns back UP by more
+    than `hyst` after easing off. A single clean apply-then-release has none
+    (that is one downward turn, not a reversal), so a smooth corner reads 0
+    and "3 brake reversals" means three pumps -- the driver-facing meaning."""
+    return _turning_points(x, hyst)[0]
 
 
 def _reversals_masked(x, mask, hyst: float) -> int:
@@ -868,7 +874,10 @@ def input_shape(win_dist, win_brake, win_throttle, win_steering) -> dict:
 
     steer_reversals = None
     if win_steering is not None:
-        steer_reversals = _reversals(win_steering, _MOD_HYST)
+        # Sawing: every direction change beyond the corner's own lock-then-unlock
+        # (one turning point), so a clean corner reads 0.
+        ups, downs = _turning_points(win_steering, _MOD_HYST)
+        steer_reversals = max(0, ups + downs - 1)
 
     return {
         "brake_release_m": release_m,
