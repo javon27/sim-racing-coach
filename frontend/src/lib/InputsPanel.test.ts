@@ -94,45 +94,41 @@ describe("InputsPanel", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("drag on the handle changes the pane height", async () => {
+  it("applies the height prop to --inputs-h (height now lives in App, #95 round 2)", async () => {
     vi.mocked(getLapInputs).mockResolvedValue({ lap: LAP, best: null, corners: [] });
-    const { container } = render(InputsPanel, { props: { lapId: 9 } });
+    const { container } = render(InputsPanel, { props: { lapId: 9, height: 340 } });
     const panel = container.querySelector(".panel") as HTMLElement;
-    await waitFor(() => expect(panel.style.getPropertyValue("--inputs-h")).toBe("220px"));
-
-    const handle = container.querySelector(".rail-resizer") as HTMLElement;
-    expect(handle).toBeTruthy();
-    await fireEvent.pointerDown(handle, { clientY: 100 });
-    await fireEvent.pointerMove(handle, { clientY: 160 });
-
-    expect(panel.style.getPropertyValue("--inputs-h")).toBe("280px");
+    await waitFor(() => expect(panel.style.getPropertyValue("--inputs-h")).toBe("340px"));
   });
 
-  it("height clamps at 120 minimum", async () => {
+  it("no longer renders its own drag handle (the chat bar is the handle now)", async () => {
     vi.mocked(getLapInputs).mockResolvedValue({ lap: LAP, best: null, corners: [] });
     const { container } = render(InputsPanel, { props: { lapId: 9 } });
-    const panel = container.querySelector(".panel") as HTMLElement;
-    await waitFor(() => expect(panel.style.getPropertyValue("--inputs-h")).toBe("220px"));
-
-    const handle = container.querySelector(".rail-resizer") as HTMLElement;
-    await fireEvent.pointerDown(handle, { clientY: 100 });
-    await fireEvent.pointerMove(handle, { clientY: -500 });
-
-    expect(panel.style.getPropertyValue("--inputs-h")).toBe("120px");
+    await waitFor(() => expect(container.querySelector(".panel")).toBeTruthy());
+    expect(container.querySelector(".rail-resizer")).toBeNull();
   });
 
-  it("height persists to localStorage", async () => {
-    const setItem = vi.spyOn(Storage.prototype, "setItem");
+  it("clicking anywhere on the header row toggles collapse, not just the button", async () => {
     vi.mocked(getLapInputs).mockResolvedValue({ lap: LAP, best: null, corners: [] });
     const { container } = render(InputsPanel, { props: { lapId: 9 } });
-    const panel = container.querySelector(".panel") as HTMLElement;
-    await waitFor(() => expect(panel.style.getPropertyValue("--inputs-h")).toBe("220px"));
+    await screen.findByText(/inputs/i);
 
-    const handle = container.querySelector(".rail-resizer") as HTMLElement;
-    await fireEvent.pointerDown(handle, { clientY: 100 });
-    await fireEvent.pointerMove(handle, { clientY: 160 });
+    const hdr = container.querySelector(".hdr h2") as HTMLElement;
+    await fireEvent.click(hdr);
 
-    expect(setItem).toHaveBeenCalledWith("inputsPanel.height", "280");
-    setItem.mockRestore();
+    expect(container.querySelector('[data-testid="inputs-panel-body"]')).toBeNull();
+    expect(localStorage.getItem("inputsPanel.collapsed")).toBe("true");
+  });
+
+  it("clicking the collapse button toggles exactly once (no double-toggle from the header handler)", async () => {
+    vi.mocked(getLapInputs).mockResolvedValue({ lap: LAP, best: null, corners: [] });
+    const { container } = render(InputsPanel, { props: { lapId: 9 } });
+    await screen.findByText(/inputs/i);
+
+    const toggle = screen.getByRole("button", { name: /collapse|expand/i });
+    await fireEvent.click(toggle);
+
+    expect(container.querySelector('[data-testid="inputs-panel-body"]')).toBeNull();
+    expect(localStorage.getItem("inputsPanel.collapsed")).toBe("true");
   });
 });

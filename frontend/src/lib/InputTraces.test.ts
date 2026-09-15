@@ -149,6 +149,26 @@ describe("InputTraces (line mode, coaching-screen lap-vs-best)", () => {
     expect(getByTestId("corner-label-T2").textContent).toBe("T2");
   });
 
+  it("prefixes a purely-numeric corner label with T (e.g. \"4\" -> \"T4\")", () => {
+    const numbered: CornerMarker[] = [
+      { label: "4", name: "Turn 4", start_dist: 50, end_dist: 150, apex_dist: 100 },
+    ];
+    const { getByTestId } = render(InputTraces, {
+      props: { mode: "line", traces: trace(), best: null, corners: numbered },
+    });
+    expect(getByTestId("corner-label-4").textContent).toBe("T4");
+  });
+
+  it("leaves a named corner label unchanged", () => {
+    const named: CornerMarker[] = [
+      { label: "Eau Rouge", name: "Eau Rouge", start_dist: 50, end_dist: 150, apex_dist: 100 },
+    ];
+    const { getByTestId } = render(InputTraces, {
+      props: { mode: "line", traces: trace(), best: null, corners: named },
+    });
+    expect(getByTestId("corner-label-Eau Rouge").textContent).toBe("Eau Rouge");
+  });
+
   it("renders no corner markers when corners is not given", () => {
     const { queryByTestId } = render(InputTraces, {
       props: { mode: "line", traces: trace(), best: null },
@@ -161,5 +181,26 @@ describe("InputTraces (line mode, coaching-screen lap-vs-best)", () => {
       props: { traces: { last: trace(), best: null } as Traces },
     });
     expect(getByTestId("trace-throttle-last").getAttribute("d")!.trimEnd()).toMatch(/Z$/);
+  });
+
+  it("shows a selected-lap-vs-best legend over the plot when a best lap is given", () => {
+    const best = trace({ lap_id: 8 });
+    const { getByText } = render(InputTraces, { props: { mode: "line", traces: trace(), best } });
+    expect(getByText("selected lap")).toBeTruthy();
+    expect(getByText("best")).toBeTruthy();
+  });
+
+  it("does not show the line-mode legend in band (Pit Wall) mode", () => {
+    const { queryByText } = render(InputTraces, {
+      props: { traces: { last: trace(), best: null } as Traces },
+    });
+    expect(queryByText("selected lap")).toBeNull();
+  });
+
+  it("marks the best polyline dashed and distinct from the selected line", () => {
+    const best = trace({ lap_id: 8 });
+    const { getByTestId } = render(InputTraces, { props: { mode: "line", traces: trace(), best } });
+    expect(getByTestId("trace-throttle-best").getAttribute("class")).toContain("dashed");
+    expect(getByTestId("trace-throttle-last").getAttribute("class")).not.toContain("dashed");
   });
 });

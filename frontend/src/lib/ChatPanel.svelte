@@ -13,6 +13,7 @@
     onnewsession,
     stream = new CoachStream(),
     voice,
+    resize,
   }: {
     sessionId?: string;
     lapId?: number;
@@ -20,6 +21,9 @@
     // (show an empty new chat); string = open that chat.
     chatId?: string | null;
     onnewsession?: () => void;
+    // The chat bar doubles as the Inputs panel's drag handle (#95 round 2). App
+    // owns the height/drag state; undefined means "not draggable" (no prop wired).
+    resize?: { down(e: PointerEvent): void; move(e: PointerEvent): void; up(): void; dragging: boolean };
     stream?: {
       phase: CoachPhase;
       toolActivity: ToolActivity | null;
@@ -427,7 +431,17 @@
 </script>
 
 <section class="chat">
-  <div class="chat-bar">
+  <div
+    class="chat-bar"
+    class:resizable={!!resize}
+    class:dragging={resize?.dragging}
+    role="separator"
+    aria-orientation="horizontal"
+    aria-label="Resize inputs panel"
+    onpointerdown={resize?.down}
+    onpointermove={resize?.move}
+    onpointerup={resize?.up}
+  >
     {#if usedTokens > 0}
       <span
         class="meter"
@@ -535,11 +549,33 @@
 
 <style>
   .chat-bar {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 8px 12px;
     border-bottom: 1px solid var(--line);
+  }
+  /* Doubles as the Inputs panel's drag handle when App wires a `resize` prop
+     (#95 round 2) -- same centered grip mark the old .rail-resizer used. */
+  .chat-bar.resizable {
+    cursor: row-resize;
+    touch-action: none;
+  }
+  .chat-bar.resizable::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 28px;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--faint);
+  }
+  .chat-bar.resizable:hover::before,
+  .chat-bar.resizable.dragging::before {
+    background: var(--accent);
   }
   .meter {
     margin-left: auto;

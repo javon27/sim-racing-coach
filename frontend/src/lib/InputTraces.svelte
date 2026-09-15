@@ -161,8 +161,15 @@
     const d0 = d[0];
     const span = d[d.length - 1] - d0 || 1;
     const x = (v: number) => ((v - d0) / span) * W;
+    // "4" reads as T4 on the plot; a name like "Eau Rouge" is left alone.
     const raw = corners
-      .map((c) => ({ label: c.label, x: x(c.apex_dist), xStart: x(c.start_dist), xEnd: x(c.end_dist) }))
+      .map((c) => ({
+        label: c.label,
+        displayLabel: /^\d+[A-Za-z]?$/.test(c.label) ? `T${c.label}` : c.label,
+        x: x(c.apex_dist),
+        xStart: x(c.start_dist),
+        xEnd: x(c.end_dist),
+      }))
       .sort((a, b) => a.x - b.x);
     // Narrow panels crowd adjacent T-labels; skip every other one where two
     // consecutive apexes sit under ~24 px apart (measured in viewBox units).
@@ -194,6 +201,13 @@
       </ul>
     {/if}
     <div class="plot">
+      {#if mode === "line"}
+        <!-- HTML, not SVG, so it never scales with the viewBox (#95 round 2). -->
+        <div class="line-legend" aria-hidden="true">
+          <span class="lg-item"><span class="lg-sw selected"></span>selected lap</span>
+          <span class="lg-item"><span class="lg-sw best"></span>best</span>
+        </div>
+      {/if}
       <svg viewBox="0 0 {W} {H}" preserveAspectRatio="none" role="img"
            aria-label="Driver inputs against lap distance">
         {#if hasMarkers}
@@ -208,7 +222,7 @@
             <line x1="0" y1={r.zero} x2={W} y2={r.zero} class="grid" />
           {/if}
           {#if r.best}
-            <path d={r.best} class="{mode === 'line' ? 'mline' : 'line'} best" data-testid="trace-{r.key}-best" />
+            <path d={r.best} class="{mode === 'line' ? 'mline dashed' : 'line'} best" data-testid="trace-{r.key}-best" />
           {/if}
           <path d={r.last} class="{mode === 'line' ? 'mline' : 'line'} last" data-testid="trace-{r.key}-last" />
         {/each}
@@ -216,7 +230,7 @@
           {#each markers as m (m.label)}
             <line x1={m.x} y1={topPad} x2={m.x} y2={H - AXIS_H} class="corner-tick" data-testid="corner-tick-{m.label}" />
             {#if m.showLabel}
-              <text x={m.x} y={topPad - 3} text-anchor="middle" class="corner-label" data-testid="corner-label-{m.label}">{m.label}</text>
+              <text x={m.x} y={topPad - 3} text-anchor="middle" class="corner-label" data-testid="corner-label-{m.label}">{m.displayLabel}</text>
             {/if}
           {/each}
         {/if}
@@ -297,16 +311,20 @@
      trace instead of a min/max ribbon. */
   .mline {
     fill: none;
-    stroke-width: 1.5;
     stroke-linejoin: round;
     vector-effect: non-scaling-stroke;
   }
   .mline.last {
     stroke: var(--accent);
+    stroke-width: 1.6;
   }
   .mline.best {
-    stroke: var(--muted);
-    opacity: 0.8;
+    stroke: var(--faint);
+    stroke-width: 1.2;
+    opacity: 1;
+  }
+  .mline.dashed {
+    stroke-dasharray: 4 3;
   }
   .corner-band {
     fill: var(--muted);
@@ -331,6 +349,34 @@
     color: var(--faint);
     font-family: var(--mono);
     pointer-events: none;
+  }
+  .line-legend {
+    position: absolute;
+    top: 0;
+    right: 0;
+    z-index: 1;
+    display: flex;
+    gap: 10px;
+    font-size: 10px;
+    color: var(--faint);
+    font-family: var(--mono);
+    pointer-events: none;
+  }
+  .lg-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .lg-sw {
+    width: 14px;
+    height: 2px;
+    border-radius: 1px;
+  }
+  .lg-sw.selected {
+    background: var(--accent);
+  }
+  .lg-sw.best {
+    background: var(--faint);
   }
   .legend {
     display: flex;
