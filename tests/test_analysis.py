@@ -946,3 +946,80 @@ def test_time_loss_buckets_handle_a_corner_wrapping_the_start_finish_seam():
     assert len([x for x in b if x["kind"] == "corner"]) == 2
     _, delta = align_time_axes(cur, ref)
     assert abs(sum(x["delta"] for x in b) - float(delta[-1])) < 0.02
+
+
+# --- consistency (#38) ---------------------------------------------------------
+
+def _consistency_stint(synthetic_lap, scales):
+    """One `stint_consistency` input: analyses/lap_times for len(scales) clones of
+    `synthetic_lap`, each with T1's min-speed window (900-1100, its minimum sits at
+    1015 -- see conftest) scaled by that lap's factor. T2 (2000-2400) is untouched,
+    so only T1 should show up as inconsistent."""
+    import dataclasses
+
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    analyses, lap_times = [], []
+    for i, scale in enumerate(scales):
+        ch = {k: v.copy() for k, v in synthetic_lap.channels.items()}
+        d = ch["lap_distance"]
+        win = (d >= 900) & (d <= 1100)
+        ch["speed"][win] = ch["speed"][win] * scale
+        lap = dataclasses.replace(synthetic_lap, channels=ch, lap_time=90.0 + i)
+        analyses.append(analyze_lap(lap, cmap))
+        lap_times.append(lap.lap_time)
+    return analyses, lap_times
+
+
+def test_stint_consistency_ranks_the_noisy_corner_first(synthetic_lap):
+    import numpy as np
+
+    from simcoach.analysis import stint_consistency
+    analyses, lap_times = _consistency_stint(
+        synthetic_lap, [1.0, 0.95, 1.05, 0.90, 1.10])
+
+    result = stint_consistency(analyses, lap_times)
+    assert result["ok"] is True
+    assert result["n"] == 5
+    assert result["ranking"][0] == "T1 Left Hairpin"
+
+    min_spds = [c.min_spd for a in analyses for c in a.corners if c.corner_no == 1]
+    expected_sigma = float(np.std(min_spds))
+    assert abs(result["corners"]["T1 Left Hairpin"]["min_spd"]["sigma"] - expected_sigma) < 1e-6
+    assert result["corners"]["T1 Left Hairpin"]["min_spd"]["n"] == 5
+    assert abs(result["lap_time_sigma"] - float(np.std(lap_times))) < 1e-9
+
+
+def test_stint_consistency_honest_with_fewer_than_three_laps(synthetic_lap):
+    from simcoach.analysis import analyze_lap, stint_consistency
+    from simcoach.corners import CornerMap
+    a = analyze_lap(synthetic_lap, CornerMap.load("simcoach/tracks/test_track.json"))
+    result = stint_consistency([a, a], [90.0, 91.0])
+    assert result == {"ok": False, "n": 2}
+
+
+def test_stint_consistency_skips_none_and_nan_fields_instead_of_zeroing(synthetic_lap):
+    """One of three laps never brakes at all (brake_point -> None for every
+    corner). That lap must be SKIPPED for brake_point's sigma/n, not counted as a
+    zero brake_point -- a zero would read as "brakes right at the apex", the
+    opposite of what actually happened."""
+    import dataclasses
+
+    import numpy as np
+
+    from simcoach.analysis import analyze_lap, stint_consistency
+    from simcoach.corners import CornerMap
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    analyses, lap_times = [], []
+    for i in range(3):
+        ch = dict(synthetic_lap.channels)
+        if i == 0:
+            ch = {**ch, "brake": np.zeros_like(ch["lap_distance"])}  # flat -> no brake_point
+        lap = dataclasses.replace(synthetic_lap, channels=ch, lap_time=90.0 + i)
+        analyses.append(analyze_lap(lap, cmap))
+        lap_times.append(lap.lap_time)
+
+    result = stint_consistency(analyses, lap_times)
+    bp = result["corners"]["T1 Left Hairpin"]["brake_point"]
+    assert bp["n"] == 2   # only the two laps that actually braked here count

@@ -732,6 +732,96 @@ def analyze_lap(
     )
 
 
+# Below this lap count a stddev is noise dressed up as a finding -- 2 laps always
+# gives a "spread" (any two numbers differ), and it tells the driver nothing. Same
+# floor `get_consistency` (coach_tools) uses to decide whether to call this at all.
+_MIN_CONSISTENCY_LAPS = 3
+# A per-corner field's own sigma below this many samples is one lap standing in for
+# a trend -- `format_consistency` stays silent on it rather than print a "spread"
+# computed from a single number (or a std of 1 sample, which is always 0.0 and would
+# misread as "perfectly consistent").
+_MIN_FIELD_SAMPLES = 3
+
+_CONSISTENCY_FIELDS = ("min_spd", "brake_point", "coast_time")
+
+
+def stint_consistency(analyses: "list[LapAnalysis]", lap_times: "list[float]") -> dict:
+    """Lap-time and per-corner spread across one stint (caller has already scoped
+    `analyses`/`lap_times` to one session + phase, valid laps only, in lap order --
+    this function doesn't know what a "stint" is, only that the two lists are
+    parallel).
+
+    Fewer than `_MIN_CONSISTENCY_LAPS` laps can't support a stddev reading:
+    returns ``{"ok": False, "n": n}`` rather than a number computed from noise.
+
+    Otherwise returns:
+        ok, n, lap_time_sigma (population stddev), lap_time_best, lap_time_mean,
+        corners: {label: {field: {"sigma": float, "n": int}}} for each of
+            min_spd / brake_point / coast_time that has at least one real sample
+            (label = "T<label> <name>", same rendering as format_corner_line),
+        ranking: corner labels ordered highest-variance-first.
+
+    NaN/None per field per lap are skipped, not zeroed -- a lap that never braked
+    (brake_point=None) or had no telemetry for a corner (min_spd=nan) contributes
+    no sample for that field rather than a fake 0.
+
+    Ranking normalises min-speed sigma by the corner's OWN mean min-speed
+    (coefficient of variation), not raw sigma: a slow hairpin's speed swings by a
+    few km/h in absolute terms for the same relative inconsistency a fast sweeper
+    swings by three times as much, so a flat sigma comparison always crowns the
+    fast corner regardless of which one the driver is actually missing. Needs at
+    least 2 min_spd samples (a single sample has no spread to measure) and a
+    positive mean (guards the division).
+    """
+    n = len(analyses)
+    if n < _MIN_CONSISTENCY_LAPS:
+        return {"ok": False, "n": n}
+    lap_times = [float(t) for t in lap_times]
+
+    order: list[str] = []
+    samples: dict[str, dict[str, list[float]]] = {}
+    for a in analyses:
+        for cm in a.corners:
+            label = f"T{cm.label or cm.corner_no} {cm.name}".strip()
+            if label not in samples:
+                samples[label] = {f: [] for f in _CONSISTENCY_FIELDS}
+                order.append(label)
+            bucket = samples[label]
+            if cm.min_spd is not None and not math.isnan(cm.min_spd):
+                bucket["min_spd"].append(cm.min_spd)
+            if cm.brake_point is not None:
+                bucket["brake_point"].append(cm.brake_point)
+            if cm.coast_time is not None and not math.isnan(cm.coast_time):
+                bucket["coast_time"].append(cm.coast_time)
+
+    corners: dict[str, dict[str, dict]] = {}
+    ranking: list[tuple[str, float]] = []
+    for label in order:
+        entry = {}
+        for field in _CONSISTENCY_FIELDS:
+            vals = samples[label][field]
+            if vals:
+                entry[field] = {"sigma": float(np.std(vals)), "n": len(vals)}
+        if entry:
+            corners[label] = entry
+        ms = samples[label]["min_spd"]
+        if len(ms) >= 2:
+            mean_ms = float(np.mean(ms))
+            if mean_ms > 0:
+                ranking.append((label, float(np.std(ms)) / mean_ms))
+    ranking.sort(key=lambda pair: -pair[1])
+
+    return {
+        "ok": True,
+        "n": n,
+        "lap_time_sigma": float(np.std(lap_times)),
+        "lap_time_best": min(lap_times),
+        "lap_time_mean": float(np.mean(lap_times)),
+        "corners": corners,
+        "ranking": [label for label, _ in ranking],
+    }
+
+
 # The per-corner geometry metrics `corner_geometry` can emit, in the order they are
 # baked. One owner because three writers touch them -- the backfill script that bakes
 # them, the editor's save path that carries them forward, and this function -- and a

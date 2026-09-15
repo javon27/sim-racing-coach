@@ -173,3 +173,51 @@ def test_format_corner_line_silent_for_deltas_under_the_floor():
                     peak_brake_g_delta=-0.1, entry_spd_delta=1.5, exit_spd_delta=-2.0)
     line = format_corner_line(cm)
     assert "vs best" not in line and "than best" not in line and "pts" not in line
+
+
+# --- consistency (#38) ---------------------------------------------------------
+
+def _consistency_result(**overrides) -> dict:
+    result = {
+        "ok": True, "n": 8, "lap_time_sigma": 0.4,
+        "lap_time_best": 91.2, "lap_time_mean": 91.8,
+        "corners": {
+            "T4 Village": {"min_spd": {"sigma": 6.0, "n": 8},
+                          "brake_point": {"sigma": 9.0, "n": 8}},
+            "T7 Anchor": {"min_spd": {"sigma": 1.0, "n": 2}},  # n < 3 -> silent
+        },
+        "ranking": ["T4 Village", "T7 Anchor"],
+    }
+    result.update(overrides)
+    return result
+
+
+def test_format_consistency_house_style():
+    from simcoach.format import format_consistency
+    out = format_consistency(_consistency_result())
+    assert out.startswith("Lap time \N{GREEK SMALL LETTER SIGMA} 0.4s over 8 laps "
+                          "(best 1:31.200, mean 1:31.800).")
+    assert "Least consistent: T4 Village — min speed ±6 km/h, brake point ±9 m" in out
+    # T7's only field has n=2 (< 3): the corner is ranked but contributes no clause.
+    assert "T7 Anchor" not in out
+
+
+def test_format_consistency_respects_imperial_units():
+    from simcoach.format import format_consistency
+    out = format_consistency(_consistency_result(), units="imperial")
+    assert "min speed ±4 mph" in out   # 6 km/h * 0.621371 rounds to 4
+
+
+def test_format_consistency_honest_with_fewer_than_three_laps():
+    from simcoach.format import format_consistency
+    out = format_consistency({"ok": False, "n": 2})
+    assert "2 laps" in out and "consistency" in out.lower()
+
+
+def test_format_consistency_silent_when_no_corner_clears_the_sample_floor():
+    from simcoach.format import format_consistency
+    out = format_consistency(_consistency_result(
+        corners={"T7 Anchor": {"min_spd": {"sigma": 1.0, "n": 2}}},
+        ranking=["T7 Anchor"]))
+    assert "Least consistent" not in out
+    assert out.startswith("Lap time")

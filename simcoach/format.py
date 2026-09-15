@@ -189,6 +189,48 @@ def format_time_loss(buckets, reference_label: str = "your best lap") -> str:
     return out
 
 
+# A per-field sigma below this many samples is one lap standing in for a trend --
+# stay silent rather than print a "spread" that isn't one (mirrors
+# analysis._MIN_FIELD_SAMPLES; kept here too since a formatter shouldn't import a
+# threshold from the module it's rendering).
+_MIN_FIELD_SAMPLES = 3
+# How many of the ranked corners to name.
+_TOP_CONSISTENCY_CORNERS = 3
+
+
+def format_consistency(result: dict, units: str = "metric") -> str:
+    """House style for `analysis.stint_consistency`: lap-time spread, then up to
+    `_TOP_CONSISTENCY_CORNERS` least-consistent corners (highest-variance first).
+    Silent on any per-field sigma with n < `_MIN_FIELD_SAMPLES` samples, and an
+    honest one-liner when the stint itself was too short to analyse."""
+    if not result.get("ok"):
+        n = result.get("n", 0)
+        return (f"Only {n} lap{'s' if n != 1 else ''} recorded this stint — need at "
+                "least 3 to read consistency.")
+    spd, _, spd_u, _ = unit_fns(units)
+    out = (f"Lap time \N{GREEK SMALL LETTER SIGMA} {result['lap_time_sigma']:.1f}s over "
+           f"{result['n']} laps (best {format_laptime(result['lap_time_best'])}, "
+           f"mean {format_laptime(result['lap_time_mean'])}).")
+    corner_parts = []
+    for label in result["ranking"][:_TOP_CONSISTENCY_CORNERS]:
+        entry = result["corners"].get(label, {})
+        bits = []
+        ms = entry.get("min_spd")
+        if ms and ms["n"] >= _MIN_FIELD_SAMPLES:
+            bits.append(f"min speed ±{spd(ms['sigma']):.0f} {spd_u}")
+        bp = entry.get("brake_point")
+        if bp and bp["n"] >= _MIN_FIELD_SAMPLES:
+            bits.append(f"brake point ±{bp['sigma']:.0f} m")
+        ct = entry.get("coast_time")
+        if ct and ct["n"] >= _MIN_FIELD_SAMPLES:
+            bits.append(f"coasting ±{ct['sigma']:.1f}s")
+        if bits:
+            corner_parts.append(f"{label} — " + ", ".join(bits))
+    if corner_parts:
+        out += " Least consistent: " + "; ".join(corner_parts) + "."
+    return out
+
+
 def format_wheel_report(analysis, units: str = "metric") -> str | None:
     """Lap-level brake temps, hot pressures, and tire wear per wheel — or None if
     the lap predates the extended capture."""
