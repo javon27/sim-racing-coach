@@ -143,6 +143,8 @@ export interface VoiceSettings {
   ptt_gamepad: string | null;
   tts_voice: string | null;
   tts_rate: number;
+  tts_engine: "windows" | "kokoro";
+  kokoro_voice: string;
   mic_device_id: string | null;
   vad_threshold: number;
   vad_silence_ms: number;
@@ -816,4 +818,33 @@ export function voiceSetup(): Promise<VoiceStatus & { started: boolean }> {
     headers: JSON_HEADERS,
     body: JSON.stringify({}),
   });
+}
+
+export interface KokoroStatus extends VoiceStatus { engine: "kokoro"; voices: string[] }
+
+export function kokoroStatus(): Promise<KokoroStatus> {
+  return request<KokoroStatus>("/voice/kokoro/status");
+}
+
+export function kokoroSetup(): Promise<KokoroStatus & { started: boolean }> {
+  return request("/voice/kokoro/setup", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({}) });
+}
+
+// Dedicated fetch (not `request()`): mirrors transcribe() -- the thrown message
+// must be the server's `detail` alone (Speaker surfaces it via onUnavailable).
+export async function speak(
+  text: string,
+  opts: { voice?: string; speed?: number; trackSlug?: string },
+  signal?: AbortSignal,
+): Promise<ArrayBuffer> {
+  const res = await fetch(`${BASE}/voice/speak`, {
+    method: "POST", headers: JSON_HEADERS, signal,
+    body: JSON.stringify({ text, voice: opts.voice, speed: opts.speed, track_slug: opts.trackSlug }),
+  });
+  if (!res.ok) {
+    let detail = "couldn't synthesise speech";
+    try { const b = await res.json(); if (typeof b?.detail === "string") detail = b.detail; } catch { /* keep default */ }
+    throw new Error(detail);
+  }
+  return res.arrayBuffer();
 }

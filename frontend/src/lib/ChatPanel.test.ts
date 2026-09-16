@@ -708,6 +708,7 @@ describe("ChatPanel", () => {
     Object.defineProperty(navigator, "mediaDevices", { value: {}, configurable: true });
     const voiceSettings = (mic_device_id: string) => ({
       enabled: true, ptt_key: "F9", ptt_wheel: null, ptt_gamepad: null, tts_voice: null, tts_rate: 1,
+      tts_engine: "windows" as const, kokoro_voice: "af_heart",
       vad_threshold: 0.02, vad_silence_ms: 1000, vad_max_s: 20, conversation_idle_s: 30, mic_device_id,
     });
     vi.mocked(getSettings).mockResolvedValue({

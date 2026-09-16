@@ -2,7 +2,7 @@
 // speech synthesis. No browser global is touched at import time -- jsdom (tests) has
 // none of AudioContext/MediaRecorder/speechSynthesis, and voice is always injected
 // as a VoiceLoop prop in tests -- only the real app constructs these.
-import { transcribe as apiTranscribe } from "./api";
+import { speak as apiSpeak, transcribe as apiTranscribe } from "./api";
 import type { Earcon, Recorder, Speaker, Transcriber } from "./voice";
 
 export class MicRecorder implements Recorder {
@@ -104,6 +104,23 @@ export class HttpTranscriber implements Transcriber {
 
 const EARCON_HZ: Record<Earcon, number> = { "listen-start": 880, "listen-end": 660, error: 220 };
 
+// Shared by both speakers -- SynthSpeaker keeps its own lazy AudioContext, KokoroSpeaker
+// reuses the one it already opened for playback.
+export function playEarcon(ctx: AudioContext, kind: Earcon): void {
+  if (ctx.state === "suspended") void ctx.resume();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.frequency.value = EARCON_HZ[kind];
+  const t = ctx.currentTime;
+  gain.gain.setValueAtTime(0, t);
+  gain.gain.linearRampToValueAtTime(0.08, t + 0.01);
+  gain.gain.linearRampToValueAtTime(0, t + 0.08);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start();
+  osc.stop(t + 0.08);
+}
+
 export class SynthSpeaker implements Speaker {
   voiceName: string | null = null;
   rate = 1.0;
@@ -173,18 +190,89 @@ export class SynthSpeaker implements Speaker {
 
   earcon(kind: Earcon): void {
     if (!this.#beepCtx) this.#beepCtx = new AudioContext();
-    const ctx = this.#beepCtx;
-    if (ctx.state === "suspended") void ctx.resume();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.frequency.value = EARCON_HZ[kind];
-    const t = ctx.currentTime;
-    gain.gain.setValueAtTime(0, t);
-    gain.gain.linearRampToValueAtTime(0.08, t + 0.01);
-    gain.gain.linearRampToValueAtTime(0, t + 0.08);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start();
-    osc.stop(t + 0.08);
+    playEarcon(this.#beepCtx, kind);
+  }
+}
+
+// Sidecar-synthesised speech (Kokoro): fetches WAV bytes from the server and plays
+// them via Web Audio, one synthesis in flight ahead of playback so the pipe never
+// stalls waiting on the network between sentences. Falls back to SynthSpeaker (via
+// onUnavailable) the first time a fetch fails -- e.g. the voice isn't installed.
+export class KokoroSpeaker implements Speaker {
+  voice = "af_heart";
+  rate = 1.0;
+  trackSlug: string | null = null;
+  onUnavailable: ((reason: string) => void) | null = null;
+  #fetchWav: typeof apiSpeak;
+  #ctx: AudioContext | null;
+  #queue: { text: string; resolve: () => void }[] = [];
+  #ahead: { buffer: Promise<AudioBuffer | null>; resolve: () => void; abort: AbortController } | null = null;
+  #playing: AudioBufferSourceNode | null = null;
+  #idleWaiters: (() => void)[] = [];
+  #failed = false;
+
+  constructor(deps: { fetchWav?: typeof apiSpeak; audio?: AudioContext } = {}) {
+    this.#fetchWav = deps.fetchWav ?? apiSpeak;
+    this.#ctx = deps.audio ?? null;
+  }
+  #audio(): AudioContext {
+    this.#ctx ??= new AudioContext();
+    if (this.#ctx.state === "suspended") void this.#ctx.resume();
+    return this.#ctx;
+  }
+  speak(text: string): Promise<void> { return new Promise((resolve) => { this.#queue.push({ text, resolve }); this.#pump(); }); }
+  enqueue(text: string): void { this.#queue.push({ text, resolve: () => {} }); this.#pump(); }
+  idle(): Promise<void> {
+    if (!this.#queue.length && !this.#ahead && !this.#playing) return Promise.resolve();
+    return new Promise((r) => this.#idleWaiters.push(r));
+  }
+  cancel(): void {
+    this.#ahead?.abort.abort(); this.#ahead?.resolve(); this.#ahead = null;
+    try { this.#playing?.stop(); } catch { /* already stopped */ }
+    this.#playing = null;
+    for (const q of this.#queue.splice(0)) q.resolve();
+    this.#settleIdle();
+  }
+  earcon(kind: Earcon): void { playEarcon(this.#audio(), kind); }
+
+  #settleIdle(): void {
+    if (this.#queue.length || this.#ahead || this.#playing) return;
+    const w = this.#idleWaiters; this.#idleWaiters = []; w.forEach((f) => f());
+  }
+  // One synthesis in flight ahead of playback: fetch the head while the previous plays.
+  #pump(): void {
+    if (this.#ahead || !this.#queue.length) return;
+    const item = this.#queue.shift()!;
+    const abort = new AbortController();
+    const buffer = this.#fetchWav(item.text, { voice: this.voice, speed: this.rate, trackSlug: this.trackSlug ?? undefined }, abort.signal)
+      .then((bytes) => this.#audio().decodeAudioData(bytes))
+      .catch((e: unknown) => { this.#fail(e); return null; });
+    this.#ahead = { buffer, resolve: item.resolve, abort };
+    void this.#play();
+  }
+  async #play(): Promise<void> {
+    const ahead = this.#ahead!;
+    const buf = await ahead.buffer;
+    if (this.#ahead !== ahead) return;               // cancelled while synthesising
+    await this.#drainPlaying();
+    this.#ahead = null;
+    this.#pump();                                    // start the NEXT synthesis before this one plays
+    if (!buf) { ahead.resolve(); this.#settleIdle(); return; }
+    const src = this.#audio().createBufferSource();
+    src.buffer = buf; src.connect(this.#audio().destination);
+    this.#playing = src;
+    await new Promise<void>((done) => { src.onended = () => done(); src.start(); });
+    if (this.#playing === src) this.#playing = null;
+    ahead.resolve();
+    this.#settleIdle();
+  }
+  #drainPlaying(): Promise<void> {
+    const cur = this.#playing;
+    return cur ? new Promise((r) => { const prev = cur.onended; cur.onended = (e) => { prev?.call(cur, e); r(); }; }) : Promise.resolve();
+  }
+  #fail(e: unknown): void {
+    if (this.#failed) return;
+    this.#failed = true;
+    this.onUnavailable?.(e instanceof Error ? e.message : String(e));
   }
 }
