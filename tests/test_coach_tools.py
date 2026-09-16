@@ -1555,3 +1555,76 @@ def test_get_wheel_report_appends_the_wear_step(tmp_path, synthetic_lap):
     ctx.record, ctx.lap_id = ctx.store.load(ids[2]), ids[2]
     out = ctx.get_wheel_report()
     assert "FR wear step" in out and "T1 Left Hairpin" in out
+
+
+# --- issue #77: partial laps are listed and readable, never the default subject --
+
+def _partial_session(tmp_path, synthetic_lap):
+    """A practice run of: lap 1 out-lap (partial), lap 2 timed, lap 3 timed,
+    lap 4 in-lap (partial) -- the shape the rig log recorded. Returns
+    (ctx, store, ids-by-game-lap-number)."""
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    base = dict(synthetic_lap.__dict__, session_id="s1", phase="practice")
+    ids = {}
+    for n, (lt, kind, ts) in enumerate(
+            [(None, "out", 10.0), (95.0, None, 20.0), (92.0, None, 30.0),
+             (None, "in", 40.0)], start=1):
+        ids[n] = store.save(LapRecord(**{**base, "lap_time": lt, "valid": kind is None,
+                                         "partial": kind, "lap_no": n, "timestamp": ts}))
+    ctx = CoachContext(store, cmap=cmap, track=synthetic_lap.track, car=synthetic_lap.car,
+                       session_id="s1", on_track=True)
+    return ctx, store, ids
+
+
+def test_latest_lap_is_the_latest_COMPLETE_lap_not_the_in_lap(tmp_path, synthetic_lap):
+    """The controller's ruling: a garage return must not make the in-lap the coach's
+    default subject."""
+    ctx, _, ids = _partial_session(tmp_path, synthetic_lap)
+    record, lap_id = ctx._current_lap()
+    assert lap_id == ids[3]
+    assert record.lap_time == 92.0
+    assert "practice lap 3" in ctx.get_lap_summary("latest")
+
+
+def test_a_partial_lap_is_reachable_by_its_game_lap_number(tmp_path, synthetic_lap):
+    """No new tool: the in-session numbering already covers every stored lap, and
+    the identity line names the kind so the model can't read it as a timed lap."""
+    ctx, _, ids = _partial_session(tmp_path, synthetic_lap)
+    record, lap_id = ctx._resolve_lap("practice lap 4")
+    assert lap_id == ids[4]
+    assert record.partial == "in"
+    assert ctx._lap_line(record, lap_id).endswith(" — in-lap")
+    assert "practice lap 4" in ctx.get_lap_summary("practice lap 4")
+
+
+def test_list_recent_laps_shows_partials_with_their_kind(tmp_path, synthetic_lap):
+    """Greyed out in the UI, named in the tool output -- the numbering runs 1..4
+    with no gap, which is the whole point of storing them."""
+    ctx, _, _ = _partial_session(tmp_path, synthetic_lap)
+    out = ctx.list_recent_laps()
+    assert "practice lap 1: out lap" in out
+    assert "practice lap 4: in lap" in out
+    assert "practice lap 2: 1:35.000" in out
+    for n in (1, 2, 3, 4):
+        assert f"practice lap {n}:" in out
+
+
+def test_consistency_and_time_loss_refuse_partial_laps(tmp_path, synthetic_lap):
+    """Best-lap / consistency math must ignore them (they are valid = 0, so
+    `_stint_analyses` drops them with no change), and a partial can never be
+    compared against a reference."""
+    ctx, _, _ = _partial_session(tmp_path, synthetic_lap)
+    analyses, lap_times = ctx._stint_analyses()
+    assert lap_times == [95.0, 92.0]
+    assert len(analyses) == 2
+    assert "can't be compared" in ctx.get_time_loss("practice lap 4")
+
+
+def test_session_status_counts_complete_laps_only(tmp_path, synthetic_lap):
+    """A partial is a row in the lap list, not a lap of data -- counting it would
+    inflate every 'laps captured' number the day partials started being stored."""
+    ctx, _, _ = _partial_session(tmp_path, synthetic_lap)
+    out = ctx.get_session_status()
+    assert "this practice: 2, session total: 2, all-time this track/car: 2" in out

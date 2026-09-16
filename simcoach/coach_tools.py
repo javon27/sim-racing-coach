@@ -47,6 +47,11 @@ from simcoach.track_lookup import load_track_knowledge, note_key_binds
 # 60-lap race. Raise it if a rig endurance run genuinely needs a longer look-back.
 _MAX_EVENT_LAPS = 30
 
+# How an unfinished lap (LapRecord.partial, #77) is named to the model: on the `Lap:`
+# identity line, and in the `list_recent_laps` listing where a lap time would go.
+_PARTIAL_WORD = {"out": "out-lap", "in": "in-lap", "partial": "partial lap"}
+_PARTIAL_LIST_WORD = {"out": "out lap", "in": "in lap", "partial": "partial"}
+
 # Tool specs advertised to the model (Anthropic tool-use format).
 TOOLS = [
     {
@@ -525,7 +530,12 @@ class CoachContext:
             return self._current_lap_cache
         found = (None, None)
         if self.track and self.car:
-            rows = self.store.recent_laps(self.track, self.car, 1, session_id=self.session_id)
+            # complete_only (#77): out/in/partial laps are stored now, but "the
+            # driver's current lap" is the latest lap they FINISHED -- a return to
+            # the garage must not make the in-lap the default subject of every
+            # answer. Partials stay reachable by explicit reference (_resolve_lap).
+            rows = self.store.recent_laps(self.track, self.car, 1,
+                                          session_id=self.session_id, complete_only=True)
             if rows:
                 lid = rows[0]["lap_id"]
                 try:
@@ -598,7 +608,11 @@ class CoachContext:
         if record.timestamp:
             parts.append(time.strftime("%H:%M:%S", time.localtime(record.timestamp)))
         head = label or ("this lap" if lap_id is None else f"lap id {lap_id}")
-        return f"Lap: {head}" + (f" ({', '.join(parts)})" if parts else "")
+        # An out/in/partial lap says so right here (#77), so the model can never read
+        # its missing lap time or NaN corners as a timed lap that went wrong.
+        kind = _PARTIAL_WORD.get(record.partial, "")
+        return (f"Lap: {head}" + (f" ({', '.join(parts)})" if parts else "")
+                + (f" — {kind}" if kind else ""))
 
     def _lap_id_for(self, record) -> int | None:
         """Best-effort DB lap_id for a record with no id attached (e.g. `best_lap`,
@@ -621,7 +635,10 @@ class CoachContext:
             return self._recent
         records = []
         if self.track and self.car:
-            for row in self.store.recent_laps(self.track, self.car, limit=10):
+            # Complete laps only: a half lap must not shape the grip envelope or
+            # the wear baseline (#77).
+            for row in self.store.recent_laps(self.track, self.car, limit=10,
+                                              complete_only=True):
                 try:
                     rec = self.store.load(row["lap_id"])
                 except Exception:
@@ -735,8 +752,13 @@ class CoachContext:
 
     # --- tools -----------------------------------------------------------
     def get_session_status(self):
-        n_all = len(self.store.list_lap_ids(self.track, self.car)) if (self.track and self.car) else 0
-        n_sess = len(self.store.session_lap_ids(self.session_id)) if self.session_id else None
+        # Complete laps only, in all three counts (#77): these say how much DATA the
+        # coach has, and counting the newly-stored out/in/partial rows would inflate
+        # every historical number the day they started being stored.
+        n_all = (len(self.store.list_lap_ids(self.track, self.car, complete_only=True))
+                 if (self.track and self.car) else 0)
+        n_sess = (len(self.store.session_lap_ids(self.session_id, complete_only=True))
+                  if self.session_id else None)
         has_ref = bool(self.track and self.car and self.store.best_lap(self.track, self.car))
         on = "on track" if self.on_track else ("unknown" if self.on_track is None else "not on track")
         cur_rec, _ = self._current_lap()
@@ -744,7 +766,8 @@ class CoachContext:
         phase = cur_rec.phase if cur_rec else None
         # Current-phase count: "8 laps into the race" must be race laps, not the
         # whole session (qualy + race). Grouped like _lap_numbering's counts[ph].
-        n_phase = (sum(1 for r in self.store.session_laps(self.session_id) if r.get("phase") == phase)
+        n_phase = (sum(1 for r in self.store.session_laps(self.session_id)
+                       if r.get("phase") == phase and not r.get("partial"))
                    if self.session_id and phase else None)
         if n_sess is not None:
             head = f"this {phase}: {n_phase}, " if n_phase is not None else ""
@@ -777,7 +800,12 @@ class CoachContext:
             label = label_by_id.get(r["lap_id"]) or (
                 f"lap {r['lap_id']}" + (f" [{r['phase']}]" if r["phase"] else "")
             )
-            out.append(f"{label}: {format_laptime(r['lap_time'])} {valid}")
+            # A partial lap keeps its NUMBER (that is why it is stored) but has no
+            # time to print and is not "INVALID" -- it is unfinished (#77).
+            if r.get("partial"):
+                out.append(f"{label}: {_PARTIAL_LIST_WORD[r['partial']]} (no time)")
+            else:
+                out.append(f"{label}: {format_laptime(r['lap_time'])} {valid}")
         return "\n".join(out)
 
     def get_lap_summary(self, which="latest"):
@@ -834,6 +862,12 @@ class CoachContext:
             return "No lap available for that request (none captured yet, or unknown lap)."
         if self.cmap is None:
             return "No corner map for this track yet — can't break the lap into corners."
+        if record.partial is not None:
+            # An out/in/spin lap covers a different piece of track than the reference
+            # and carries no lap time; the overlap gate below would let a long in-lap
+            # through and report a delta that silently includes a pit-lane detour.
+            return ("That lap can't be compared to the reference (partial lap, or a "
+                    "different track length).")
         ref, ref_label = self._reference_lap(record, lap_id, reference)
         if ref is None:
             return ("No reference lap to compare against yet — you need a second valid "

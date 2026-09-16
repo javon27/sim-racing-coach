@@ -1854,3 +1854,31 @@ def test_stint_wear_baseline_skips_wheels_without_the_channel(synthetic_lap):
 def test_stint_wear_baseline_needs_two_laps(synthetic_lap):
     assert stint_wear_baseline([synthetic_lap]) == {}
     assert stint_wear_baseline([]) == {}
+
+
+def test_analyze_lap_on_a_partial_fragment_is_nan_where_the_lap_never_went(synthetic_lap):
+    """#77: a stored out/in/spin lap covers only part of the track and carries no lap
+    time. analyze_lap must not raise on either -- it reports NaN for the corners the
+    fragment never reached, and real numbers for the ones it did, which is what lets
+    the coach screen keep inputs + corner analysis on a spin lap."""
+    import numpy as np
+
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap
+    from simcoach.model_types import LapRecord
+
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    c1, c2 = cmap.corners[0], cmap.corners[1]
+    d = synthetic_lap.channels["lap_distance"]
+    # Keep only the second half of the lap: corner 1's window is never entered.
+    keep = d >= (c1.end_dist + c2.start_dist) / 2
+    assert keep.sum() > 10 and not keep[0]
+    frag = LapRecord(**{**synthetic_lap.__dict__,
+                        "lap_time": None, "valid": False, "partial": "partial",
+                        "channels": {k: v[keep] for k, v in synthetic_lap.channels.items()}})
+
+    a = analyze_lap(frag, cmap)
+    assert a.lap_time is None
+    by_no = {cm.corner_no: cm for cm in a.corners}
+    assert np.isnan(by_no[c1.number].min_spd)
+    assert np.isfinite(by_no[c2.number].min_spd)
