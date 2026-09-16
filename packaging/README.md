@@ -66,6 +66,54 @@ ctranslate2's native library and the model load correctly from the frozen
 exe. `tests/test_packaging_spec.py` guards the spec against losing the
 collects.
 
+## Kokoro TTS (`.[voice]`, GPL-free)
+
+`kokoro-onnx` and `misaki` are the two Kokoro-82M packages the sidecar loads
+(see `simcoach/tts_kokoro.py`). Their own PyPI metadata pulls in
+`phonemizer` + `espeakng-loader` (GPL, via `kokoro-onnx`) and `spacy` +
+`num2words` (LGPL, via `misaki`) as transitive deps — none of that code ever
+runs (`install_stubs()` replaces all four with stand-ins before either
+package is imported), but a plain `pip install ".[voice]"` would still
+*download and ship* them. Install the voice extra the no-deps way instead, so
+they never even land on disk:
+
+```sh
+pip install --only-binary=:all: onnxruntime==1.30.0 regex faster-whisper
+pip install --no-deps kokoro-onnx==0.6.1 misaki==0.7.4
+```
+
+Then verify none of the four are importable in that venv:
+
+```sh
+python -c "import importlib.util as u, sys; sys.exit(any(u.find_spec(m) for m in ('phonemizer','espeakng_loader','spacy','num2words')))"
+```
+
+`packaging/simcoach-sidecar.spec` additionally excludes all four
+(`excludes=[...]`) as a build-time backstop, and merges
+`collect_all("kokoro_onnx")` / `collect_all("misaki")` /
+`collect_all("onnxruntime")` into the `Analysis` for the onnx runtime's native
+DLLs and misaki's vocab/lexicon data files.
+
+To verify locally: install the voice extra the no-deps way above, freeze,
+then run the frozen exe against an isolated data dir holding the two model
+files (`<data>/kokoro/kokoro-v1.0.onnx`, `<data>/kokoro/voices-v1.0.bin`) and
+exercise `/voice/speak` + `/voice/kokoro/status`:
+
+```sh
+pyinstaller packaging/simcoach-sidecar.spec --distpath dist-sidecar --workpath build-sidecar
+SIMCOACH_DATA_DIR=/path/to/scratch-data dist-sidecar/simcoach-sidecar.exe &
+curl -X POST http://127.0.0.1:8765/voice/speak -H "content-type: application/json" \
+     -d '{"text":"Turn ten."}' -o out.wav        # starts with RIFF
+curl http://127.0.0.1:8765/voice/kokoro/status    # installed: true, gpl_free: true
+```
+
+`gpl_free` in the status response is a runtime self-check (see
+`simcoach.tts_kokoro.gpl_free`): true only when none of the four packages is
+loaded for real (a `__simcoach_stub__` entry is fine) and none is even
+importable in the running process. `tests/test_packaging_spec.py` guards the
+spec/extra against re-listing them; `tests/test_server_voice.py` guards the
+status field.
+
 ## Release
 
 Push a `vX.Y.Z` tag. CI builds the installers and drafts a GitHub release with them

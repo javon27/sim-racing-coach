@@ -24,9 +24,23 @@ for _sub in ("tracks", "cars"):
 # needs at runtime) plus tokenizers/huggingface_hub's own binaries (#104).
 _fw_datas, _fw_binaries, _fw_hidden = collect_all("faster_whisper")
 _ct_datas, _ct_binaries, _ct_hidden = collect_all("ctranslate2")
-datas += _fw_datas + _ct_datas
-binaries = _fw_binaries + _ct_binaries
-hiddenimports = collect_submodules("simcoach") + _fw_hidden + _ct_hidden
+
+# Kokoro TTS (#104): kokoro_onnx/misaki are pure-Python + the onnxruntime native
+# lib; collect_all so the onnx runtime's DLLs and misaki's data files (vocab,
+# lexicon) ship. The adapter in simcoach/tts_kokoro.py guarantees the GPL/LGPL
+# packages kokoro_onnx/misaki *would* pull in (phonemizer, espeakng_loader,
+# spacy, num2words) are never imported for real -- the exclude list below backs
+# that with a build-time guarantee: PyInstaller won't bundle them even if some
+# transitive import path is missed.
+_ko_datas, _ko_binaries, _ko_hidden = collect_all("kokoro_onnx")
+_mi_datas, _mi_binaries, _mi_hidden = collect_all("misaki")
+_ort_datas, _ort_binaries, _ort_hidden = collect_all("onnxruntime")
+
+datas += _fw_datas + _ct_datas + _ko_datas + _mi_datas + _ort_datas
+binaries = _fw_binaries + _ct_binaries + _ko_binaries + _mi_binaries + _ort_binaries
+hiddenimports = (
+    collect_submodules("simcoach") + _fw_hidden + _ct_hidden + _ko_hidden + _mi_hidden + _ort_hidden
+)
 
 a = Analysis(
     [os.path.join(ROOT, "packaging", "run_sidecar.py")],
@@ -36,7 +50,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=[],
+    excludes=["spacy", "phonemizer", "espeakng_loader", "num2words", "spacy_curated_transformers"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

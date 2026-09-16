@@ -275,7 +275,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     # The whisper model lives at the app-data ROOT (next to the config), not in the
     # telemetry dir the store owns; move an install from the first release across.
     from .. import paths as _paths
-    from ..tts_kokoro import EngineUnavailable, KokoroEngine
+    from ..tts_kokoro import EngineUnavailable, KokoroEngine, gpl_free
     from ..voice import (
         KokoroInstaller,
         ModelInstaller,
@@ -2472,7 +2472,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
 
     @app.get("/voice/kokoro/status")
     def kokoro_status():
-        return app.state.kokoro_installer.status()
+        return {**app.state.kokoro_installer.status(), "gpl_free": gpl_free()}
 
     @app.post("/voice/speak")
     async def voice_speak(body: dict = Body(...)):

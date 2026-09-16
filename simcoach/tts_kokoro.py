@@ -81,6 +81,28 @@ def install_stubs() -> None:
         sys.modules[mod.__name__] = mod
 
 
+_GPL_MODULES = ("phonemizer", "espeakng_loader", "spacy", "num2words")
+
+
+def gpl_free() -> bool:
+    """True if none of the GPL/LGPL TTS backends is loaded for real or installed on
+    disk -- a `__simcoach_stub__` entry from install_stubs() doesn't count against it.
+    Surfaced at /voice/kokoro/status as a runtime proof for the frozen build (#104)."""
+    import importlib.util
+    for name in _GPL_MODULES:
+        mod = sys.modules.get(name)
+        if mod is not None:
+            if not getattr(mod, "__simcoach_stub__", False):
+                return False
+            continue  # stub already satisfies "not real"; skip find_spec (raises on a stub)
+        try:
+            if importlib.util.find_spec(name) is not None:
+                return False
+        except (ImportError, ValueError):
+            return False
+    return True
+
+
 # ---- misaki without spaCy (spike patch, verbatim) -----------------------------------
 _TOKEN_RE = re.compile(
     r"\d+(?:[.:,]\d+)*%?"            # numbers, times, decimals, percents

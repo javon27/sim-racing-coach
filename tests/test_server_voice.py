@@ -148,6 +148,26 @@ def test_kokoro_setup_and_status_endpoints(tmp_path, monkeypatch):
     assert c.get("/voice/kokoro/status").json()["engine"] == "kokoro"
 
 
+class _StatusInst:
+    def start(self): return True
+    def status(self): return {"engine": "kokoro", "installed": False, "installing": False,
+                              "progress_bytes": 0, "total_bytes": 1, "error": None, "voices": []}
+
+
+def test_kokoro_status_reports_gpl_free_true_in_a_clean_env(tmp_path, monkeypatch):
+    c, _ = _app(tmp_path, monkeypatch, kokoro_installer=_StatusInst())
+    assert c.get("/voice/kokoro/status").json()["gpl_free"] is True
+
+
+def test_kokoro_status_gpl_free_false_when_a_real_gpl_module_is_loaded(tmp_path, monkeypatch):
+    import sys
+    import types
+    fake = types.ModuleType("phonemizer")   # no __simcoach_stub__ marker -> looks real
+    monkeypatch.setitem(sys.modules, "phonemizer", fake)
+    c, _ = _app(tmp_path, monkeypatch, kokoro_installer=_StatusInst())
+    assert c.get("/voice/kokoro/status").json()["gpl_free"] is False
+
+
 def _ask(c, body):
     with c.websocket_connect("/coach", headers={"host": "127.0.0.1",
                                                  "origin": "http://127.0.0.1:8765"}) as ws:
