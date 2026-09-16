@@ -572,6 +572,26 @@ describe("ChatPanel", () => {
     expect(screen.getByText("Full answer.")).toBeTruthy(); // written chat is the full answer
   });
 
+  it("spoken frame reaches the loop before done (#104: speak the cue as soon as it streams)", async () => {
+    const stream = new FakeStream();
+    const { voice, speaker } = fakeVoice();
+    render(ChatPanel, { props: { stream, voice } });
+
+    const mic = screen.getByRole("button", { name: /hold to talk/i });
+    await fireEvent.pointerDown(mic);
+    await new Promise((r) => setTimeout(r, 300));
+    await fireEvent.pointerUp(mic);
+    await waitFor(() => expect(voice.state).toBe("asking"));
+
+    stream.emit({ phase: "streaming", spoken: "Brake later into four." });
+    await waitFor(() => expect(speaker.spoken).toEqual(["Brake later into four."]));
+    expect(voice.state).toBe("speaking"); // speaking already, well before `done`
+
+    stream.emit({ phase: "done", answer: "Full answer.", spoken: "Brake later into four.", chatId: "c1" });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(speaker.spoken).toEqual(["Brake later into four."]); // not spoken a second time
+  });
+
   it("composer: voice enabled + empty box shows the mic, no Send button", async () => {
     const { voice } = fakeVoice();
     render(ChatPanel, { props: { stream: new FakeStream(), voice } });

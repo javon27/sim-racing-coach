@@ -120,6 +120,22 @@ describe("VoiceLoop PTT", () => {
     speaker.end(); await flush();
     expect(loop.state).toBe("idle");
   });
+  it("onSpoken speaks before onAnswer; onAnswer does not re-speak", async () => {
+    const { loop, speaker } = make();
+    loop.press(); await flush(); loop.release(); await flush(); await flush();
+    loop.onSpoken("Brake later into four."); await flush();
+    expect(loop.state).toBe("speaking"); expect(speaker.spoken).toEqual(["Brake later into four."]);
+    // done arrives while the cue is still being spoken: no second utterance.
+    loop.onAnswer("Full answer.", "Brake later into four."); await flush();
+    expect(speaker.spoken).toEqual(["Brake later into four."]);
+    speaker.end(); await flush();
+    expect(loop.state).toBe("idle");
+  });
+  it("onSpoken outside asking/ptt is ignored", async () => {
+    const { loop, speaker } = make();
+    loop.onSpoken("Brake later."); await flush();
+    expect(loop.state).toBe("idle"); expect(speaker.spoken).toEqual([]);
+  });
   it("falls back to the first paragraph when spoken is missing", async () => {
     const { loop, speaker } = make();
     loop.press(); await flush(); loop.release(); await flush(); await flush();

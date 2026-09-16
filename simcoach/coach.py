@@ -212,25 +212,27 @@ AGENTIC_SYSTEM_PROMPT = (
 
 SPOKEN_SENTENCE = (
     "VOICE: the driver asked by voice from the headset and will HEAR only a short summary "
-    "while the full answer is shown on screen. Write your normal full answer, then on its "
-    "own FINAL line write `[spoken] ` followed by 2-3 plain spoken sentences carrying the "
-    "single most important cue -- no markdown, no lists, no numbers they can't hold in "
-    "their head mid-session."
+    "while the full answer is shown on screen. On the VERY FIRST line write `[spoken] ` "
+    "followed by 2-3 plain spoken sentences carrying the single most important cue -- no "
+    "markdown, no lists, no numbers they can't hold in their head mid-session. Leave a "
+    "blank line, then write your normal full answer."
 )
 
 _SPOKEN_RE = re.compile(r"^\s*(?:\*\*)?\[spoken\](?:\*\*)?:?(?:\*\*)?\s*(.*?)\s*$", re.IGNORECASE)
 
 
 def split_spoken(text: str) -> tuple[str, str | None]:
-    """Pull the trailing `[spoken] ...` line out of an answer. Returns
-    (answer without that line, spoken) or (text, None) when absent/empty."""
+    """Pull the `[spoken] ...` line out of an answer (tag may be the first line or
+    the last -- scans from the start so a tag-first reply is found immediately as
+    it streams). Returns (answer without that line, spoken) or (text, None) when
+    absent/empty."""
     lines = text.split("\n")
-    for i in range(len(lines) - 1, -1, -1):
+    for i in range(len(lines)):
         m = _SPOKEN_RE.match(lines[i])
         if m:
             if not m.group(1):
                 return text, None
-            rest = "\n".join(lines[:i] + lines[i + 1:]).rstrip()
+            rest = "\n".join(lines[:i] + lines[i + 1:]).strip()
             return rest, m.group(1)
     return text, None
 

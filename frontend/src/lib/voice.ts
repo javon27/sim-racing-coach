@@ -170,6 +170,14 @@ export class VoiceLoop {
   }
 
   // ---- coach events ----
+  // PTT only: the [spoken] cue streamed ahead of the rest of the answer (coach.ts
+  // `spoken` event) -- start speaking it right away instead of waiting for `done`.
+  // This moves state off "asking", so onAnswer's own `state !== "asking"` guard
+  // below is what stops it from re-speaking once `done` arrives.
+  onSpoken(text: string): void {
+    if (this.state !== "asking" || this.mode !== "ptt") return;
+    void this.#speakThen(stripForSpeech(text), () => { this.mode = null; this.#set("idle"); });
+  }
   onAnswer(answer: string, spoken?: string | null): void {
     if (this.state !== "asking") return;
     const text = this.mode === "ptt" ? (spoken ?? firstParagraph(answer)) : answer;

@@ -425,12 +425,20 @@
     window.addEventListener("settings-changed", loadVoice);
     window.addEventListener("keydown", onWindowKeydown);
     window.addEventListener("keyup", onWindowKeyup);
+    let lastSpokenSeen: string | null = null;
     const unsubscribe = stream.subscribe((s) => {
       const snap = s as { phase: CoachPhase; toolActivity: ToolActivity | null; answer: string; spoken?: string | null; chatId: string | null; error: string | null; usage?: ChatUsage | null; cost?: number | null; costComplete?: boolean; longChat?: boolean };
       phase = snap.phase;
       toolActivity = snap.toolActivity;
       answer = snap.answer;
       error = snap.error;
+      if (snap.phase === "connecting") lastSpokenSeen = null; // fresh ask -- forget the last turn's cue
+      // The `spoken` cue streams ahead of `done` (#104) -- forward it to the loop
+      // the moment it arrives so PTT starts talking immediately, not just on done.
+      if (snap.spoken && snap.spoken !== lastSpokenSeen) {
+        lastSpokenSeen = snap.spoken;
+        activeVoice?.onSpoken(snap.spoken);
+      }
       if (snap.phase === "done") {
         messages = [...messages, { role: "coach", text: snap.answer }];
         waiting = false;
