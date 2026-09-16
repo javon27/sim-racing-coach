@@ -125,6 +125,7 @@ _MAP_BUFFER_MAX = 8      # cap mapping-mode buffer (need only 2 edges; keep last
 # auto-admit http://tauri.localhost:5173 and :8765. Widen this set deliberately.
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
 REST_PROBE_TTL = 2.0  # s: liveness probe rate cap so /status polling can't hammer LMU's REST
+_EVENTS_PERIOD = 1.0  # s: /events push loop period (module constant so tests can monkeypatch it)
 SIDECAR_PORT = 8765   # the port simcoach/server/__main__.py serves on (it imports this)
 VITE_DEV_PORT = 5173  # `npm run dev` / src-tauri/tauri.conf.json devUrl
 FRONTEND_ORIGINS = ["http://localhost:5173", "http://tauri.localhost"]
@@ -810,8 +811,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     def health():
         return {"status": "ok"}
 
-    @app.get("/status")
-    def status():
+    def _status_view() -> dict:
         # Live track/car from shared memory FIRST, so a track/car change is detected
         # right away. The latest captured lap adds rich context (on_track + session/
         # lap ids) but ONLY while it still matches the live session; once the driver
@@ -851,6 +851,10 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             "session_id": session_id,
             "lap_id": lap_id,
         }
+
+    @app.get("/status")
+    def status():
+        return _status_view()
 
     @app.get("/sessions")
     def sessions(track: str | None = None, car: str | None = None,
@@ -2244,6 +2248,88 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                     c["car"] = resolve_car(c["car"], c["cls"])
                 await ws.send_json(payload)
                 await asyncio.sleep(_LIVE_PERIOD)
+        except (WebSocketDisconnect, RuntimeError):
+            pass
+        finally:
+            if ws.client_state == WebSocketState.CONNECTED:
+                try: await ws.close()
+                except Exception: pass
+
+    @app.websocket("/events")
+    async def events_ws(ws: WebSocket):
+        # Replaces the frontend's status/laps/map/mapcapture/voice-status pollers
+        # (#106) with one push. Same host/origin preamble as /coach and /live.
+        host = (ws.headers.get("host") or "").split(":")[0].lower()
+        if host not in ALLOWED_HOSTS or _bad_origin(ws.headers.get("origin")):
+            await ws.close(code=1008)
+            return
+        await ws.accept()
+
+        log = logging.getLogger(__name__)
+        _MISSING = object()
+        last: dict = {}  # per-connection change-detection state
+
+        def _events_tick() -> list[tuple[str, dict]]:
+            # Runs off the event loop (blocking store/smm/disk reads). Each topic is
+            # independently guarded: a broken one is logged and skipped, never taking
+            # `status` (the client's liveness signal) down with it.
+            frames: list[tuple[str, dict]] = []
+            status_data = _status_view()
+            frames.append(("status", status_data))  # every tick
+
+            try:
+                sid = status_data["session_id"]
+                laps = store.session_laps(sid) if sid else []
+                sig = (sid, len(laps), laps[-1]["id"] if laps else None)
+                if last.get("_laps_sig", _MISSING) != sig:
+                    last["_laps_sig"] = sig
+                    frames.append(("laps", {"session_id": sid, "laps": laps}))
+            except Exception:
+                log.warning("events: laps tick failed", exc_info=True)
+
+            try:
+                track, car = status_data["track"], status_data["car"]
+                map_data = _map_payload(track, car) if track else {}
+                key = (track, car)
+                if last.get("_map_key", _MISSING) != key:
+                    last["_map_key"] = key
+                    frames.append(("map", map_data))
+            except Exception:
+                log.warning("events: map tick failed", exc_info=True)
+
+            try:
+                was_mapping = last.get("_mapcapture_active", False)
+                if app.state.mapping or was_mapping:
+                    mc_data = mapcapture_status()
+                    sig = json.dumps(mc_data, sort_keys=True, default=str)
+                    if last.get("_mapcapture_sig") != sig:
+                        last["_mapcapture_sig"] = sig
+                        frames.append(("mapcapture", mc_data))
+                    last["_mapcapture_active"] = app.state.mapping
+            except Exception:
+                log.warning("events: mapcapture tick failed", exc_info=True)
+
+            try:
+                was_installing = last.get("_voice_installing", False)
+                vs_data = app.state.voice_installer.status()
+                if vs_data.get("installing") or was_installing:
+                    sig = json.dumps(vs_data, sort_keys=True, default=str)
+                    if last.get("_voice_sig") != sig:
+                        last["_voice_sig"] = sig
+                        frames.append(("voice_setup", vs_data))
+                    last["_voice_installing"] = vs_data.get("installing")
+            except Exception:
+                log.warning("events: voice_setup tick failed", exc_info=True)
+
+            return frames
+
+        loop = asyncio.get_running_loop()
+        try:
+            while True:
+                frames = await loop.run_in_executor(None, _events_tick)
+                for topic, data in frames:
+                    await ws.send_json({"topic": topic, "data": data})
+                await asyncio.sleep(_EVENTS_PERIOD)
         except (WebSocketDisconnect, RuntimeError):
             pass
         finally:
