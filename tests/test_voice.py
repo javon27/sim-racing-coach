@@ -192,3 +192,30 @@ def test_kokoro_default_download_verifies_sha256(tmp_path, monkeypatch):
     monkeypatch.setattr(v, "_fetch_to", lambda url, dest: dest.write_bytes(served[url.rsplit("/", 1)[1]]))
     with pytest.raises(RuntimeError, match="sha256"):
         v._default_kokoro_download(tmp_path / "kokoro")
+
+
+def test_kokoro_installer_memoises_voices_once_populated(tmp_path):
+    def fake_download(dest: Path):
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "kokoro-v1.0.onnx").write_bytes(b"0")
+        (dest / "voices-v1.0.bin").write_bytes(b"0")
+    inst = KokoroInstaller(str(tmp_path), downloader=fake_download)
+    inst.start()
+    for _ in range(50):
+        if not inst.status()["installing"]:
+            break
+        time.sleep(0.05)
+
+    calls = {"n": 0}
+    def counting_voices():
+        calls["n"] += 1
+        return ["af_heart"]
+    inst.voices_fn = counting_voices
+
+    for _ in range(3):
+        assert inst.status()["voices"] == ["af_heart"]
+    assert calls["n"] == 1   # loaded once, then served from the memo
+
+    inst.start()   # a fresh install invalidates the memo
+    assert inst.status()["voices"] == ["af_heart"]
+    assert calls["n"] == 2

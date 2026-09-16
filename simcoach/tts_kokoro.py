@@ -231,17 +231,20 @@ class KokoroEngine:
         return (self.model_dir / MODEL_FILE).exists() and (self.model_dir / VOICES_FILE).exists()
 
     def _load(self):
-        if self._kokoro is not None:
+        if self._kokoro is not None:      # fast path, no lock
             return self._kokoro
-        if not self.available():
-            raise EngineUnavailable("Kokoro model is not installed")
-        try:
-            cls = self._backend or _patch_kokoro()
-            self._kokoro = cls(str(self.model_dir / MODEL_FILE), str(self.model_dir / VOICES_FILE))
-        except Exception as e:      # surfaced to Settings; Windows voices take over (re-raised, not swallowed)
-            self._error = str(e) or type(e).__name__
-            raise EngineUnavailable(self._error) from e
-        return self._kokoro
+        with self._lock:                  # the 325 MB model must load exactly once
+            if self._kokoro is not None:  # another thread won the race while we waited
+                return self._kokoro
+            if not self.available():
+                raise EngineUnavailable("Kokoro model is not installed")
+            try:
+                cls = self._backend or _patch_kokoro()
+                self._kokoro = cls(str(self.model_dir / MODEL_FILE), str(self.model_dir / VOICES_FILE))
+            except Exception as e:  # surfaced to Settings; Windows voices take over (re-raised, not swallowed)
+                self._error = str(e) or type(e).__name__
+                raise EngineUnavailable(self._error) from e
+            return self._kokoro
 
     def voices(self) -> list[str]:
         return [v for v in self._load().get_voices() if v[:1] in ("a", "b")]   # American/British English

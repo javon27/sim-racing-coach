@@ -1,6 +1,8 @@
 import importlib.util
 import struct
 import sys
+import threading
+import time
 
 import numpy as np
 import pytest
@@ -127,6 +129,29 @@ def test_engine_unavailable_when_model_files_missing(tmp_path):
     assert eng.available() is False
     with pytest.raises(EngineUnavailable):
         eng.synthesize("hi", voice="af_heart", speed=1.0)
+
+
+def test_load_is_locked_against_concurrent_voices_and_synthesize_calls(tmp_path):
+    counter = {"n": 0}
+
+    class FakeKokoro:
+        def __init__(self, *a):
+            counter["n"] += 1
+            time.sleep(0.05)   # widen the race window an unlocked _load() would fall into
+        def get_voices(self): return ["af_heart"]
+        def create(self, ph, voice, speed=1.0, is_phonemes=False, lang="en-us"):
+            return np.zeros(240, dtype=np.float32), 24000
+
+    _touch_model_files(tmp_path)
+    eng = KokoroEngine(tmp_path, backend=FakeKokoro, g2p=lambda t: t)
+
+    threads = [threading.Thread(target=eng.voices),
+               threading.Thread(target=lambda: eng.synthesize("hi", voice="af_heart", speed=1.0))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(2)
+    assert counter["n"] == 1
 
 
 @pytest.mark.skipif(not HAVE_KOKORO, reason="voice extra not installed")
