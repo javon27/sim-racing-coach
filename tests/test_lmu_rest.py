@@ -92,3 +92,22 @@ def test_player_energy_usage_picks_player_by_name():
 def test_player_energy_usage_empty_when_no_standing():
     r = LmuRest(fetch=lambda p: [] if "standings" in p else {})
     assert r.player_energy_usage() == []
+
+
+def test_reachable_is_true_for_a_listening_port_and_false_and_fast_otherwise():
+    # Rig 2026-09-15: a closed loopback port does not RST a Python socket here, so
+    # the HTTP probe burned its full 4 s timeout with LMU closed. reachable() bounds
+    # that to its own short connect timeout.
+    import socket
+    import time
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+    try:
+        assert LmuRest(f"http://127.0.0.1:{port}").reachable() is True
+    finally:
+        srv.close()
+    t = time.monotonic()
+    assert LmuRest(f"http://127.0.0.1:{port}").reachable(timeout=0.3) is False
+    assert time.monotonic() - t < 1.5

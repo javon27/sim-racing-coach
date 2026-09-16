@@ -749,6 +749,11 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             except Exception:
                 return None
         try:
+            # Fast TCP check first (300 ms bound) so a closed LMU never costs the
+            # full HTTP timeout; then the real liveness probe.
+            reachable = getattr(rest, "reachable", None)
+            if reachable is not None and not reachable():
+                raise ConnectionError("LMU REST port not accepting connections")
             rest.get_setup()  # liveness probe
         except Exception:
             app.state.rest = None
