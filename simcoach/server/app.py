@@ -1989,6 +1989,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             # waiting for the whole answer. Not buffered outside PTT.
             spoken_buf = "" if voice == "ptt" else None
             spoken_resolved = voice != "ptt"
+            spoken = None   # defined even if the stream raises before it's resolved below
             try:
                 for ev in app.state.coach.ask_agentic_stream(
                         ctx, question, car=car, input_device=req.get("input_device"),
@@ -2027,7 +2028,6 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                         _emit({"type": "spoken", "text": m.group(1)})
                     else:
                         _emit({"type": "text", "text": spoken_buf})
-                spoken = None
                 if voice == "ptt":
                     text, spoken = split_spoken(text)
                     spoken = spoken or first_paragraph(text)
@@ -2049,7 +2049,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                     stored_question = ("🎤 " + question) if voice else question
                     app.state.store.save_chat(chat_id, ctx.session_id, ctx.track, ctx.car, ctx.lap_id,
                                               stored_question, text, ctx.tool_calls,
-                                              usage=turn_usage.as_dict(), model=used_model)
+                                              usage=turn_usage.as_dict(), model=used_model,
+                                              spoken=spoken)
                     terminal["chat_id"] = chat_id
                     # Report the CHAT cumulative total, read back from the store after
                     # the insert: the number the driver sees is then the persisted

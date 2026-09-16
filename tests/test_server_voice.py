@@ -119,6 +119,7 @@ def test_ptt_strips_spoken_line_and_sends_it_on_done(tmp_path, monkeypatch):
     rows = store.chat_messages(ev["chat_id"])
     assert rows[0]["question"] == "🎤 where am I losing time"
     assert rows[0]["answer"] == "Brake later.\n\nMore detail."      # never stored with the tag
+    assert rows[0]["spoken"] == "Brake later into four."
 
 
 def _ask_all(c, body):
@@ -180,5 +181,7 @@ def test_conversation_and_typed_add_nothing(tmp_path, monkeypatch):
     ev = _ask(c, {"question": "q", "voice": "conversation"})
     assert "spoken" not in ev and ev["answer"] == "Answer." and "VOICE:" not in model.last_system
     assert store.chat_messages(ev["chat_id"])[0]["question"] == "🎤 q"
+    assert store.chat_messages(ev["chat_id"])[0]["spoken"] is None
     ev = _ask(c, {"question": "typed", "voice": "bogus"})
     assert "spoken" not in ev and store.chat_messages(ev["chat_id"])[0]["question"] == "typed"
+    assert store.chat_messages(ev["chat_id"])[0]["spoken"] is None

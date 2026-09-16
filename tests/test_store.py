@@ -376,6 +376,21 @@ def test_v1_schema_migrates_in_place_to_v2(tmp_path, synthetic_lap):
     assert s.session_lap_ids("s1") == [lid]
 
 
+def test_save_chat_round_trips_spoken(tmp_path):
+    """Issue #108: the PTT spoken cue is stored alongside the written answer so a
+    later review can compare what was heard against what was written."""
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "telem"))
+    cid = s.create_chat()
+    s.save_chat(cid, "s1", "t", "c", None, "q", "a", spoken="Brake later into Turn 1.")
+    assert s.chat_messages(cid)[0]["spoken"] == "Brake later into Turn 1."
+    assert s.session_chat("s1")[0]["spoken"] == "Brake later into Turn 1."
+
+    # a row saved without it reads None, not missing/omitted.
+    s.save_chat(cid, "s1", "t", "c", None, "typed q", "typed a")
+    assert s.chat_messages(cid)[1]["spoken"] is None
+
+
 def test_concurrent_save_and_read_is_safe(tmp_path, synthetic_lap):
     """A background writer looping save() and a foreground reader looping
     best_lap()/load() on the same LapStore must never crash. Without the
@@ -627,6 +642,25 @@ def test_v17_schema_migrates_lap_no_and_pit_columns_to_v18(tmp_path):
     assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     cols = [r[1] for r in s2.conn.execute("PRAGMA table_info(laps)")]
     assert {"lap_no", "pit"} <= set(cols)
+
+
+def test_v18_schema_migrates_spoken_column_to_v19(tmp_path):
+    """Issue #108: persist the coach's spoken cue (PTT) alongside the written
+    answer. A v18 db with coach_chat lacking `spoken` migrates to v19 with the
+    column present and existing rows intact (spoken NULL)."""
+    from simcoach.store import SCHEMA_VERSION, LapStore
+    db = str(tmp_path / "c.sqlite")
+    s = LapStore(db, str(tmp_path / "telem"))
+    cid_old = s.create_chat()
+    s.save_chat(cid_old, "s", "t", "c", None, "legacy q", "legacy a")
+    s.conn.execute("PRAGMA user_version = 18")
+    s.conn.commit(); s.conn.close()
+
+    s2 = LapStore(db, str(tmp_path / "telem"))
+    assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    cols = [r[1] for r in s2.conn.execute("PRAGMA table_info(coach_chat)")]
+    assert "spoken" in cols
+    assert s2.chat_messages(cid_old)[0]["spoken"] is None
 
 
 def test_save_and_load_round_trips_lap_no_and_pit(tmp_path, synthetic_lap):

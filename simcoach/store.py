@@ -76,7 +76,7 @@ def _session_base(sid: str) -> str:
     """The (track, car, mode) base of a session id, dropping any ~<instance> suffix."""
     return sid.split(_SESSION_SEP, 1)[0]
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
@@ -104,7 +104,8 @@ CREATE TABLE IF NOT EXISTS coach_chat (
     output_tokens INTEGER,
     cache_read_tokens INTEGER,
     cache_write_tokens INTEGER,
-    model TEXT
+    model TEXT,
+    spoken TEXT
 );
 """
 
@@ -599,6 +600,14 @@ class LapStore:
                     for c in ("lap_no", "pit"):
                         if c not in cols:
                             _add_column(self.conn, "laps", f"{c} INTEGER")
+            if current_version < 19:
+                # v18 -> v19: persist the PTT spoken cue (the short line read aloud)
+                # alongside the written answer, so a later review can compare what
+                # was heard against what was written -- issue #108. Existing rows
+                # stay NULL. Guard the ADD COLUMN like the v4/v5/v12 steps.
+                cols = [r[1] for r in self.conn.execute("PRAGMA table_info(coach_chat)")]
+                if cols and "spoken" not in cols:
+                    _add_column(self.conn, "coach_chat", "spoken TEXT")
         if current_version != stamp:
             self.conn.execute(f"PRAGMA user_version = {stamp}")
         self.conn.commit()
@@ -921,12 +930,15 @@ class LapStore:
     def save_chat(self, chat_id: str, session_id: str, track: str | None, car: str | None,
                   lap_id: int | None, question: str, answer: str,
                   tool_calls: list | None = None, ts: float | None = None,
-                  usage: dict | None = None, model: str | None = None) -> None:
+                  usage: dict | None = None, model: str | None = None,
+                  spoken: str | None = None) -> None:
         """Append one coach Q&A exchange (with the tools it invoked) to the log.
 
         `usage` is a TokenUsage.as_dict() of what this turn actually billed, summed
         over every tool-loop call; `model` is the model that billed it. Both optional
-        — a turn with no usage stores NULLs and sums as zero."""
+        — a turn with no usage stores NULLs and sums as zero. `spoken` (added v19) is
+        the PTT cue actually read aloud, so a later review can compare what was heard
+        against what was written; NULL for a non-voice or non-PTT turn."""
         if chat_id is None:
             raise ValueError("chat_id is required")
         tc_json = json.dumps(tool_calls) if tool_calls else None
@@ -935,11 +947,11 @@ class LapStore:
             self.conn.execute(
                 "INSERT INTO coach_chat (ts, chat_id, session_id, track, car, lap_id, "
                 "question, answer, tool_calls, input_tokens, output_tokens, "
-                "cache_read_tokens, cache_write_tokens, model) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "cache_read_tokens, cache_write_tokens, model, spoken) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (ts if ts is not None else time.time(), chat_id, session_id, track, car,
                  lap_id, question, answer, tc_json,
-                 *(u.get(key) for _, key in _USAGE_COLUMNS), model),
+                 *(u.get(key) for _, key in _USAGE_COLUMNS), model, spoken),
             )
 
     def chat_usage(self, chat_id: str) -> dict:
@@ -1012,11 +1024,12 @@ class LapStore:
         """Every Q&A exchange in a chat, oldest first."""
         with self._lock:
             rows = self.conn.execute(
-                "SELECT ts, session_id, track, car, lap_id, question, answer, tool_calls "
+                "SELECT ts, session_id, track, car, lap_id, question, answer, tool_calls, spoken "
                 "FROM coach_chat WHERE chat_id = ? ORDER BY ts, id",
                 (chat_id,),
             ).fetchall()
-            keys = ("ts", "session_id", "track", "car", "lap_id", "question", "answer", "tool_calls")
+            keys = ("ts", "session_id", "track", "car", "lap_id", "question", "answer", "tool_calls",
+                     "spoken")
             out = []
             for r in rows:
                 d = dict(zip(keys, r))
@@ -1028,11 +1041,11 @@ class LapStore:
         """Every Q&A exchange in a session, oldest first (for review / memory)."""
         with self._lock:
             rows = self.conn.execute(
-                "SELECT ts, track, car, lap_id, question, answer, tool_calls FROM coach_chat "
+                "SELECT ts, track, car, lap_id, question, answer, tool_calls, spoken FROM coach_chat "
                 "WHERE session_id = ? ORDER BY id ASC",
                 (session_id,),
             ).fetchall()
-            keys = ("ts", "track", "car", "lap_id", "question", "answer", "tool_calls")
+            keys = ("ts", "track", "car", "lap_id", "question", "answer", "tool_calls", "spoken")
             out = []
             for r in rows:
                 d = dict(zip(keys, r))
