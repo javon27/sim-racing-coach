@@ -283,8 +283,8 @@ SPOKEN_SENTENCE = (
     "blank line, then write your normal full answer. Locate a corner the way the corner "
     "tools do under 'Locate it:' -- 'Turn N' followed by the descriptor ('Turn 10, sector 2, "
     "the fast left after the long straight'). Add the corner's name only if the driver has "
-    "used it themselves in this chat; never the name alone. One cue, one action; at most one "
-    "number in the whole spoken part."
+    "used it themselves in this chat; never the name alone. One cue, one action; apart from "
+    "the locator's own numbers, at most one figure in the whole spoken part."
 )
 
 _SPOKEN_RE = re.compile(r"^\s*(?:\*\*)?\[spoken\](?:\*\*)?:?(?:\*\*)?\s*(.*?)\s*$", re.IGNORECASE)
