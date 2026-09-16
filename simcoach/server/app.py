@@ -2289,11 +2289,12 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
 
             try:
                 track, car = status_data["track"], status_data["car"]
-                map_data = _map_payload(track, car) if track else {}
                 key = (track, car)
                 if last.get("_map_key", _MISSING) != key:
+                    # Only on a track/car change: _map_payload re-reads the track file
+                    # and the store's sector bounds, which is not 1 Hz work.
                     last["_map_key"] = key
-                    frames.append(("map", map_data))
+                    frames.append(("map", _map_payload(track, car) if track else {}))
             except Exception:
                 log.warning("events: map tick failed", exc_info=True)
 
