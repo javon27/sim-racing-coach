@@ -686,6 +686,24 @@ describe("ChatPanel (scroll to end + jump-to-latest, #104)", () => {
     }
   }
 
+  it("a spoken question snaps the thread to the end even when scrolled up (rig: conversation mode didn't scroll)", async () => {
+    const speaker = { speak() { return new Promise<void>(() => {}); }, cancel() {}, earcon() {} };
+    const recorder = { async start() {}, async stop() { return { pcm: new Float32Array(16000), sampleRate: 16000 }; } };
+    const transcriber = { async transcribe() { return { text: "where am I losing time", seconds: 1 }; } };
+    const voice = new VoiceLoop({ recorder, transcriber, speaker, ask: () => {}, vad: { threshold: 0.02, silenceMs: 1000, maxS: 20 }, conversationIdleS: 30 });
+    const { container } = render(ChatPanel, { props: { stream: new FakeStream(), voice } });
+    const scrollEl = container.querySelector(".chat-scroll") as HTMLElement;
+    stubLayout(scrollEl);
+    scrollEl.scrollTop = 100;                      // driver had scrolled up
+    await fireEvent.scroll(scrollEl);
+    const mic = screen.getByRole("button", { name: /hold to talk/i });
+    await fireEvent.pointerDown(mic);
+    await new Promise((r) => setTimeout(r, 300));
+    await fireEvent.pointerUp(mic);
+    await screen.findByText("🎤 where am I losing time");
+    await waitFor(() => expect(scrollEl.scrollTop).toBe(scrollEl.scrollHeight));
+  });
+
   it("opens a stored chat scrolled to the end", async () => {
     vi.mocked(getChatMessages).mockResolvedValue([
       { ts: 1, session_id: "s1", track: "Le Mans", car: "Corvette", lap_id: null, question: "q1", answer: "a1", tool_calls: null },

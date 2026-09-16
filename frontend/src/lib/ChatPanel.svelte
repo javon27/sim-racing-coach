@@ -222,6 +222,9 @@
   });
 
   function sendVoice(text: string, mode: VoiceMode) {
+    // Same snap-to-bottom a typed send gets: a spoken question is the driver
+    // acting too, so the thread must follow it (rig: conversation mode didn't scroll).
+    forceScrollOnLoad = true;
     messages = [...messages, { role: "you", text: "🎤 " + text }];
     waiting = true;
     stream.ask(text, { sessionId, lapId, chatId: currentChatId, voice: mode });
