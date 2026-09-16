@@ -26,6 +26,7 @@ from simcoach.analysis import (
 from simcoach.coach import _setup_lines, live_electronics
 from simcoach.corners import CornerMap
 from simcoach.format import (
+    corner_descriptor,
     find_corner,
     format_consistency,
     format_corner_line,
@@ -954,14 +955,25 @@ class CoachContext:
                     f"in all {len(analysis.corners)} corners.")
         return lap_line + "\n" + "\n".join(lines)
 
+    def _latest_analysis(self):
+        """This session's current/latest lap's analysis, or None with no lap or
+        no corner map -- used to seed `list_track_corners`' spoken locators with
+        real measured speeds rather than geometry alone."""
+        record, lap_id = self._current_lap()
+        if record is None:
+            return None
+        return self._analysis_for(record, lap_id)
+
     def list_track_corners(self):
         if self.cmap is None or not self.cmap.corners:
             return "No corner map for this track yet — no corner list available."
+        analysis = self._latest_analysis()
         parts = []
         for c in self.cmap.corners:
             label = c.label or str(c.number)
             multi = " (double-apex)" if c.apexes and len(c.apexes) > 1 else ""
-            parts.append(f"T{label} {c.name} — {c.direction}{multi}")
+            descriptor = corner_descriptor(self.cmap, c.number, analysis=analysis)
+            parts.append(f"T{label} {c.name} — {c.direction}{multi} — {descriptor}")
         return (f"Corners for {self.track or 'this track'} ({len(parts)}), from the saved map:\n"
                 + "\n".join(parts))
 
@@ -987,6 +999,14 @@ class CoachContext:
         geo = self._corner_geometry_clause(label, cm.direction)
         if geo:
             line += f"\nGeometry (baked from the track map): {geo}"
+        # #108 item 12: locate it by direction/speed/position, not a bare number --
+        # the reference/best lap's speeds when one resolves (a spun lap's min speed
+        # lies), else this lap's own.
+        ref, _ = self._reference_lap(record, lap_id, "best")
+        ref_analysis = self._analysis_for(ref, None) if ref is not None else analysis
+        descriptor = corner_descriptor(self.cmap, cm.corner_no, analysis=ref_analysis,
+                                       sector_bounds=record.sector_bounds)
+        line += f"\nLocate it: {descriptor}"
         return self._lap_line(record, lap_id) + "\n" + line
 
     def _gear_usually_line(self, cm) -> str | None:

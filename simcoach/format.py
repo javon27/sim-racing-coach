@@ -230,6 +230,94 @@ def format_corner_line(cm, units: str = "metric") -> str:
     return line
 
 
+# #108 item 12: a code-generated spoken locator ("Turn 10, sector 2, the fast
+# left after the long straight") -- a bare corner NUMBER only works with a map
+# open, and a corner NAME the driver doesn't know is useless in the headset.
+# Built entirely from owned data (map geometry + measured min_spd); the model
+# never guesses direction, position, or what precedes a corner.
+_SPEED_CLASS_KMH = ((70, "hairpin"), (110, "slow"), (160, "medium"), (220, "fast"))
+_FLAT_OUT_CLASS = "flat-out"
+
+# ponytail: tuning knobs for the "precedes" clause's gap wording -- a rig read
+# on a straight the driver knows settles these.
+_GAP_LONG_STRAIGHT_M = 600.0
+_GAP_STRAIGHT_M = 250.0
+_GAP_STRAIGHT_AFTER_M = 80.0
+
+
+def _speed_class(min_spd_kmh: float) -> str:
+    for limit, name in _SPEED_CLASS_KMH:
+        if min_spd_kmh < limit:
+            return name
+    return _FLAT_OUT_CLASS
+
+
+def corner_descriptor(cmap, corner_no, analysis=None, sector_bounds=None) -> str:
+    """One spoken locator for a corner -- direction, speed class, what precedes
+    it, where in the lap -- composed from the map (`cmap`) and, optionally, a
+    lap's measured speeds (`analysis`, a `LapAnalysis`; pass the reference/best
+    lap's -- a spun lap's min speed lies) and sector splits (`sector_bounds`,
+    `record.sector_bounds`). Each part is omitted, not guessed, when it can't be
+    computed. `cmap.corners` must be sorted by `start_dist`."""
+    corners = cmap.corners
+    idx = next((i for i, c in enumerate(corners) if c.number == corner_no), None)
+    if idx is None:
+        return f"Turn {corner_no}"
+    corner = corners[idx]
+    parts = [f"Turn {corner.label or corner.number}"]
+
+    if sector_bounds:
+        b0, b1 = sector_bounds[0], sector_bounds[1]
+        sector = 1 if corner.apex_dist <= b0 else (2 if corner.apex_dist <= b1 else 3)
+        parts.append(f"sector {sector}")
+    elif cmap.length:
+        frac = corner.apex_dist / cmap.length
+        parts.append("early in the lap" if frac <= 1 / 3 else
+                     "middle of the lap" if frac <= 2 / 3 else "back half")
+
+    if not sector_bounds:
+        if idx == 0:
+            parts.append("the first corner")
+        elif idx == len(corners) - 1:
+            parts.append("the last corner")
+
+    # Speed class + direction -- e.g. "the fast left"; hairpins read direction-first.
+    cls = None
+    if analysis is not None:
+        cm = next((c for c in analysis.corners if c.corner_no == corner_no), None)
+        if cm is not None and not math.isnan(cm.min_spd):
+            cls = _speed_class(cm.min_spd)
+    tail = []
+    if corner.direction:
+        if cls == "hairpin" and corner.direction in ("left", "right"):
+            tail.append(f"the {corner.direction}-hand hairpin")
+        elif cls and corner.direction in ("left", "right"):
+            tail.append(f"the {cls} {corner.direction}")
+        else:
+            tail.append(corner.direction)
+
+    # What precedes it -- gap from the previous map corner's end to this one's
+    # start; wraps the S/F seam for the first corner when the lap length is known.
+    prev = corners[idx - 1] if len(corners) > 1 else None
+    if prev is not None:
+        gap = ((cmap.length - prev.end_dist) + corner.start_dist if idx == 0 and cmap.length
+               else None if idx == 0 else corner.start_dist - prev.end_dist)
+        if gap is not None:
+            prev_label = prev.label or prev.number
+            if gap >= _GAP_LONG_STRAIGHT_M:
+                tail.append("after the long straight")
+            elif gap >= _GAP_STRAIGHT_M:
+                tail.append("after the straight")
+            elif gap <= _GAP_STRAIGHT_AFTER_M:
+                tail.append(f"straight after Turn {prev_label}")
+            else:
+                tail.append(f"after Turn {prev_label}")
+
+    if tail:
+        parts.append(" ".join(tail))
+    return ", ".join(parts)
+
+
 # How many loss buckets the coach is handed. More than this and the ranking stops
 # being a ranking. ponytail: a flat cap; a "everything above 0.1s" rule would adapt.
 _TOP_BUCKETS = 5

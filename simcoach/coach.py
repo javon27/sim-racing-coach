@@ -280,10 +280,11 @@ SPOKEN_SENTENCE = (
     "while the full answer is shown on screen. On the VERY FIRST line write `[spoken] ` "
     "followed by 2-3 plain spoken sentences carrying the single most important cue -- no "
     "markdown, no lists, no numbers they can't hold in their head mid-session. Leave a "
-    "blank line, then write your normal full answer. Refer to a corner as 'Turn N' first "
-    "(the number from the corner line, e.g. 'Turn 10'); add its name only after the number "
-    "('Turn 10, Pouhon'), never the name alone. One cue, one action; at most one number in "
-    "the whole spoken part."
+    "blank line, then write your normal full answer. Locate a corner the way the corner "
+    "tools do under 'Locate it:' -- 'Turn N' followed by the descriptor ('Turn 10, sector 2, "
+    "the fast left after the long straight'). Add the corner's name only if the driver has "
+    "used it themselves in this chat; never the name alone. One cue, one action; at most one "
+    "number in the whole spoken part."
 )
 
 _SPOKEN_RE = re.compile(r"^\s*(?:\*\*)?\[spoken\](?:\*\*)?:?(?:\*\*)?\s*(.*?)\s*$", re.IGNORECASE)
