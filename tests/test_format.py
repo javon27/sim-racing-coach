@@ -494,7 +494,7 @@ def test_format_events_lockup_and_wheelspin_lines():
 
 def test_format_events_off_line():
     assert format_events([_ev("off", 1, past_edge_m=1.4)], _CMAP) == [
-        "T1 Left Hairpin: off track — centre 1.4 m past the edge"]
+        "T1 Left Hairpin: off track"]
 
 
 def test_format_events_wear_step_line():

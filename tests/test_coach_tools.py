@@ -54,6 +54,7 @@ def _gear_session(tmp_path, synthetic_lap, gears, phase="practice"):
     so a lap's gear_min reads that lap's own constant everywhere, T1's
     min-speed sample included."""
     import dataclasses
+
     import numpy as np
     store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
     cmap = CornerMap.load("simcoach/tracks/test_track.json")

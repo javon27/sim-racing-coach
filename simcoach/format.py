@@ -472,8 +472,11 @@ def format_events(events, cmap, units: str = "metric") -> list[str]:
                          f"\N{RIGHTWARDS ARROW} {spd(d['speed_min_kmh']):.0f} {spd_u}, "
                          f"turned {d['turned_deg']:.0f}\N{DEGREE SIGN}")
         elif kind == "off":
-            lines.append(f"{head}off track \N{EM DASH} centre {d['past_edge_m']:.1f} m "
-                         "past the edge")
+            # The metres figure stays in the event detail only: track_edge units are
+            # still pending live validation (see `_metrics_for_corner`) and the corner
+            # line deliberately withholds the same number. State the fact, not an
+            # unverified measurement.
+            lines.append(f"{head}off track")
         elif kind in ("lockup", "wheelspin"):
             lines.append(f"{head}{kind}")
         elif kind == "wear_step":

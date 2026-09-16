@@ -43,6 +43,7 @@ def test_brake_point_found_when_braking_is_in_the_approach(synthetic_lap):
     # like Parabolica) must still be detected, not fall back to the "no brake"
     # sentinel — a window-only search regressed here.
     import numpy as np
+
     from simcoach.analysis import analyze_lap
     from simcoach.corners import CornerMap
     from simcoach.model_types import LapRecord
@@ -248,10 +249,11 @@ def test_extended_corner_inputs(synthetic_lap):
     # Longitudinal-g (split by pedal), steering, ABS/TC, and track-width usage
     # reach the per-corner metrics and the coach's corner line.
     import numpy as np
+
     from simcoach.analysis import analyze_lap
     from simcoach.corners import CornerMap
-    from simcoach.model_types import LapRecord
     from simcoach.format import format_corner_line
+    from simcoach.model_types import LapRecord
     cmap = CornerMap.load("simcoach/tracks/test_track.json")
     ch = dict(synthetic_lap.channels)
     brake, throttle = ch["brake"], ch["throttle"]
@@ -394,6 +396,7 @@ def test_extended_inputs_absent_without_channels(synthetic_lap):
 
 def test_tire_summary_absent_without_channels(synthetic_lap):
     import numpy as np
+
     from simcoach.analysis import analyze_lap
     from simcoach.corners import CornerMap
     from simcoach.model_types import LapRecord
@@ -459,6 +462,7 @@ def _lap_with_speed(synthetic_lap, speed):
 def test_analyze_lap_metrics_tolerates_partial_nan_speed(synthetic_lap):
     """A single NaN sample in corner 1's speed window must not poison min_spd."""
     import numpy as np
+
     from simcoach.analysis import analyze_lap
     from simcoach.corners import CornerMap
 
@@ -489,6 +493,7 @@ def test_analyze_lap_metrics_tolerates_partial_nan_speed(synthetic_lap):
 def test_analyze_lap_metrics_all_nan_speed_window_is_degenerate(synthetic_lap):
     """An entirely-NaN speed window falls to the degenerate path instead of crashing."""
     import numpy as np
+
     from simcoach.analysis import analyze_lap
     from simcoach.corners import CornerMap
 
@@ -512,6 +517,7 @@ def test_analyze_lap_metrics_all_nan_speed_window_is_degenerate(synthetic_lap):
 def test_analyze_lap_delta_is_none_when_min_spd_is_nan(synthetic_lap):
     """min_spd_delta must be None (not NaN) when a corner's min_spd is undefined."""
     import numpy as np
+
     from simcoach.analysis import analyze_lap
     from simcoach.corners import CornerMap
 
@@ -612,7 +618,7 @@ def test_analyze_lap_direction_is_computed_not_read_from_map(synthetic_lap):
     stated direction. Use a map with a deliberately WRONG direction and assert the
     analysis reports the telemetry-computed direction instead."""
     from simcoach.analysis import analyze_lap
-    from simcoach.corners import CornerMap, Corner
+    from simcoach.corners import Corner, CornerMap
 
     cmap = CornerMap.load("simcoach/tracks/test_track.json")
     # Corner 1 is actually "left" per telemetry; flip the map to say "right".
@@ -628,7 +634,9 @@ def test_analyze_lap_direction_is_computed_not_read_from_map(synthetic_lap):
 
 def test_analyze_lap_rejects_reference_from_different_track(synthetic_lap):
     import dataclasses
+
     import pytest
+
     from simcoach.analysis import analyze_lap
     from simcoach.corners import CornerMap
 
@@ -1135,6 +1143,7 @@ def test_handling_read_understeer():
     # Steering keeps winding (0.31 -> 0.6 over the mid phase) while lat_g sits
     # flat at 1.5 -- the car is adding lock and getting nothing back.
     import numpy as np
+
     from simcoach.analysis import handling_read
 
     n = 20
@@ -1154,6 +1163,7 @@ def test_handling_read_oversteer_countersteer():
     # Steering normally sits opposite sign to lat_g (LMU convention, #70); 8
     # consecutive samples flip to lat_g's OWN sign mid-corner -- countersteer.
     import numpy as np
+
     from simcoach.analysis import handling_read
 
     n = 20
@@ -1173,6 +1183,7 @@ def test_handling_read_neutral_on_a_clean_trace():
     # Steering and lat_g rise and fall together (no plateau, no reversal, no
     # exit drop) -- a clean, proportional corner.
     import numpy as np
+
     from simcoach.analysis import handling_read
 
     n = 20
@@ -1189,6 +1200,7 @@ def test_handling_read_neutral_on_a_clean_trace():
 
 def test_handling_read_too_few_samples_is_none():
     import numpy as np
+
     from simcoach.analysis import handling_read
 
     n = 5
@@ -1199,6 +1211,7 @@ def test_handling_read_too_few_samples_is_none():
 
 def test_handling_read_lockup():
     import numpy as np
+
     from simcoach.analysis import handling_read
 
     n = 15
@@ -1216,6 +1229,7 @@ def test_handling_read_lockup():
 
 def test_handling_read_wheelspin():
     import numpy as np
+
     from simcoach.analysis import handling_read
 
     n = 15
@@ -1233,6 +1247,7 @@ def test_handling_read_wheelspin():
 
 def test_handling_read_none_when_wheel_rot_missing():
     import numpy as np
+
     from simcoach.analysis import handling_read
 
     n = 15
@@ -1284,7 +1299,9 @@ def test_wheelspin_and_lockup_read_magnitude_not_sign():
 
 def test_grip_envelope_p98_of_usable_samples(synthetic_lap):
     import dataclasses
+
     import numpy as np
+
     from simcoach.analysis import grip_envelope
 
     n = 1000
@@ -1301,7 +1318,9 @@ def test_grip_envelope_ignores_a_single_crash_spike(synthetic_lap):
     # #78: a raw max of long_g was set by one 40g crash-spike sample. p98
     # must barely move when that single sample is injected.
     import dataclasses
+
     import numpy as np
+
     from simcoach.analysis import grip_envelope
 
     n = 1000
@@ -1322,6 +1341,7 @@ def test_grip_envelope_ignores_a_single_crash_spike(synthetic_lap):
 
 def test_grip_envelope_none_without_load_channels(synthetic_lap):
     import dataclasses
+
     from simcoach.analysis import grip_envelope
 
     ch = {k: v for k, v in synthetic_lap.channels.items() if k not in ("lat_g", "long_g")}
@@ -1332,7 +1352,9 @@ def test_grip_envelope_none_without_load_channels(synthetic_lap):
 
 def test_gg_used_and_dead_middle_per_corner(synthetic_lap):
     import dataclasses
+
     import numpy as np
+
     from simcoach.analysis import analyze_lap
     from simcoach.corners import CornerMap
 
@@ -1367,6 +1389,7 @@ def test_gg_used_and_dead_middle_per_corner(synthetic_lap):
 
 def test_analyze_lap_gg_fields_none_without_envelope_or_load_channels(synthetic_lap):
     import dataclasses
+
     from simcoach.analysis import analyze_lap
     from simcoach.corners import CornerMap
 
@@ -1394,6 +1417,7 @@ def test_analyze_lap_falls_back_to_self_referenced_envelope(synthetic_lap):
 
 def test_gear_read_gear_min_at_min_speed_sample():
     import numpy as np
+
     from simcoach.analysis import gear_read
 
     n = 10
@@ -1407,6 +1431,7 @@ def test_gear_read_gear_min_at_min_speed_sample():
 
 def test_gear_read_bog_true_when_exit_rpm_is_low():
     import numpy as np
+
     from simcoach.analysis import gear_read
 
     n = 10
@@ -1423,6 +1448,7 @@ def test_gear_read_bog_true_when_exit_rpm_is_low():
 
 def test_gear_read_bog_false_when_exit_rpm_clears_the_band():
     import numpy as np
+
     from simcoach.analysis import gear_read
 
     n = 10
@@ -1439,6 +1465,7 @@ def test_gear_read_bog_false_when_exit_rpm_clears_the_band():
 
 def test_gear_read_short_shift_true_at_low_rpm():
     import numpy as np
+
     from simcoach.analysis import gear_read
 
     n = 10
@@ -1454,6 +1481,7 @@ def test_gear_read_short_shift_true_at_low_rpm():
 
 def test_gear_read_short_shift_false_near_redline():
     import numpy as np
+
     from simcoach.analysis import gear_read
 
     n = 10
@@ -1469,6 +1497,7 @@ def test_gear_read_short_shift_false_near_redline():
 
 def test_gear_read_none_when_channels_absent():
     import numpy as np
+
     from simcoach.analysis import gear_read
 
     n = 5
@@ -1498,6 +1527,7 @@ def test_analyze_lap_gear_fields_none_without_rpm_channel(synthetic_lap):
 def test_input_shape_linear_release_measures_distance_and_steep_frac():
     import numpy as np
     import pytest
+
     from simcoach.analysis import input_shape
 
     dist = np.array([0.0, 8.0, 16.0, 24.0, 32.0, 40.0])
@@ -1510,6 +1540,7 @@ def test_input_shape_linear_release_measures_distance_and_steep_frac():
 
 def test_input_shape_dumped_release_has_high_steep_frac():
     import numpy as np
+
     from simcoach.analysis import input_shape
 
     dist = np.array([0.0, 8.0, 16.0, 24.0])
@@ -1521,6 +1552,7 @@ def test_input_shape_dumped_release_has_high_steep_frac():
 
 def test_input_shape_no_braking_phase_release_is_none():
     import numpy as np
+
     from simcoach.analysis import input_shape
 
     n = 6
@@ -1531,6 +1563,7 @@ def test_input_shape_no_braking_phase_release_is_none():
 
 def test_input_shape_no_release_inside_window_is_none():
     import numpy as np
+
     from simcoach.analysis import input_shape
 
     n = 6
@@ -1541,6 +1574,7 @@ def test_input_shape_no_release_inside_window_is_none():
 
 def test_input_shape_pumped_brake_counts_three_reversals():
     import numpy as np
+
     from simcoach.analysis import input_shape
 
     brake = np.array([0.9, 0.7, 0.9, 0.7, 0.9, 0.7, 0.9])   # 3 re-applications (pumps) of 0.2
@@ -1551,6 +1585,7 @@ def test_input_shape_pumped_brake_counts_three_reversals():
 
 def test_input_shape_smooth_brake_has_no_reversals():
     import numpy as np
+
     from simcoach.analysis import input_shape
 
     brake = np.array([0.9, 0.8, 0.7, 0.6, 0.5])   # monotonic release, no pumping
@@ -1561,6 +1596,7 @@ def test_input_shape_smooth_brake_has_no_reversals():
 
 def test_input_shape_hysteresis_ignores_small_wiggles():
     import numpy as np
+
     from simcoach.analysis import input_shape
 
     # 0.02 wiggle, under the 0.05 hysteresis.
@@ -1572,6 +1608,7 @@ def test_input_shape_hysteresis_ignores_small_wiggles():
 
 def test_input_shape_throttle_stabs_counted():
     import numpy as np
+
     from simcoach.analysis import input_shape
 
     throttle = np.array([0.9, 0.6, 0.9, 0.6, 0.9, 0.6, 0.9])   # 3 stabs, mirrors brake pumping
@@ -1582,6 +1619,7 @@ def test_input_shape_throttle_stabs_counted():
 
 def test_input_shape_steering_sawing_counted():
     import numpy as np
+
     from simcoach.analysis import input_shape
 
     steer = np.array([0.0, 0.3, -0.3, 0.3, -0.3, 0.3])   # lock, then 3 saws beyond it
@@ -1592,6 +1630,7 @@ def test_input_shape_steering_sawing_counted():
 
 def test_input_shape_none_when_channel_absent():
     import numpy as np
+
     from simcoach.analysis import input_shape
 
     n = 5
@@ -1624,7 +1663,9 @@ def test_analyze_lap_diffs_input_shape_metrics_vs_reference(synthetic_lap):
     # A reference that pumps the brake 3 times in corner 1's braking zone (the
     # current lap brakes smoothly) must move brake_reversals_delta.
     import dataclasses
+
     import numpy as np
+
     from simcoach.analysis import analyze_lap
     from simcoach.corners import CornerMap
 
