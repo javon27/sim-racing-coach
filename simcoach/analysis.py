@@ -1402,6 +1402,231 @@ def stint_tire_trend(analyses: "list[LapAnalysis]", lap_times: "list[float]") ->
     }
 
 
+# --- per-lap incident log (#108 items 3+4) -----------------------------------
+# Why this exists: the coach could only ever read the LATEST lap, so "I spun at
+# turn 10 a few laps ago" got "nothing flagged", and a flat spot from that spin
+# was then blamed on cornering load. These are MEASURED incidents placed on a
+# lap and a corner; the model narrates them, it never infers them.
+#
+# The spin read is from the PATH heading (arctan2 over pos_z/pos_x), not body
+# yaw: LMU's struct carries an orientation matrix (`mOri`) but smm.py does not
+# sample it, so the direction the car is TRAVELLING is all we hold. A car that
+# slides straight ahead while the body swaps ends therefore under-reads.
+# ponytail: capture `mOri` and take true yaw -- that is the real upgrade path,
+# not more thresholds here.
+_SPIN_WINDOW_S = 3.0      # ponytail: longest window a spin may take. Raise it and a
+                          # slow tight hairpin starts to qualify; a rig lap through a
+                          # known hairpin vs a known spin is what settles it.
+_SPIN_DEG = 150.0         # ponytail: path rotation inside that window. Spa's La Source
+                          # turns ~170 deg, so the angle ALONE cannot separate the two.
+_SPIN_SPEED_FRAC = 0.5    # ponytail: the actual discriminator -- a hairpin holds its
+                          # minimum speed through the rotation, a spin collapses below
+                          # half the speed it started the window at.
+_SPIN_MIN_SPEED_KMH = 5.0  # ponytail: below this the heading off two positions is noise
+                           # (a parked or crawling car), so those samples are dropped.
+# ponytail: centre-of-car past the white line, not the outer wheels -- see the
+# track_edge_min note in `_metrics_for_corner`. 1 m is roughly one unmodeled
+# half-car-width past the line, i.e. the point where even a wide GT car's centre
+# being out is not explainable by the missing width. A rig lap with a KNOWN
+# track-limits warning is what settles it.
+_OFF_TRACK_M = -1.0
+# ponytail: a flat spot is a STEP, not a slope. Multiple of the stint median, with
+# an absolute floor so a stint that barely wears (a cold short run, median ~0)
+# doesn't flag every lap. A rig lap with a known flat spot settles both.
+_WEAR_STEP_MULT = 2.5
+_WEAR_STEP_MIN = 0.003    # fraction of tire life, i.e. 0.3 % in one lap
+
+
+def _sample_time(record: LapRecord) -> np.ndarray:
+    """Per-sample elapsed seconds, full length and aligned to the raw channels --
+    unlike `lap_time_axis`, which returns a filtered grid. Prefers a captured time
+    channel; falls back to integrating ds/v when none is present (or when the
+    captured one steps backwards at the S/F seam, which would make a time window
+    meaningless)."""
+    ch = record.channels
+    t = None
+    if "time" in ch:
+        t = np.asarray(ch["time"], dtype=float)
+    elif "elapsed_time" in ch:
+        t = np.asarray(ch["elapsed_time"], dtype=float)
+        if "lap_start_et" in ch:
+            lset = np.asarray(ch["lap_start_et"], dtype=float)
+            t = t[:min(t.size, lset.size)] - lset[:min(t.size, lset.size)]
+    if t is not None and t.size and np.all(np.diff(t[np.isfinite(t)]) >= 0):
+        return t
+    d = _interp_lap_distance(record)
+    v = np.asarray(ch["speed"], dtype=float)
+    n = min(d.size, v.size)
+    dt = np.diff(d[:n]) / (np.maximum(v[:n][1:], _MIN_SPEED_KMH) * _SPEED_KMH_TO_MS)
+    return np.concatenate(([0.0], np.cumsum(np.nan_to_num(dt))))
+
+
+def _corner_at(cmap: CornerMap, dist) -> int | None:
+    """The mapped corner number whose window contains `dist`, or None (off the map,
+    between corners, or an unknown distance). Same wrap-aware windows `analyze_lap`
+    reads corners through."""
+    if cmap is None or dist is None or not math.isfinite(float(dist)):
+        return None
+    for c in cmap.corners:
+        if in_window(float(dist), c.start_dist, c.end_dist):
+            return c.number
+    return None
+
+
+def _spin_events(record: LapRecord, cmap: CornerMap) -> list[dict]:
+    """Spins, read off the driven path. Empty when the lap has no position
+    channels (older captures) or too few moving samples."""
+    ch = record.channels
+    if "pos_x" not in ch or "pos_z" not in ch:
+        return []
+    x = np.asarray(ch["pos_x"], dtype=float)
+    z = np.asarray(ch["pos_z"], dtype=float)
+    v = np.asarray(ch["speed"], dtype=float)
+    d = _interp_lap_distance(record)
+    t = _sample_time(record)
+    n = min(x.size, z.size, v.size, d.size, t.size)
+    x, z, v, d, t = x[:n], z[:n], v[:n], d[:n], t[:n]
+    keep = (np.isfinite(x) & np.isfinite(z) & np.isfinite(v) & np.isfinite(t)
+            & (v > _SPIN_MIN_SPEED_KMH))
+    x, z, v, d, t = x[keep], z[keep], v[keep], d[keep], t[keep]
+    if x.size < 3:
+        return []
+    # A repeated position gives arctan2(0, 0) == 0 and would inject a fake ±180°
+    # swing into the unwrapped heading. Drop the duplicate, keep the first.
+    moved = np.concatenate(([True], (np.diff(x) ** 2 + np.diff(z) ** 2) > 0.0))
+    x, z, v, d, t = x[moved], z[moved], v[moved], d[moved], t[moved]
+    if x.size < 3:
+        return []
+    # h[k] = heading of the segment LEAVING sample k, unwrapped so a window's
+    # rotation is a plain subtraction rather than a modulo dance.
+    h = np.degrees(np.unwrap(np.arctan2(np.diff(z), np.diff(x))))
+    m = h.size
+
+    # ponytail: O(samples x window) scan -- ~150 samples per window at 50 Hz, a few
+    # ms a lap. A prefix-min/running-extreme structure would make it linear; it is
+    # not worth the code until a stint scan is measurably slow.
+    spans: list[list[int]] = []
+    for i in range(m):
+        j = int(np.searchsorted(t, t[i] + _SPIN_WINDOW_S, side="right")) - 1
+        if j <= i:
+            continue
+        k = min(j, m - 1)
+        if np.abs(h[i:k + 1] - h[i]).max() <= _SPIN_DEG:
+            continue
+        if v[i:j + 1].min() >= _SPIN_SPEED_FRAC * v[i]:
+            continue
+        # The excursion is the WHOLE window, not the first sample that tripped it:
+        # the rotation and the speed minimum usually land after that point, and the
+        # merge below then reports one spin rather than a run of partial ones.
+        if spans and i <= spans[-1][1]:
+            spans[-1][1] = max(spans[-1][1], j)
+        else:
+            spans.append([i, j])
+
+    out = []
+    for lo, hi in spans:
+        k = min(hi, m - 1)
+        mi = lo + int(np.argmin(v[lo:hi + 1]))
+        out.append({
+            "kind": "spin",
+            "corner_no": _corner_at(cmap, d[mi]),
+            "lap_distance": float(d[mi]),
+            "detail": {"speed_from_kmh": float(v[lo]),
+                       "speed_min_kmh": float(v[mi]),
+                       "turned_deg": float(np.abs(h[lo:k + 1] - h[lo]).max())},
+        })
+    return out
+
+
+def _wear_step_events(record: LapRecord, cmap: CornerMap, baseline: dict) -> list[dict]:
+    """Per-wheel wear STEPS: this lap's wear against the stint's own median. A step
+    on one lap at one corner is a flat spot; a slope across the stint is
+    `stint_tire_trend`'s job, not this one."""
+    if not baseline:
+        return []
+    ch = record.channels
+    d = _interp_lap_distance(record)
+    out = []
+    for w in _WHEELS:
+        key = f"tire_wear_{w}"
+        if key not in ch or w not in baseline:
+            continue
+        wear = np.asarray(ch[key], dtype=float)
+        if wear.size < 2:
+            continue
+        lap_wear = float(wear[0] - wear[-1])   # remaining fraction, so start - end
+        if not math.isfinite(lap_wear):
+            continue
+        if lap_wear <= max(_WEAR_STEP_MULT * baseline[w], _WEAR_STEP_MIN):
+            continue
+        drops = -np.diff(wear[:min(wear.size, d.size)])
+        if not drops.size or not np.isfinite(drops).any():
+            continue
+        i = int(np.nanargmax(drops)) + 1
+        out.append({
+            "kind": "wear_step",
+            "corner_no": _corner_at(cmap, d[i]),
+            "lap_distance": float(d[i]),
+            "detail": {"wheel": w, "step_pct": lap_wear * 100.0,
+                       "baseline_pct": baseline[w] * 100.0},
+        })
+    return out
+
+
+def lap_events(record: LapRecord, cmap: CornerMap, analysis: "LapAnalysis | None",
+               wear_baseline: dict | None = None) -> list[dict]:
+    """Everything that went wrong on one lap, in along-lap order:
+    `{"kind", "corner_no", "lap_distance", "detail"}` per incident.
+
+    kinds: "spin" (path rotation with a speed collapse), "off" (car centre past
+    the white line), "lockup"/"wheelspin" (pass-through of the per-corner reads),
+    "wear_step" (a flat spot). `wear_baseline` comes from `stint_wear_baseline`
+    over the stint's laps; without one the wear kind is skipped entirely rather
+    than guessed against a single lap."""
+    events = _spin_events(record, cmap)
+    for cm in (analysis.corners if analysis is not None else []):
+        if cm.lockup:
+            events.append({"kind": "lockup", "corner_no": cm.corner_no,
+                           "lap_distance": cm.apex_dist, "detail": {}})
+        if cm.wheelspin:
+            events.append({"kind": "wheelspin", "corner_no": cm.corner_no,
+                           "lap_distance": cm.apex_dist, "detail": {}})
+        edge = cm.track_edge_min
+        if edge is not None and math.isfinite(edge) and edge < _OFF_TRACK_M:
+            events.append({"kind": "off", "corner_no": cm.corner_no,
+                           "lap_distance": cm.apex_dist,
+                           "detail": {"past_edge_m": -edge}})
+    events.extend(_wear_step_events(record, cmap, wear_baseline or {}))
+    # Stable, so incidents sharing an apex distance keep their insertion order.
+    events.sort(key=lambda e: (e["lap_distance"] if math.isfinite(e["lap_distance"])
+                               else math.inf))
+    return events
+
+
+def stint_wear_baseline(records: "list[LapRecord]") -> dict[str, float]:
+    """{wheel: median per-lap wear (fraction)} over the laps that carry the channel.
+
+    {} below two laps: one lap cannot be its own baseline, and a "step" measured
+    against itself is not a finding. The median (not the mean) is what lets the
+    flat-spot lap stay in the population without inflating the bar it has to clear.
+    """
+    if len(records) < 2:
+        return {}
+    out = {}
+    for w in _WHEELS:
+        vals = []
+        for rec in records:
+            arr = rec.channels.get(f"tire_wear_{w}")
+            if arr is None:
+                continue
+            arr = np.asarray(arr, dtype=float)
+            if arr.size >= 2 and math.isfinite(arr[0] - arr[-1]):
+                vals.append(float(arr[0] - arr[-1]))
+        if vals:
+            out[w] = float(np.median(vals))
+    return out
+
+
 # The per-corner geometry metrics `corner_geometry` can emit, in the order they are
 # baked. One owner because three writers touch them -- the backfill script that bakes
 # them, the editor's save path that carries them forward, and this function -- and a

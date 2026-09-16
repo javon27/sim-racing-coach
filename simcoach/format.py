@@ -446,6 +446,43 @@ def format_lap_facts(analysis, units: str = "metric", corner_order=None, top_los
     return "\n".join(lines)
 
 
+def _event_corner_tag(cmap, corner_no) -> str:
+    """'T10 Pouhon' for a mapped corner, 'T5' when the map names none, '' when the
+    incident sits outside every corner window. Same designation `format_corner_line`
+    shows, so the driver reads one naming scheme."""
+    if corner_no is None or cmap is None:
+        return ""
+    for c in getattr(cmap, "corners", []):
+        if c.number == corner_no:
+            return f"T{c.label or c.number} {c.name}".strip()
+    return f"T{corner_no}"
+
+
+def format_events(events, cmap, units: str = "metric") -> list[str]:
+    """One driver-facing line per incident from `analysis.lap_events`, corner-tagged
+    the way corner lines are. Every number here is measured; nothing is hedged."""
+    spd, _, spd_u, _ = unit_fns(units)
+    lines = []
+    for e in events:
+        tag = _event_corner_tag(cmap, e.get("corner_no"))
+        head = f"{tag}: " if tag else ""
+        kind, d = e["kind"], e.get("detail") or {}
+        if kind == "spin":
+            lines.append(f"{head}spin \N{EM DASH} {spd(d['speed_from_kmh']):.0f} "
+                         f"\N{RIGHTWARDS ARROW} {spd(d['speed_min_kmh']):.0f} {spd_u}, "
+                         f"turned {d['turned_deg']:.0f}\N{DEGREE SIGN}")
+        elif kind == "off":
+            lines.append(f"{head}off track \N{EM DASH} centre {d['past_edge_m']:.1f} m "
+                         "past the edge")
+        elif kind in ("lockup", "wheelspin"):
+            lines.append(f"{head}{kind}")
+        elif kind == "wear_step":
+            where = f" at {tag}" if tag else ""
+            lines.append(f"{d['wheel'].upper()} wear step {d['step_pct']:.1f}%{where} "
+                         f"(stint median {d['baseline_pct']:.1f}%/lap)")
+    return lines
+
+
 def find_corner(analysis, corner) -> object | None:
     """Look up a corner by number (int or numeric string) or name (case-insensitive
     substring), so a tool can fetch just the one the driver asked about."""

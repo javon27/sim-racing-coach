@@ -17,8 +17,10 @@ from simcoach.analysis import (
     analyze_lap,
     geometry_clause,
     grip_envelope,
+    lap_events,
     stint_consistency,
     stint_tire_trend,
+    stint_wear_baseline,
     time_loss_buckets,
 )
 from simcoach.coach import _setup_lines, live_electronics
@@ -27,6 +29,7 @@ from simcoach.format import (
     find_corner,
     format_consistency,
     format_corner_line,
+    format_events,
     format_lap_facts,
     format_laptime,
     format_time_loss,
@@ -37,6 +40,11 @@ from simcoach.format import (
 )
 from simcoach.fuel import fuel_per_lap_from_channel, laps_remaining
 from simcoach.track_lookup import load_track_knowledge, note_key_binds
+
+# ponytail: hard cap on an incident scan. Each lap past the cache costs a telemetry
+# load plus a full analysis, so a model asking for "the whole stint" must not walk a
+# 60-lap race. Raise it if a rig endurance run genuinely needs a longer look-back.
+_MAX_EVENT_LAPS = 30
 
 # Tool specs advertised to the model (Anthropic tool-use format).
 TOOLS = [
@@ -90,6 +98,21 @@ TOOLS = [
                                              "this session's best, else all-time best) or "
                                              "an in-session lap number."},
             },
+        },
+    },
+    {
+        "name": "get_stint_events",
+        "description": "Incidents across the last N laps of this session — spins, "
+                       "off-tracks, lockups, wheelspin, and per-wheel wear steps (flat "
+                       "spots), each with lap and corner. Call this when the driver "
+                       "mentions a spin, an off, a moment, a flat spot, or asks what "
+                       "happened a few laps ago; never assume the latest lap is the one "
+                       "they mean.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"laps": {"type": "integer",
+                                    "description": "How many recent laps to scan "
+                                                   "(default 10, max 30)."}},
         },
     },
     {
@@ -484,6 +507,10 @@ class CoachContext:
         # #38 P1.4: grip envelope, computed once per context (see `_grip_envelope`).
         self._envelope: float | None = None
         self._envelope_computed = False
+        # The recent stored laps those reads are built from, loaded ONCE and shared
+        # with the wear baseline (#108) so events cost no extra lap loads.
+        self._recent: list | None = None
+        self._wear_baseline_cache: dict | None = None
 
     # --- helpers ---------------------------------------------------------
     def _current_lap(self) -> tuple:
@@ -585,15 +612,12 @@ class CoachContext:
                 return row["id"]
         return None
 
-    def _grip_envelope(self, reference):
-        """The grip envelope (g), computed ONCE per context (cached on
-        `self._envelope`) from this track/car's recent stored laps plus
-        `reference` -- later calls reuse the same cached value regardless of
-        which record/reference triggered the first one, so every tool call
-        this turn reads the same envelope."""
-        if self._envelope_computed:
-            return self._envelope
-        self._envelope_computed = True
+    def _recent_records(self) -> list:
+        """This track/car's ~10 most recent stored laps, loaded ONCE per context.
+        Shared by the grip envelope and the wear baseline so the second reader is
+        free."""
+        if self._recent is not None:
+            return self._recent
         records = []
         if self.track and self.car:
             for row in self.store.recent_laps(self.track, self.car, limit=10):
@@ -603,6 +627,39 @@ class CoachContext:
                     rec = None   # a result-log row with no telemetry -- nothing to read
                 if rec is not None:
                     records.append(rec)
+        self._recent = records
+        return records
+
+    def _wear_baseline(self) -> dict:
+        """{wheel: median per-lap wear} for spotting a flat spot (#108), over the
+        same recent laps the grip envelope already loaded.
+        ponytail: those laps are scoped to track/car, not to this stint, so a
+        long-run median can drag a short stint's bar around. `get_stint_events`
+        passes its own stint-scoped baseline; this is the cheap one for the
+        single-lap tools. Scope it per session if a rig stint reads wrong."""
+        if self._wear_baseline_cache is None:
+            self._wear_baseline_cache = stint_wear_baseline(self._recent_records())
+        return self._wear_baseline_cache
+
+    def _events_for(self, record, lap_id, baseline=None) -> list[str]:
+        """Formatted incident lines for one lap, or [] with no corner map."""
+        if self.cmap is None or record is None:
+            return []
+        analysis = self._analysis_for(record, lap_id)
+        events = lap_events(record, self.cmap, analysis,
+                            self._wear_baseline() if baseline is None else baseline)
+        return format_events(events, self.cmap, self.units)
+
+    def _grip_envelope(self, reference):
+        """The grip envelope (g), computed ONCE per context (cached on
+        `self._envelope`) from this track/car's recent stored laps plus
+        `reference` -- later calls reuse the same cached value regardless of
+        which record/reference triggered the first one, so every tool call
+        this turn reads the same envelope."""
+        if self._envelope_computed:
+            return self._envelope
+        self._envelope_computed = True
+        records = list(self._recent_records())
         if reference is not None:
             records.append(reference)
         self._envelope = grip_envelope(records) if records else None
@@ -728,7 +785,11 @@ class CoachContext:
             return self._no_lap_msg(which)
         if self.cmap is None:
             return "No corner map for this track yet — can't break the lap into corners."
-        lap_line = self._lap_line(record, lap_id)
+        # #108: what went WRONG on this lap leads, right under the identity -- a spin
+        # or a flat spot reframes every corner number below it.
+        events = self._events_for(record, lap_id)
+        lap_line = (self._lap_line(record, lap_id) + "\nEvents this lap: "
+                    + (", ".join(events) if events else "none"))
         analysis = self._analysis_for(record, lap_id)
         # #102: lead with the time-loss ranking (and surface its worst corners
         # first below) whenever a reference resolves -- a flat table buries the
@@ -819,6 +880,40 @@ class CoachContext:
             analyses.append(analysis)
             lap_times.append(record.lap_time)
         return analyses, lap_times
+
+    def get_stint_events(self, laps=10):
+        """Incidents over the last N laps of this session, grouped by lap.
+
+        Deliberately NOT filtered to valid laps -- a lap with a spin or an off is
+        usually the INVALID one, which is exactly the lap the driver is asking
+        about."""
+        if not self.session_id:
+            return "No active session — no stint to scan for incidents."
+        if self.cmap is None:
+            return "No corner map for this track yet — can't place incidents on corners."
+        try:
+            n = int(laps or 10)
+        except (TypeError, ValueError):
+            n = 10
+        n = max(1, min(n, _MAX_EVENT_LAPS))
+        rows = self.store.session_laps(self.session_id)[-n:]   # session_laps is ts order
+        loaded = []
+        for row in rows:
+            try:
+                record = self.store.load(row["id"])
+            except Exception:
+                record = None   # a result-log row with no telemetry file
+            if record is not None:
+                loaded.append((record, row["id"]))
+        if not loaded:
+            return "No telemetry-backed laps in this session yet — nothing to scan."
+        baseline = stint_wear_baseline([rec for rec, _ in loaded])
+        out = []
+        for record, lap_id in loaded:
+            lines = self._events_for(record, lap_id, baseline)
+            out.append(self._lap_line(record, lap_id))
+            out.extend(f"  {line}" for line in (lines or ["none"]))
+        return "\n".join(out)
 
     def get_consistency(self, phase=None):
         if not self.session_id:
@@ -1035,8 +1130,13 @@ class CoachContext:
         if analysis is None:
             return "No lap captured yet (or no corner map for this track)."
         report = format_wheel_report(analysis, self.units)
+        # #108: a wear STEP on one lap at one corner is a flat spot, not deg. The
+        # wear line above reads the same number as a stint slope and gets blamed on
+        # cornering load, so name the step next to it.
+        steps = [line for line in self._events_for(record, lap_id) if "wear step" in line]
         return (self._lap_line(record, lap_id) + "\n"
-                + (report or "No brake/wear data was captured for this lap (older capture)."))
+                + (report or "No brake/wear data was captured for this lap (older capture).")
+                + ("\n" + "\n".join(steps) if steps else ""))
 
     def get_energy_report(self):
         if self.record is None:
@@ -1182,6 +1282,7 @@ class CoachContext:
             "get_lap_summary": lambda: self.get_lap_summary(args.get("which", "latest")),
             "get_time_loss": lambda: self.get_time_loss(args.get("which", "latest"),
                                                         args.get("reference", "best")),
+            "get_stint_events": lambda: self.get_stint_events(args.get("laps", 10)),
             "get_consistency": lambda: self.get_consistency(args.get("phase")),
             "get_tire_trend": lambda: self.get_tire_trend(args.get("phase")),
             "get_handling": lambda: self.get_handling(args.get("which", "latest")),
