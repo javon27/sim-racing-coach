@@ -58,7 +58,7 @@
     const keys = Object.keys(notes.corners);
     if (!map) return { rows: keys.map((k) => ({ key: k, label: k })), orphans: [] as string[] };
     const ranges = keys.map((k) => ({ key: k, r: rangeOf(k) })).filter((x) => x.r) as { key: string; r: [number, number] }[];
-    const rows: { key: string; label: string }[] = [];
+    const rows: { key: string; label: string; name?: string }[] = [];
     const usedRange = new Set<string>();
     for (const c of map.corners) {
       const label = c.label || String(c.number);
@@ -70,10 +70,11 @@
       const cover = CORNER_NUM.test(label) && String(n) === label
         ? ranges.find(({ r }) => n >= r[0] && n <= r[1]) : undefined;
       if (cover) {
+        // A range covers several corners, so no single name applies -- the key alone.
         if (!usedRange.has(cover.key)) { usedRange.add(cover.key); rows.push({ key: cover.key, label: cover.key }); }
         continue; // a covered corner shows under its range row, not its own
       }
-      rows.push({ key: label, label });
+      rows.push({ key: label, label, name: c.name || undefined });
     }
     const valid = new Set(rows.map((row) => row.key));
     return { rows, orphans: keys.filter((k) => !valid.has(k)) };
@@ -311,7 +312,7 @@
         {/if}
         {#each cornerView.rows as row (row.key)}
           <div class="corner-row">
-            <span class="clabel">T{row.label}</span>
+            <span class="clabel">T{row.label}{row.name ? ` — ${row.name}` : ""}</span>
             <textarea rows="2" aria-label={`corner note ${row.key}`}
               bind:value={() => noteOf(row.key), (v) => setNote(row.key, v)}></textarea>
             <span class="wc">{wordCount(noteOf(row.key))}/50</span>

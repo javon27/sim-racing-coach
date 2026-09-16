@@ -139,6 +139,21 @@ test("corner-notes list is driven by the map, true orphans flagged", async () =>
   expect(screen.getByLabelText("corner note 9")).toBeTruthy();
 });
 
+test("corner-notes rows show the map's shipped corner names, not just T-labels", async () => {
+  // #107: the shipped Spa file carries corner names (La Source, Eau Rouge, ...) and the
+  // coach uses them, but this list showed only "T1".."T19" with no name.
+  vi.spyOn(api, "getTrackNotes").mockResolvedValue({
+    overview: "", corners: {}, reference_times: {}, source: "",
+  });
+  vi.spyOn(api, "getTrackMap").mockResolvedValue(fourCornerMap());
+  const { container } = render(TracksScreen);
+  await fireEvent.click(await screen.findByText("Algarve"));
+  await screen.findByLabelText("corner note 1");
+  const labels = Array.from(container.querySelectorAll(".corner-row .clabel")).map((el) => el.textContent);
+  expect(labels[0]).toContain("Turn 1");
+  expect(labels[3]).toContain("Turn 4");
+});
+
 test("a hyphen-range note collapses its covered corners into one row", async () => {
   vi.spyOn(api, "getTrackNotes").mockResolvedValue({
     overview: "", corners: { "1": "a", "2-3": "double apex", "4": "d" }, reference_times: {}, source: "",

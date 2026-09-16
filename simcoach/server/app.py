@@ -700,6 +700,21 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                  "track_name": _track_file_data(track).get("name") or track}
         return m
 
+    def _live_map_key(track: str, car: str) -> tuple[str, str]:
+        # The (track, car) the LIVE session's map is drawn from (#107). Normally
+        # (track, car) as-is; but a shipped track with corners and NO frozen outline
+        # (shipped Spa predates them, #82) has nothing under a car with no laps yet --
+        # borrow the by-slug lookup, which already knows to use the most-recently-
+        # driven car's laps for this track (_slug_map_key). Cheap on the 2 s /status
+        # poll: with no laps at all for the track, `_slug_map_key` falls through its
+        # own DB query returning nothing and `_canonical_map` short-circuits on an
+        # empty `_clean_lap_channels` before touching the averager.
+        if not track or _has_canonical(track, car):
+            return track, car
+        if _track_file_data(track).get("corners"):
+            return _slug_map_key(track_slug(track))
+        return track, car
+
     def _slug_map_key(slug: str) -> tuple[str, str]:
         # The (track, car) a slug's map is drawn from. Normally (slug, ""): a stored outline
         # needs no car. A track file with corners and NO stored outline (shipped Spa
@@ -854,7 +869,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             "car_model": resolve_car(car) if car else None,
             "on_track": activity == "track",
             "activity": activity,
-            "has_map": _has_canonical(track, car),
+            "has_map": _has_canonical(*_live_map_key(track, car)),
             "lmu_connected": _ensure_rest() is not None,
             "session_id": session_id,
             "lap_id": lap_id,
@@ -964,7 +979,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             live = None
         if not live or not live.get("track"):
             return {}
-        return _map_payload(live["track"], live["car"])
+        return _map_payload(*_live_map_key(live["track"], live["car"]))
 
     @app.get("/track/inputs")
     def track_inputs():
@@ -2304,7 +2319,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                     # Only on a track/car change: _map_payload re-reads the track file
                     # and the store's sector bounds, which is not 1 Hz work.
                     last["_map_key"] = key
-                    frames.append(("map", _map_payload(track, car) if track else {}))
+                    frames.append(("map", _map_payload(*_live_map_key(track, car)) if track else {}))
             except Exception:
                 log.warning("events: map tick failed", exc_info=True)
 
