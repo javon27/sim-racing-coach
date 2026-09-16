@@ -15,7 +15,7 @@
 - Windows voices stay the DEFAULT engine; `voice.tts_engine` defaults to `"windows"`.
 - Never import `phonemizer`, `espeakng_loader`, `spacy` or `num2words` in the sidecar; the adapter's import guard test must stay red-proof (Task 3) and the frozen build must exclude all four (Task 5).
 - Pins: `kokoro-onnx==0.6.1`, `misaki==0.7.4`, `onnxruntime==1.30.0`. misaki is installed with `--no-deps` (its `en` extra pulls spaCy/num2words/phonemizer); its only runtime dep we ship is `regex`.
-- Model files (opt-in download, never in the installer): `kokoro-v1.0.onnx` 325 532 387 bytes sha256 `7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5`; `voices-v1.0.bin` 28 214 398 bytes sha256 `bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d`; URL base `https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1/`. Stored at `<app-data root>/kokoro/`.
+- Model files (opt-in download, never in the installer): `kokoro-v1.0.onnx` 325 532 387 bytes sha256 `7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5`; `voices-v1.0.bin` 28 214 398 bytes sha256 `bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d`; URL base `https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/`. Stored at `<app-data root>/kokoro/`.
 - WAV out: 24 000 Hz, mono, 16-bit PCM.
 - First-word latency is accepted; the client keeps ONE synthesis in flight ahead of playback.
 - Commit trailers per the session; `Refs #104` (never `Fixes`). Stage by name; never `git stash` / `git reset` / `git add -A`. Do not touch `simcoach/tracks/fuji_speedway.json` or `simcoach/tracks/silverstone_national_circuit.json` (untracked on purpose).
@@ -878,7 +878,7 @@ KOKORO_FILES = {
     "kokoro-v1.0.onnx": (325_532_387, "7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5"),
     "voices-v1.0.bin": (28_214_398, "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d"),
 }
-KOKORO_URL_BASE = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1/"
+KOKORO_URL_BASE = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/"
 KOKORO_TOTAL_BYTES = sum(size for size, _ in KOKORO_FILES.values())
 
 
