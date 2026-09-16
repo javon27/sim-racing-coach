@@ -133,6 +133,55 @@ def test_system_prompts_tell_the_coach_to_flag_not_assert_electronics():
     assert "COCKPIT ELECTRONICS:" in prompt
     assert "garage value" in prompt
     assert "Never assert" in prompt
+    assert "live on-track" in prompt
+
+
+def test_live_electronics_reads_last_finite_sample():
+    """Issue #33: the coach must read the driver's LIVE on-track dial state from the
+    latest lap's telemetry, not the (possibly stale) garage value. Values are chosen
+    so last-finite != first-finite != max, so the test can't pass on the wrong read."""
+    import numpy as np
+
+    from simcoach.coach import live_electronics
+    channels = {
+        "tc_map": np.array([np.nan, np.nan, 6, 6, 3, 3]),
+        "tc_map_max": np.array([np.nan, np.nan, 11, 11, 11, 11]),
+        "rear_brake_bias": np.array([np.nan, 0.515, 0.495, 0.495]),
+        # Max never populated (all zero) -- must be omitted, not read as "0 of 0-0".
+        "abs_map": np.array([np.nan, 5, 5]),
+        "abs_map_max": np.array([np.nan, 0, 0]),
+        # All-NaN channel -- no live sample ever arrived.
+        "motor_map": np.array([np.nan, np.nan]),
+        "motor_map_max": np.array([np.nan, 3, 3]),
+        # tc_slip_map is simply absent -- must be omitted, not KeyError.
+    }
+    out = live_electronics(channels)
+    assert out == {
+        "VM_TRACTIONCONTROLMAP": "3 of 0-11",
+        "VM_BRAKE_BALANCE": "50.5:49.5",
+    }
+
+
+def test_setup_lines_with_live_value_drops_the_caveat_and_step():
+    """A live-covered electronic states the on-track read as fact, tagged with the
+    garage value for context -- no caveat, no ordinal step (the live index already
+    carries its own range). A live-less electronic keeps the caveat. A mechanical
+    param is unaffected either way."""
+    from simcoach.coach import _setup_lines
+    setup = {
+        "VM_TRACTIONCONTROLMAP": {"stringValue": "6", "value": 6, "minValue": 0,
+                                  "maxValue": 11, "isFreeSetting": True},
+        "VM_ENGINE_MIXTURE": {"stringValue": "Race", "isFreeSetting": True},
+        "VM_REAR_WING": {"stringValue": "6.5 deg", "value": 6, "minValue": 0,
+                         "maxValue": 9, "isFreeSetting": True},
+    }
+    live = {"VM_TRACTIONCONTROLMAP": "3 of 0-11"}
+    lines = {line.split(":")[0][2:]: line for line in _setup_lines(setup, live)}
+    assert lines["Tractioncontrolmap"] == "- Tractioncontrolmap: 3 of 0-11 [live on-track; garage 6]"
+    assert "(step" not in lines["Tractioncontrolmap"]
+    assert CAVEAT not in lines["Tractioncontrolmap"]
+    assert lines["Engine Mixture"] == f"- Engine Mixture: Race {CAVEAT}"
+    assert lines["Rear Wing"] == "- Rear Wing: 6.5 deg (step 6 of 0-9)"
 
 
 from simcoach.coach import first_paragraph, split_spoken

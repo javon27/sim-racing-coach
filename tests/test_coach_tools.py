@@ -751,6 +751,48 @@ def test_get_setup_surfaces_step_position(tmp_path, synthetic_lap):
     assert "(range" not in out
 
 
+def test_get_setup_surfaces_live_electronics_over_garage(tmp_path, synthetic_lap):
+    """Issue #33: get_setup must state the LIVE on-track dial read as the truth for
+    an electronic the latest lap captured, tagging the garage value for context --
+    and leave the garage caveat only where no live value exists (mechanical params
+    unaffected). A past session's stored setup (get_last_setup) has no live lap
+    behind it, so it must never carry a live tag."""
+    import dataclasses
+
+    import numpy as np
+    n = len(synthetic_lap.channels["lap_distance"])
+    ch = {**synthetic_lap.channels,
+          "tc_map": np.full(n, np.nan), "tc_map_max": np.full(n, np.nan),
+          "rear_brake_bias": np.full(n, np.nan)}
+    ch["tc_map"][-1] = 3
+    ch["tc_map_max"][-1] = 11
+    ch["rear_brake_bias"][-1] = 0.495
+    lap = dataclasses.replace(synthetic_lap, channels=ch)
+    ctx, _, _ = _ctx(tmp_path, lap)
+    ctx.setup = {
+        "VM_TRACTIONCONTROLMAP": {"stringValue": "6", "value": 6, "isFreeSetting": True,
+                                  "minValue": 0, "maxValue": 11},
+        "VM_BRAKE_BALANCE": {"stringValue": "51.5:48.5", "value": 22, "isFreeSetting": True,
+                             "minValue": 0, "maxValue": 57},
+        "VM_REAR_WING": {"stringValue": "6.5 deg", "value": 6, "isFreeSetting": True,
+                         "minValue": 0, "maxValue": 9},
+    }
+    out = ctx.get_setup()
+    assert "Tractioncontrolmap: 3 of 0-11 [live on-track; garage 6]" in out
+    assert "step 6" not in out.split("Tractioncontrolmap")[1].split("\n")[0]
+    assert "Brake Balance: 50.5:49.5 [live on-track; garage 51.5:48.5]" in out
+    assert "Live values are from the latest captured lap." in out
+    assert "Rear Wing: 6.5 deg (step 6 of 0-9)" in out
+
+    store = ctx.store
+    store.save_session_setup("prior--offline", synthetic_lap.track, synthetic_lap.car, {
+        "VM_TRACTIONCONTROLMAP": {"stringValue": "6", "value": 6, "isFreeSetting": True,
+                                  "minValue": 0, "maxValue": 11},
+    })
+    last = CoachContext(store, track=synthetic_lap.track, car=synthetic_lap.car).get_last_setup()
+    assert "live on-track" not in last
+
+
 def test_get_setup_omits_step_without_ordinal(tmp_path, synthetic_lap):
     ctx, _, _ = _ctx(tmp_path, synthetic_lap)
     ctx.setup = {

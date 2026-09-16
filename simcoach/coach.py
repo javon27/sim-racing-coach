@@ -1,5 +1,7 @@
 import re
 
+import numpy as np
+
 from simcoach.driver import DriverProfile
 from simcoach.format import unit_fns
 from simcoach.model.base import Model
@@ -55,10 +57,58 @@ _ELECTRONICS_TERMS = (
 )
 _GARAGE_CAVEAT = " [garage value — confirm what's dialed on-track]"
 
+# Packed garage key -> live channel base name (simcoach/lmu/smm.py). Capture stores
+# the LIVE cockpit dial state per sample; rig-verified 2026-09-09/2026-09-15 that the
+# live index tracks on-track changes the garage REST value discards (issue #33).
+_LIVE_ELECTRONICS = {
+    "VM_ANTILOCKBRAKESYSTEMMAP": "abs_map",
+    "VM_TRACTIONCONTROLMAP": "tc_map",
+    "VM_TRACTIONCONTROLSLIPANGLEMAP": "tc_slip_map",
+    "VM_TRACTIONCONTROLPOWERCUTMAP": "tc_cut_map",
+    "VM_ELECTRIC_MOTOR_MAP": "motor_map",
+    "VM_BRAKE_MIGRATION": "migration",
+    "VM_FRONT_ANTISWAY": "front_antisway",
+    "VM_REAR_ANTISWAY": "rear_antisway",
+    "VM_BRAKE_BALANCE": "rear_brake_bias",
+}
 
-def _setup_lines(setup: dict) -> list[str]:
+
+def live_electronics(channels: dict) -> dict[str, str]:
+    """Last finite live dial read per packed garage key, for the ones that resolved.
+
+    An index channel also needs its `_max` last finite value > 0 -- Max == 0 means
+    the block never populated this lap, not "no ABS" (issue comment 2026-09-10).
+    `rear_brake_bias` is the REAR fraction 0-1; rendered front:rear like the garage
+    string (0.495 -> "50.5:49.5")."""
+    out: dict[str, str] = {}
+    for key, name in _LIVE_ELECTRONICS.items():
+        ch = channels.get(name)
+        if ch is None:
+            continue
+        finite = np.asarray(ch)[np.isfinite(ch)]
+        if finite.size == 0:
+            continue
+        v = finite[-1]
+        if name == "rear_brake_bias":
+            out[key] = f"{(1 - v) * 100:.1f}:{v * 100:.1f}"
+            continue
+        max_ch = channels.get(f"{name}_max")
+        if max_ch is None:
+            continue
+        max_finite = np.asarray(max_ch)[np.isfinite(max_ch)]
+        if max_finite.size == 0 or max_finite[-1] <= 0:
+            continue
+        out[key] = f"{int(v)} of 0-{int(max_finite[-1])}"
+    return out
+
+
+def _setup_lines(setup: dict, live: dict | None = None) -> list[str]:
     """Human-meaningful setup params, formatted for the prompt (filters ~170 -> the
     commonly-coached subset; flags tier-locked ones and garage-sourced electronics).
+
+    `live` (from `live_electronics`) overrides a key's line with the on-track read
+    as fact -- `- {label}: {live value} [live on-track; garage {stringValue}]`, no
+    step suffix (the live index already carries its own range) and no garage caveat.
 
     Appends "(step N of lo-hi)" -- the param's ORDINAL position among the garage's
     available options (issue #32). minValue/maxValue on LMU's garage payload are
@@ -74,6 +124,7 @@ def _setup_lines(setup: dict) -> list[str]:
     only how far a param can still move, never by how much -- the system prompts
     tell the coach to give direction rather than an exact amount.
     """
+    live = live or {}
     out = []
     for key, v in setup.items():
         if not isinstance(v, dict) or "stringValue" not in v:
@@ -86,6 +137,9 @@ def _setup_lines(setup: dict) -> list[str]:
             continue
         label = key[3:].replace("_", " ").title() if key.startswith("VM_") else key
         locked = "" if v.get("isFreeSetting", True) else " [locked this tier]"
+        if key in live:
+            out.append(f"- {label}: {live[key]}{locked} [live on-track; garage {sv}]")
+            continue
         lo, hi, cur = v.get("minValue"), v.get("maxValue"), v.get("value")
         step = "" if None in (lo, hi, cur) else f" (step {cur} of {lo}-{hi})"
         garage = _GARAGE_CAVEAT if any(t in k for t in _ELECTRONICS_TERMS) else ""
@@ -196,12 +250,14 @@ AGENTIC_SYSTEM_PROMPT = (
     "only to tell whether a param is already at its limit and which way it can still "
     "move. One step's physical size is not exposed, so NEVER state an exact increment "
     "(e.g. '-50 lbf/in') — give direction ('soften the front spring a step or two').\n"
-    "- COCKPIT ELECTRONICS: a setup line ending [garage value — ...] is the GARAGE "
-    "setting. LMU discards ANY electronics change the driver made on track once the car "
-    "returns to the garage — ABS, the TC family, the engine and motor maps, mixture, "
-    "regen, brake migration, brake balance, anti-roll — so it never reports what they "
-    "actually dialed in. Never "
-    "assert one as what they're currently running — name it as the garage value and ask "
+    "- COCKPIT ELECTRONICS: a setup line tagged [live on-track; garage X] is what the "
+    "driver is ACTUALLY running — read from the latest captured lap's telemetry. State "
+    "it plainly, never hedge it; if the driver says they changed it since that lap, "
+    "believe them. A line ending [garage value — ...] instead is the GARAGE setting "
+    "with no live read (mixture, regen, engine brake map, or any electronic before the "
+    "first captured lap) — LMU discards an on-track change to it once the car returns "
+    "to the garage, so it never reports what they actually dialed in. Never assert one "
+    "of those as what they're currently running — name it as the garage value and ask "
     "them to confirm. Mechanical params (springs, ride height, camber, wings, dampers) "
     "carry no such marker and ARE the truth; state those plainly.\n"
     "- Match length to the question: a quick question gets a sentence or two; a broad one ('how's "

@@ -21,7 +21,7 @@ from simcoach.analysis import (
     stint_tire_trend,
     time_loss_buckets,
 )
-from simcoach.coach import _setup_lines
+from simcoach.coach import _setup_lines, live_electronics
 from simcoach.corners import CornerMap
 from simcoach.format import (
     find_corner,
@@ -1046,10 +1046,14 @@ class CoachContext:
     def get_setup(self):
         if not self.setup:
             return "No setup data available (REST unavailable or open setup)."
-        lines = _setup_lines(self.setup)
+        record, _ = self._current_lap()
+        live = live_electronics(record.channels) if record is not None else {}
+        lines = _setup_lines(self.setup, live)
         if not lines:
             return "No adjustable setup parameters exposed for this car."
         out = "Current setup:\n" + "\n".join(lines)
+        if live:
+            out += "\nLive values are from the latest captured lap."
         if self.allowed_adjustments is not None:
             out += "\nLegal to change this tier: " + ", ".join(self.allowed_adjustments)
         return out
