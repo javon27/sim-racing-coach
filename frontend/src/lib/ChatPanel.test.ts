@@ -3,6 +3,8 @@ import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/sv
 import { getChatMessages, getChatUsage, getSettings, kokoroStatus, type ChatUsage, type SettingsResponse } from "./api";
 import type { CoachPhase, ToolActivity } from "./coach";
 import { VoiceLoop, type VoiceMode } from "./voice";
+import { KokoroSpeaker } from "./audio";
+import { eventFeed } from "./events";
 import ChatPanel from "./ChatPanel.svelte";
 
 vi.mock("./api", async () => {
@@ -772,6 +774,31 @@ describe("ChatPanel", () => {
     expect(await screen.findByText("Kokoro voice isn't installed — using Windows voices")).toBeTruthy();
 
     delete (navigator as { mediaDevices?: unknown }).mediaDevices;
+  });
+
+  function statusFrame(track: string | null) {
+    return {
+      track, car: null, on_track: false, activity: null, has_map: false,
+      lmu_connected: false, session_id: null, lap_id: null,
+    };
+  }
+
+  it("keeps a KokoroSpeaker's trackSlug live as the driver's live track changes", async () => {
+    const speaker = new KokoroSpeaker();
+    const recorder = { async start() {}, async stop() { return { pcm: new Float32Array(0), sampleRate: 16000 }; } };
+    const transcriber = { async transcribe() { return { text: "", seconds: 0 }; } };
+    const voice = new VoiceLoop({
+      recorder, transcriber, speaker, ask: () => {},
+      vad: { threshold: 0.02, silenceMs: 1000, maxS: 20 }, conversationIdleS: 30,
+    });
+
+    render(ChatPanel, { props: { stream: new FakeStream(), voice } });
+
+    eventFeed.push("status", statusFrame("Circuit de Spa-Francorchamps"));
+    await waitFor(() => expect(speaker.trackSlug).toBe("Circuit de Spa-Francorchamps"));
+
+    eventFeed.push("status", statusFrame("Autodromo Nazionale Monza"));
+    await waitFor(() => expect(speaker.trackSlug).toBe("Autodromo Nazionale Monza"));
   });
 });
 

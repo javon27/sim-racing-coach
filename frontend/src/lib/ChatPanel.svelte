@@ -218,6 +218,21 @@
     activeVoice.setSpeaker(s);
   }
 
+  // Kokoro's pronunciation table is per-track -- keep a KokoroSpeaker's trackSlug
+  // live as the driver's live track changes, not just set once when the loop is
+  // built. Plain `let`, deliberately NOT $state (see LapList's currentSessionId):
+  // it's only ever read/written from inside this effect's own callback, so making
+  // it reactive state would just make the effect depend on itself for no benefit.
+  let lastTrack: string | null = null;
+  $effect(() =>
+    eventFeed.status.subscribe((st) => {
+      const track = st?.track ?? null;
+      if (track === lastTrack) return;
+      lastTrack = track;
+      if (activeVoice?.speaker instanceof KokoroSpeaker) activeVoice.speaker.trackSlug = track;
+    }),
+  );
+
   let lastSentQuestion: string | null = null;
   $effect(() => {
     const v = activeVoice;

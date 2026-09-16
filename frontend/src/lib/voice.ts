@@ -151,6 +151,9 @@ export class VoiceLoop {
   /** Swap the active speaker in place (e.g. a failed Kokoro fetch falling back to
    *  Windows TTS mid-session) without tearing down the rest of the loop. */
   setSpeaker(s: Speaker): void { this.#o = { ...this.#o, speaker: s }; }
+  /** The active speaker (e.g. so a host can keep a KokoroSpeaker's trackSlug live
+   *  as the driver's track changes, without holding its own separate reference). */
+  get speaker(): Speaker { return this.#o.speaker; }
   #set(state: VoiceState) {
     this.state = state;
     // The recorder holds the mic open between presses so a press starts instantly
