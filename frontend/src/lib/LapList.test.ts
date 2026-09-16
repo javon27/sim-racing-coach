@@ -311,6 +311,28 @@ describe("LapList", () => {
     expect(onlive).toHaveBeenCalledWith({ session_id: "S1" });
   });
 
+  it("a pinned past session is queried once, not once per status frame", async () => {
+    pushStatus("S1", 5);
+    vi.mocked(getSessionLaps).mockImplementation(async (sid: string) =>
+      sid === "OLD"
+        ? [{ id: 42, lap_time: 210.0, valid: 1, ts: 300 }]
+        : [{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }],
+    );
+    const { container } = render(LapList, { props: { sessionId: "OLD" } });
+    await vi.waitFor(() =>
+      expect(container.querySelector(".lap .t")?.textContent).toBe("3:30.000"),
+    );
+    const before = vi.mocked(getSessionLaps).mock.calls.filter(([sid]) => sid === "OLD").length;
+    // Three more 1 Hz status frames while the hold stays (same live session, same lap).
+    pushStatus("S1", 5);
+    pushStatus("S1", 5);
+    pushStatus("S1", 5);
+    await new Promise((r) => setTimeout(r, 30));
+    const after = vi.mocked(getSessionLaps).mock.calls.filter(([sid]) => sid === "OLD").length;
+    expect(after).toBe(before);
+    expect(container.querySelector(".lap .t")?.textContent).toBe("3:30.000");
+  });
+
   it("pinned session, live session id changes: onlive fires once with the new id (snaps even before the baseline lap advances)", async () => {
     pushStatus("S1", 5);
     vi.mocked(getSessionLaps).mockImplementation(async (sid: string) =>

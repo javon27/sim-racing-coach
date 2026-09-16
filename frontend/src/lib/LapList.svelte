@@ -31,6 +31,7 @@
   // state that self-dependency would re-run the sessionId effect and re-arm the
   // review hold the moment the list snapped to a new live session.
   let currentSessionId: string | null = null;
+  let pinnedLoaded: string | null = null; // the pinned session whose rows are already shown
   let phase: "connecting" | "ok" | "unreachable" = $state("connecting");
 
   // Auto-scroll: keep the newest lap in view as laps are appended (session_laps
@@ -131,7 +132,20 @@
     // The live session's rows ride along on the feed; only a session the feed
     // isn't streaming (a pinned past session) still needs the indexed query.
     const frame = eventFeed.laps.value;
-    const l = frame && frame.session_id === target ? frame.laps : await getSessionLaps(target);
+    let l: LapRow[];
+    if (frame && frame.session_id === target) {
+      l = frame.laps;
+    } else if (!(reviewing && pinnedLoaded === target)) {
+      // A pinned past session's rows never change: query them once per target,
+      // not once per 1 Hz status frame. A followed live session keeps refetching
+      // until its laps frame arrives. (`pinnedLoaded` is a plain let on purpose,
+      // and `laps` is never READ here: a $state read in this synchronous prefix
+      // would make the status effect depend on it.)
+      l = await getSessionLaps(target);
+      pinnedLoaded = reviewing ? target : null;
+    } else {
+      return;
+    }
     laps = l;
     bestId = bestIdOf(l);
   }
@@ -205,6 +219,7 @@
     reviewBaseline = null;
     reviewBaselineSet = false;
     reviewLiveSessionId = null;
+    pinnedLoaded = null;
     load();
   });
 
