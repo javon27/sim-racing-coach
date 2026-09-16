@@ -46,6 +46,10 @@ def test_float_reads_digits_after_the_point():
     ("2nd", "second"), ("21st", "twenty-first"), ("3rd gear", "third gear"),
     ("Turn 10, sector 2.", "Turn ten, sector two."),
     ("T10", "turn ten"),
+    ("0.35%", "zero point three five percent"),
+    ("laps 3-4", "laps three to four"),
+    ("T3-4", "turn three to four"),
+    ("2:00.0 lap", "two minutes point zero lap"),
     ("no numbers here", "no numbers here"),
 ])
 def test_expand(text, spoken):

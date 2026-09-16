@@ -81,7 +81,10 @@ def num2words(n: float, to: str = "cardinal") -> str:
 
 def _lap_time(m: re.Match) -> str:
     minutes, seconds, tenths = int(m.group(1)), int(m.group(2)), m.group(3)
-    secs = _cardinal(seconds) if seconds >= 10 else f"oh-{_ONES[seconds]}"
+    if seconds == 0:
+        secs = "minutes"
+    else:
+        secs = _cardinal(seconds) if seconds >= 10 else f"oh-{_ONES[seconds]}"
     out = f"{_cardinal(minutes)} {secs}"
     if tenths is not None:
         out += " point " + " ".join(_ONES[int(d)] for d in tenths)
@@ -90,18 +93,28 @@ def _lap_time(m: re.Match) -> str:
 
 def _decimal(m: re.Match) -> str:
     sign = "minus " if m.group(1) else ""
-    return sign + f"{_cardinal(int(m.group(2)))} point " + " ".join(_ONES[int(d)] for d in m.group(3))
+    suffix = " percent" if m.group(4) else ""
+    return sign + f"{_cardinal(int(m.group(2)))} point " + " ".join(_ONES[int(d)] for d in m.group(3)) + suffix
 
 
-# Order matters: lap times before decimals, T-prefix before bare integers.
-# Lookaheads accept a sentence-final number: not followed by a word char,
-# nor by "." or ":" followed by a digit (so "sector 2." and "1:53.1." match).
+def _turn(m: re.Match) -> str:
+    out = f"turn {_cardinal(int(m.group(1)))}"
+    if m.group(2):
+        out += f" to {_cardinal(int(m.group(2)))}"
+    return out
+
+
+# Order matters: lap times before decimals, T-prefix and ranges before bare
+# integers. Lookaheads accept a sentence-final number: not followed by a word
+# char, nor by "." or ":" followed by a digit (so "sector 2." and "1:53.1."
+# match).
 _RULES: list[tuple[re.Pattern, object]] = [
     (re.compile(r"(?<![\d:.])(\d{1,2}):(\d{2})(?:\.(\d+))?(?!\w|[.:]\d)"), _lap_time),
-    (re.compile(r"(?<![\w.])(-?)(\d+)\.(\d+)(?!\d|[.:]\d)"), _decimal),
+    (re.compile(r"(?<![\w.])(-?)(\d+)\.(\d+)(%)?(?!\d|[.:]\d)"), _decimal),
     (re.compile(r"(?<![\w-])(\d+)(st|nd|rd|th)\b"), lambda m: _ordinal(int(m.group(1)))),
-    (re.compile(r"\bT(\d{1,2})\b"), lambda m: f"turn {_cardinal(int(m.group(1)))}"),
+    (re.compile(r"\bT(\d{1,2})(?:-(\d{1,2}))?\b"), _turn),
     (re.compile(r"(?<![\w.])(-?)(\d+)%"), lambda m: ("minus " if m.group(1) else "") + f"{_cardinal(int(m.group(2)))} percent"),
+    (re.compile(r"(?<![\w.:-])(\d+)-(\d+)(?!\w|[.:]\d)"), lambda m: f"{_cardinal(int(m.group(1)))} to {_cardinal(int(m.group(2)))}"),
     (re.compile(r"(?<![\w.:-])(-?)(\d+)(?!\w|[.:]\d)"), lambda m: ("minus " if m.group(1) else "") + _cardinal(int(m.group(2)))),
 ]
 
