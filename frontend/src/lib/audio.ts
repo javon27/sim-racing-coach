@@ -92,6 +92,8 @@ export class SynthSpeaker implements Speaker {
   voiceName: string | null = null;
   rate = 1.0;
   #beepCtx: AudioContext | null = null;
+  #pending = 0;
+  #idleWaiters: (() => void)[] = [];
 
   // getVoices() is empty until the async `voiceschanged` event fires in
   // Chromium/WebView2 -- gating on its length here made loadVoice() at
@@ -117,8 +119,40 @@ export class SynthSpeaker implements Speaker {
     });
   }
 
+  // Conversation mode: queue an utterance without awaiting it -- speechSynthesis.speak()
+  // already queues natively, so back-to-back calls just play in order.
+  enqueue(text: string): void {
+    const u = new SpeechSynthesisUtterance(text);
+    u.rate = this.rate;
+    if (this.voiceName) {
+      const v = speechSynthesis.getVoices().find((x) => x.name === this.voiceName);
+      if (v) u.voice = v;
+    }
+    this.#pending++;
+    const settle = () => {
+      this.#pending = Math.max(0, this.#pending - 1);
+      if (this.#pending === 0) {
+        const waiters = this.#idleWaiters;
+        this.#idleWaiters = [];
+        waiters.forEach((w) => w());
+      }
+    };
+    u.onend = settle;
+    u.onerror = settle;
+    speechSynthesis.speak(u);
+  }
+
+  idle(): Promise<void> {
+    if (this.#pending === 0) return Promise.resolve();
+    return new Promise((resolve) => this.#idleWaiters.push(resolve));
+  }
+
   cancel(): void {
     if (typeof speechSynthesis !== "undefined") speechSynthesis.cancel();
+    this.#pending = 0;
+    const waiters = this.#idleWaiters;
+    this.#idleWaiters = [];
+    waiters.forEach((w) => w());   // queue is empty now -- resolve, don't strand callers
   }
 
   earcon(kind: Earcon): void {
