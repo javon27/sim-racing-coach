@@ -254,7 +254,8 @@ describe("VoiceLoop conversation", () => {
     const { loop, recorder } = make();
     loop.toggleConversation(); await flush();
     recorder.frame(0.2); for (let i = 0; i < 20; i++) recorder.frame(0); await flush(); await flush();
-    loop.onAnswer("Answer.", null); await flush();
+    loop.onText("Answer. "); await flush();       // streaming contract: sentences arrive via onText
+    expect(loop.state).toBe("speaking");
     for (let i = 0; i < 8; i++) recorder.frame(0.3);
     await flush();
     expect(loop.state).toBe("listening");

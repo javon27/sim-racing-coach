@@ -733,7 +733,7 @@ describe("ChatPanel (scroll to end + jump-to-latest, #104)", () => {
   }
 
   it("a spoken question snaps the thread to the end even when scrolled up (rig: conversation mode didn't scroll)", async () => {
-    const speaker = { speak() { return new Promise<void>(() => {}); }, cancel() {}, earcon() {} };
+    const speaker = { speak() { return new Promise<void>(() => {}); }, enqueue() {}, async idle() {}, cancel() {}, earcon() {} };
     const recorder = { async start() {}, async stop() { return { pcm: new Float32Array(16000), sampleRate: 16000 }; } };
     const transcriber = { async transcribe() { return { text: "where am I losing time", seconds: 1 }; } };
     const voice = new VoiceLoop({ recorder, transcriber, speaker, ask: () => {}, vad: { threshold: 0.02, silenceMs: 1000, maxS: 20 }, conversationIdleS: 30 });

@@ -181,6 +181,20 @@ class MemoryKeyring(KeyringBackend):
     def delete_password(self, service, username): self._store.pop((service, username), None)
 
 
+@pytest.fixture(autouse=True)
+def _no_live_game(monkeypatch):
+    """The suite must not depend on whether LMU is running on the dev box.
+
+    Rig 2026-09-15: with LMU open, five chat-history tests failed because the
+    server read the LIVE session id from shared memory and (correctly, #97)
+    refused to thread a stored chat from another session. Tests that want a
+    live game stub these themselves; everyone else sees no game."""
+    from simcoach.lmu import smm
+    for name in ("read_live_status", "read_session_track_car", "read_live_session_id"):
+        if hasattr(smm, name):
+            monkeypatch.setattr(smm, name, lambda: None)
+
+
 @pytest.fixture
 def mem_keyring():
     prev = _keyring.get_keyring()
