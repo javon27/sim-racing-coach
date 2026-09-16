@@ -69,6 +69,26 @@ describe("KokoroSpeaker", () => {
     expect(sources.every((s) => s.stopped || !s.started)).toBe(true);
   });
 
+  it("cancel() while a decoded sentence is waiting for the previous one to end never plays it", async () => {
+    const { ctx, sources } = fakeAudio();
+    const resolvers: ((b: ArrayBuffer) => void)[] = [];
+    const fetchWav = vi.fn(() => new Promise<ArrayBuffer>((r) => resolvers.push(r)));
+    const sp = new KokoroSpeaker({ fetchWav, audio: ctx });
+    sp.enqueue("One."); sp.enqueue("Two.");
+    await Promise.resolve();
+    resolvers[0](wav(10));
+    await vi.waitFor(() => expect(sources.length).toBe(1));   // "One." decoded and playing
+    resolvers[1](wav(10));                                    // "Two." decodes while "One." plays,
+    await vi.waitFor(() => expect(fetchWav).toHaveBeenCalledTimes(2));
+    // let "Two." finish decoding and start waiting on drainPlaying() for "One." to end
+    await new Promise((r) => setTimeout(r, 0));
+    sp.cancel();
+    expect(sources[0].stopped).toBe(true);
+    await sp.idle();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sources.length).toBe(1);                           // "Two." must never have started
+  });
+
   it("reports the first failure through onUnavailable once and resolves the caller", async () => {
     const { ctx } = fakeAudio();
     const fetchWav = vi.fn(async () => { throw new Error("Kokoro voice isn't installed"); });

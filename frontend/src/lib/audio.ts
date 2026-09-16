@@ -210,6 +210,10 @@ export class KokoroSpeaker implements Speaker {
   #playing: AudioBufferSourceNode | null = null;
   #idleWaiters: (() => void)[] = [];
   #failed = false;
+  // Bumped by cancel() so an in-flight #play() -- even one already past its
+  // synthesis, decoded and waiting inside #drainPlaying() for the previous
+  // sentence to end -- notices and bails instead of playing a cancelled sentence.
+  #gen = 0;
 
   constructor(deps: { fetchWav?: typeof apiSpeak; audio?: AudioContext } = {}) {
     this.#fetchWav = deps.fetchWav ?? apiSpeak;
@@ -227,6 +231,7 @@ export class KokoroSpeaker implements Speaker {
     return new Promise((r) => this.#idleWaiters.push(r));
   }
   cancel(): void {
+    this.#gen++;
     this.#ahead?.abort.abort(); this.#ahead?.resolve(); this.#ahead = null;
     try { this.#playing?.stop(); } catch { /* already stopped */ }
     this.#playing = null;
@@ -252,9 +257,11 @@ export class KokoroSpeaker implements Speaker {
   }
   async #play(): Promise<void> {
     const ahead = this.#ahead!;
+    const gen = this.#gen;
     const buf = await ahead.buffer;
-    if (this.#ahead !== ahead) return;               // cancelled while synthesising
+    if (gen !== this.#gen) { ahead.resolve(); this.#settleIdle(); return; }   // cancelled while synthesising
     await this.#drainPlaying();
+    if (gen !== this.#gen) { ahead.resolve(); this.#settleIdle(); return; }   // cancelled while waiting to play
     this.#ahead = null;
     this.#pump();                                    // start the NEXT synthesis before this one plays
     if (!buf) { ahead.resolve(); this.#settleIdle(); return; }
@@ -262,6 +269,7 @@ export class KokoroSpeaker implements Speaker {
     src.buffer = buf; src.connect(this.#audio().destination);
     this.#playing = src;
     await new Promise<void>((done) => { src.onended = () => done(); src.start(); });
+    if (gen !== this.#gen) { ahead.resolve(); this.#settleIdle(); return; }   // cancelled while playing
     if (this.#playing === src) this.#playing = null;
     ahead.resolve();
     this.#settleIdle();
