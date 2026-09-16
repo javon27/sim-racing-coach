@@ -187,6 +187,10 @@ AGENTIC_SYSTEM_PROMPT = (
     "When saying how far into a race or qualy the driver is, use the CURRENT-PHASE lap "
     "count (get_session_status reports 'this <phase>: N'), never the session total, which "
     "includes other phases.\n\n"
+    "LAP IDENTITY: every lap tool starts with `Lap: …`. When you report a per-lap fact, say "
+    "which lap it came from ('on race lap 3 …'). If a later answer reads a NEWER lap than an "
+    "earlier one, say so ('that was lap 3; lap 4 now shows …') instead of contradicting "
+    "yourself.\n\n"
     "RACECRAFT: for a question about the race or how it went, call get_race_result. When it "
     "returns a result, LEAD with the race story — positions gained or lost, the incidents "
     "and penalties, the recovery arc — and treat lap-time and corner analysis as supporting "
@@ -203,7 +207,8 @@ AGENTIC_SYSTEM_PROMPT = (
     "exit that follows — reference both minima.\n\n"
     "For a track's character, cues, or hazards — or how any corner drives — call "
     "get_track_notes and quote the authored notes; NEVER invent track character from "
-    "memory. If no notes exist, say so and coach from telemetry. "
+    "memory. If no notes exist, say so and coach from telemetry. The authored track "
+    "knowledge is 'the track notes' — never call it a wiki or a guide. "
     "When reference lap times are given, you MAY compare the driver's time to the "
     "benchmark for their class as an absolute yardstick — but these are community times, "
     "not the driver's data; frame them as a reference, not a verdict.\n\n"
@@ -271,7 +276,10 @@ SPOKEN_SENTENCE = (
     "while the full answer is shown on screen. On the VERY FIRST line write `[spoken] ` "
     "followed by 2-3 plain spoken sentences carrying the single most important cue -- no "
     "markdown, no lists, no numbers they can't hold in their head mid-session. Leave a "
-    "blank line, then write your normal full answer."
+    "blank line, then write your normal full answer. Refer to a corner as 'Turn N' first "
+    "(the number from the corner line, e.g. 'Turn 10'); add its name only after the number "
+    "('Turn 10, Pouhon'), never the name alone. One cue, one action; at most one number in "
+    "the whole spoken part."
 )
 
 _SPOKEN_RE = re.compile(r"^\s*(?:\*\*)?\[spoken\](?:\*\*)?:?(?:\*\*)?\s*(.*?)\s*$", re.IGNORECASE)

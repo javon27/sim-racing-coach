@@ -1,5 +1,7 @@
 """Agentic tool layer: the tools return the right on-demand summaries, and the
 Coach agentic loop dispatches the model's tool calls (via FakeModel scripting)."""
+import re
+
 import pytest
 
 from simcoach.coach import Coach
@@ -20,10 +22,11 @@ def _ctx(tmp_path, lap):
 def test_get_corner_returns_one_corner(tmp_path, synthetic_lap):
     ctx, _, _ = _ctx(tmp_path, synthetic_lap)
     out = ctx.get_corner("1")
-    assert out.startswith("T1 ")
+    assert out.startswith("Lap: ")   # #108 item 1: lap identity leads every result
+    assert "\nT1 " in out
     assert "\nT2" not in out  # just the one corner, not the whole lap
     # name lookup works too
-    assert ctx.get_corner("Left Hairpin").startswith("T1 ")
+    assert "\nT1 " in ctx.get_corner("Left Hairpin")
     # unknown corner lists the options instead of crashing
     assert "No corner matching" in ctx.get_corner("Nonexistent")
 
@@ -37,8 +40,8 @@ def test_get_corner_targets_a_specific_lap(tmp_path, synthetic_lap):
     store.save(lap)
     ctx = CoachContext(store, cmap=cmap, track=lap.track, car=lap.car,
                        session_id="s1", on_track=True)
-    assert ctx.get_corner("1", which="race lap 1").startswith("T1 ")
-    assert ctx.dispatch("get_corner", {"corner": "1", "which": "race lap 1"}).startswith("T1 ")
+    assert "\nT1 " in ctx.get_corner("1", which="race lap 1")
+    assert "\nT1 " in ctx.dispatch("get_corner", {"corner": "1", "which": "race lap 1"})
     # a lap that doesn't exist is honest, not silently the latest lap
     assert "no lap" in ctx.get_corner("1", which="race lap 9").lower()
 
@@ -820,7 +823,7 @@ def test_get_last_setup_renders_step_position(tmp_path):
 
 def test_dispatch_routes_and_handles_unknown(tmp_path, synthetic_lap):
     ctx, _, _ = _ctx(tmp_path, synthetic_lap)
-    assert ctx.dispatch("get_corner", {"corner": "1"}).startswith("T1 ")
+    assert "\nT1 " in ctx.dispatch("get_corner", {"corner": "1"})
     assert "unknown tool" in ctx.dispatch("bogus", {})
 
 
@@ -835,7 +838,7 @@ def test_agentic_loop_dispatches_tool_calls(tmp_path, synthetic_lap):
     assert res.usage.total > 0          # usage rides back out with the answer
     # the tool actually ran and produced the corner line
     assert model.dispatched[0][0] == "get_corner"
-    assert model.dispatched[0][2].startswith("T1 ")
+    assert "\nT1 " in model.dispatched[0][2]
     # tools were advertised to the model
     assert model.last_tools == TOOLS
 
@@ -975,7 +978,7 @@ def test_current_lap_resolved_from_store_when_not_pinned(tmp_path, synthetic_lap
                        track=synthetic_lap.track, car=synthetic_lap.car, on_track=False)
     summary = ctx.get_lap_summary("latest")
     assert "Corner facts" in summary and "T1 " in summary
-    assert ctx.get_corner("1").startswith("T1 ")
+    assert "\nT1 " in ctx.get_corner("1")
     assert "Current lap: yes" in ctx.get_session_status()
 
 
@@ -1027,8 +1030,9 @@ def test_get_time_loss_is_honest_without_a_reference(tmp_path, synthetic_lap):
 def test_get_lap_summary_leads_with_the_ranking_and_the_worst_corner_first(tmp_path, synthetic_lap):
     ctx, _ = _time_loss_ctx(tmp_path, synthetic_lap)   # loses time only in T1
     out = ctx.get_lap_summary("latest")
-    first_line = out.splitlines()[0]
-    assert "Net" in first_line and "-" in first_line
+    assert out.splitlines()[0].startswith("Lap: ")   # #108 item 1: lap identity first
+    ranking_line = out.splitlines()[1]
+    assert "Net" in ranking_line and "-" in ranking_line
     assert out.index("T1 Left Hairpin") < out.index("T2 Right Sweeper")
     assert "\N{BLACK UP-POINTING TRIANGLE}" in out   # the top-loss corner is marked
 
@@ -1055,14 +1059,16 @@ def test_get_lap_summary_reorders_the_worst_corner_ahead_of_track_order(tmp_path
                        car=cur.car, session_id="s2--online", on_track=True)
 
     out = ctx.get_lap_summary("latest")
-    assert out.splitlines()[0].startswith("Net")
+    assert out.splitlines()[0].startswith("Lap: ")   # #108 item 1: lap identity first
+    assert out.splitlines()[1].startswith("Net")
     assert out.index("T2 Right Sweeper") < out.index("T1 Left Hairpin")
 
 
 def test_get_lap_summary_unchanged_without_a_reference(tmp_path, synthetic_lap):
     ctx, _, _ = _ctx(tmp_path, synthetic_lap)    # only one lap stored -- no reference
     out = ctx.get_lap_summary("latest")
-    assert out.splitlines()[0] == "Corner facts (authoritative, from telemetry):"
+    assert out.splitlines()[0].startswith("Lap: ")   # #108 item 1: lap identity first
+    assert out.splitlines()[1] == "Corner facts (authoritative, from telemetry):"
 
 
 def test_get_time_loss_refuses_to_compare_a_lap_to_itself(tmp_path, synthetic_lap):
@@ -1330,3 +1336,108 @@ def test_get_tire_trend_works_without_a_corner_map(tmp_path, synthetic_lap):
     ctx.cmap = None
     out = ctx.dispatch("get_tire_trend", {})
     assert "s/lap" in out and "corner map" not in out
+
+
+# --- lap identity on every per-lap tool result (#108 item 1) ---------------
+# La Source #108: "no lockup" then a minute later "IS showing a lockup" -- both
+# true, `which="latest"` had moved to a newer lap, and no tool result said which
+# lap it described. Every single-lap tool must now lead with `Lap: ...`, with
+# game-lap-number and wall-clock time distinct enough that a wrong lap fails.
+
+def _lap_identity_session(tmp_path, synthetic_lap):
+    """Two race laps in one session with distinct lap_no/timestamp/lap_time, so
+    an identity line naming the wrong lap fails the assertions."""
+    import dataclasses
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    session_id = "s1--offline"
+    lap2 = dataclasses.replace(synthetic_lap, session_id=session_id, phase="race",
+                               lap_no=2, timestamp=1_700_000_000.0, lap_time=91.0)
+    lap3 = dataclasses.replace(synthetic_lap, session_id=session_id, phase="race",
+                               lap_no=3, timestamp=1_700_000_060.0, lap_time=90.0)
+    id2 = store.save(lap2)
+    id3 = store.save(lap3)
+    ctx = CoachContext(store, record=lap3, lap_id=id3, cmap=cmap, track=lap3.track,
+                       car=lap3.car, session_id=session_id, on_track=True)
+    return ctx, store, id2, id3
+
+
+def test_get_lap_summary_starts_with_lap_identity(tmp_path, synthetic_lap):
+    ctx, *_ = _lap_identity_session(tmp_path, synthetic_lap)
+    out = ctx.get_lap_summary("latest")
+    assert out.startswith("Lap: ")
+    assert "race lap 3" in out
+    assert "game lap 3" in out
+    assert re.search(r"\d{2}:\d{2}:\d{2}", out)
+
+
+def test_get_handling_starts_with_lap_identity(tmp_path, synthetic_lap):
+    ctx, *_ = _lap_identity_session(tmp_path, synthetic_lap)
+    out = ctx.get_handling("latest")
+    assert out.startswith("Lap: ")
+    assert "race lap 3" in out
+    assert "game lap 3" in out
+    assert re.search(r"\d{2}:\d{2}:\d{2}", out)
+
+
+def test_get_corner_starts_with_lap_identity(tmp_path, synthetic_lap):
+    ctx, *_ = _lap_identity_session(tmp_path, synthetic_lap)
+    out = ctx.get_corner("1", "latest")
+    assert out.startswith("Lap: ")
+    assert "race lap 3" in out
+    assert "game lap 3" in out
+    assert re.search(r"\d{2}:\d{2}:\d{2}", out)
+
+
+def test_get_time_loss_identity_names_subject_and_reference_laps(tmp_path, synthetic_lap):
+    ctx, *_ = _lap_identity_session(tmp_path, synthetic_lap)
+    out = ctx.get_time_loss("latest")
+    assert out.startswith("Lap: ")
+    assert "race lap 3" in out          # the subject lap (latest, faster of the two)
+    assert "game lap 3" in out
+    assert " vs best: " in out
+    assert "game lap 2" in out          # the REFERENCE lap's identity, not the subject's
+
+
+def test_get_tire_report_and_wheel_report_start_with_lap_identity(tmp_path, synthetic_lap):
+    ctx, *_ = _lap_identity_session(tmp_path, synthetic_lap)
+    for out in (ctx.get_tire_report(), ctx.get_wheel_report()):
+        assert out.startswith("Lap: ")
+        assert "race lap 3" in out
+        assert "game lap 3" in out
+
+
+def test_lap_identity_omits_game_lap_fragment_when_not_stored(tmp_path, synthetic_lap):
+    # synthetic_lap has no lap_no and timestamp=0.0 -- no fragment must be invented.
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    out = ctx.get_lap_summary("latest")
+    assert out.startswith("Lap: ")
+    assert "game lap" not in out
+
+
+def test_latest_lap_identity_is_cached_once_per_turn(tmp_path, synthetic_lap):
+    # #108: "latest" must resolve once per CoachContext (one per coach turn) so two
+    # tool calls in the same turn describe the same lap, even if a newer lap lands
+    # mid-turn. A fresh context picks up the newer lap.
+    import dataclasses
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    lap1 = dataclasses.replace(synthetic_lap, lap_no=1, timestamp=100.0, lap_time=95.0)
+    lap2 = dataclasses.replace(synthetic_lap, lap_no=2, timestamp=200.0, lap_time=94.0)
+    store.save(lap1)
+    store.save(lap2)
+    ctx = CoachContext(store, cmap=cmap, track=lap1.track, car=lap1.car, on_track=True)
+
+    first = ctx.get_lap_summary("latest")
+    assert "game lap 2" in first
+
+    lap3 = dataclasses.replace(synthetic_lap, lap_no=3, timestamp=300.0, lap_time=93.0)
+    store.save(lap3)
+
+    second = ctx.get_lap_summary("latest")
+    assert "game lap 2" in second
+    assert "game lap 3" not in second   # cached -- the new lap doesn't leak into this turn
+
+    ctx2 = CoachContext(store, cmap=cmap, track=lap1.track, car=lap1.car, on_track=True)
+    fresh = ctx2.get_lap_summary("latest")
+    assert "game lap 3" in fresh

@@ -194,10 +194,11 @@ TOOLS = [
     {
         "name": "get_track_notes",
         "description": "Authored track knowledge (character, cues, hazards) for the current "
-                       "track: a short overview plus per-corner notes, as OWNED data. Call this "
-                       "before describing how a track or corner drives. Pass `corner` (number or "
-                       "label) to get just that corner's note. Works with NO laps captured. "
-                       "Never invent track character from memory — quote these notes.",
+                       "track (refer to it as 'the track notes'): a short overview plus "
+                       "per-corner notes, as OWNED data. Call this before describing how a "
+                       "track or corner drives. Pass `corner` (number or label) to get just "
+                       "that corner's note. Works with NO laps captured. Never invent track "
+                       "character from memory — quote these notes.",
         "input_schema": {
             "type": "object",
             "properties": {"corner": {"type": "string",
@@ -556,6 +557,34 @@ class CoachContext:
         self._lap_numbering_cache = (label_by_id, id_by_ref)
         return self._lap_numbering_cache
 
+    def _lap_line(self, record, lap_id) -> str:
+        """'Lap: race lap 3 (game lap 7, 21:14:05)' -- the in-session label the driver sees
+        in the lap list (#77 numbering), the game's own lap number when stored, and the
+        local wall-clock time the lap was captured, so two answers a minute apart can be
+        told apart (#108 item 1)."""
+        label_by_id, _ = self._lap_numbering()
+        label = label_by_id.get(lap_id) if lap_id is not None else None
+        parts = []
+        if record.lap_no is not None:
+            parts.append(f"game lap {record.lap_no}")
+        if record.timestamp:
+            parts.append(time.strftime("%H:%M:%S", time.localtime(record.timestamp)))
+        head = label or ("this lap" if lap_id is None else f"lap id {lap_id}")
+        return f"Lap: {head}" + (f" ({', '.join(parts)})" if parts else "")
+
+    def _lap_id_for(self, record) -> int | None:
+        """Best-effort DB lap_id for a record with no id attached (e.g. `best_lap`,
+        which only returns the record) -- matched by timestamp within this session.
+        None when it can't be found (outside this session, or no session_id), which
+        just leaves `_lap_line` to fall back to the record's own game-lap/time facts
+        without an in-session label."""
+        if not (self.session_id and record is not None):
+            return None
+        for row in self.store.session_laps(self.session_id):
+            if row["ts"] == record.timestamp:
+                return row["id"]
+        return None
+
     def _grip_envelope(self, reference):
         """The grip envelope (g), computed ONCE per context (cached on
         `self._envelope`) from this track/car's recent stored laps plus
@@ -596,12 +625,6 @@ class CoachContext:
             self._analysis_cache[key] = analyze_lap(record, self.cmap, reference=ref,
                                                      envelope=envelope)
         return self._analysis_cache[key]
-
-    def _latest_analysis(self):
-        record, lap_id = self._current_lap()
-        if record is None:
-            return None
-        return self._analysis_for(record, lap_id)
 
     def _resolve_lap(self, which):
         """which -> (record, lap_id). 'latest'/None -> current; 'best' -> best lap;
@@ -705,6 +728,7 @@ class CoachContext:
             return self._no_lap_msg(which)
         if self.cmap is None:
             return "No corner map for this track yet — can't break the lap into corners."
+        lap_line = self._lap_line(record, lap_id)
         analysis = self._analysis_for(record, lap_id)
         # #102: lead with the time-loss ranking (and surface its worst corners
         # first below) whenever a reference resolves -- a flat table buries the
@@ -712,7 +736,7 @@ class CoachContext:
         ref, ref_label = self._reference_lap(record, lap_id, "best")
         buckets = time_loss_buckets(record, ref, self.cmap) if ref is not None else None
         if not buckets:
-            return format_lap_facts(analysis, self.units)
+            return lap_line + "\n" + format_lap_facts(analysis, self.units)
         by_label = {f"T{cm.label or cm.corner_no} {cm.name}".strip(): cm.corner_no
                     for cm in analysis.corners}
         losses = sorted((b for b in buckets if b["kind"] == "corner" and b["delta"] > 0),
@@ -720,7 +744,7 @@ class CoachContext:
         top = [by_label[b["label"]] for b in losses if b["label"] in by_label]
         order = top + [cm.corner_no for cm in analysis.corners if cm.corner_no not in top]
         body = format_lap_facts(analysis, self.units, corner_order=order, top_loss=set(top))
-        return format_time_loss(buckets, ref_label) + "\n\n" + body
+        return lap_line + "\n" + format_time_loss(buckets, ref_label) + "\n\n" + body
 
     def _reference_lap(self, record, lap_id, reference="best"):
         """(record, label) for a time-loss comparison, or (None, label).
@@ -761,7 +785,10 @@ class CoachContext:
         if buckets is None:
             return ("That lap can't be compared to the reference (partial lap, or a "
                     "different track length).")
-        return format_time_loss(buckets, ref_label)
+        ref_word = (reference or "best").strip().lower()
+        ref_line = self._lap_line(ref, self._lap_id_for(ref)).removeprefix("Lap: ")
+        identity = f"{self._lap_line(record, lap_id)} vs {ref_word}: {ref_line}"
+        return identity + "\n" + format_time_loss(buckets, ref_label)
 
     def _stint_analyses(self, phase=None, need_corners=True):
         """(analyses, lap_times) for one stint -- session + phase, valid laps only,
@@ -814,6 +841,7 @@ class CoachContext:
         if self.cmap is None:
             return "No corner map for this track yet — can't break the lap into corners."
         analysis = self._analysis_for(record, lap_id)
+        lap_line = self._lap_line(record, lap_id)
         lines = []
         for cm in analysis.corners:
             flags = []
@@ -827,9 +855,9 @@ class CoachContext:
                 tag = f"T{cm.label or cm.corner_no} {cm.name}"
                 lines.append(f"{tag}: " + ". ".join(flags) + ".")
         if not lines:
-            return (f"No handling flags on this lap — balance read neutral in all "
-                    f"{len(analysis.corners)} corners.")
-        return "\n".join(lines)
+            return (lap_line + "\n" + f"No handling flags on this lap — balance read neutral "
+                    f"in all {len(analysis.corners)} corners.")
+        return lap_line + "\n" + "\n".join(lines)
 
     def list_track_corners(self):
         if self.cmap is None or not self.cmap.corners:
@@ -864,7 +892,7 @@ class CoachContext:
         geo = self._corner_geometry_clause(label, cm.direction)
         if geo:
             line += f"\nGeometry (baked from the track map): {geo}"
-        return line
+        return self._lap_line(record, lap_id) + "\n" + line
 
     def _gear_usually_line(self, cm) -> str | None:
         """#38 P1.7: "You took T{label} in {gear} (usually {mode})." when this
@@ -993,18 +1021,22 @@ class CoachContext:
         return out
 
     def get_tire_report(self):
-        analysis = self._latest_analysis()
+        record, lap_id = self._current_lap()
+        analysis = self._analysis_for(record, lap_id) if record is not None else None
         if analysis is None:
             return "No lap captured yet (or no corner map for this track)."
         report = format_tire_report(analysis, self.units)
-        return report or "No tire-temperature data was captured for this lap."
+        return (self._lap_line(record, lap_id) + "\n"
+                + (report or "No tire-temperature data was captured for this lap."))
 
     def get_wheel_report(self):
-        analysis = self._latest_analysis()
+        record, lap_id = self._current_lap()
+        analysis = self._analysis_for(record, lap_id) if record is not None else None
         if analysis is None:
             return "No lap captured yet (or no corner map for this track)."
         report = format_wheel_report(analysis, self.units)
-        return report or "No brake/wear data was captured for this lap (older capture)."
+        return (self._lap_line(record, lap_id) + "\n"
+                + (report or "No brake/wear data was captured for this lap (older capture)."))
 
     def get_energy_report(self):
         if self.record is None:

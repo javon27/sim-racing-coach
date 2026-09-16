@@ -215,3 +215,26 @@ def test_split_spoken_absent_or_malformed_returns_text_unchanged():
 def test_first_paragraph_is_the_fallback():
     assert first_paragraph("\n\nFirst block\nstill first.\n\nSecond.") == "First block\nstill first."
     assert first_paragraph("") == ""
+
+
+def test_system_prompt_requires_lap_identity():
+    """#108 item 1: the coach must say which lap a per-lap fact came from, and call
+    out a later answer reading a newer lap than an earlier one."""
+    from simcoach.coach import AGENTIC_SYSTEM_PROMPT
+    assert "Lap:" in AGENTIC_SYSTEM_PROMPT
+
+
+def test_system_prompt_calls_track_knowledge_the_track_notes():
+    """#108 item 8: the coach must never call the authored track knowledge a wiki
+    or a guide -- the driver never authored a wiki, they authored notes."""
+    from simcoach.coach import AGENTIC_SYSTEM_PROMPT
+    assert "track notes" in AGENTIC_SYSTEM_PROMPT
+    assert "wiki" in AGENTIC_SYSTEM_PROMPT
+
+
+def test_spoken_sentence_locates_corners_by_number_first():
+    """#108 item 10: a spoken cue must lead with 'Turn N' -- a corner NAME alone
+    ('Pouhon') isn't followable mid-session; the number is."""
+    from simcoach.coach import SPOKEN_SENTENCE
+    assert "Turn N" in SPOKEN_SENTENCE
+    assert "never the name alone" in SPOKEN_SENTENCE
