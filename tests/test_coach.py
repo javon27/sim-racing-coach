@@ -238,3 +238,9 @@ def test_spoken_sentence_locates_corners_by_number_first():
     from simcoach.coach import SPOKEN_SENTENCE
     assert "Turn N" in SPOKEN_SENTENCE
     assert "never the name alone" in SPOKEN_SENTENCE
+
+
+def test_prompt_routes_incidents_to_get_stint_events():
+    from simcoach.coach import AGENTIC_SYSTEM_PROMPT
+    assert "get_stint_events" in AGENTIC_SYSTEM_PROMPT
+    assert "flat spot" in AGENTIC_SYSTEM_PROMPT

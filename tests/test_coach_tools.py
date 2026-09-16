@@ -1031,7 +1031,8 @@ def test_get_lap_summary_leads_with_the_ranking_and_the_worst_corner_first(tmp_p
     ctx, _ = _time_loss_ctx(tmp_path, synthetic_lap)   # loses time only in T1
     out = ctx.get_lap_summary("latest")
     assert out.splitlines()[0].startswith("Lap: ")   # #108 item 1: lap identity first
-    ranking_line = out.splitlines()[1]
+    assert out.splitlines()[1].startswith("Events this lap: ")   # #108 items 3+4
+    ranking_line = out.splitlines()[2]
     assert "Net" in ranking_line and "-" in ranking_line
     assert out.index("T1 Left Hairpin") < out.index("T2 Right Sweeper")
     assert "\N{BLACK UP-POINTING TRIANGLE}" in out   # the top-loss corner is marked
@@ -1060,7 +1061,8 @@ def test_get_lap_summary_reorders_the_worst_corner_ahead_of_track_order(tmp_path
 
     out = ctx.get_lap_summary("latest")
     assert out.splitlines()[0].startswith("Lap: ")   # #108 item 1: lap identity first
-    assert out.splitlines()[1].startswith("Net")
+    assert out.splitlines()[1].startswith("Events this lap: ")   # #108 items 3+4
+    assert out.splitlines()[2].startswith("Net")
     assert out.index("T2 Right Sweeper") < out.index("T1 Left Hairpin")
 
 
@@ -1068,7 +1070,8 @@ def test_get_lap_summary_unchanged_without_a_reference(tmp_path, synthetic_lap):
     ctx, _, _ = _ctx(tmp_path, synthetic_lap)    # only one lap stored -- no reference
     out = ctx.get_lap_summary("latest")
     assert out.splitlines()[0].startswith("Lap: ")   # #108 item 1: lap identity first
-    assert out.splitlines()[1] == "Corner facts (authoritative, from telemetry):"
+    assert out.splitlines()[1].startswith("Events this lap: ")   # #108 items 3+4
+    assert out.splitlines()[2] == "Corner facts (authoritative, from telemetry):"
 
 
 def test_get_time_loss_refuses_to_compare_a_lap_to_itself(tmp_path, synthetic_lap):
@@ -1441,3 +1444,92 @@ def test_latest_lap_identity_is_cached_once_per_turn(tmp_path, synthetic_lap):
     ctx2 = CoachContext(store, cmap=cmap, track=lap1.track, car=lap1.car, on_track=True)
     fresh = ctx2.get_lap_summary("latest")
     assert "game lap 3" in fresh
+
+
+# --- stint event log (#108 items 3+4) ---------------------------------------
+
+def _events_session(tmp_path, synthetic_lap):
+    """4 race laps: lap 2 spins at T2, lap 3 takes a 4x FR wear step at T1."""
+    import dataclasses
+
+    import numpy as np
+
+    from simcoach.analysis import _SPEED_KMH_TO_MS
+
+    def spin_at(base, lo=2190.0, hi=2230.0, turn=200.0, v_from=180.0, v_min=30.0):
+        ch = dict(base.channels)
+        d = np.asarray(ch["lap_distance"], float)
+        h = np.radians(np.clip((d - lo) / (hi - lo), 0.0, 1.0) * turn)
+        ds = np.r_[0.0, np.diff(d)]
+        ch["pos_x"] = np.cumsum(ds * np.cos(h))
+        ch["pos_z"] = np.cumsum(ds * np.sin(h))
+        v = np.asarray(ch["speed"], float).copy()
+        v[(d >= lo - 60) & (d < lo)] = v_from
+        seg = (d >= lo) & (d <= hi)
+        v[seg] = np.interp(d[seg], [lo, hi], [v_from, v_min])
+        v[(d > hi) & (d <= hi + 60)] = v_min
+        ch["speed"] = v
+        ch["time"] = np.cumsum(np.r_[0.0, np.diff(d) / np.maximum(
+            v[1:] * _SPEED_KMH_TO_MS, 1.0)])
+        return dataclasses.replace(base, channels=ch)
+
+    def wear_step_at(base, wheel="fr", drop=0.09, at_dist=1000.0):
+        ch = dict(base.channels)
+        d = np.asarray(ch["lap_distance"], float)
+        wear = np.asarray(ch[f"tire_wear_{wheel}"], float).copy()
+        wear[int(np.argmin(np.abs(d - at_dist))):] -= drop
+        ch[f"tire_wear_{wheel}"] = wear
+        return dataclasses.replace(base, channels=ch)
+
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    session_id = "s1--online"
+    laps = [synthetic_lap, spin_at(synthetic_lap), wear_step_at(synthetic_lap), synthetic_lap]
+    ids = [store.save(dataclasses.replace(lap, session_id=session_id, phase="race",
+                                          lap_time=90.0 + i, timestamp=90.0 + i))
+           for i, lap in enumerate(laps)]
+    cur = store.load(ids[-1])
+    ctx = CoachContext(store, cmap=cmap, track=cur.track, car=cur.car,
+                       session_id=session_id, on_track=True)
+    return ctx, ids
+
+
+def test_get_stint_events_names_the_lap_and_the_corner(tmp_path, synthetic_lap):
+    ctx, _ = _events_session(tmp_path, synthetic_lap)
+    out = ctx.dispatch("get_stint_events", {})
+    assert "race lap 2" in out and "race lap 3" in out
+    assert "T2 Right Sweeper: spin" in out
+    assert "FR wear step" in out and "T1 Left Hairpin" in out
+    # the two clean laps say so rather than going unmentioned
+    assert out.count("none") == 2
+
+
+def test_get_stint_events_scopes_to_the_last_n_laps(tmp_path, synthetic_lap):
+    ctx, _ = _events_session(tmp_path, synthetic_lap)
+    out = ctx.dispatch("get_stint_events", {"laps": 2})
+    assert "race lap 1" not in out and "race lap 2" not in out
+    assert "race lap 3" in out and "race lap 4" in out
+
+
+def test_get_stint_events_is_advertised_to_the_model():
+    spec = next(t for t in TOOLS if t["name"] == "get_stint_events")
+    assert "spin" in spec["description"]
+    assert "laps" in spec["input_schema"]["properties"]
+
+
+def test_get_lap_summary_leads_with_events_this_lap(tmp_path, synthetic_lap):
+    ctx, _ = _events_session(tmp_path, synthetic_lap)
+    out = ctx.get_lap_summary("race lap 2")
+    lines = out.splitlines()
+    assert lines[0].startswith("Lap: ")
+    assert lines[1].startswith("Events this lap: ")
+    assert "spin" in lines[1]
+    # a clean lap says so rather than dropping the line
+    assert ctx.get_lap_summary("race lap 1").splitlines()[1] == "Events this lap: none"
+
+
+def test_get_wheel_report_appends_the_wear_step(tmp_path, synthetic_lap):
+    ctx, ids = _events_session(tmp_path, synthetic_lap)
+    ctx.record, ctx.lap_id = ctx.store.load(ids[2]), ids[2]
+    out = ctx.get_wheel_report()
+    assert "FR wear step" in out and "T1 Left Hairpin" in out

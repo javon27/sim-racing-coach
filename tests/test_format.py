@@ -1,7 +1,8 @@
 import math
 
 from simcoach.analysis import CornerMetrics
-from simcoach.format import format_corner_line, format_laptime
+from simcoach.corners import CornerMap
+from simcoach.format import format_corner_line, format_events, format_laptime
 
 
 def _cm(track_edge_min: float) -> CornerMetrics:
@@ -457,3 +458,46 @@ def test_format_corner_line_silent_on_two_steer_reversals():
     cm = _cm(1.0)
     cm.steer_reversals = 2
     assert "sawing" not in format_corner_line(cm)
+
+
+# --- event lines (#108 items 3+4) -------------------------------------------
+
+_CMAP = CornerMap.load("simcoach/tracks/test_track.json")
+
+
+def _ev(kind, corner_no, **detail):
+    return {"kind": kind, "corner_no": corner_no, "lap_distance": 1000.0, "detail": detail}
+
+
+def test_format_events_spin_line():
+    ev = _ev("spin", 2, speed_from_kmh=178.0, speed_min_kmh=32.0, turned_deg=195.0)
+    assert format_events([ev], _CMAP) == [
+        "T2 Right Sweeper: spin — 178 → 32 km/h, turned 195°"]
+
+
+def test_format_events_spin_line_imperial():
+    ev = _ev("spin", 2, speed_from_kmh=178.0, speed_min_kmh=32.0, turned_deg=195.0)
+    assert format_events([ev], _CMAP, "imperial") == [
+        "T2 Right Sweeper: spin — 111 → 20 mph, turned 195°"]
+
+
+def test_format_events_spin_off_the_map_has_no_corner_tag():
+    ev = _ev("spin", None, speed_from_kmh=178.0, speed_min_kmh=32.0, turned_deg=195.0)
+    assert format_events([ev], _CMAP) == [
+        "spin — 178 → 32 km/h, turned 195°"]
+
+
+def test_format_events_lockup_and_wheelspin_lines():
+    assert format_events([_ev("lockup", 1), _ev("wheelspin", 2)], _CMAP) == [
+        "T1 Left Hairpin: lockup", "T2 Right Sweeper: wheelspin"]
+
+
+def test_format_events_off_line():
+    assert format_events([_ev("off", 1, past_edge_m=1.4)], _CMAP) == [
+        "T1 Left Hairpin: off track — centre 1.4 m past the edge"]
+
+
+def test_format_events_wear_step_line():
+    ev = _ev("wear_step", 1, wheel="fr", step_pct=1.2, baseline_pct=0.3)
+    assert format_events([ev], _CMAP) == [
+        "FR wear step 1.2% at T1 Left Hairpin (stint median 0.3%/lap)"]

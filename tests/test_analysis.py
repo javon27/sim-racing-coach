@@ -1,3 +1,13 @@
+import dataclasses
+
+import numpy as np
+import pytest
+
+from simcoach.analysis import analyze_lap, lap_events, stint_wear_baseline
+from simcoach.corners import CornerMap
+from simcoach.model_types import LapRecord
+
+
 def test_analyze_lap_metrics(synthetic_lap):
     from simcoach.analysis import analyze_lap
     from simcoach.corners import CornerMap
@@ -1632,3 +1642,174 @@ def test_analyze_lap_diffs_input_shape_metrics_vs_reference(synthetic_lap):
     a = analyze_lap(synthetic_lap, cmap, reference=reference)
     c1 = a.corners[0]
     assert c1.brake_reversals_delta is not None and c1.brake_reversals_delta < 0
+
+
+# --- per-lap event log (#108 items 3+4) ------------------------------------
+
+def _path_lap(segments, hz=50.0, track="test_track"):
+    """A LapRecord whose PATH (pos_x/pos_z) turns by `turn_deg` over each segment
+    while speed ramps v_start -> v_end. segments: (duration_s, turn_deg,
+    v_start_kmh, v_end_kmh). Everything else (distance, time) is integrated from
+    that speed trace, so the time axis and the path agree."""
+    from simcoach.analysis import _SPEED_KMH_TO_MS
+    v_parts, h_parts = [], []
+    heading = 0.0
+    for dur, turn, v0, v1 in segments:
+        k = max(2, round(dur * hz))
+        v_parts.append(np.linspace(v0, v1, k))
+        h_parts.append(heading + np.linspace(0.0, turn, k))
+        heading += turn
+    v = np.concatenate(v_parts)
+    h = np.radians(np.concatenate(h_parts))
+    n = v.size
+    dt = 1.0 / hz
+    t = np.arange(n) * dt
+    ds = np.r_[0.0, v[1:] * _SPEED_KMH_TO_MS * dt]
+    ch = {
+        "lap_distance": np.cumsum(ds),
+        "time": t,
+        "speed": v,
+        "pos_x": np.cumsum(ds * np.cos(h)),
+        "pos_z": np.cumsum(ds * np.sin(h)),
+        "throttle": np.zeros(n),
+        "brake": np.zeros(n),
+        "steering": np.zeros(n),
+    }
+    return LapRecord("lmu", track, "test_car", float(t[-1]), True, 0.0, ch)
+
+
+def test_lap_events_flags_a_spin_on_the_straight():
+    # 200 deg of rotation in 2 s while speed falls 180 -> 30: a spin.
+    rec = _path_lap([(2.0, 0.0, 180.0, 180.0),
+                     (2.0, 200.0, 180.0, 30.0),
+                     (2.0, 0.0, 30.0, 30.0)])
+    cmap = CornerMap([])
+    events = lap_events(rec, cmap, analyze_lap(rec, cmap))
+    spins = [e for e in events if e["kind"] == "spin"]
+    assert len(spins) == 1
+    e = spins[0]
+    assert e["corner_no"] is None          # no mapped corner here
+    assert e["detail"]["speed_from_kmh"] == pytest.approx(180.0, abs=2.0)
+    assert e["detail"]["speed_min_kmh"] == pytest.approx(30.0, abs=2.0)
+    assert e["detail"]["turned_deg"] == pytest.approx(200.0, abs=5.0)
+
+
+def test_lap_events_does_not_flag_a_170_degree_hairpin():
+    # The discriminator is the speed COLLAPSE, not the angle: brake 250 -> 65 on
+    # the straight (no rotation), then turn 170 deg at a steady 65 km/h. Every
+    # 3 s window has a big angle or a big speed drop, never both.
+    rec = _path_lap([(3.0, 0.0, 250.0, 65.0),
+                     (2.5, 170.0, 65.0, 65.0),
+                     (3.0, 0.0, 65.0, 120.0)])
+    cmap = CornerMap([])
+    events = lap_events(rec, cmap, analyze_lap(rec, cmap))
+    assert [e for e in events if e["kind"] == "spin"] == []
+
+
+def test_lap_events_skips_spins_without_position_channels(synthetic_lap):
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    events = lap_events(synthetic_lap, cmap, analyze_lap(synthetic_lap, cmap))
+    assert [e for e in events if e["kind"] == "spin"] == []
+
+
+def test_lap_events_off_track_only_past_the_knob(synthetic_lap):
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    # Corner 1's closest approach is 0.3 m INSIDE the edge -> not an off.
+    events = lap_events(synthetic_lap, cmap, analyze_lap(synthetic_lap, cmap))
+    assert [e for e in events if e["kind"] == "off"] == []
+    # Push the car 1.5 m past its own edge through corner 1.
+    ch = dict(synthetic_lap.channels)
+    d = np.asarray(ch["lap_distance"], float)
+    edge = np.asarray(ch["track_edge"], float).copy()
+    lat = np.asarray(ch["path_lateral"], float).copy()
+    seg = (d >= 980) & (d <= 1020)
+    lat[seg] = np.copysign(np.abs(edge[seg]) + 1.5, lat[seg])
+    ch["path_lateral"] = lat
+    rec = dataclasses.replace(synthetic_lap, channels=ch)
+    offs = [e for e in lap_events(rec, cmap, analyze_lap(rec, cmap)) if e["kind"] == "off"]
+    assert len(offs) == 1
+    assert offs[0]["corner_no"] == 1
+    assert offs[0]["detail"]["past_edge_m"] == pytest.approx(1.5, abs=0.2)
+
+
+def test_lap_events_passes_lockup_and_wheelspin_through(synthetic_lap):
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    ch = dict(synthetic_lap.channels)
+    d = np.asarray(ch["lap_distance"], float)
+    n = d.size
+    speed = np.asarray(ch["speed"], float)
+    brake = np.asarray(ch["brake"], float)
+    # Front wheels stopped through corner 1's brake zone -> lockup; a rear wheel
+    # spinning 30% faster than the fronts on corner 2's exit -> wheelspin.
+    rot = {w: speed / 3.6 / 0.33 for w in ("fl", "fr", "rl", "rr")}
+    locked = (d >= 900) & (d <= 1000) & (brake > 0.5)
+    for w in ("fl", "fr"):
+        rot[w] = np.where(locked, 0.0, rot[w])
+    spin = (d >= 2200) & (d <= 2300)
+    rot["rl"] = np.where(spin, rot["rl"] * 1.3, rot["rl"])
+    for w, v in rot.items():
+        ch[f"wheel_rot_{w}"] = v
+    assert n == d.size
+    rec = dataclasses.replace(synthetic_lap, channels=ch)
+    events = lap_events(rec, cmap, analyze_lap(rec, cmap))
+    assert {(e["kind"], e["corner_no"]) for e in events} >= {("lockup", 1), ("wheelspin", 2)}
+
+
+def _wear_lap(base, wheel="fr", drop=0.09, at_dist=1000.0):
+    ch = dict(base.channels)
+    d = np.asarray(ch["lap_distance"], float)
+    wear = np.asarray(ch[f"tire_wear_{wheel}"], float).copy()
+    i = np.argmin(np.abs(d - at_dist))
+    wear[i:] -= drop
+    ch[f"tire_wear_{wheel}"] = wear
+    return dataclasses.replace(base, channels=ch), i
+
+
+def test_lap_events_wear_step_flags_the_wheel_and_places_it(synthetic_lap):
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    rec, i = _wear_lap(synthetic_lap)          # FR: 0.03/lap baseline -> 0.12 lap
+    baseline = {w: 0.03 for w in ("fl", "fr", "rl", "rr")}
+    steps = [e for e in lap_events(rec, cmap, analyze_lap(rec, cmap), baseline)
+             if e["kind"] == "wear_step"]
+    assert len(steps) == 1
+    e = steps[0]
+    assert e["detail"]["wheel"] == "fr"
+    assert e["corner_no"] == 1
+    assert e["lap_distance"] == pytest.approx(float(np.asarray(
+        rec.channels["lap_distance"], float)[i]), abs=1.0)
+    assert e["detail"]["step_pct"] == pytest.approx(12.0, abs=0.5)
+    assert e["detail"]["baseline_pct"] == pytest.approx(3.0, abs=0.01)
+
+
+def test_lap_events_no_wear_events_without_a_baseline(synthetic_lap):
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    rec, _ = _wear_lap(synthetic_lap)
+    events = lap_events(rec, cmap, analyze_lap(rec, cmap))
+    assert [e for e in events if e["kind"] == "wear_step"] == []
+
+
+def test_stint_wear_baseline_is_the_per_wheel_median(synthetic_lap):
+    recs = []
+    for drop in (0.00, 0.02, 0.09):
+        ch = dict(synthetic_lap.channels)
+        wear = np.asarray(ch["tire_wear_fr"], float).copy()
+        wear[len(wear) // 2:] -= drop
+        ch["tire_wear_fr"] = wear
+        recs.append(dataclasses.replace(synthetic_lap, channels=ch))
+    base = stint_wear_baseline(recs)
+    assert base["fr"] == pytest.approx(0.05, abs=1e-6)   # median of .03/.05/.12
+    assert base["fl"] == pytest.approx(0.03, abs=1e-6)
+
+
+def test_stint_wear_baseline_skips_wheels_without_the_channel(synthetic_lap):
+    recs = []
+    for _ in range(3):
+        ch = {k: v for k, v in synthetic_lap.channels.items() if k != "tire_wear_rr"}
+        recs.append(dataclasses.replace(synthetic_lap, channels=ch))
+    base = stint_wear_baseline(recs)
+    assert "rr" not in base and "fl" in base
+
+
+def test_stint_wear_baseline_needs_two_laps(synthetic_lap):
+    assert stint_wear_baseline([synthetic_lap]) == {}
+    assert stint_wear_baseline([]) == {}
