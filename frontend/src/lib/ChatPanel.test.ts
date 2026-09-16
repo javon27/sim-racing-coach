@@ -186,6 +186,23 @@ describe("ChatPanel", () => {
     expect(screen.queryByText("lemans question")).toBeNull();
   });
 
+  it("history rows carrying a spoken cue show it under the coach bubble; rows without one don't", async () => {
+    vi.mocked(getChatMessages).mockResolvedValue([
+      { ts: 1, session_id: "s1", track: "Le Mans", car: "Corvette", lap_id: null,
+        question: "where do I brake?", answer: "Brake later into T3.", tool_calls: null,
+        spoken: "Brake later into three." },
+      { ts: 2, session_id: "s1", track: "Le Mans", car: "Corvette", lap_id: null,
+        question: "typed question", answer: "Typed answer.", tool_calls: null, spoken: null },
+    ]);
+    const stream = new FakeStream();
+
+    render(ChatPanel, { props: { stream, chatId: "c1" } });
+
+    expect(await screen.findByText(/Brake later into three\./)).toBeTruthy();
+    expect(await screen.findByText("Typed answer.")).toBeTruthy();
+    expect(document.querySelectorAll(".spoken")).toHaveLength(1);
+  });
+
   it("chatId=null (session with no chat) shows an empty new chat, not the latest", async () => {
     // A chatless session was opened (chatId=null), so the panel must NOT load
     // any latest chat — it shows the empty new-chat state.
@@ -574,6 +591,7 @@ describe("ChatPanel", () => {
 
     await waitFor(() => expect(speaker.spoken).toContain("Short cue."));
     expect(screen.getByText("Full answer.")).toBeTruthy(); // written chat is the full answer
+    expect(screen.getByText(/Short cue\./)).toBeTruthy();  // shown under the new coach message
   });
 
   it("spoken frame reaches the loop before done (#104: speak the cue as soon as it streams)", async () => {

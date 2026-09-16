@@ -43,7 +43,7 @@
     voice?: VoiceLoop | null;
   } = $props();
 
-  type Msg = { role: "you" | "coach"; text: string };
+  type Msg = { role: "you" | "coach"; text: string; spoken?: string | null };
 
   // Minimal markdown -> HTML for coach answers: headings (#/##), "- " lists,
   // **bold**, `code`. No dependency — everything else renders as plain text.
@@ -367,7 +367,7 @@
       const hist: Msg[] = [];
       for (const row of rows) {
         hist.push({ role: "you", text: row.question });
-        hist.push({ role: "coach", text: row.answer });
+        hist.push({ role: "coach", text: row.answer, spoken: row.spoken ?? null });
       }
       messages = hist;
     } catch {
@@ -456,7 +456,10 @@
         activeVoice?.onSpoken(snap.spoken);
       }
       if (snap.phase === "done") {
-        messages = [...messages, { role: "coach", text: snap.answer }];
+        // snap.spoken only ever carries a value for a PTT turn (the server only
+        // sets `terminal.spoken` when voice === "ptt"), so no extra mode gating
+        // is needed here -- it's already null for typed/conversation turns.
+        messages = [...messages, { role: "coach", text: snap.answer, spoken: snap.spoken ?? null }];
         waiting = false;
         // Adopt the server's chat id so follow-ups append to this thread.
         if (snap.chatId) currentChatId = snap.chatId;
@@ -577,6 +580,9 @@
               </div>
               {#if m.role === "coach"}
                 <div class="body md">{@html renderMarkdown(m.text)}</div>
+                {#if m.spoken}
+                  <div class="spoken" title="What was read aloud">🔈 {m.spoken}</div>
+                {/if}
               {:else}
                 <div class="body">{m.text}</div>
               {/if}

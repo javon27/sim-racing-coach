@@ -102,6 +102,7 @@ export interface ChatMessage {
   question: string;
   answer: string;
   tool_calls: unknown;
+  spoken?: string | null;
 }
 
 // Billed tokens for a whole chat. Computed by the core (simcoach/store.py +
