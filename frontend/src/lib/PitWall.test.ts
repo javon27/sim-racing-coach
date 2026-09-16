@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, waitFor, cleanup } from "@testing-library/svelte";
+import { tick } from "svelte";
 
 const getInputTraces = vi.fn(async () => ({ last: null, best: null }));
 
@@ -10,8 +11,19 @@ vi.mock("./api", () => ({
 }));
 
 import PitWall from "./PitWall.svelte";
+import { getCurrentMap } from "./api";
+import { eventFeed } from "./events";
 import { liveField } from "./live";
 import type { FieldSnapshot } from "./live";
+
+const MAP = {
+  width: 100, height: 60,
+  path: [[0, 0], [10, 20], [30, 40]] as [number, number][],
+  dist: [0, 100, 200],
+  sectors: [],
+  corners: [],
+  track_name: "Monza",
+};
 
 function snapshot(lap: number): FieldSnapshot {
   return {
@@ -56,6 +68,33 @@ describe("PitWall", () => {
     const { getByTestId } = render(PitWall);
     await waitFor(() => expect(getByTestId("trace-throttle-last")).toBeTruthy());
     expect(getByTestId("trace-brake-last").getAttribute("d")).toContain("M0.0");
+  });
+
+  it("takes the track map off /events instead of polling for it (#106)", async () => {
+    liveField.snapshot = snapshot(1); // the map only draws while the session is live
+    eventFeed.push("map", MAP);
+    const { container } = render(PitWall);
+    await waitFor(() => expect(container.querySelector("polyline")).toBeTruthy());
+    expect(getCurrentMap).not.toHaveBeenCalled();
+  });
+
+  it("only swaps the map when the frame names a different track (zoom/pan survives)", async () => {
+    liveField.snapshot = snapshot(1);
+    eventFeed.push("map", MAP);
+    const { container } = render(PitWall);
+    const points = () => container.querySelector("polyline")?.getAttribute("points");
+    await waitFor(() => expect(points()).toBeTruthy());
+    const drawn = points();
+
+    // Same track: the map is NOT re-assigned (handing TrackMap a new object resets
+    // the user's zoom/pan), so even different geometry under the same name is ignored.
+    eventFeed.push("map", { ...MAP, path: [[0, 0], [50, 50], [99, 59]] });
+    await tick(); // let Svelte flush, so "unchanged" means it really was ignored
+    expect(points()).toBe(drawn);
+
+    // A different track is the one thing that swaps it.
+    eventFeed.push("map", { ...MAP, track_name: "Spa", path: [[0, 0], [50, 50], [99, 59]] });
+    await waitFor(() => expect(points()).not.toBe(drawn));
   });
 
   it("refetches the traces when the lap counter ticks, not on every live frame", async () => {

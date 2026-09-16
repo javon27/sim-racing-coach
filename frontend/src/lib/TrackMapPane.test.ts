@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/svelte";
+import { tick } from "svelte";
 import { getSessionLaps, getLapMap, getStatus, getCurrentMap, type StatusResponse } from "./api";
 import { eventFeed } from "./events";
 import TrackMapPane from "./TrackMapPane.svelte";
@@ -109,13 +110,15 @@ describe("TrackMapPane", () => {
 
     const { container } = render(TrackMapPane, { props: { sessionId: undefined } });
     expect(await screen.findByText("Live Track")).toBeTruthy();
-    const drawn = container.querySelector("polyline");
+    const points = () => container.querySelector("polyline")?.getAttribute("points");
+    const drawn = points();
     expect(drawn).toBeTruthy();
 
     // Status keeps ticking (1 Hz on the real feed) with no map frame: the ~130 KB
-    // map is neither re-fetched nor re-assigned, so the user's zoom/pan survives.
+    // map is neither re-fetched nor re-drawn, so the user's zoom/pan survives.
     for (let i = 0; i < 5; i++) eventFeed.push("status", live);
-    expect(container.querySelector("polyline")).toBe(drawn);
+    await tick(); // flush, or "unchanged" would just mean "not rendered yet"
+    expect(points()).toBe(drawn);
 
     // A track change is what makes the sidecar send a new map frame.
     eventFeed.push("status", { ...live, track: "Other Track" });

@@ -6,7 +6,8 @@
   import SectorDeltas from "./SectorDeltas.svelte";
   import InputTraces from "./InputTraces.svelte";
   import { liveField } from "./live";
-  import { getCurrentMap, getInputTraces, type InputTraces as InputTraceData,
+  import { eventFeed } from "./events";
+  import { getInputTraces, type InputTraces as InputTraceData,
            type TrackMap as TrackMapData } from "./api";
 
   // Shared app-lifetime feed (started in App); we only subscribe — never start/stop
@@ -14,20 +15,17 @@
   let snapshot = $state(liveField.snapshot);
   let trackMap: TrackMapData | null = $state(null);
   let traces: InputTraceData | null = $state(null);
-  let mapTimer: ReturnType<typeof setInterval> | undefined;
   let tracedLap: number | null | undefined; // undefined = not fetched yet
 
   const unsub = liveField.subscribe((v) => { snapshot = v.snapshot; });
 
-  async function pollMap() {
-    try {
-      const m = await getCurrentMap();
-      const next = "path" in m && m.path.length > 0 ? m : null;
-      // Only swap when the track actually changes. Re-assigning an equal map every
-      // poll hands TrackMap a new object, which resets the user's zoom/pan.
-      if ((next?.track_name ?? null) !== (trackMap?.track_name ?? null)) trackMap = next;
-    } catch { /* keep last */ }
-  }
+  // #106: the map was a 2 s getCurrentMap() poll; it now arrives on the shared
+  // /events feed. Still only swap when the track actually changes — handing
+  // TrackMap a new object resets the user's zoom/pan.
+  $effect(() => eventFeed.map.subscribe((m) => {
+    const next = m && "path" in m && m.path.length > 0 ? m : null;
+    if ((next?.track_name ?? null) !== (trackMap?.track_name ?? null)) trackMap = next;
+  }));
 
   async function loadTraces() {
     try { traces = await getInputTraces(); } catch { /* keep last */ }
@@ -46,14 +44,7 @@
     loadTraces();
   });
 
-  onMount(() => {
-    pollMap();
-    mapTimer = setInterval(pollMap, 2000);
-  });
-  onDestroy(() => {
-    unsub();
-    if (mapTimer) clearInterval(mapTimer);
-  });
+  onDestroy(unsub);
 
   const cars = $derived(
     (snapshot?.cars ?? []).map((c) => ({
