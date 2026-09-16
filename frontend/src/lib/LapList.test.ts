@@ -229,7 +229,8 @@ describe("LapList", () => {
         : [{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }],
     );
 
-    const { container } = render(LapList, { props: { sessionId: "OLD", pollMs: 5 } });
+    const onlive = vi.fn();
+    const { container } = render(LapList, { props: { sessionId: "OLD", pollMs: 5, onlive } });
 
     // Holds on OLD (3:30.000) while live lap_id stays at the baseline (5).
     // Numbering is per-phase positional now, so discriminate by the row's time.
@@ -243,6 +244,72 @@ describe("LapList", () => {
       () => expect(container.querySelector(".lap .t")?.textContent).toBe("3:36.000"),
       { timeout: 2000 },
     );
+    // OLD -> S1 is a real switch of the followed session -> reported once.
+    expect(onlive).toHaveBeenCalledTimes(1);
+    expect(onlive).toHaveBeenCalledWith({ session_id: "S1" });
+  });
+
+  it("pinned session, live session id changes: onlive fires once with the new id (snaps even before the baseline lap advances)", async () => {
+    vi.mocked(getStatus).mockResolvedValue(status("S1", 5));
+    vi.mocked(getSessionLaps).mockImplementation(async (sid: string) =>
+      sid === "OLD"
+        ? [{ id: 42, lap_time: 210.0, valid: 1, ts: 300 }]
+        : sid === "S1"
+          ? [{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]
+          : [{ id: 10, lap_time: 220.0, valid: 1, ts: 100 }], // S2
+    );
+
+    const onlive = vi.fn();
+    const { container } = render(LapList, { props: { sessionId: "OLD", pollMs: 5, onlive } });
+
+    await vi.waitFor(() =>
+      expect(container.querySelector(".lap .t")?.textContent).toBe("3:30.000"), // OLD
+    );
+
+    // The live session id itself changes (same lap_id 5) -> the new-session-id
+    // rule alone must end the hold, even though no new lap has arrived.
+    vi.mocked(getStatus).mockResolvedValue(status("S2", 5));
+    await vi.waitFor(
+      () => expect(container.querySelector(".lap .t")?.textContent).toBe("3:40.000"), // S2
+      { timeout: 2000 },
+    );
+    expect(onlive).toHaveBeenCalledTimes(1);
+    expect(onlive).toHaveBeenCalledWith({ session_id: "S2" });
+  });
+
+  it("no pinned session, live session changes: onlive fires with the new id", async () => {
+    vi.mocked(getStatus).mockResolvedValue(status("S1", 5));
+    vi.mocked(getSessionLaps).mockImplementation(async (sid: string) =>
+      sid === "S1"
+        ? [{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]
+        : [{ id: 10, lap_time: 220.0, valid: 1, ts: 100 }],
+    );
+
+    const onlive = vi.fn();
+    const { container } = render(LapList, { props: { pollMs: 5, onlive } });
+
+    await vi.waitFor(() =>
+      expect(container.querySelector(".lap .t")?.textContent).toBe("3:36.000"), // S1
+    );
+
+    vi.mocked(getStatus).mockResolvedValue(status("S2", 6));
+    await vi.waitFor(
+      () => expect(container.querySelector(".lap .t")?.textContent).toBe("3:40.000"), // S2
+      { timeout: 2000 },
+    );
+    expect(onlive).toHaveBeenCalledTimes(1);
+    expect(onlive).toHaveBeenCalledWith({ session_id: "S2" });
+  });
+
+  it("cold start does not emit onlive (no prior followed session to switch away from)", async () => {
+    vi.mocked(getStatus).mockResolvedValueOnce(status(null, null)).mockResolvedValue(status("S1", 1));
+    vi.mocked(getSessionLaps).mockResolvedValue([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
+
+    const onlive = vi.fn();
+    render(LapList, { props: { pollMs: 5, onlive } });
+
+    await screen.findByText("Lap 1", {}, { timeout: 2000 });
+    expect(onlive).not.toHaveBeenCalled();
   });
 
   it("retries through transient failures and eventually renders laps", async () => {

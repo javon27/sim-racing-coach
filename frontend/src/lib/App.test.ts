@@ -84,6 +84,8 @@ describe("Coach screen assembly", () => {
       activity: null,
       has_map: true,
       lmu_connected: true,
+      session_id: "s1",
+      lap_id: 5,
     });
     vi.mocked(getSettings).mockResolvedValue({
       units: "metric",
@@ -232,4 +234,49 @@ describe("Coach screen assembly", () => {
     expect(vi.mocked(getSessionLaps)).toHaveBeenCalledWith("s1");
     expect(vi.mocked(getSessionChats)).toHaveBeenCalledWith("s1");
   });
+
+  it("#109: a new live session starting while a past session is pinned unpins the map/strip/chat to follow it", async () => {
+    // LapList polls every 5s (App doesn't override pollMs) -- give this test
+    // room for that real poll to land instead of faking timers.
+    const { container } = render(App);
+    await screen.findByText("Pit Wall"); // shell mounts past the splash
+    const nav = within(container.querySelector(".nav") as HTMLElement);
+
+    await fireEvent.click(nav.getByText("Sessions"));
+    const sessionRow = await screen.findByRole("button", { name: /Le Mans/i });
+    await fireEvent.click(sessionRow);
+
+    // Pinned on the deep-linked session s1, as in the test above.
+    await waitFor(() =>
+      expect(nav.getByText("Coach").closest(".nav-item")?.classList.contains("on")).toBe(true),
+    );
+    expect(await screen.findByText("Lap 1")).toBeTruthy();
+    expect(vi.mocked(getSessionLaps)).toHaveBeenCalledWith("s1");
+    vi.mocked(getSessionChats).mockClear();
+
+    // A new live session starts (s2), with a laps list distinguishable from s1's.
+    vi.mocked(getStatus).mockResolvedValue({
+      track: "Le Mans",
+      car: "Corvette Z06",
+      on_track: true,
+      activity: null,
+      has_map: true,
+      lmu_connected: true,
+      session_id: "s2",
+      lap_id: 7,
+    });
+    vi.mocked(getSessionLaps).mockImplementation(async (sid: string) =>
+      sid === "s2"
+        ? [{ id: 20, lap_time: 200.0, valid: 1, ts: 500 }]
+        : [{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }],
+    );
+
+    // The lap list followed the new live session...
+    await screen.findByText("3:20.000", {}, { timeout: 7000 });
+    expect(vi.mocked(getSessionLaps)).toHaveBeenCalledWith("s2");
+    // ...and the panes unpinned: no re-fetch of s1's chat after the flip, and the
+    // chat composer is back to an empty new chat (not still showing s1's thread).
+    expect(vi.mocked(getSessionChats)).not.toHaveBeenCalledWith("s1");
+    expect(await screen.findByText(/new chat/i)).toBeTruthy();
+  }, 10000);
 });

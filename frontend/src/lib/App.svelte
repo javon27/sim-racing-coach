@@ -248,6 +248,7 @@
                 selectedLapId = detail.lap_id;
                 selectedSessionId = detail.session_id;
               }}
+              onlive={handleNewSession}
             />
             <div
               class="rail-resizer"

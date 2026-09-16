@@ -4,6 +4,7 @@
 
   let {
     onselect,
+    onlive,
     retryTries = 8,
     retryDelayMs = 750,
     pollMs = 5000,
@@ -11,6 +12,7 @@
     selectedLapId = null,
   }: {
     onselect?: (detail: { lap_id: number; session_id: string }) => void;
+    onlive?: (detail: { session_id: string }) => void;
     retryTries?: number;
     retryDelayMs?: number;
     pollMs?: number;
@@ -76,6 +78,11 @@
   let reviewTarget: string | null = null;
   let reviewBaseline: number | null = null;
   let reviewBaselineSet = false;
+  // The live session id observed when the baseline was captured -- a DIFFERENT
+  // live session id showing up later ends the hold immediately, even before a
+  // new lap arrives (the review target itself is a past session and will never
+  // equal the live session id, so this can't be compared against reviewTarget).
+  let reviewLiveSessionId: string | null = null;
 
   function bestIdOf(l: LapRow[]): number | null {
     return (
@@ -94,11 +101,15 @@
     if (reviewTarget !== null && !reviewBaselineSet) {
       reviewBaseline = liveLapId;
       reviewBaselineSet = true;
+      reviewLiveSessionId = liveSessionId;
     }
 
-    // Hold on the review target until a live lap advances past the baseline.
+    // Hold on the review target until a live lap advances past the baseline, OR
+    // until the live session id itself changes out from under it (a new live
+    // session ends the hold immediately, even before its first lap arrives).
     const reviewing =
       reviewTarget !== null &&
+      (liveSessionId === null || liveSessionId === reviewLiveSessionId) &&
       !(liveLapId !== null && (reviewBaseline === null || liveLapId > reviewBaseline));
     const target = reviewing ? reviewTarget : liveSessionId;
 
@@ -108,7 +119,9 @@
       currentSessionId = null;
       return;
     }
+    const prev = currentSessionId;
     currentSessionId = target;
+    if (!reviewing && prev !== null && target !== prev) onlive?.({ session_id: target });
     const l = await getSessionLaps(target);
     laps = l;
     bestId = bestIdOf(l);
@@ -162,6 +175,7 @@
     reviewTarget = sessionId ?? null;
     reviewBaseline = null;
     reviewBaselineSet = false;
+    reviewLiveSessionId = null;
     load();
   });
   // Scroll to the newest lap when the count grows (new lap captured, or first load).
