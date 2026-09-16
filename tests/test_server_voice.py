@@ -121,6 +121,49 @@ def test_ptt_strips_spoken_line_and_sends_it_on_done(tmp_path, monkeypatch):
     assert rows[0]["answer"] == "Brake later.\n\nMore detail."      # never stored with the tag
 
 
+def _ask_all(c, body):
+    """Like _ask, but returns every event up to and including done/error."""
+    with c.websocket_connect("/coach", headers={"host": "127.0.0.1",
+                                                 "origin": "http://127.0.0.1:8765"}) as ws:
+        ws.send_json(body)
+        events = []
+        while True:
+            ev = ws.receive_json()
+            events.append(ev)
+            if ev["type"] in ("done", "error"):
+                return events
+
+
+def test_ptt_spoken_streams_before_text_and_is_never_in_text_events(tmp_path, monkeypatch):
+    monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    model = FakeModel(reply="[spoken] Brake later into four.\n\nFull answer.\n\nMore.")
+    c = TestClient(create_app(store, Coach(model)), base_url="http://127.0.0.1")
+    events = _ask_all(c, {"question": "q", "voice": "ptt"})
+    spoken_idx = next(i for i, e in enumerate(events) if e["type"] == "spoken")
+    text_idxs = [i for i, e in enumerate(events) if e["type"] == "text"]
+    assert all(spoken_idx < i for i in text_idxs)
+    joined_text = "".join(e["text"] for e in events if e["type"] == "text")
+    assert "[spoken]" not in joined_text
+    assert events[spoken_idx]["text"] == "Brake later into four."
+    done = events[-1]
+    assert done["type"] == "done"
+    assert done["answer"] == "Full answer.\n\nMore."
+
+
+def test_ptt_no_spoken_event_when_tag_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    model = FakeModel(reply="First para.\n\nSecond.")
+    c = TestClient(create_app(store, Coach(model)), base_url="http://127.0.0.1")
+    events = _ask_all(c, {"question": "q", "voice": "ptt"})
+    assert not any(e["type"] == "spoken" for e in events)
+    joined_text = "".join(e["text"] for e in events if e["type"] == "text")
+    assert joined_text == "First para.\n\nSecond."
+    done = events[-1]
+    assert done["spoken"] == "First para."
+
+
 def test_ptt_falls_back_to_first_paragraph_when_tag_missing(tmp_path, monkeypatch):
     monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))

@@ -85,6 +85,12 @@ export class CoachStream {
             this.phase = "streaming";
             this.answer += data.text;
             break;
+          case "spoken":
+            // PTT: the [spoken] cue streamed as its own line, ahead of the rest of
+            // the answer -- surfaced immediately so VoiceLoop can start speaking it
+            // without waiting for `done`. Does not end the stream.
+            this.spoken = data.text;
+            break;
           case "done":
             this.phase = "done";
             this.answer = data.answer ?? this.answer;

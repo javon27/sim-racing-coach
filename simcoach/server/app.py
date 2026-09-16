@@ -34,7 +34,7 @@ from ..analysis import (
 )
 from ..car_lookup import resolve_car
 from ..car_notes import load_car_notes, load_setup_concepts
-from ..coach import first_paragraph, split_spoken
+from ..coach import _SPOKEN_RE, first_paragraph, split_spoken
 from ..coach_tools import CoachContext, race_result_text, scrub_stored_answer
 from ..corners import CornerMap, in_window, validated_sections, validated_sectors
 from ..driver import DriverProfile
@@ -1983,6 +1983,12 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             # makes the ×N tool-loop re-send visible instead of invisible.
             turn_usage = TokenUsage()
             used_model: str | None = None
+            # PTT: the [spoken] cue is the FIRST line (SPOKEN_SENTENCE). Buffer text
+            # deltas until the first newline arrives, so that line can be emitted as
+            # its own `spoken` event (and spoken immediately client-side) instead of
+            # waiting for the whole answer. Not buffered outside PTT.
+            spoken_buf = "" if voice == "ptt" else None
+            spoken_resolved = voice != "ptt"
             try:
                 for ev in app.state.coach.ask_agentic_stream(
                         ctx, question, car=car, input_device=req.get("input_device"),
@@ -1998,7 +2004,29 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                         continue
                     if ev["type"] == "text":
                         text += ev["text"]       # accumulate streamed deltas into the full answer
+                        if not spoken_resolved:
+                            spoken_buf += ev["text"]
+                            if "\n" not in spoken_buf:
+                                continue          # first line not complete yet — keep buffering
+                            first_line, rest = spoken_buf.split("\n", 1)
+                            spoken_resolved = True
+                            m = _SPOKEN_RE.match(first_line)
+                            if m and m.group(1):
+                                _emit({"type": "spoken", "text": m.group(1)})
+                                rest = rest.removeprefix("\n")   # also drop the blank line after the tag
+                                if rest:
+                                    _emit({"type": "text", "text": rest})
+                            elif spoken_buf:
+                                _emit({"type": "text", "text": spoken_buf})
+                            continue
                     _emit(ev)
+                if not spoken_resolved and spoken_buf:
+                    # Stream ended before a newline ever arrived (single-line reply).
+                    m = _SPOKEN_RE.match(spoken_buf)
+                    if m and m.group(1):
+                        _emit({"type": "spoken", "text": m.group(1)})
+                    else:
+                        _emit({"type": "text", "text": spoken_buf})
                 spoken = None
                 if voice == "ptt":
                     text, spoken = split_spoken(text)

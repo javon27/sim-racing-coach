@@ -272,6 +272,25 @@ describe("CoachStream", () => {
     expect(stream.phase).toBe("done");
   });
 
+  it("spoken event sets spoken without ending the stream", () => {
+    const stream = new CoachStream();
+    stream.ask("q", { voice: "ptt" });
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.();
+
+    emit(ws, { type: "spoken", text: "Brake later into four." });
+    expect(stream.spoken).toBe("Brake later into four.");
+    expect(stream.phase).toBe("connecting"); // unaffected -- no text/done yet
+
+    emit(ws, { type: "text", text: "Full answer." });
+    expect(stream.phase).toBe("streaming");
+    expect(stream.spoken).toBe("Brake later into four."); // still set
+
+    emit(ws, { type: "done", chat_id: "c1", answer: "Full answer.", spoken: "Brake later into four." });
+    expect(stream.phase).toBe("done");
+    expect(stream.spoken).toBe("Brake later into four.");
+  });
+
   it("an older sidecar's done (no answer field) keeps the streamed text", () => {
     const stream = new CoachStream();
     stream.ask("q");

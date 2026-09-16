@@ -428,12 +428,33 @@
     window.addEventListener("settings-changed", loadVoice);
     window.addEventListener("keydown", onWindowKeydown);
     window.addEventListener("keyup", onWindowKeyup);
+    let lastSpokenSeen: string | null = null;
+    // Conversation mode speaks sentence-by-sentence as the answer streams (#104).
+    // Diffed from `answer`'s growth rather than adding a field to CoachStream --
+    // ChatPanel already tracks `answer` for rendering, so this is the smaller
+    // plumbing than threading a `lastDelta` through the stream/store contract.
+    let voicedAnswerLen = 0;
     const unsubscribe = stream.subscribe((s) => {
       const snap = s as { phase: CoachPhase; toolActivity: ToolActivity | null; answer: string; spoken?: string | null; chatId: string | null; error: string | null; usage?: ChatUsage | null; cost?: number | null; costComplete?: boolean; longChat?: boolean };
       phase = snap.phase;
       toolActivity = snap.toolActivity;
       answer = snap.answer;
       error = snap.error;
+      if (snap.phase === "connecting") {
+        lastSpokenSeen = null; // fresh ask -- forget the last turn's cue
+        voicedAnswerLen = 0;
+      }
+      if (snap.answer.length > voicedAnswerLen) {
+        const delta = snap.answer.slice(voicedAnswerLen);
+        voicedAnswerLen = snap.answer.length;
+        activeVoice?.onText(delta);
+      }
+      // The `spoken` cue streams ahead of `done` (#104) -- forward it to the loop
+      // the moment it arrives so PTT starts talking immediately, not just on done.
+      if (snap.spoken && snap.spoken !== lastSpokenSeen) {
+        lastSpokenSeen = snap.spoken;
+        activeVoice?.onSpoken(snap.spoken);
+      }
       if (snap.phase === "done") {
         messages = [...messages, { role: "coach", text: snap.answer }];
         waiting = false;

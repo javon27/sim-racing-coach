@@ -65,7 +65,35 @@ export interface Recorder {
   clear?(keepMs?: number): void;
 }
 export interface Transcriber { transcribe(wav: Uint8Array): Promise<{ text: string; seconds: number }> }
-export interface Speaker { speak(text: string): Promise<void>; cancel(): void; earcon(kind: Earcon): void }
+export interface Speaker {
+  speak(text: string): Promise<void>;
+  /** Queue an utterance without awaiting it (conversation mode streams sentences
+   *  in as the answer arrives); resolves nothing itself -- see `idle()`. */
+  enqueue(text: string): void;
+  /** Resolves once every enqueue()d utterance has finished playing (immediately
+   *  if nothing is pending). */
+  idle(): Promise<void>;
+  cancel(): void;
+  earcon(kind: Earcon): void;
+}
+
+// Pops the first complete sentence off a growing text buffer: a `.`/`!`/`?`/`\n`
+// counts as the end only when followed by whitespace or the end of what has
+// streamed so far -- so "1.52.3" (a lap time) isn't split mid-number. Returns
+// null while the buffer holds no complete sentence yet.
+function popSentence(buf: string): { sentence: string; rest: string } | null {
+  for (let i = 0; i < buf.length; i++) {
+    const c = buf[i];
+    if (c === "\n") return { sentence: buf.slice(0, i + 1), rest: buf.slice(i + 1) };
+    if (c === "." || c === "!" || c === "?") {
+      const next = buf[i + 1];
+      if (next === undefined || /\s/.test(next)) {
+        return { sentence: buf.slice(0, i + 1), rest: buf.slice(i + 1) };
+      }
+    }
+  }
+  return null;
+}
 export interface VoiceLoopOptions {
   recorder: Recorder; transcriber: Transcriber; speaker: Speaker;
   ask(text: string, mode: VoiceMode): void;
@@ -101,6 +129,9 @@ export class VoiceLoop {
   #recording = false;
   #starting: Promise<void> | null = null;
   #bargeMs = 0;   // consecutive ms above the barge-in level while speaking
+  // Conversation mode only: text streamed via onText() not yet popped into a
+  // complete sentence and enqueue()d. Dropped on any cancelSpeech (barge-in/stop).
+  #textBuf = "";
   #releaseTimer: unknown = null;
   #idleTimer: unknown = null;
   #speakSeq = 0;
@@ -172,12 +203,51 @@ export class VoiceLoop {
   }
 
   // ---- coach events ----
+  // PTT only: the [spoken] cue streamed ahead of the rest of the answer (coach.ts
+  // `spoken` event) -- start speaking it right away instead of waiting for `done`.
+  // This moves state off "asking", so onAnswer's own `state !== "asking"` guard
+  // below is what stops it from re-speaking once `done` arrives.
+  onSpoken(text: string): void {
+    if (this.state !== "asking" || this.mode !== "ptt") return;
+    void this.#speakThen(stripForSpeech(text), () => { this.mode = null; this.#set("idle"); });
+  }
   onAnswer(answer: string, spoken?: string | null): void {
+    if (this.mode === "conversation") {
+      // Sentences already streamed in via onText() as enqueue()d utterances; this
+      // just flushes whatever's left in the buffer and waits for the queue (not
+      // one utterance) to finish before listening again.
+      if (this.state !== "asking" && this.state !== "speaking") return;
+      const remainder = stripForSpeech(this.#textBuf);
+      this.#textBuf = "";
+      if (remainder) {
+        if (this.state !== "speaking") { this.#set("speaking"); this.#startRecorder().catch(() => {}); }
+        this.#o.speaker.enqueue(remainder);
+      }
+      const seq = this.#speakSeq;
+      void this.#o.speaker.idle().then(() => {
+        if (seq === this.#speakSeq && this.state === "speaking") this.#listen("conversation");
+      });
+      return;
+    }
     if (this.state !== "asking") return;
-    const text = this.mode === "ptt" ? (spoken ?? firstParagraph(answer)) : answer;
-    void this.#speakThen(stripForSpeech(text), () => {
-      if (this.mode === "conversation") this.#listen("conversation"); else { this.mode = null; this.#set("idle"); }
+    void this.#speakThen(stripForSpeech(spoken ?? firstParagraph(answer)), () => {
+      this.mode = null; this.#set("idle");
     });
+  }
+
+  // Conversation mode only: pop and enqueue every complete sentence the buffer
+  // now holds as text streams in; the first enqueue moves state -> speaking
+  // (mic stays open for barge-in, same as #speakThen).
+  onText(delta: string): void {
+    if (this.mode !== "conversation" || (this.state !== "asking" && this.state !== "speaking")) return;
+    this.#textBuf += delta;
+    let popped: { sentence: string; rest: string } | null;
+    while ((popped = popSentence(this.#textBuf))) {
+      this.#textBuf = popped.rest;
+      const spoken = stripForSpeech(popped.sentence);
+      if (this.state !== "speaking") { this.#set("speaking"); this.#startRecorder().catch(() => {}); }
+      if (spoken) this.#o.speaker.enqueue(spoken);
+    }
   }
   onError(message: string): void {
     if (this.state !== "asking") return;
@@ -268,6 +338,7 @@ export class VoiceLoop {
     // answers to the coach's questions (rig: a 2-word minimum ate them).
     if (!/[\p{L}\p{N}]/u.test(text)) { this.#fail(DIDNT_CATCH, false); return; }
     this.lastQuestion = text;
+    this.#textBuf = "";
     this.#set("asking");
     this.#o.ask(text, this.mode ?? "ptt");
   }
@@ -279,7 +350,7 @@ export class VoiceLoop {
     await this.#o.speaker.speak(text);
     if (seq === this.#speakSeq) after();
   }
-  #cancelSpeech(): void { this.#speakSeq++; this.#o.speaker.cancel(); }
+  #cancelSpeech(): void { this.#speakSeq++; this.#o.speaker.cancel(); this.#textBuf = ""; }
 
   #fail(message: string, keepError = true): void {
     this.#clearIdle();

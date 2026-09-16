@@ -145,6 +145,13 @@ def test_split_spoken_extracts_and_strips_the_last_tag_line():
     assert answer == "Brake **later** into T4.\n\n- point one\n- point two"
 
 
+def test_split_spoken_extracts_when_tag_is_first():
+    text = "[spoken] Brake later into four.\n\nFull answer.\n\nMore."
+    answer, spoken = split_spoken(text)
+    assert spoken == "Brake later into four."
+    assert answer == "Full answer.\n\nMore."
+
+
 def test_split_spoken_tolerates_bold_tag_and_colon():
     answer, spoken = split_spoken("Full answer.\n**[Spoken]:** Short cue.")
     assert (answer, spoken) == ("Full answer.", "Short cue.")

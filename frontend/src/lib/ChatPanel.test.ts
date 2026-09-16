@@ -437,14 +437,18 @@ describe("ChatPanel", () => {
 
   function fakeVoice() {
     const speaker = {
-      spoken: [] as string[], cancels: 0,
+      spoken: [] as string[], enqueued: [] as string[], cancels: 0,
       speak(text: string) { this.spoken.push(text); return new Promise<void>(() => {}); },
+      enqueue(text: string) { this.enqueued.push(text); },
+      idle() { return Promise.resolve(); },
       cancel() { this.cancels++; },
       earcon() { /* no-op */ },
     };
     const recorder = {
-      async start() { /* no-op */ },
-      async stop() { return { pcm: new Float32Array(16000), sampleRate: 16000 }; },
+      onFrame: null as ((f: Float32Array, sampleRate?: number) => void) | null,
+      async start(onFrame: (f: Float32Array, sampleRate?: number) => void) { this.onFrame = onFrame; },
+      async stop() { this.onFrame = null; return { pcm: new Float32Array(16000), sampleRate: 16000 }; },
+      frame(level: number) { this.onFrame?.(new Float32Array(800).fill(level)); },
     };
     const transcriber = { async transcribe() { return { text: "where am I losing time", seconds: 1 }; } };
     const asked: [string, VoiceMode][] = [];
@@ -452,7 +456,7 @@ describe("ChatPanel", () => {
       recorder, transcriber, speaker, ask: (t, m) => asked.push([t, m]),
       vad: { threshold: 0.02, silenceMs: 1000, maxS: 20 }, conversationIdleS: 30,
     });
-    return { voice, speaker, asked };
+    return { voice, speaker, recorder, asked };
   }
 
   const rowDefaults = { ts: 1, session_id: "s1", track: "Le Mans", car: "Corvette", lap_id: null, tool_calls: null };
@@ -570,6 +574,48 @@ describe("ChatPanel", () => {
 
     await waitFor(() => expect(speaker.spoken).toContain("Short cue."));
     expect(screen.getByText("Full answer.")).toBeTruthy(); // written chat is the full answer
+  });
+
+  it("spoken frame reaches the loop before done (#104: speak the cue as soon as it streams)", async () => {
+    const stream = new FakeStream();
+    const { voice, speaker } = fakeVoice();
+    render(ChatPanel, { props: { stream, voice } });
+
+    const mic = screen.getByRole("button", { name: /hold to talk/i });
+    await fireEvent.pointerDown(mic);
+    await new Promise((r) => setTimeout(r, 300));
+    await fireEvent.pointerUp(mic);
+    await waitFor(() => expect(voice.state).toBe("asking"));
+
+    stream.emit({ phase: "streaming", spoken: "Brake later into four." });
+    await waitFor(() => expect(speaker.spoken).toEqual(["Brake later into four."]));
+    expect(voice.state).toBe("speaking"); // speaking already, well before `done`
+
+    stream.emit({ phase: "done", answer: "Full answer.", spoken: "Brake later into four.", chatId: "c1" });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(speaker.spoken).toEqual(["Brake later into four."]); // not spoken a second time
+  });
+
+  it("conversation mode: text deltas reach the loop's onText as they stream", async () => {
+    const stream = new FakeStream();
+    const { voice, speaker, recorder, asked } = fakeVoice();
+    render(ChatPanel, { props: { stream, voice } });
+
+    const mic = screen.getByRole("button", { name: /hold to talk/i });
+    await fireEvent.pointerDown(mic);
+    await fireEvent.pointerUp(mic); // tap = conversation mode
+    await waitFor(() => expect(voice.mode).toBe("conversation"));
+
+    recorder.frame(0.2); // speech, then silence ends the utterance (VAD)
+    for (let i = 0; i < 20; i++) recorder.frame(0);
+    await waitFor(() => expect(asked).toEqual([["where am I losing time", "conversation"]]));
+    await waitFor(() => expect(voice.state).toBe("asking"));
+
+    stream.emit({ phase: "streaming", answer: "Brake later. " });
+    await waitFor(() => expect(speaker.enqueued).toEqual(["Brake later."]));
+
+    stream.emit({ phase: "streaming", answer: "Brake later. Carry more speed." });
+    await waitFor(() => expect(speaker.enqueued).toEqual(["Brake later.", "Carry more speed."]));
   });
 
   it("composer: voice enabled + empty box shows the mic, no Send button", async () => {

@@ -89,9 +89,26 @@ class FakeTranscriber implements Transcriber {
   async transcribe() { this.calls++; if (this.fail) throw this.fail; return { text: this.text, seconds: 1 }; }
 }
 class FakeSpeaker implements Speaker {
-  spoken: string[] = []; earcons: string[] = []; cancels = 0; resolve: (() => void) | null = null;
+  spoken: string[] = []; enqueued: string[] = []; earcons: string[] = []; cancels = 0; resolve: (() => void) | null = null;
+  #pending = 0; #idleWaiters: (() => void)[] = [];
   speak(text: string) { this.spoken.push(text); return new Promise<void>((r) => (this.resolve = r)); }
-  cancel() { this.cancels++; this.resolve?.(); this.resolve = null; }
+  enqueue(text: string) { this.enqueued.push(text); this.#pending++; }
+  idle(): Promise<void> {
+    if (this.#pending === 0) return Promise.resolve();
+    return new Promise((r) => this.#idleWaiters.push(r));
+  }
+  // Resolve every enqueue()d utterance, like the native queue finishing playback.
+  drain() {
+    this.#pending = 0;
+    const waiters = this.#idleWaiters; this.#idleWaiters = [];
+    waiters.forEach((w) => w());
+  }
+  cancel() {
+    this.cancels++; this.resolve?.(); this.resolve = null;
+    this.#pending = 0;
+    const waiters = this.#idleWaiters; this.#idleWaiters = [];
+    waiters.forEach((w) => w());
+  }
   earcon(k: "listen-start" | "listen-end" | "error") { this.earcons.push(k); }
   end() { this.resolve?.(); this.resolve = null; }
 }
@@ -121,6 +138,22 @@ describe("VoiceLoop PTT", () => {
     expect(loop.state).toBe("speaking"); expect(speaker.spoken).toEqual(["Brake later."]);
     speaker.end(); await flush();
     expect(loop.state).toBe("idle");
+  });
+  it("onSpoken speaks before onAnswer; onAnswer does not re-speak", async () => {
+    const { loop, speaker } = make();
+    loop.press(); await flush(); loop.release(); await flush(); await flush();
+    loop.onSpoken("Brake later into four."); await flush();
+    expect(loop.state).toBe("speaking"); expect(speaker.spoken).toEqual(["Brake later into four."]);
+    // done arrives while the cue is still being spoken: no second utterance.
+    loop.onAnswer("Full answer.", "Brake later into four."); await flush();
+    expect(speaker.spoken).toEqual(["Brake later into four."]);
+    speaker.end(); await flush();
+    expect(loop.state).toBe("idle");
+  });
+  it("onSpoken outside asking/ptt is ignored", async () => {
+    const { loop, speaker } = make();
+    loop.onSpoken("Brake later."); await flush();
+    expect(loop.state).toBe("idle"); expect(speaker.spoken).toEqual([]);
   });
   it("falls back to the first paragraph when spoken is missing", async () => {
     const { loop, speaker } = make();
@@ -198,7 +231,7 @@ describe("VoiceLoop errors always end idle with the mic closed", () => {
 });
 
 describe("VoiceLoop conversation", () => {
-  it("tap → listening; VAD end → ask; answer spoken in full; then listening again", async () => {
+  it("tap → listening; VAD end → ask; sentences spoken as they stream; then listening again", async () => {
     const { loop, recorder, speaker, asked } = make();
     loop.toggleConversation(); await flush();
     expect(loop.state).toBe("listening"); expect(loop.mode).toBe("conversation");
@@ -206,9 +239,12 @@ describe("VoiceLoop conversation", () => {
     for (let i = 0; i < 20; i++) recorder.frame(0);   // 1000 ms silence
     await flush(); await flush();
     expect(asked).toEqual([["where am I losing time", "conversation"]]);
-    loop.onAnswer("Full **answer**.\n\n- one", null); await flush();
-    expect(speaker.spoken).toEqual(["Full answer. one."]);
-    speaker.end(); await flush();
+    loop.onText("Full **answer**.\n\n- one"); await flush();
+    expect(loop.state).toBe("speaking");
+    expect(speaker.enqueued).toEqual(["Full answer."]); // "- one" has no terminator yet, stays buffered
+    loop.onAnswer("Full **answer**.\n\n- one", null); await flush(); // done: flush the "- one" remainder
+    expect(speaker.enqueued).toEqual(["Full answer.", "one."]);
+    speaker.drain(); await flush();
     expect(loop.state).toBe("listening"); expect(recorder.open).toBe(true);
     // The mic ran through the whole answer (barge-in); that audio is dropped when
     // listening resumes (rig: a quick "yes" was rejected as "longer than 30 s").
@@ -228,7 +264,7 @@ describe("VoiceLoop conversation", () => {
     const { loop, recorder, speaker } = make();
     loop.toggleConversation(); await flush();
     recorder.frame(0.2); for (let i = 0; i < 20; i++) recorder.frame(0); await flush(); await flush();
-    loop.onAnswer("Answer.", null); await flush();
+    loop.onText("Answer."); await flush();
     expect(loop.state).toBe("speaking");
     // Sustained loud speech (>= 2x threshold for BARGE_IN_MS) interrupts.
     for (let i = 0; i < 8; i++) recorder.frame(0.3);
@@ -239,7 +275,7 @@ describe("VoiceLoop conversation", () => {
     const { loop, recorder, speaker } = make();
     loop.toggleConversation(); await flush();
     recorder.frame(0.2); for (let i = 0; i < 20; i++) recorder.frame(0); await flush(); await flush();
-    loop.onAnswer("Answer.", null); await flush();
+    loop.onText("Answer."); await flush();
     expect(loop.state).toBe("speaking");
     // A single loud frame, a quiet gap, then another: no sustained burst.
     recorder.frame(0.3); recorder.frame(0); recorder.frame(0.3); await flush();
@@ -265,6 +301,66 @@ describe("VoiceLoop conversation", () => {
     t!.fn(); await flush();
     expect(loop.state).toBe("idle"); expect(recorder.open).toBe(false);
   });
+  it("sentences are enqueued as text streams, listening resumes after the queue drains", async () => {
+    const { loop, recorder, speaker, asked } = make();
+    loop.toggleConversation(); await flush();
+    recorder.frame(0.2); for (let i = 0; i < 20; i++) recorder.frame(0);
+    await flush(); await flush();
+    expect(asked).toEqual([["where am I losing time", "conversation"]]);
+
+    loop.onText("Brake later into four. ");
+    await flush();
+    expect(loop.state).toBe("speaking");
+    expect(speaker.enqueued).toEqual(["Brake later into four."]);
+    expect(recorder.open).toBe(true); // mic reopened for barge-in
+
+    loop.onText("You're carrying good speed through five.\n");
+    await flush();
+    expect(speaker.enqueued).toEqual(["Brake later into four.", "You're carrying good speed through five."]);
+
+    loop.onText("More to come"); // no terminator yet -- stays buffered
+    loop.onAnswer("Full answer text here.", null); // done: flush the remainder
+    await flush();
+    expect(speaker.enqueued).toEqual([
+      "Brake later into four.", "You're carrying good speed through five.", "More to come",
+    ]);
+    expect(loop.state).toBe("speaking"); // still waiting on the queue to drain
+
+    speaker.drain(); await flush();
+    expect(loop.state).toBe("listening"); expect(loop.mode).toBe("conversation"); expect(recorder.open).toBe(true);
+  });
+  it("barge-in mid-stream clears the queue and drops the buffer", async () => {
+    const { loop, recorder, speaker, asked } = make();
+    loop.toggleConversation(); await flush();
+    recorder.frame(0.2); for (let i = 0; i < 20; i++) recorder.frame(0); await flush(); await flush();
+    loop.onText("First sentence. Partial leftover without a terminator");
+    await flush();
+    expect(loop.state).toBe("speaking");
+    expect(speaker.enqueued).toEqual(["First sentence."]);
+
+    for (let i = 0; i < 8; i++) recorder.frame(0.3); // sustained loud speech -> barge-in
+    await flush();
+    expect(speaker.cancels).toBe(1); expect(loop.state).toBe("listening");
+
+    // A new utterance starts; the dropped buffer must not leak into it.
+    recorder.frame(0.2); for (let i = 0; i < 20; i++) recorder.frame(0); await flush(); await flush();
+    expect(asked).toEqual([
+      ["where am I losing time", "conversation"], ["where am I losing time", "conversation"],
+    ]);
+    loop.onText("New sentence."); await flush();
+    // "First sentence." (already enqueued before the barge-in) stays queued;
+    // only the buffered, not-yet-spoken "Partial leftover..." was dropped.
+    expect(speaker.enqueued).toEqual(["First sentence.", "New sentence."]);
+  });
+  it("PTT ignores onText", async () => {
+    const { loop, speaker } = make();
+    loop.press(); await flush(); loop.release(); await flush(); await flush();
+    expect(loop.state).toBe("asking"); expect(loop.mode).toBe("ptt");
+    loop.onText("Some streamed text.");
+    await flush();
+    expect(speaker.enqueued).toEqual([]);
+    expect(loop.state).toBe("asking");
+  });
   it("tap converts a PTT listen into conversation without stopping the recorder", async () => {
     const { loop, recorder } = make();
     loop.press(); await flush();
@@ -284,7 +380,7 @@ describe("frame clock", () => {
     chunk(0.2); for (let i = 0; i < 4; i++) chunk(0);
     await flush(); await flush();
     expect(asked.length).toBe(1);
-    loop.onAnswer("Answer.", null); await flush();
+    loop.onText("Answer."); await flush();
     expect(loop.state).toBe("speaking");
     // Two loud 256 ms chunks = 512 ms >= BARGE_IN_MS: interrupts (was 8 chunks = 2 s).
     chunk(0.3); chunk(0.3); await flush();
