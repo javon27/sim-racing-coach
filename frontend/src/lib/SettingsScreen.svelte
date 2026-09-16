@@ -20,6 +20,7 @@
     type DriverMemory,
     type VoiceStatus,
   } from "./api";
+  import { eventFeed } from "./events";
   import InfoTip from "./InfoTip.svelte";
   import { isTauri as isTauriShell, captureNext, describeBind, listDevices, pushBinds, type DeviceInfo } from "./voice-shell";
 
@@ -71,21 +72,31 @@
     el.setAttribute("open", "");
   }
 
+  function settleVoiceSetup(st: VoiceStatus) {
+    voiceStatusInfo = st;
+    if (st.installing) return;
+    if (st.error) {
+      dialogError = st.error;
+      dialogPhase = "error";
+    } else {
+      dialogPhase = "ready";
+    }
+  }
+
+  // #106: the download used to be watched by a 1 s /voice/status poll inside
+  // downloadVoiceModel's loop. The sidecar streams voice_setup frames while an
+  // install runs, so progress (and the final ready/error) just arrives.
+  $effect(() => eventFeed.voiceSetup.subscribe((st) => {
+    if (st && dialogPhase === "progress") settleVoiceSetup(st);
+  }));
+
   async function downloadVoiceModel() {
     dialogPhase = "progress";
     dialogError = null;
     try {
-      voiceStatusInfo = await voiceSetup();
-      while (voiceStatusInfo.installing) {
-        await new Promise((r) => setTimeout(r, 1000));
-        voiceStatusInfo = await voiceStatus();
-      }
-      if (voiceStatusInfo.error) {
-        dialogError = voiceStatusInfo.error;
-        dialogPhase = "error";
-      } else {
-        dialogPhase = "ready";
-      }
+      // POST /voice/setup answers with the status it started from; if it is
+      // already finished there will be no frame to wait for.
+      settleVoiceSetup(await voiceSetup());
     } catch (e) {
       dialogError = e instanceof Error ? e.message : String(e);
       dialogPhase = "error";

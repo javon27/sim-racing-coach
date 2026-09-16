@@ -21,6 +21,7 @@ import {
   type StatusResponse,
 } from "./api";
 import { applyTheme } from "./theme";
+import { eventFeed } from "./events";
 import SettingsScreen from "./SettingsScreen.svelte";
 
 vi.mock("./api", async () => {
@@ -499,9 +500,7 @@ describe("SettingsScreen", () => {
       vi.mocked(getSettings).mockResolvedValue(baseSettings({ voice: voiceDefaults }));
       vi.mocked(putSettings).mockImplementation(async (cfg) => baseSettings(cfg as Partial<SettingsResponse>));
       vi.mocked(voiceStatus)
-        .mockResolvedValueOnce({ installed: false, installing: false, progress_bytes: 0, total_bytes: 100, error: null })
-        .mockResolvedValueOnce({ installed: false, installing: true, progress_bytes: 50, total_bytes: 100, error: null })
-        .mockResolvedValue({ installed: true, installing: false, progress_bytes: 100, total_bytes: 100, error: null });
+        .mockResolvedValue({ installed: false, installing: false, progress_bytes: 0, total_bytes: 100, error: null });
       vi.mocked(voiceSetup).mockResolvedValue({ started: true, installed: false, installing: true, progress_bytes: 0, total_bytes: 100, error: null });
 
       render(SettingsScreen);
@@ -514,7 +513,34 @@ describe("SettingsScreen", () => {
 
       await waitFor(() => expect(voiceSetup).toHaveBeenCalled());
       expect(vi.mocked(putSettings).mock.calls.at(-1)![0]).toMatchObject({ voice: { enabled: true } });
-      await waitFor(() => expect(screen.getByText(/Ready/)).toBeTruthy(), { timeout: 4000 });
+
+      // Progress arrives on the /events feed (#106), not a 1 s /voice/status poll.
+      eventFeed.push("voice_setup", { installed: false, installing: true, progress_bytes: 50, total_bytes: 100, error: null });
+      expect(await screen.findByText("50%")).toBeTruthy();
+
+      eventFeed.push("voice_setup", { installed: true, installing: false, progress_bytes: 100, total_bytes: 100, error: null });
+      await waitFor(() => expect(screen.getByText(/Ready/)).toBeTruthy());
+
+      // One /voice/status call only: the "is it already installed?" check on enable.
+      expect(vi.mocked(voiceStatus).mock.calls.length).toBe(1);
+    });
+
+    it("a download that fails reports the feed's error in the dialog", async () => {
+      vi.mocked(getSettings).mockResolvedValue(baseSettings({ voice: voiceDefaults }));
+      vi.mocked(putSettings).mockImplementation(async (cfg) => baseSettings(cfg as Partial<SettingsResponse>));
+      vi.mocked(voiceStatus).mockResolvedValue({ installed: false, installing: false, progress_bytes: 0, total_bytes: 100, error: null });
+      vi.mocked(voiceSetup).mockResolvedValue({ started: true, installed: false, installing: true, progress_bytes: 0, total_bytes: 100, error: null });
+
+      render(SettingsScreen);
+      await fireEvent.click(await screen.findByLabelText("Enable voice"));
+      const dialog = await screen.findByRole("dialog");
+      await fireEvent.click(within(dialog).getByRole("button", { name: "Download" }));
+      await waitFor(() => expect(voiceSetup).toHaveBeenCalled());
+
+      eventFeed.push("voice_setup", { installed: false, installing: false, progress_bytes: 10, total_bytes: 100, error: "disk full" });
+
+      expect(await screen.findByText("disk full")).toBeTruthy();
+      expect(await screen.findByRole("button", { name: "Retry" })).toBeTruthy();
     });
 
     it("Not now reverts enable", async () => {
