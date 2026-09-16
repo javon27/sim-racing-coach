@@ -14,15 +14,21 @@
     distillProfile,
     voiceStatus,
     voiceSetup,
+    kokoroStatus,
+    kokoroSetup,
     type SettingsResponse,
     type IngestResult,
     type DriverProfileData,
     type DriverMemory,
     type VoiceStatus,
+    type KokoroStatus,
   } from "./api";
   import { eventFeed } from "./events";
   import InfoTip from "./InfoTip.svelte";
   import { isTauri as isTauriShell, captureNext, describeBind, listDevices, pushBinds, type DeviceInfo } from "./voice-shell";
+  import { makeSpeaker } from "./audio";
+
+  const KOKORO_PREVIEW_SENTENCE = "Brake later into turn four, the fast left after the long straight.";
 
   const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -86,9 +92,99 @@
   // #106: the download used to be watched by a 1 s /voice/status poll inside
   // downloadVoiceModel's loop. The sidecar streams voice_setup frames while an
   // install runs, so progress (and the final ready/error) just arrives.
+  // Both installers (whisper + Kokoro) now share this one topic (Kokoro speaker
+  // plan), so a frame is only this dialog's if its engine matches -- a frame with
+  // no `engine` at all is the original whisper installer (predates the field).
   $effect(() => eventFeed.voiceSetup.subscribe((st) => {
-    if (st && dialogPhase === "progress") settleVoiceSetup(st);
+    if (st && (st.engine ?? "whisper") === "whisper" && dialogPhase === "progress") settleVoiceSetup(st);
   }));
+
+  // --- Voice (Kokoro engine) ---
+  let kokoroStatusInfo: KokoroStatus | null = $state(null);
+  let showKokoroDialog = $state(false);
+  let kokoroDialogPhase: VoiceDialogPhase = $state("ask");
+  let kokoroDialogError: string | null = $state(null);
+  let previewing = $state(false);
+
+  function kokoroSetupPct(): number {
+    const st = kokoroStatusInfo;
+    if (!st?.total_bytes) return 0;
+    return Math.round((st.progress_bytes / st.total_bytes) * 100);
+  }
+
+  function kokoroStatusText(): string {
+    const st = kokoroStatusInfo;
+    if (!st) return "";
+    if (st.error) return st.error;
+    if (st.installing) {
+      const pct = st.total_bytes ? Math.round((st.progress_bytes / st.total_bytes) * 100) : 0;
+      return `Downloading Kokoro voice… ${pct}%`;
+    }
+    return st.installed ? "Ready" : "Kokoro voice isn't installed — using Windows voices";
+  }
+
+  function settleKokoroSetup(st: KokoroStatus) {
+    kokoroStatusInfo = st;
+    if (st.installing) return;
+    if (st.error) {
+      kokoroDialogError = st.error;
+      kokoroDialogPhase = "error";
+    } else {
+      kokoroDialogPhase = "ready";
+    }
+  }
+
+  $effect(() => eventFeed.voiceSetup.subscribe((st) => {
+    if (st && st.engine === "kokoro" && kokoroDialogPhase === "progress") settleKokoroSetup(st as KokoroStatus);
+  }));
+
+  async function downloadKokoroModel() {
+    kokoroDialogPhase = "progress";
+    kokoroDialogError = null;
+    try {
+      settleKokoroSetup(await kokoroSetup());
+    } catch (e) {
+      kokoroDialogError = e instanceof Error ? e.message : String(e);
+      kokoroDialogPhase = "error";
+    }
+  }
+
+  function closeKokoroDialog() {
+    showKokoroDialog = false;
+  }
+
+  async function notNowKokoroSetup() {
+    showKokoroDialog = false;
+    if (!settings) return;
+    settings = { ...settings, voice: { ...settings.voice, tts_engine: "windows" } };
+    await saveConfig();
+  }
+
+  async function onEngineChange() {
+    await saveConfig();
+    if (!settings || settings.voice.tts_engine !== "kokoro") return;
+    try {
+      const st = await kokoroStatus();
+      kokoroStatusInfo = st;
+      if (st.installed) return;
+    } catch {
+      /* fall through -- still offer the dialog so the driver can retry */
+    }
+    kokoroDialogPhase = "ask";
+    kokoroDialogError = null;
+    showKokoroDialog = true;
+  }
+
+  async function previewVoice() {
+    if (!settings) return;
+    previewing = true;
+    try {
+      const speaker = makeSpeaker(settings.voice, !!kokoroStatusInfo?.installed, () => {});
+      await speaker.speak(KOKORO_PREVIEW_SENTENCE);
+    } finally {
+      previewing = false;
+    }
+  }
 
   async function downloadVoiceModel() {
     dialogPhase = "progress";
@@ -244,6 +340,13 @@
       try {
         settings = await getSettings();
         phase = "ok";
+        if (settings.voice.tts_engine === "kokoro") {
+          try {
+            kokoroStatusInfo = await kokoroStatus();
+          } catch {
+            /* Voice section just shows "not installed" until a retry succeeds */
+          }
+        }
         await syncVoiceShell();
       } catch {
         phase = "error";
@@ -640,18 +743,71 @@
         </div>
       </div>
       <div class="field">
-        <span class="lbl">Voice<InfoTip text="Which installed system voice reads answers aloud." /></span>
+        <span class="lbl">Engine<InfoTip text="Kokoro is a higher-quality, downloaded voice; Windows uses your system's built-in voices." /></span>
         <div class="control">
-          {#if ttsVoices.length === 0}
+          <select aria-label="Engine" bind:value={settings.voice.tts_engine} onchange={onEngineChange}>
+            <option value="windows">Windows</option>
+            <option value="kokoro">Kokoro</option>
+          </select>
+        </div>
+      </div>
+      {#if settings.voice.tts_engine === "kokoro" && kokoroStatusInfo && !showKokoroDialog}
+        <p class="status">{kokoroStatusText()}</p>
+      {/if}
+      {#if showKokoroDialog}
+        <dialog use:openVoiceDialog aria-label="Set up Kokoro voice">
+          <h3>Set up Kokoro voice</h3>
+          <p>
+            Nestor downloads the Kokoro voice model (about 340 MB, one time) into your app data
+            folder so Kokoro voices work offline.
+          </p>
+          {#if kokoroDialogPhase === "ask"}
+            <div class="dialog-actions">
+              <button type="button" onclick={downloadKokoroModel}>Download</button>
+              <button type="button" onclick={notNowKokoroSetup}>Not now</button>
+            </div>
+          {:else if kokoroDialogPhase === "progress"}
+            <progress value={kokoroStatusInfo?.progress_bytes ?? 0} max={kokoroStatusInfo?.total_bytes ?? 100}
+            ></progress>
+            <p>{kokoroSetupPct()}%</p>
+          {:else if kokoroDialogPhase === "ready"}
+            <p>Ready</p>
+            <div class="dialog-actions">
+              <button type="button" onclick={closeKokoroDialog}>Done</button>
+            </div>
+          {:else if kokoroDialogPhase === "error"}
+            <p class="status">{kokoroDialogError}</p>
+            <div class="dialog-actions">
+              <button type="button" onclick={downloadKokoroModel}>Retry</button>
+              <button type="button" onclick={closeKokoroDialog}>Close</button>
+            </div>
+          {/if}
+        </dialog>
+      {/if}
+      <div class="field">
+        <span class="lbl">Voice<InfoTip text="Which voice reads answers aloud." /></span>
+        <div class="control">
+          {#if settings.voice.tts_engine === "kokoro"}
+            {#if kokoroStatusInfo?.voices?.length}
+              <select aria-label="Voice" bind:value={settings.voice.kokoro_voice} onchange={saveConfig}>
+                {#each kokoroStatusInfo.voices as v (v)}
+                  <option value={v}>{v}</option>
+                {/each}
+              </select>
+            {:else}
+              <span class="status inline">Kokoro voices appear once the model is installed.</span>
+            {/if}
+          {:else if ttsVoices.length === 0}
             <span class="status inline">No speech voices installed — answers will be shown only.</span>
           {:else}
-            <select bind:value={settings.voice.tts_voice} onchange={saveConfig}>
+            <select aria-label="Voice" bind:value={settings.voice.tts_voice} onchange={saveConfig}>
               <option value={null}>Browser default</option>
               {#each ttsVoices as v (v.name)}
                 <option value={v.name}>{v.name}</option>
               {/each}
             </select>
           {/if}
+          <button type="button" onclick={previewVoice} disabled={previewing}>{previewing ? "Playing…" : "Preview"}</button>
         </div>
       </div>
       <div class="field">

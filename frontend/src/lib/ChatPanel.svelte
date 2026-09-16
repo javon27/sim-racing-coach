@@ -1,10 +1,13 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { CoachStream, type CoachPhase, type ToolActivity } from "./coach";
-  import { getChatMessages, getChatUsage, getSettings, type ChatUsage } from "./api";
+  import { getChatMessages, getChatUsage, getSettings, kokoroStatus, type ChatUsage, type VoiceSettings } from "./api";
   import { VoiceLoop, type VoiceMode, type VoiceState } from "./voice";
-  import { MicRecorder, HttpTranscriber, SynthSpeaker } from "./audio";
+  import { MicRecorder, HttpTranscriber, SynthSpeaker, KokoroSpeaker, makeSpeaker } from "./audio";
   import { attachShell, isTauri } from "./voice-shell";
+  import { eventFeed } from "./events";
+
+  const KOKORO_FALLBACK_NOTICE = "Kokoro voice isn't installed — using Windows voices";
 
   let {
     sessionId,
@@ -140,6 +143,11 @@
   // changed input device disposes the old stream instead of leaking it.
   let currentRecorder: MicRecorder | null = null;
   let currentMicDeviceId: string | null = null;
+  // The one-line notice shown in the composer when the engine wanted Kokoro but
+  // Windows TTS is what's actually playing (not installed yet, or a runtime fetch
+  // failed and rebuildWithWindows() took over).
+  let voiceNotice: string | null = $state(null);
+  let lastVoiceSettings: VoiceSettings | null = null;
 
   async function syncShell() {
     detachShell?.();
@@ -165,9 +173,15 @@
         await syncShell();
         return;
       }
-      const speaker = new SynthSpeaker();
-      speaker.voiceName = v.tts_voice;
-      speaker.rate = v.tts_rate;
+      lastVoiceSettings = v;
+      const ks = v.tts_engine === "kokoro" ? await kokoroStatus().catch(() => null) : null;
+      const installed = !!ks?.installed;
+      voiceNotice = v.tts_engine === "kokoro" && !installed ? KOKORO_FALLBACK_NOTICE : null;
+      const speaker = makeSpeaker(v, installed, () => {
+        voiceNotice = KOKORO_FALLBACK_NOTICE;
+        rebuildWithWindows();
+      });
+      if (speaker instanceof KokoroSpeaker) speaker.trackSlug = eventFeed.status.value?.track ?? null;
       const micDeviceId = v.mic_device_id ?? null;
       if (currentRecorder && micDeviceId !== currentMicDeviceId) {
         void currentRecorder.dispose();
@@ -193,6 +207,17 @@
     }
   }
 
+  // Runtime Kokoro fallback (a fetch failed mid-session, not just "not installed
+  // yet"): swap the loop's speaker for Windows TTS in place rather than rebuilding
+  // the whole VoiceLoop.
+  function rebuildWithWindows() {
+    if (!activeVoice || !lastVoiceSettings) return;
+    const s = new SynthSpeaker();
+    s.voiceName = lastVoiceSettings.tts_voice;
+    s.rate = lastVoiceSettings.tts_rate;
+    activeVoice.setSpeaker(s);
+  }
+
   let lastSentQuestion: string | null = null;
   $effect(() => {
     const v = activeVoice;
@@ -200,6 +225,7 @@
       voiceState = "idle";
       speakingMessage = null;
       lastSentQuestion = null;
+      voiceNotice = null;
       return;
     }
     return v.subscribe((s) => {
@@ -634,7 +660,7 @@
           onpointerup={onMicUp}
           onpointercancel={onMicCancel}
         >{voiceState === "speaking" ? "■" : "🎤"}</button>
-        <span class="voice-status" role="status">{voiceStatusText()}</span>
+        <span class="voice-status" role="status">{voiceStatusText() || voiceNotice || ""}</span>
       {:else}
         <button type="button" class="send" aria-label="Send" onclick={send} disabled={waiting}>
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>

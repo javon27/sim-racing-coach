@@ -785,6 +785,11 @@ export interface VoiceStatus {
   progress_bytes: number;
   total_bytes: number | null;
   error: string | null;
+  // Absent on a whisper frame (its installer predates this field); present and
+  // "kokoro" on a Kokoro frame -- the /events feed multiplexes both installers'
+  // progress over the same voice_setup topic, so a subscriber must check this to
+  // avoid reacting to the other engine's frame.
+  engine?: "whisper" | "kokoro";
 }
 
 // Dedicated fetch (not `request()`): the thrown message must be the server's

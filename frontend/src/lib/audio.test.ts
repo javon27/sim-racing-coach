@@ -1,6 +1,16 @@
 // frontend/src/lib/audio.test.ts
 import { describe, it, expect, vi } from "vitest";
-import { KokoroSpeaker } from "./audio";
+import { KokoroSpeaker, SynthSpeaker, makeSpeaker } from "./audio";
+import type { VoiceSettings } from "./api";
+
+function voiceSettings(overrides: Partial<VoiceSettings> = {}): VoiceSettings {
+  return {
+    enabled: true, ptt_key: "F9", ptt_wheel: null, ptt_gamepad: null, tts_voice: null, tts_rate: 1,
+    tts_engine: "windows", kokoro_voice: "af_heart",
+    vad_threshold: 0.02, vad_silence_ms: 1000, vad_max_s: 20, conversation_idle_s: 30, mic_device_id: null,
+    ...overrides,
+  };
+}
 
 class FakeSource {
   onended: (() => void) | null = null;
@@ -97,5 +107,39 @@ describe("KokoroSpeaker", () => {
     await sp.speak("a"); await sp.speak("b");
     expect(onUnavailable).toHaveBeenCalledTimes(1);
     expect(onUnavailable).toHaveBeenCalledWith("Kokoro voice isn't installed");
+  });
+});
+
+describe("makeSpeaker", () => {
+  it("returns a KokoroSpeaker with voice/rate set when the engine is kokoro and installed", () => {
+    const v = voiceSettings({ tts_engine: "kokoro", kokoro_voice: "am_michael", tts_rate: 1.3 });
+    const s = makeSpeaker(v, true, () => {});
+    expect(s).toBeInstanceOf(KokoroSpeaker);
+    expect((s as KokoroSpeaker).voice).toBe("am_michael");
+    expect((s as KokoroSpeaker).rate).toBe(1.3);
+  });
+
+  it("wires onFallback as the KokoroSpeaker's onUnavailable", () => {
+    const onFallback = vi.fn();
+    const v = voiceSettings({ tts_engine: "kokoro" });
+    const s = makeSpeaker(v, true, onFallback);
+    (s as KokoroSpeaker).onUnavailable?.("network error");
+    expect(onFallback).toHaveBeenCalledWith("network error");
+  });
+
+  it("falls back to SynthSpeaker when kokoro is selected but not installed", () => {
+    const v = voiceSettings({ tts_engine: "kokoro", tts_voice: "Zira", tts_rate: 0.8 });
+    const s = makeSpeaker(v, false, () => {});
+    expect(s).toBeInstanceOf(SynthSpeaker);
+    expect((s as SynthSpeaker).voiceName).toBe("Zira");
+    expect((s as SynthSpeaker).rate).toBe(0.8);
+  });
+
+  it("returns a SynthSpeaker when the engine is windows, regardless of kokoroInstalled", () => {
+    const v = voiceSettings({ tts_engine: "windows", tts_voice: "David", tts_rate: 1.1 });
+    const s = makeSpeaker(v, true, () => {});
+    expect(s).toBeInstanceOf(SynthSpeaker);
+    expect((s as SynthSpeaker).voiceName).toBe("David");
+    expect((s as SynthSpeaker).rate).toBe(1.1);
   });
 });

@@ -2,7 +2,7 @@
 // speech synthesis. No browser global is touched at import time -- jsdom (tests) has
 // none of AudioContext/MediaRecorder/speechSynthesis, and voice is always injected
 // as a VoiceLoop prop in tests -- only the real app constructs these.
-import { speak as apiSpeak, transcribe as apiTranscribe } from "./api";
+import { speak as apiSpeak, transcribe as apiTranscribe, type VoiceSettings } from "./api";
 import type { Earcon, Recorder, Speaker, Transcriber } from "./voice";
 
 export class MicRecorder implements Recorder {
@@ -283,4 +283,25 @@ export class KokoroSpeaker implements Speaker {
     this.#failed = true;
     this.onUnavailable?.(e instanceof Error ? e.message : String(e));
   }
+}
+
+// Picks the engine a caller (ChatPanel, Settings preview) should speak through:
+// Kokoro only when both selected AND confirmed installed -- otherwise Windows TTS
+// is the ceiling, same as before Kokoro existed. `onFallback` is wired as the
+// Kokoro speaker's onUnavailable so a later runtime failure (network hiccup,
+// uninstalled after all) can still be handled -- callers swap in a fresh
+// SynthSpeaker themselves (VoiceLoop.setSpeaker) since this factory has no
+// loop to reach into. trackSlug isn't part of VoiceSettings -- callers set it.
+export function makeSpeaker(v: VoiceSettings, kokoroInstalled: boolean, onFallback: (reason: string) => void): Speaker {
+  if (v.tts_engine === "kokoro" && kokoroInstalled) {
+    const s = new KokoroSpeaker();
+    s.voice = v.kokoro_voice;
+    s.rate = v.tts_rate;
+    s.onUnavailable = onFallback;
+    return s;
+  }
+  const s = new SynthSpeaker();
+  s.voiceName = v.tts_voice;
+  s.rate = v.tts_rate;
+  return s;
 }

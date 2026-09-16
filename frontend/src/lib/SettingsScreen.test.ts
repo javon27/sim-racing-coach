@@ -16,6 +16,9 @@ import {
   distillProfile,
   voiceStatus,
   voiceSetup,
+  kokoroStatus,
+  kokoroSetup,
+  speak,
   type SettingsResponse,
   type DriverProfileData,
   type StatusResponse,
@@ -42,6 +45,9 @@ vi.mock("./api", async () => {
     distillProfile: vi.fn(),
     voiceStatus: vi.fn(),
     voiceSetup: vi.fn(),
+    kokoroStatus: vi.fn(),
+    kokoroSetup: vi.fn(),
+    speak: vi.fn(),
   };
 });
 
@@ -126,6 +132,9 @@ describe("SettingsScreen", () => {
     vi.mocked(distillProfile).mockReset();
     vi.mocked(voiceStatus).mockReset();
     vi.mocked(voiceSetup).mockReset();
+    vi.mocked(kokoroStatus).mockReset();
+    vi.mocked(kokoroSetup).mockReset();
+    vi.mocked(speak).mockReset();
     vi.mocked(isTauri).mockReset().mockReturnValue(false);
     vi.mocked(captureNext).mockReset();
     vi.mocked(pushBinds).mockReset();
@@ -695,6 +704,99 @@ describe("SettingsScreen", () => {
       const select = await screen.findByLabelText("Microphone");
 
       expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual(["System default"]);
+    });
+
+    // --- Settings -> Voice -> Kokoro engine ---
+
+    it("Engine select offers Windows and Kokoro; picking Kokoro without the model opens the setup dialog and Not now reverts", async () => {
+      vi.mocked(getSettings).mockResolvedValue(baseSettings({ voice: voiceDefaults }));
+      vi.mocked(putSettings).mockImplementation(async (cfg) =>
+        baseSettings({ voice: { ...voiceDefaults, ...(cfg.voice as object) } }),
+      );
+      vi.mocked(kokoroStatus).mockResolvedValue({
+        engine: "kokoro", installed: false, installing: false, progress_bytes: 0, total_bytes: 340_000_000,
+        error: null, voices: [],
+      });
+
+      render(SettingsScreen);
+      const select = await screen.findByLabelText("Engine");
+      expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual(["Windows", "Kokoro"]);
+
+      await fireEvent.change(select, { target: { value: "kokoro" } });
+
+      const dialog = await screen.findByRole("dialog", { name: /kokoro/i });
+      await waitFor(() =>
+        expect(vi.mocked(putSettings).mock.calls.at(-1)![0]).toMatchObject({ voice: { tts_engine: "kokoro" } }),
+      );
+
+      const notNow = within(dialog).getByRole("button", { name: "Not now" });
+      await fireEvent.click(notNow);
+
+      await waitFor(() =>
+        expect(vi.mocked(putSettings).mock.calls.at(-1)![0]).toMatchObject({ voice: { tts_engine: "windows" } }),
+      );
+      expect(kokoroSetup).not.toHaveBeenCalled();
+    });
+
+    it("Kokoro voice select lists the installed voices and Preview posts one fixed sentence", async () => {
+      vi.mocked(getSettings).mockResolvedValue(
+        baseSettings({ voice: { ...voiceDefaults, tts_engine: "kokoro" } }),
+      );
+      vi.mocked(kokoroStatus).mockResolvedValue({
+        engine: "kokoro", installed: true, installing: false, progress_bytes: 0, total_bytes: null, error: null,
+        voices: ["af_heart", "am_michael"],
+      });
+      vi.mocked(speak).mockResolvedValue(new ArrayBuffer(10));
+
+      render(SettingsScreen);
+      const select = await screen.findByLabelText("Voice");
+      await waitFor(() => expect(within(select).getAllByRole("option")).toHaveLength(2));
+      expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual(["af_heart", "am_michael"]);
+
+      await fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+
+      await waitFor(() =>
+        expect(speak).toHaveBeenCalledWith(
+          "Brake later into turn four, the fast left after the long straight.",
+          expect.anything(),
+          expect.anything(),
+        ),
+      );
+    });
+
+    it("voice_setup frames with engine kokoro drive the dialog progress", async () => {
+      vi.mocked(getSettings).mockResolvedValue(baseSettings({ voice: voiceDefaults }));
+      vi.mocked(putSettings).mockImplementation(async (cfg) =>
+        baseSettings({ voice: { ...voiceDefaults, ...(cfg.voice as object) } }),
+      );
+      vi.mocked(kokoroStatus).mockResolvedValue({
+        engine: "kokoro", installed: false, installing: false, progress_bytes: 0, total_bytes: 340_000_000,
+        error: null, voices: [],
+      });
+      vi.mocked(kokoroSetup).mockResolvedValue({
+        started: true, engine: "kokoro", installed: false, installing: true, progress_bytes: 0,
+        total_bytes: 340_000_000, error: null, voices: [],
+      });
+
+      render(SettingsScreen);
+      const select = await screen.findByLabelText("Engine");
+      await fireEvent.change(select, { target: { value: "kokoro" } });
+
+      const dialog = await screen.findByRole("dialog", { name: /kokoro/i });
+      await fireEvent.click(within(dialog).getByRole("button", { name: "Download" }));
+      await waitFor(() => expect(kokoroSetup).toHaveBeenCalled());
+
+      eventFeed.push("voice_setup", {
+        engine: "kokoro", installed: false, installing: true, progress_bytes: 170_000_000,
+        total_bytes: 340_000_000, error: null, voices: [],
+      });
+      expect(await screen.findByText("50%")).toBeTruthy();
+
+      eventFeed.push("voice_setup", {
+        engine: "kokoro", installed: true, installing: false, progress_bytes: 340_000_000,
+        total_bytes: 340_000_000, error: null, voices: ["af_heart"],
+      });
+      await waitFor(() => expect(screen.getByText(/Ready/)).toBeTruthy());
     });
   });
 });

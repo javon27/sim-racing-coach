@@ -148,6 +148,9 @@ export class VoiceLoop {
     this.#listeners.add(run); run(this);
     return () => this.#listeners.delete(run);
   }
+  /** Swap the active speaker in place (e.g. a failed Kokoro fetch falling back to
+   *  Windows TTS mid-session) without tearing down the rest of the loop. */
+  setSpeaker(s: Speaker): void { this.#o = { ...this.#o, speaker: s }; }
   #set(state: VoiceState) {
     this.state = state;
     // The recorder holds the mic open between presses so a press starts instantly

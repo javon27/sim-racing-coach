@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/svelte";
-import { getChatMessages, getChatUsage, getSettings, type ChatUsage, type SettingsResponse } from "./api";
+import { getChatMessages, getChatUsage, getSettings, kokoroStatus, type ChatUsage, type SettingsResponse } from "./api";
 import type { CoachPhase, ToolActivity } from "./coach";
 import { VoiceLoop, type VoiceMode } from "./voice";
 import ChatPanel from "./ChatPanel.svelte";
 
 vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
-  return { ...actual, getChatMessages: vi.fn(), getChatUsage: vi.fn(), getSettings: vi.fn() };
+  return { ...actual, getChatMessages: vi.fn(), getChatUsage: vi.fn(), getSettings: vi.fn(), kokoroStatus: vi.fn() };
 });
 
 // Only used by the mic-device-change test below (#104): every other voice test
@@ -89,6 +89,7 @@ describe("ChatPanel", () => {
     vi.mocked(getChatUsage).mockResolvedValue({ usage: usage(), cost: 0, cost_complete: true });
     vi.mocked(getSettings).mockReset();
     vi.mocked(getSettings).mockResolvedValue({ show_cost: true } as SettingsResponse);
+    vi.mocked(kokoroStatus).mockReset();
     micInstances.length = 0;
   });
 
@@ -726,6 +727,49 @@ describe("ChatPanel", () => {
     await waitFor(() => expect(micInstances.length).toBe(2));
     expect(micInstances[0].dispose).toHaveBeenCalled();
     expect(micInstances[1].deviceId).toBe("device-2");
+
+    delete (navigator as { mediaDevices?: unknown }).mediaDevices;
+  });
+
+  const kokoroVoiceSettings = (engine: "windows" | "kokoro") => ({
+    enabled: true, ptt_key: "F9", ptt_wheel: null, ptt_gamepad: null, tts_voice: null, tts_rate: 1,
+    tts_engine: engine, kokoro_voice: "af_heart",
+    vad_threshold: 0.02, vad_silence_ms: 1000, vad_max_s: 20, conversation_idle_s: 30, mic_device_id: null,
+  });
+
+  it("uses KokoroSpeaker when the engine is kokoro and installed, SynthSpeaker otherwise", async () => {
+    Object.defineProperty(navigator, "mediaDevices", { value: {}, configurable: true });
+    vi.mocked(getSettings).mockResolvedValue({
+      show_cost: true, voice: kokoroVoiceSettings("kokoro"),
+    } as unknown as SettingsResponse);
+    vi.mocked(kokoroStatus).mockResolvedValue({
+      engine: "kokoro", installed: true, installing: false, progress_bytes: 0, total_bytes: null, error: null,
+      voices: ["af_heart"],
+    });
+
+    render(ChatPanel, { props: { stream: new FakeStream() } });
+
+    await waitFor(() => expect(kokoroStatus).toHaveBeenCalled());
+    // Installed -- no Windows-fallback notice, and the mic still renders (voice built ok).
+    expect(screen.queryByText(/using Windows voices/i)).toBeNull();
+    expect(await screen.findByRole("button", { name: /hold to talk/i })).toBeTruthy();
+
+    delete (navigator as { mediaDevices?: unknown }).mediaDevices;
+  });
+
+  it("falls back to SynthSpeaker with a notice when Kokoro isn't installed", async () => {
+    Object.defineProperty(navigator, "mediaDevices", { value: {}, configurable: true });
+    vi.mocked(getSettings).mockResolvedValue({
+      show_cost: true, voice: kokoroVoiceSettings("kokoro"),
+    } as unknown as SettingsResponse);
+    vi.mocked(kokoroStatus).mockResolvedValue({
+      engine: "kokoro", installed: false, installing: false, progress_bytes: 0, total_bytes: 340_000_000, error: null,
+      voices: [],
+    });
+
+    render(ChatPanel, { props: { stream: new FakeStream() } });
+
+    expect(await screen.findByText("Kokoro voice isn't installed — using Windows voices")).toBeTruthy();
 
     delete (navigator as { mediaDevices?: unknown }).mediaDevices;
   });
