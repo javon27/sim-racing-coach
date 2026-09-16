@@ -9702,5 +9702,17 @@
     },
     "reference_times": {},
     "source": "Bahrain International Circuit corner guides (Honda F1, RaceControl/Le Mans Ultimate wiki, Senate GP corner-by-corner, tracktitan.io); directions/apex positions taken from the app's computed corner map. T6-T10 return-loop notes grounded in geometry + Bahrain surface character; opening T1-T5 grounded in shared Bahrain GP knowledge."
+  },
+  "pronunciations": {
+    "Michael Schumacher Corner": "mˈaɪkəl ʃˈuːmɑːkɚ kˈɔːɹnɚ",
+    "Turn 10": "tˈɜːn tˈɛn",
+    "Turn 2": "tˈɜːn tˈuː",
+    "Turn 3": "tˈɜːn θɹˈiː",
+    "Turn 4": "tˈɜːn fˈɔːɹ",
+    "Turn 5": "tˈɜːn fˈaɪv",
+    "Turn 6": "tˈɜːn sˈɪks",
+    "Turn 7": "tˈɜːn sˈɛvən",
+    "Turn 8": "tˈɜːn ˈeɪt",
+    "Turn 9": "tˈɜːn nˈaɪn"
   }
 }

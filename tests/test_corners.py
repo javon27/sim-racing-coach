@@ -263,7 +263,7 @@ def test_shipped_track_json_on_disk_has_no_overlapping_windows():
     the RAW JSON -- no CornerMap involved -- so it checks what's actually on
     disk, for every shipped map, including the S/F seam pair (circularly)."""
     for f in glob.glob("simcoach/tracks/*.json"):
-        with open(f) as fh:
+        with open(f, encoding="utf-8") as fh:
             data = json.load(fh)
         length = data.get("length") or data.get("length_m")
         if not length:

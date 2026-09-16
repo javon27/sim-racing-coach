@@ -173,7 +173,7 @@ class CornerMap:
     @classmethod
     def load(cls, path: str) -> "CornerMap":
         """Load corner map from JSON file. See from_data for the validation rules."""
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return cls.from_data(json.load(f))
 
     @classmethod

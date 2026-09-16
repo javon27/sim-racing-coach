@@ -148,5 +148,20 @@
       "apex_dist": 6858.0,
       "end_dist": 6903
     }
-  ]
+  ],
+  "pronunciations": {
+    "Blanchimont": "blˈæntʃɪmˌɔnt",
+    "Bruxelles": "bɹʌksˈɛlz",
+    "Bus Stop": "bˈʌs stˈɑːp",
+    "Eau Rouge": "ˈoʊ ɹˈuːʒ",
+    "La Source": "lˌæ sˈɔːɹs",
+    "Les Combes": "lˈɛs kəmˈɛz",
+    "Les Fagnes": "lˈɛs fˈæɡnɪz",
+    "Malmedy": "mˈælmədi",
+    "Pouhon": "pˈaʊhɑːn",
+    "Raidillon": "ɹˈeɪdɪlən",
+    "Raidillon exit": "ɹˈeɪdɪlən ˈɛɡzɪt",
+    "Speaker's Corner": "spˈiːkɚz kˈɔːɹnɚ",
+    "Stavelot": "stˈeɪvlɑːt"
+  }
 }

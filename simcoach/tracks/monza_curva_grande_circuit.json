@@ -9710,5 +9710,19 @@
     },
     "reference_times": {},
     "source": "Corner names and character grounded in Monza corner guides (Formula1.com 'How every corner got its name', Mercedes-AMG F1, monzanet.it) and the LMU Curva-Grande variant confirmation (lemansultimate.wiki.gg Track Guide: Monza). Directions/apex % taken as authoritative from the app's corner map. Roggia = left-right chicane (T2/T3), Lesmi = T4/T5, Ascari = left-right-left complex (T6/T7/T8), Parabolica = T9. No credible layout-specific reference lap times found (variant differs from full GP; full-GP times do not transfer), so reference_times left empty."
+  },
+  "pronunciations": {
+    "Curva Grande": "kˈɜːvə ɡɹˈænd",
+    "Curva Parabolica": "kˈɜːvə pˌæɹəbˈɑːlɪkə",
+    "Curva del Serraglio": "kˈɜːvə dˈɛl sɛɹˈæɡlɪˌoʊ",
+    "Curve di Lesmo": "kˈɜːv di lˈɛsmoʊ",
+    "Lesmo 1": "lˈɛsmoʊ wˈʌn",
+    "Lesmo 2": "lˈɛsmoʊ tˈuː",
+    "Turn 3": "tˈɜːn θɹˈiː",
+    "Turn 7": "tˈɜːn sˈɛvən",
+    "Turn 8": "tˈɜːn ˈeɪt",
+    "Variante Ascari": "vˈɛɹiənt ɐskˈæɹi",
+    "Variante della Roggia": "vˈɛɹiənt dˈɛlɚ ɹˈɑːɡiə",
+    "Variante della Rogglia": "vˈɛɹiənt dˈɛlɚ ɹˈɑːɡliə"
   }
 }

@@ -1,5 +1,9 @@
+import json
+import pathlib
+
 import pytest
 
+from simcoach import tts_kokoro
 from simcoach.pronunciations import apply, table_for, validated_pronunciations
 
 TABLE = {"Pouhon": "pˈaʊhɑːn", "Eau Rouge": "ˈoʊ ɹˈuːʒ", "Raidillon": "ɹˈeɪdɪlən"}
@@ -37,3 +41,25 @@ def test_validated_pronunciations_refuses(bad, exc):
 
 def test_validated_pronunciations_strips_keys():
     assert validated_pronunciations({" Pouhon ": "pˈaʊhɑːn"}) == {"Pouhon": "pˈaʊhɑːn"}
+
+
+def test_every_shipped_map_pronunciation_block_validates_and_fits_the_vocab():
+    tts_kokoro.install_stubs()
+    pytest.importorskip("kokoro_onnx")
+    from kokoro_onnx.config import DEFAULT_VOCAB
+
+    for p in pathlib.Path("simcoach/tracks").glob("*.json"):
+        if p.name in ("test_track.json",):
+            continue
+        data = json.loads(p.read_text(encoding="utf-8"))
+        if "pronunciations" not in data:
+            continue
+        table = validated_pronunciations(data["pronunciations"])
+        for name, ph in table.items():
+            bad = [c for c in ph if c not in DEFAULT_VOCAB and c != " "]
+            assert not bad, f"{p.name}: {name!r} has chars outside Kokoro's vocab: {bad}"
+    assert any(
+        "pronunciations" in json.loads(p.read_text(encoding="utf-8"))
+        for p in pathlib.Path("simcoach/tracks").glob("*.json")
+        if p.name == "circuit_de_spa_francorchamps.json"
+    )

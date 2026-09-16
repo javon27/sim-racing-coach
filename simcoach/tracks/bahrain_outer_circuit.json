@@ -9719,5 +9719,18 @@
     },
     "reference_times": {},
     "source": "the-race.com (Bahrain Outer 'wacky' race explainer), f1-fansite.com Bahrain Outer Track layout/lap records, formula1.com Sakhir outer track article. No credible GT3/LMP2/Hypercar times were found for this specific layout, so reference_times left empty (F1's 55.404/53.377 are not LMU classes)."
+  },
+  "pronunciations": {
+    "Michael Schumacher Corner": "mˈaɪkəl ʃˈuːmɑːkɚ kˈɔːɹnɚ",
+    "Turn 10": "tˈɜːn tˈɛn",
+    "Turn 11": "tˈɜːn ɪlˈɛvən",
+    "Turn 2": "tˈɜːn tˈuː",
+    "Turn 3": "tˈɜːn θɹˈiː",
+    "Turn 4": "tˈɜːn fˈɔːɹ",
+    "Turn 5": "tˈɜːn fˈaɪv",
+    "Turn 6": "tˈɜːn sˈɪks",
+    "Turn 7": "tˈɜːn sˈɛvən",
+    "Turn 8": "tˈɜːn ˈeɪt",
+    "Turn 9": "tˈɜːn nˈaɪn"
   }
 }

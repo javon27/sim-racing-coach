@@ -29,9 +29,10 @@ HAVE_KOKORO = importlib.util.find_spec("kokoro_onnx") is not None and importlib.
 
 def test_gpl_packages_are_not_installed_in_this_environment():
     # The whole point of the adapter: none of these may be importable for real.
-    for name in ("phonemizer", "espeakng_loader", "spacy", "num2words"):
-        spec = importlib.util.find_spec(name)
-        assert spec is None or getattr(sys.modules.get(name), "__simcoach_stub__", False), name
+    # Routes through gpl_free() itself -- a bare importlib.util.find_spec() raises
+    # ValueError on a stub module (no __spec__) once any earlier test has stubbed
+    # it in, which gpl_free() already guards against.
+    assert tts_kokoro.gpl_free()
 
 
 def test_pins_match_installed_versions_when_present():
