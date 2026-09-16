@@ -1,8 +1,8 @@
 import math
 
-from simcoach.analysis import CornerMetrics
+from simcoach.analysis import CornerMetrics, analyze_lap
 from simcoach.corners import CornerMap
-from simcoach.format import format_corner_line, format_events, format_laptime
+from simcoach.format import corner_descriptor, format_corner_line, format_events, format_laptime
 
 
 def _cm(track_edge_min: float) -> CornerMetrics:
@@ -501,3 +501,79 @@ def test_format_events_wear_step_line():
     ev = _ev("wear_step", 1, wheel="fr", step_pct=1.2, baseline_pct=0.3)
     assert format_events([ev], _CMAP) == [
         "FR wear step 1.2% at T1 Left Hairpin (stint median 0.3%/lap)"]
+
+
+# --- corner_descriptor (#108 item 12: spoken corner locator) ----------------
+
+# test_track.json (loaded above as _CMAP) carries no `length` -- the shipped file
+# omits it -- but the synthetic lap it's paired with (conftest.synthetic_lap) is a
+# real 3000 m circuit. Build the same two corners WITH a length so thirds/wrap
+# math has something to work with.
+_CMAP3000 = CornerMap.from_data({
+    "length": 3000,
+    "corners": [
+        {"number": 1, "name": "Left Hairpin", "direction": "left",
+         "start_dist": 800, "apex_dist": 1000, "end_dist": 1200},
+        {"number": 2, "name": "Right Sweeper", "direction": "right",
+         "start_dist": 2000, "apex_dist": 2200, "end_dist": 2400},
+    ],
+})
+
+
+def test_corner_descriptor_first_corner_full_sentence(synthetic_lap):
+    # apex 1000/3000 = exactly a third -> "early"; first in the map -> ordinal
+    # phrase too; hairpin direction reads "the left-hand hairpin"; gap wraps
+    # past the S/F line from corner 2's end (2400) to corner 1's start (800)
+    # = 1400 m -> "the long straight".
+    analysis = analyze_lap(synthetic_lap, _CMAP3000)
+    out = corner_descriptor(_CMAP3000, 1, analysis=analysis)
+    assert out == ("Turn 1, early in the lap, the first corner, "
+                    "the left-hand hairpin after the long straight")
+
+
+def test_corner_descriptor_last_corner_contains_expected_parts(synthetic_lap):
+    analysis = analyze_lap(synthetic_lap, _CMAP3000)
+    out = corner_descriptor(_CMAP3000, 2, analysis=analysis)
+    assert "Turn 2" in out
+    assert "the last corner" in out
+    assert "the slow right" in out          # min ~94 km/h -> "slow" (<110)
+    assert "after the long straight" in out  # 2000 - 1200 = 800 m gap
+
+
+def test_corner_descriptor_sector_bounds_pins_apex_not_start(synthetic_lap):
+    # Splits chosen so corner 1's apex (1000) sits AT the S1/S2 split (sector 1,
+    # by apex) while its start_dist (800) would read sector 1 either way -- the
+    # split that actually distinguishes apex-based from start-based sectoring is
+    # corner 2 (apex 2200 > both splits -> sector 3).
+    analysis = analyze_lap(synthetic_lap, _CMAP3000)
+    out1 = corner_descriptor(_CMAP3000, 1, analysis=analysis, sector_bounds=[1000, 2000])
+    out2 = corner_descriptor(_CMAP3000, 2, analysis=analysis, sector_bounds=[1000, 2000])
+    assert "sector 1" in out1
+    assert "sector 3" in out2
+
+
+def test_corner_descriptor_no_analysis_has_no_speed_class():
+    out = corner_descriptor(_CMAP3000, 1, analysis=None)
+    assert "left" in out
+    assert "hairpin" not in out
+    assert not any(w in out for w in ("slow", "medium", "fast", "flat-out"))
+
+
+def test_corner_descriptor_close_gap_reads_straight_after():
+    cmap = CornerMap.from_data({"corners": [
+        {"number": 1, "name": "A", "direction": "left",
+         "start_dist": 0, "apex_dist": 20, "end_dist": 40},
+        {"number": 2, "name": "B", "direction": "right",
+         "start_dist": 90, "apex_dist": 110, "end_dist": 130},
+    ]})
+    assert "straight after Turn 1" in corner_descriptor(cmap, 2)
+
+
+def test_corner_descriptor_mid_gap_reads_after_the_straight():
+    cmap = CornerMap.from_data({"corners": [
+        {"number": 1, "name": "A", "direction": "left",
+         "start_dist": 0, "apex_dist": 20, "end_dist": 40},
+        {"number": 2, "name": "B", "direction": "right",
+         "start_dist": 340, "apex_dist": 360, "end_dist": 380},
+    ]})
+    assert "after the straight" in corner_descriptor(cmap, 2)

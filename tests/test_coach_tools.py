@@ -31,6 +31,14 @@ def test_get_corner_returns_one_corner(tmp_path, synthetic_lap):
     assert "No corner matching" in ctx.get_corner("Nonexistent")
 
 
+def test_get_corner_locates_the_corner(tmp_path, synthetic_lap):
+    """#108 item 12: get_corner appends a spoken-ready locator, computed from the
+    owned map + measured speed, not left for the model to invent."""
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    out = ctx.get_corner("1")
+    assert "Locate it: Turn 1, " in out
+
+
 def test_get_corner_targets_a_specific_lap(tmp_path, synthetic_lap):
     # A corner question during a lap-2 discussion must read THAT lap, not always latest.
     from simcoach.model_types import LapRecord
@@ -503,6 +511,19 @@ def test_no_lap_context_is_honest(tmp_path):
     ctx = CoachContext(store, track="spa", car="car", on_track=False)
     assert "no lap captured yet" in ctx.get_session_status().lower()
     assert "no lap" in ctx.get_corner("1").lower()
+
+
+def test_list_track_corners_entries_end_with_descriptor(tmp_path, synthetic_lap):
+    """#108 item 12: each corner line ends with the same spoken locator get_corner
+    gives, computed from the latest lap's analysis when one is available."""
+    from simcoach.format import corner_descriptor
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    out = ctx.list_track_corners()
+    analysis = ctx._latest_analysis()
+    lines = out.split("\n")[1:]
+    assert len(lines) == len(ctx.cmap.corners)
+    for c, line in zip(ctx.cmap.corners, lines):
+        assert line.endswith(corner_descriptor(ctx.cmap, c.number, analysis=analysis))
 
 
 def test_list_track_corners_works_without_a_lap(tmp_path):

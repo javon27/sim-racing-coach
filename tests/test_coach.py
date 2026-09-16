@@ -240,6 +240,14 @@ def test_spoken_sentence_locates_corners_by_number_first():
     assert "never the name alone" in SPOKEN_SENTENCE
 
 
+def test_spoken_sentence_points_to_the_locate_it_descriptor():
+    """#108 item 12: the spoken cue must reuse the corner tools' own locator
+    ('Locate it: Turn N, sector 2, the fast left after the long straight'),
+    not a bare number the model has to invent context around."""
+    from simcoach.coach import SPOKEN_SENTENCE
+    assert "Locate it" in SPOKEN_SENTENCE
+
+
 def test_prompt_routes_incidents_to_get_stint_events():
     from simcoach.coach import AGENTIC_SYSTEM_PROMPT
     assert "get_stint_events" in AGENTIC_SYSTEM_PROMPT
