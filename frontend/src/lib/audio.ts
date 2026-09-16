@@ -40,16 +40,19 @@ export class MicRecorder implements Recorder {
     this.#source = this.#ctx.createMediaStreamSource(this.#stream);
   }
 
-  async start(onFrame: (frame: Float32Array) => void): Promise<void> {
+  async start(onFrame: (frame: Float32Array, sampleRate?: number) => void): Promise<void> {
     await this.#ensureStream();
     const ctx = this.#ctx!;
     // ponytail: ScriptProcessorNode is deprecated but inline and universal; AudioWorklet when it breaks.
-    this.#node = ctx.createScriptProcessor(4096, 1, 1);
+    // 1024 samples = 64 ms at 16 kHz: fine enough for the VAD/barge-in clocks
+    // (4096 was 256 ms per frame, which the loop was counting as 50 ms -- every
+    // timing gate ran ~5x slow at the rig).
+    this.#node = ctx.createScriptProcessor(1024, 1, 1);
     this.#chunks = [];
     this.#node.onaudioprocess = (e) => {
       const chunk = new Float32Array(e.inputBuffer.getChannelData(0));
       this.#chunks.push(chunk);
-      onFrame(chunk);
+      onFrame(chunk, ctx.sampleRate);
     };
     this.#source!.connect(this.#node);
     this.#node.connect(ctx.destination);

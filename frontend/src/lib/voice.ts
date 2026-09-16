@@ -55,7 +55,9 @@ export type VoiceMode = "ptt" | "conversation";
 export type Earcon = "listen-start" | "listen-end" | "error";
 
 export interface Recorder {
-  start(onFrame: (frame: Float32Array) => void): Promise<void>;
+  /** `onFrame` gets each PCM chunk plus its sample rate, so the loop can clock
+   *  VAD/barge-in from the chunk's real duration. */
+  start(onFrame: (frame: Float32Array, sampleRate?: number) => void): Promise<void>;
   stop(): Promise<{ pcm: Float32Array; sampleRate: number }>;
   /** Release the mic/stream entirely; the next start() re-acquires it. Optional. */
   dispose?(): Promise<void>;
@@ -201,7 +203,7 @@ export class VoiceLoop {
   #startRecorder(): Promise<void> {
     if (this.#recording) return Promise.resolve();
     if (!this.#starting) {
-      this.#starting = this.#o.recorder.start((frame) => this.#onFrame(frame))
+      this.#starting = this.#o.recorder.start((frame, rate) => this.#onFrame(frame, rate))
         .then(() => { this.#recording = true; })
         .finally(() => { this.#starting = null; });
     }
@@ -214,16 +216,19 @@ export class VoiceLoop {
     return this.#o.recorder.stop();
   }
 
-  #onFrame(frame: Float32Array): void {
+  #onFrame(frame: Float32Array, sampleRate?: number): void {
     if (this.mode !== "conversation") return;
     const level = rms(frame);
+    // Clock from the chunk's real duration when the recorder says its rate;
+    // `frameMs` is only the fallback for recorders that don't.
+    const frameMs = sampleRate ? (frame.length / sampleRate) * 1000 : (this.#o.frameMs ?? 50);
     if (this.state === "speaking") {            // barge-in
       // The coach's own playback leaks into a desk mic, so a single frame over the
       // listening threshold is not speech: require a SUSTAINED burst at twice the
       // threshold before cutting the answer off. ponytail: fixed multiplier and
       // window; an echo-cancelling reference of the TTS output would be the upgrade.
       if (level >= this.#o.vad.threshold * BARGE_IN_LEVEL_MULT) {
-        this.#bargeMs += this.#o.frameMs ?? 50;
+        this.#bargeMs += frameMs;
         if (this.#bargeMs >= BARGE_IN_MS) { this.#bargeMs = 0; this.#cancelSpeech(); this.#listen("conversation"); }
       } else {
         this.#bargeMs = 0;
@@ -231,7 +236,7 @@ export class VoiceLoop {
       return;
     }
     if (this.state !== "listening") return;
-    const r = vadStep(this.#vad, level, this.#o.frameMs ?? 50, this.#o.vad);
+    const r = vadStep(this.#vad, level, frameMs, this.#o.vad);
     this.#vad = r.state;
     if (r.state.speaking) this.#clearIdle();
     if (r.action === "end") void this.#finishUtterance();

@@ -71,9 +71,9 @@ describe("rms", () => {
 import { VoiceLoop, type Recorder, type Speaker, type Transcriber, type VoiceMode } from "./voice";
 
 class FakeRecorder implements Recorder {
-  started = 0; stopped = 0; onFrame: ((f: Float32Array) => void) | null = null; failStart = false;
+  started = 0; stopped = 0; onFrame: ((f: Float32Array, sampleRate?: number) => void) | null = null; failStart = false;
   startGate: Promise<void> | null = null;
-  async start(onFrame: (f: Float32Array) => void) {
+  async start(onFrame: (f: Float32Array, sampleRate?: number) => void) {
     if (this.startGate) await this.startGate;
     if (this.failStart) throw new Error("NotAllowedError");
     this.started++; this.onFrame = onFrame;
@@ -251,6 +251,23 @@ describe("VoiceLoop conversation", () => {
     loop.toggleConversation();
     expect(loop.state).toBe("listening"); expect(loop.mode).toBe("conversation");
     expect(recorder.started).toBe(1); expect(recorder.stopped).toBe(0);
+  });
+});
+
+describe("frame clock", () => {
+  it("times VAD and barge-in from the chunk's real duration when the recorder reports a rate (rig: 256 ms chunks counted as 50 ms)", async () => {
+    const { loop, recorder, speaker, asked } = make();
+    loop.toggleConversation(); await flush();
+    // 4096-sample chunks at 16 kHz = 256 ms each: speech, then 4 silent chunks = 1024 ms >= silenceMs.
+    const chunk = (level: number) => recorder.onFrame?.(new Float32Array(4096).fill(level), 16000);
+    chunk(0.2); for (let i = 0; i < 4; i++) chunk(0);
+    await flush(); await flush();
+    expect(asked.length).toBe(1);
+    loop.onAnswer("Answer.", null); await flush();
+    expect(loop.state).toBe("speaking");
+    // Two loud 256 ms chunks = 512 ms >= BARGE_IN_MS: interrupts (was 8 chunks = 2 s).
+    chunk(0.3); chunk(0.3); await flush();
+    expect(speaker.cancels).toBe(1); expect(loop.state).toBe("listening");
   });
 });
 
