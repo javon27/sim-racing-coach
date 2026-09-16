@@ -79,6 +79,8 @@ class FakeRecorder implements Recorder {
     this.started++; this.onFrame = onFrame;
   }
   async stop() { this.stopped++; this.onFrame = null; return { pcm: new Float32Array(160), sampleRate: 16000 }; }
+  cleared: number[] = [];
+  clear(keepMs = 0) { this.cleared.push(keepMs); }
   get open() { return this.started > this.stopped; }
   frame(level: number) { this.onFrame?.(new Float32Array(800).fill(level)); }
 }
@@ -202,6 +204,19 @@ describe("VoiceLoop conversation", () => {
     expect(speaker.spoken).toEqual(["Full answer. one."]);
     speaker.end(); await flush();
     expect(loop.state).toBe("listening"); expect(recorder.open).toBe(true);
+    // The mic ran through the whole answer (barge-in); that audio is dropped when
+    // listening resumes (rig: a quick "yes" was rejected as "longer than 30 s").
+    expect(recorder.cleared).toEqual([0]);
+  });
+  it("barge-in keeps the interrupting burst when it clears the buffer", async () => {
+    const { loop, recorder } = make();
+    loop.toggleConversation(); await flush();
+    recorder.frame(0.2); for (let i = 0; i < 20; i++) recorder.frame(0); await flush(); await flush();
+    loop.onAnswer("Answer.", null); await flush();
+    for (let i = 0; i < 8; i++) recorder.frame(0.3);
+    await flush();
+    expect(loop.state).toBe("listening");
+    expect(recorder.cleared.at(-1)).toBeGreaterThan(0);
   });
   it("speech during speaking barges in", async () => {
     const { loop, recorder, speaker } = make();

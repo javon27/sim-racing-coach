@@ -58,6 +58,22 @@ export class MicRecorder implements Recorder {
     this.#node.connect(ctx.destination);
   }
 
+  /** Drop buffered audio, keeping only the last `keepMs` (default 0). Used when
+   *  listening resumes after the coach spoke: the mic stayed open for barge-in
+   *  and everything it heard meanwhile must not ride along with the next question. */
+  clear(keepMs = 0): void {
+    if (keepMs <= 0) { this.#chunks = []; return; }
+    const rate = this.#ctx?.sampleRate ?? 16000;
+    let keep = Math.round((keepMs / 1000) * rate);
+    const kept: Float32Array[] = [];
+    for (let i = this.#chunks.length - 1; i >= 0 && keep > 0; i--) {
+      const c = this.#chunks[i];
+      kept.unshift(c.length <= keep ? c : c.subarray(c.length - keep));
+      keep -= c.length;
+    }
+    this.#chunks = kept;
+  }
+
   async stop(): Promise<{ pcm: Float32Array; sampleRate: number }> {
     const sampleRate = this.#ctx?.sampleRate ?? 16000;
     const total = this.#chunks.reduce((n, c) => n + c.length, 0);

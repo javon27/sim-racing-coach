@@ -61,6 +61,8 @@ export interface Recorder {
   stop(): Promise<{ pcm: Float32Array; sampleRate: number }>;
   /** Release the mic/stream entirely; the next start() re-acquires it. Optional. */
   dispose?(): Promise<void>;
+  /** Drop audio buffered so far, keeping the last `keepMs`. Optional. */
+  clear?(keepMs?: number): void;
 }
 export interface Transcriber { transcribe(wav: Uint8Array): Promise<{ text: string; seconds: number }> }
 export interface Speaker { speak(text: string): Promise<void>; cancel(): void; earcon(kind: Earcon): void }
@@ -192,8 +194,13 @@ export class VoiceLoop {
   }
 
   // ---- internals ----
-  #listen(mode: VoiceMode): void {
+  #listen(mode: VoiceMode, keepMs = 0): void {
     this.mode = mode; this.error = null; this.#vad = vadInitial;
+    // The recorder may already be running (it stays open through the coach's
+    // answer for barge-in). Everything it heard until now is not the driver's
+    // question -- rig: a quick "yes" after a long answer was sent with the whole
+    // answer's audio in front of it and rejected as "longer than 30 s".
+    if (this.#recording) this.#o.recorder.clear?.(keepMs);
     this.#set("listening");
     this.#o.speaker.earcon("listen-start");
     this.#armIdle();
@@ -229,7 +236,9 @@ export class VoiceLoop {
       // window; an echo-cancelling reference of the TTS output would be the upgrade.
       if (level >= this.#o.vad.threshold * BARGE_IN_LEVEL_MULT) {
         this.#bargeMs += frameMs;
-        if (this.#bargeMs >= BARGE_IN_MS) { this.#bargeMs = 0; this.#cancelSpeech(); this.#listen("conversation"); }
+        // Keep the burst that triggered the barge-in (plus a little lead-in) so
+        // the interrupting words are part of the utterance.
+        if (this.#bargeMs >= BARGE_IN_MS) { this.#bargeMs = 0; this.#cancelSpeech(); this.#listen("conversation", BARGE_IN_MS + 200); }
       } else {
         this.#bargeMs = 0;
       }
