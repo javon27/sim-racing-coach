@@ -228,8 +228,6 @@ class KokoroEngine:
         self._error: str | None = None
 
     def available(self) -> bool:
-        if self._backend is not None:      # test/dev injection point -- no on-disk model needed
-            return True
         return (self.model_dir / MODEL_FILE).exists() and (self.model_dir / VOICES_FILE).exists()
 
     def _load(self):

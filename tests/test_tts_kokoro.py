@@ -9,10 +9,18 @@ from simcoach import tts_kokoro
 from simcoach.tts_kokoro import (
     KOKORO_ONNX_VERSION,
     MISAKI_VERSION,
+    MODEL_FILE,
+    VOICES_FILE,
     EngineUnavailable,
     KokoroEngine,
     preprocess,
 )
+
+
+def _touch_model_files(model_dir):
+    (model_dir / MODEL_FILE).touch()
+    (model_dir / VOICES_FILE).touch()
+
 
 HAVE_KOKORO = importlib.util.find_spec("kokoro_onnx") is not None and importlib.util.find_spec("misaki") is not None
 
@@ -59,6 +67,7 @@ def test_synthesize_with_fake_backend_returns_16bit_mono_24k_wav(tmp_path):
             calls.append((phonemes, voice, speed, is_phonemes))
             return np.linspace(-0.5, 0.5, 2400, dtype=np.float32), 24000
 
+    _touch_model_files(tmp_path)
     eng = KokoroEngine(tmp_path, backend=FakeKokoro, g2p=lambda text: f"<{text}>")
     wav = eng.synthesize("Turn 10.", voice="am_michael", speed=1.2)
     assert _wav_header(wav) == (1, 24000, 16)
@@ -82,6 +91,7 @@ def test_synthesize_retries_a_failing_sentence_spelled_out_then_drops_it(tmp_pat
         def create(self, ph, voice, speed=1.0, is_phonemes=False, lang="en-us"):
             return np.zeros(240, dtype=np.float32), 24000
 
+    _touch_model_files(tmp_path)
     eng = KokoroEngine(tmp_path, backend=FakeKokoro, g2p=g2p)
     wav = eng.synthesize("Brake later. Pouhon is fast.", voice="af_heart", speed=1.0)
     assert _wav_header(wav)[1] == 24000
@@ -104,6 +114,7 @@ def test_synthesize_retries_by_spelling_capitalised_words_when_message_has_no_wo
         def create(self, ph, voice, speed=1.0, is_phonemes=False, lang="en-us"):
             return np.zeros(240, dtype=np.float32), 24000
 
+    _touch_model_files(tmp_path)
     eng = KokoroEngine(tmp_path, backend=FakeKokoro, g2p=g2p)
     wav = eng.synthesize("Watch Eau Rouge.", voice="af_heart", speed=1.0)
     assert _wav_header(wav)[1] == 24000
