@@ -73,7 +73,7 @@ existing coach path. A voice question is a normal chat message marked 🎤.
 
 1. Bound key/button down → `voice:press` → `listening` (earcon, recorder start).
 2. Up → `voice:release` → recorder stop → `transcribing` → `POST /voice/transcribe`.
-3. Empty/garbled text (< 2 words) → speak "didn't catch that" → `idle`. Nothing is sent.
+3. Empty transcript (no letters or digits; whisper's VAD returns nothing on silence) → speak "didn't catch that" → `idle`. Nothing is sent. One-word replies ("yes") are sent.
 4. Otherwise `asking`: the transcript is sent on `/coach` with `voice: "ptt"`; it appears
    in the chat marked 🎤.
 5. `done` → chat shows the full answer; `speaking` reads `spoken` (falls back to the first
@@ -101,7 +101,7 @@ that are not built yet (wake word) are not shown.
 |---|---|
 | Mic permission denied / no device | speak + show "I can't hear the mic"; `idle` |
 | STT model not installed | 409 → "voice isn't set up yet — enable it in Settings"; `idle` |
-| Transcript empty or < 2 words | "didn't catch that"; nothing sent; `idle` |
+| Transcript empty (no letters/digits) | "didn't catch that"; nothing sent; `idle` |
 | Sidecar down / coach error | existing error text is spoken and shown; `idle` |
 | Bind poller can't open a device | Settings shows the device as unavailable; other binds keep working |
 | speechSynthesis has no voices | answer shown only; Settings warns |

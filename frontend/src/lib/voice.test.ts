@@ -128,12 +128,18 @@ describe("VoiceLoop PTT", () => {
     loop.onAnswer("First **para**.\n\nSecond.", null); await flush();
     expect(speaker.spoken).toEqual(["First para."]);
   });
-  it("short transcript: says didn't catch that, sends nothing, idle", async () => {
+  it("empty transcript: says didn't catch that, sends nothing, idle", async () => {
     const { loop, transcriber, speaker, asked } = make();
-    transcriber.text = "uh";
+    transcriber.text = " ... ";
     loop.press(); await flush(); loop.release(); await flush(); await flush();
     expect(asked).toEqual([]); expect(loop.state).toBe("idle");
     expect(speaker.spoken[0]).toMatch(/didn't catch/i); expect(speaker.earcons).toContain("error");
+  });
+  it("a one-word reply is sent (rig: 'yes' to the coach's question was rejected)", async () => {
+    const { loop, transcriber, asked } = make();
+    transcriber.text = "Yes.";
+    loop.press(); await flush(); loop.release(); await flush(); await flush();
+    expect(asked).toEqual([["Yes.", "ptt"]]);
   });
   it("press during speaking cancels speech and listens again (barge-in)", async () => {
     const { loop, speaker, recorder } = make();

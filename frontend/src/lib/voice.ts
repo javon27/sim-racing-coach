@@ -263,7 +263,10 @@ export class VoiceLoop {
     } catch (e) {
       this.#fail(e instanceof Error ? e.message : String(e)); return;
     }
-    if (text.split(/\s+/).filter(Boolean).length < 2) { this.#fail(DIDNT_CATCH, false); return; }
+    // Only an EMPTY transcript is "didn't catch that": whisper's own VAD already
+    // returns nothing on silence, and one-word replies ("yes", "no") are real
+    // answers to the coach's questions (rig: a 2-word minimum ate them).
+    if (!/[\p{L}\p{N}]/u.test(text)) { this.#fail(DIDNT_CATCH, false); return; }
     this.lastQuestion = text;
     this.#set("asking");
     this.#o.ask(text, this.mode ?? "ptt");
