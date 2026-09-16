@@ -18,7 +18,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
-from fastapi import Body, FastAPI, HTTPException, Request, WebSocket
+from fastapi import Body, FastAPI, HTTPException, Request, Response, WebSocket
 from fastapi.responses import JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 from starlette.websockets import WebSocketDisconnect, WebSocketState
@@ -42,6 +42,7 @@ from ..lmu.ingest import ingest_all
 from ..model.base import TokenUsage
 from ..model.factory import CoachUserError, make_model
 from ..pricing import estimate_chat_cost
+from ..pronunciations import table_for
 from ..ribbon import multi_signal_direction, reconstruct_surface, ribbon_to_screen
 from ..tiers import adjustable_from_setup, legal_adjustments
 from ..track_lookup import (
@@ -266,25 +267,32 @@ def _capture_loop(source, store, app_state) -> None:
 
 
 def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_factory=None,
-               tracks_dir=None, *, transcriber=None, installer=None) -> FastAPI:
+               tracks_dir=None, *, transcriber=None, installer=None,
+               kokoro_installer=None, kokoro_engine=None) -> FastAPI:
     app = FastAPI(title="SimCoach", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store = store
     app.state.coach = coach
+    # The whisper model lives at the app-data ROOT (next to the config), not in the
+    # telemetry dir the store owns; move an install from the first release across.
+    from .. import paths as _paths
+    from ..tts_kokoro import EngineUnavailable, KokoroEngine
     from ..voice import (
+        KokoroInstaller,
         ModelInstaller,
         NotInstalled,
         VoiceInputError,
         WhisperTranscriber,
         decode_wav,
+        kokoro_dir,
+        migrate_model_dir,
     )
-    # The whisper model lives at the app-data ROOT (next to the config), not in the
-    # telemetry dir the store owns; move an install from the first release across.
-    from .. import paths as _paths
-    from ..voice import migrate_model_dir
     voice_root = str(_paths.app_data_dir())
     migrate_model_dir(store.data_dir, voice_root)
     app.state.transcriber = transcriber or WhisperTranscriber(voice_root)
     app.state.voice_installer = installer or ModelInstaller(voice_root)
+    app.state.kokoro_installer = kokoro_installer or KokoroInstaller(voice_root)
+    app.state.kokoro_engine = kokoro_engine or KokoroEngine(kokoro_dir(voice_root))
+    app.state.kokoro_installer.voices_fn = app.state.kokoro_engine.voices
     app.state.tracks_dir = Path(tracks_dir) if tracks_dir else _DEFAULT_TRACKS_DIR
     # #105: GET /tracks' per-lap usable-cloud check, keyed on (telemetry_path, mtime).
     # Only /tracks reads this (via _rebuild_clouds(..., cache=...)) -- the build path
@@ -2335,17 +2343,20 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             except Exception:
                 log.warning("events: mapcapture tick failed", exc_info=True)
 
-            try:
-                was_installing = last.get("_voice_installing", False)
-                vs_data = app.state.voice_installer.status()
-                if vs_data.get("installing") or was_installing:
-                    sig = json.dumps(vs_data, sort_keys=True, default=str)
-                    if last.get("_voice_sig") != sig:
-                        last["_voice_sig"] = sig
-                        frames.append(("voice_setup", vs_data))
-                    last["_voice_installing"] = vs_data.get("installing")
-            except Exception:
-                log.warning("events: voice_setup tick failed", exc_info=True)
+            for inst in (app.state.voice_installer, app.state.kokoro_installer):
+                try:
+                    vs_data = inst.status()
+                    engine = vs_data.get("engine", "whisper")
+                    installing_key, sig_key = f"_voice_installing_{engine}", f"_voice_sig_{engine}"
+                    was_installing = last.get(installing_key, False)
+                    if vs_data.get("installing") or was_installing:
+                        sig = json.dumps(vs_data, sort_keys=True, default=str)
+                        if last.get(sig_key) != sig:
+                            last[sig_key] = sig
+                            frames.append(("voice_setup", vs_data))
+                        last[installing_key] = vs_data.get("installing")
+                except Exception:
+                    log.warning("events: voice_setup tick failed", exc_info=True)
 
             return frames
 
@@ -2453,6 +2464,36 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     @app.get("/voice/status")
     def voice_status():
         return app.state.voice_installer.status()
+
+    @app.post("/voice/kokoro/setup")
+    def kokoro_setup(body: dict = Body(...)):
+        started = app.state.kokoro_installer.start()
+        return {"started": started, **app.state.kokoro_installer.status()}
+
+    @app.get("/voice/kokoro/status")
+    def kokoro_status():
+        return app.state.kokoro_installer.status()
+
+    @app.post("/voice/speak")
+    async def voice_speak(body: dict = Body(...)):
+        text = str(body.get("text") or "").strip()
+        if not text:
+            raise HTTPException(400, "text is required")
+        eng = app.state.kokoro_engine
+        if not eng.available():
+            raise HTTPException(409, "Kokoro voice isn't installed — enable it in Settings")
+        cfg = config.load_config()["voice"]
+        voice = str(body.get("voice") or cfg.get("kokoro_voice") or "af_heart")
+        speed = float(body.get("speed") or cfg.get("tts_rate") or 1.0)
+        raw_slug = body.get("track_slug") or body.get("track") or _live_track() or ""
+        slug = track_slug(raw_slug) if raw_slug else ""
+        table = table_for(_track_file_data(slug)) if slug else {}
+        loop = asyncio.get_running_loop()
+        try:
+            wav = await loop.run_in_executor(None, eng.synthesize, text, voice, speed, table)
+        except EngineUnavailable as e:
+            raise HTTPException(503, str(e))
+        return Response(content=wav, media_type="audio/wav")
 
     @app.post("/ingest")
     def ingest(body: dict = Body(...)):

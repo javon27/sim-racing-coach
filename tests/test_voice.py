@@ -13,6 +13,7 @@ from simcoach.voice import (
     MAX_SECONDS,
     WHISPER_PROMPT,
     FakeTranscriber,
+    KokoroInstaller,
     ModelInstaller,
     NotInstalled,
     VoiceInputError,
@@ -167,3 +168,27 @@ def test_installer_start_is_idempotent_while_running(tmp_path):
     assert inst.start() is True
     assert inst.start() is False   # already running
     gate.set()
+
+
+def test_kokoro_installer_downloads_both_files_and_reports(tmp_path):
+    def fake_download(dest: Path):
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "kokoro-v1.0.onnx").write_bytes(b"0" * 100)
+        (dest / "voices-v1.0.bin").write_bytes(b"0" * 10)
+    inst = KokoroInstaller(str(tmp_path), downloader=fake_download)
+    assert inst.status()["installed"] is False and inst.status()["engine"] == "kokoro"
+    assert inst.start() is True
+    for _ in range(50):
+        if not inst.status()["installing"]:
+            break
+        time.sleep(0.05)
+    s = inst.status()
+    assert s["installed"] is True and s["error"] is None and s["total_bytes"] == 325_532_387 + 28_214_398
+
+
+def test_kokoro_default_download_verifies_sha256(tmp_path, monkeypatch):
+    from simcoach import voice as v
+    served = {"kokoro-v1.0.onnx": b"abc", "voices-v1.0.bin": b"def"}
+    monkeypatch.setattr(v, "_fetch_to", lambda url, dest: dest.write_bytes(served[url.rsplit("/", 1)[1]]))
+    with pytest.raises(RuntimeError, match="sha256"):
+        v._default_kokoro_download(tmp_path / "kokoro")

@@ -168,3 +168,30 @@ def test_events_topic_failure_does_not_stop_status_frames(tmp_path, monkeypatch)
         topics = [ws.receive_json()["topic"] for _ in range(6)]
     assert topics.count("status") >= 3
     assert "map" not in topics
+
+
+def test_voice_setup_frame_carries_engine(tmp_path, monkeypatch):
+    from simcoach.lmu import smm
+    monkeypatch.setattr(smm, "read_live_status", lambda: None)
+    _fast(monkeypatch)
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+
+    class FakeInstaller:
+        def __init__(self, engine):
+            self.engine = engine
+            self.installing = True
+
+        def status(self):
+            return {"engine": self.engine, "installed": not self.installing, "installing": self.installing,
+                     "progress_bytes": 0, "total_bytes": 1, "error": None}
+
+    whisper_inst, kokoro_inst = FakeInstaller("whisper"), FakeInstaller("kokoro")
+    app = create_app(store, Coach(FakeModel(reply="ok")), installer=whisper_inst, kokoro_installer=kokoro_inst)
+    client = TestClient(app, base_url="http://127.0.0.1")
+
+    with client.websocket_connect("/events", headers={"host": "127.0.0.1"}) as ws:
+        engines = set()
+        for _ in range(2):
+            f = _drain_until(ws, "voice_setup")
+            engines.add(f["data"]["engine"])
+        assert engines == {"whisper", "kokoro"}

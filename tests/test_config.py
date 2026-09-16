@@ -105,3 +105,9 @@ def test_malformed_file_falls_back(tmp_path):
     p = tmp_path / "c.json"
     p.write_text("{ not json")
     assert config.load_config(str(p))["units"] == "metric"
+
+
+def test_voice_defaults_include_engine_and_kokoro_voice(tmp_path, monkeypatch):
+    monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
+    cfg = config.load_config()
+    assert cfg["voice"]["tts_engine"] == "windows" and cfg["voice"]["kokoro_voice"] == "af_heart"

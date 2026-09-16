@@ -144,9 +144,67 @@ class ModelInstaller:
 
     def status(self) -> dict:
         installing = self._thread is not None and self._thread.is_alive()
-        return {"installed": (self.dest / "model.bin").exists(), "installing": installing,
+        return {"engine": "whisper", "installed": (self.dest / "model.bin").exists(), "installing": installing,
                 "progress_bytes": _dir_bytes(self.dest), "total_bytes": EXPECTED_MODEL_BYTES,
                 "error": self._error}
+
+
+KOKORO_FILES = {
+    "kokoro-v1.0.onnx": (325_532_387, "7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5"),
+    "voices-v1.0.bin": (28_214_398, "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d"),
+}
+KOKORO_URL_BASE = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1/"
+KOKORO_TOTAL_BYTES = sum(size for size, _ in KOKORO_FILES.values())
+
+
+def kokoro_dir(data_dir: str) -> Path:
+    return Path(data_dir) / "kokoro"
+
+
+def kokoro_installed(data_dir: str) -> bool:
+    return all((kokoro_dir(data_dir) / name).exists() for name in KOKORO_FILES)
+
+
+def _fetch_to(url: str, dest: Path) -> None:
+    import urllib.request
+    with urllib.request.urlopen(url, timeout=60) as r, open(dest, "wb") as f:
+        while chunk := r.read(1 << 20):
+            f.write(chunk)
+
+
+def _default_kokoro_download(dest: Path) -> None:
+    import hashlib
+    dest.mkdir(parents=True, exist_ok=True)
+    for name, (size, sha) in KOKORO_FILES.items():
+        tmp = dest / (name + ".part")
+        _fetch_to(KOKORO_URL_BASE + name, tmp)
+        digest = hashlib.sha256(tmp.read_bytes()).hexdigest()
+        if digest != sha:
+            tmp.unlink(missing_ok=True)
+            raise RuntimeError(f"{name}: sha256 mismatch (got {digest[:12]}…) — download again")
+        tmp.replace(dest / name)
+
+
+class KokoroInstaller(ModelInstaller):
+    """Same state machine as the whisper installer, for the Kokoro model pair."""
+
+    def __init__(self, data_dir: str, downloader: Callable[[Path], None] | None = None):
+        super().__init__(data_dir, downloader or _default_kokoro_download)
+        self.dest = kokoro_dir(data_dir)
+        self.voices_fn: Callable[[], list[str]] | None = None   # set by app.py once the engine exists
+
+    def status(self) -> dict:
+        installing = self._thread is not None and self._thread.is_alive()
+        installed = all((self.dest / n).exists() for n in KOKORO_FILES)
+        voices: list[str] = []
+        if installed and self.voices_fn is not None:
+            try:
+                voices = self.voices_fn()
+            except Exception:       # noqa: BLE001 -- a broken model reports as installed-but-no-voices; /speak says why
+                voices = []
+        return {"engine": "kokoro", "installed": installed, "installing": installing,
+                "progress_bytes": _dir_bytes(self.dest), "total_bytes": KOKORO_TOTAL_BYTES,
+                "error": self._error, "voices": voices}
 
 
 class WhisperTranscriber:

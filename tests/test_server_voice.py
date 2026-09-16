@@ -9,6 +9,7 @@ from simcoach.coach import Coach
 from simcoach.model.fake import FakeModel
 from simcoach.server.app import create_app
 from simcoach.store import LapStore
+from simcoach.tts_kokoro import EngineUnavailable
 from simcoach.voice import FakeTranscriber, ModelInstaller
 
 
@@ -21,10 +22,11 @@ def _wav(rate=16000, seconds=1.0) -> bytes:
     return buf.getvalue()
 
 
-def _app(tmp_path, monkeypatch, transcriber=None, installer=None):
+def _app(tmp_path, monkeypatch, transcriber=None, installer=None, kokoro_installer=None, kokoro_engine=None):
     monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    app = create_app(store, Coach(FakeModel()), transcriber=transcriber, installer=installer)
+    app = create_app(store, Coach(FakeModel()), transcriber=transcriber, installer=installer,
+                      kokoro_installer=kokoro_installer, kokoro_engine=kokoro_engine)
     return TestClient(app, base_url="http://127.0.0.1"), store
 
 
@@ -94,6 +96,56 @@ def test_setup_starts_download_and_status_tracks_it(tmp_path, monkeypatch):
 def test_setup_requires_json_body(tmp_path, monkeypatch):
     c, _ = _app(tmp_path, monkeypatch, installer=ModelInstaller(str(tmp_path), downloader=lambda d: None))
     assert c.post("/voice/setup").status_code == 422    # CSRF guard, same as /ingest
+
+
+class FakeEngine:
+    def __init__(self, ok=True): self.ok, self.calls = ok, []
+    def available(self): return self.ok
+    def voices(self): return ["af_heart", "am_michael"]
+    def synthesize(self, text, voice, speed, table=None):
+        if not self.ok:
+            raise EngineUnavailable("model missing")
+        self.calls.append((text, voice, speed, table))
+        return b"RIFF" + b"\0" * 40
+
+
+def test_speak_returns_wav_and_passes_voice_speed_and_table(tmp_path, monkeypatch):
+    eng = FakeEngine()
+    c, _ = _app(tmp_path, monkeypatch, kokoro_engine=eng)
+    (Path(c.app.state.tracks_dir) / "circuit_de_spa_francorchamps.json")  # shipped file has no block yet
+    r = c.post("/voice/speak", json={"text": "Turn 10", "voice": "am_michael", "speed": 1.2,
+                                     "track_slug": "circuit_de_spa_francorchamps"})
+    assert r.status_code == 200 and r.headers["content-type"].startswith("audio/wav")
+    assert eng.calls[0][:3] == ("Turn 10", "am_michael", 1.2)
+
+
+def test_speak_track_display_name_also_resolves_the_table(tmp_path, monkeypatch):
+    eng = FakeEngine()
+    c, _ = _app(tmp_path, monkeypatch, kokoro_engine=eng)
+    r = c.post("/voice/speak", json={"text": "Turn 10", "track": "Circuit de Spa-Francorchamps"})
+    assert r.status_code == 200
+    assert eng.calls[0][:2] == ("Turn 10", "af_heart")   # default voice
+
+
+def test_speak_400_on_empty_409_when_not_installed_503_when_engine_fails(tmp_path, monkeypatch):
+    c, _ = _app(tmp_path, monkeypatch, kokoro_engine=FakeEngine(ok=False))
+    assert c.post("/voice/speak", json={"text": "  "}).status_code == 400
+    assert c.post("/voice/speak", json={"text": "hi"}).status_code == 409
+    bad = FakeEngine(); bad.synthesize = lambda *a, **k: (_ for _ in ()).throw(EngineUnavailable("onnx failed"))
+    c2, _ = _app(tmp_path, monkeypatch, kokoro_engine=bad)
+    r = c2.post("/voice/speak", json={"text": "hi"})
+    assert r.status_code == 503 and "onnx failed" in r.json()["detail"]
+
+
+def test_kokoro_setup_and_status_endpoints(tmp_path, monkeypatch):
+    class Inst:
+        started = False
+        def start(self): self.started = True; return True
+        def status(self): return {"engine": "kokoro", "installed": False, "installing": self.started,
+                                  "progress_bytes": 0, "total_bytes": 1, "error": None, "voices": []}
+    c, _ = _app(tmp_path, monkeypatch, kokoro_installer=Inst())
+    assert c.post("/voice/kokoro/setup", json={}).json()["started"] is True
+    assert c.get("/voice/kokoro/status").json()["engine"] == "kokoro"
 
 
 def _ask(c, body):
