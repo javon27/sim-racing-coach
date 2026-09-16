@@ -20,6 +20,11 @@ export class Topic<T> {
 
   constructor(public value: T) {}
 
+  /** Live listener count — lets a component test prove it unsubscribed. */
+  get subscriberCount(): number {
+    return this.#listeners.size;
+  }
+
   subscribe(run: (v: T) => void): () => void {
     this.#listeners.add(run);
     run(this.value);

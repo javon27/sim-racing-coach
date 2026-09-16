@@ -1,294 +1,170 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/svelte";
-import { getStatus, getSettings } from "./api";
+import { getSettings, type StatusResponse } from "./api";
+import { eventFeed } from "./events";
 import SessionBar from "./SessionBar.svelte";
 
 vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
-  return { ...actual, getStatus: vi.fn(), getSettings: vi.fn() };
+  return { ...actual, getSettings: vi.fn() };
 });
+
+const SETTINGS = {
+  units: "metric",
+  input_device: "wheel",
+  model: "sonnet",
+  corner_naming: "names",
+  driver: { braking_style: null, balance_preference: null, risk_tolerance: null },
+  api_key_set: true,
+  data_dir: "x",
+  app_version: "0.1",
+  lmu_build: null,
+};
+
+function status(over: Partial<StatusResponse> = {}): StatusResponse {
+  return {
+    track: "Le Mans",
+    car: "Corvette Z06",
+    on_track: false,
+    activity: null,
+    has_map: true,
+    lmu_connected: true,
+    session_id: "s1",
+    lap_id: 1,
+    ...over,
+  };
+}
+
+/** A status frame off the /events feed — what used to be a getStatus() poll tick. */
+function pushStatus(over: Partial<StatusResponse> = {}) {
+  eventFeed.push("status", status(over));
+}
 
 describe("SessionBar", () => {
   beforeEach(() => {
-    vi.mocked(getStatus).mockReset();
     vi.mocked(getSettings).mockReset();
+    vi.mocked(getSettings).mockResolvedValue(SETTINGS as never);
   });
 
   afterEach(cleanup);
 
-  it("renders track/car + units from the API", async () => {
-    vi.mocked(getStatus).mockResolvedValue({
-      track: "Le Mans",
-      car: "Corvette Z06",
-      on_track: false,
-      has_map: true,
-      lmu_connected: true,
-    });
-    vi.mocked(getSettings).mockResolvedValue({
-      units: "metric",
-      input_device: "wheel",
-      model: "sonnet",
-      corner_naming: "names",
-      driver: { braking_style: null, balance_preference: null, risk_tolerance: null },
-      api_key_set: true,
-      data_dir: "x",
-      app_version: "0.1",
-      lmu_build: null,
-    });
-
+  it("renders track/car from the /events feed and units from the API", async () => {
     render(SessionBar);
+    pushStatus();
 
     expect(await screen.findByText("Le Mans")).toBeTruthy();
     expect(screen.getByText("Corvette Z06")).toBeTruthy();
-    expect(screen.getByText("metric")).toBeTruthy();
+    expect(await screen.findByText("metric")).toBeTruthy();
   });
 
   it("shows the live driving state (On track / Garage / In menus / LMU offline)", async () => {
-    const settings = {
-      units: "metric" as const,
-      input_device: "wheel" as const,
-      model: "sonnet" as const,
-      corner_naming: "names" as const,
-      driver: { braking_style: null, balance_preference: null, risk_tolerance: null },
-      api_key_set: true,
-      data_dir: "x",
-      app_version: "0.1",
-      lmu_build: null,
-    };
-    vi.mocked(getSettings).mockResolvedValue(settings as never);
-
-    vi.mocked(getStatus).mockResolvedValue({
-      track: "Le Mans", car: "C8", on_track: true, activity: "track", has_map: true, lmu_connected: true,
-    } as never);
     let view = render(SessionBar);
+    pushStatus({ on_track: true, activity: "track" });
     expect(await screen.findByText("On track")).toBeTruthy();
     view.unmount();
 
     // Garage: detected live even before any lap is completed.
-    vi.mocked(getStatus).mockResolvedValue({
-      track: "Le Mans", car: "C8", on_track: false, activity: "garage", has_map: true, lmu_connected: true,
-    } as never);
     view = render(SessionBar);
+    pushStatus({ activity: "garage" });
     expect(await screen.findByText("Garage")).toBeTruthy();
     view.unmount();
 
     // In a session menu (connected, no player state).
-    vi.mocked(getStatus).mockResolvedValue({
-      track: null, car: null, on_track: false, activity: null, has_map: false, lmu_connected: true,
-    } as never);
     view = render(SessionBar);
+    pushStatus({ track: null, car: null, activity: null });
     expect(await screen.findByText("In menus")).toBeTruthy();
     view.unmount();
 
-    vi.mocked(getStatus).mockResolvedValue({
-      track: null, car: null, on_track: false, activity: null, has_map: false, lmu_connected: false,
-    } as never);
     render(SessionBar);
+    pushStatus({ track: null, car: null, activity: null, lmu_connected: false });
     expect(await screen.findByText("LMU offline")).toBeTruthy();
   });
 
-  it("retries through transient failures and eventually renders data", async () => {
-    vi.mocked(getStatus)
+  it("retries through transient settings failures and eventually renders units", async () => {
+    vi.mocked(getSettings)
       .mockRejectedValueOnce(new Error("network"))
       .mockRejectedValueOnce(new Error("network"))
-      .mockResolvedValue({
-        track: "Le Mans",
-        car: "Corvette Z06",
-        on_track: false,
-        has_map: true,
-        lmu_connected: true,
-      });
-    vi.mocked(getSettings).mockResolvedValue({
-      units: "metric",
-      input_device: "wheel",
-      model: "sonnet",
-      corner_naming: "names",
-      driver: { braking_style: null, balance_preference: null, risk_tolerance: null },
-      api_key_set: true,
-      data_dir: "x",
-      app_version: "0.1",
-      lmu_build: null,
-    });
+      .mockResolvedValue(SETTINGS as never);
 
     render(SessionBar, { props: { retryTries: 5, retryDelayMs: 5 } });
+    pushStatus();
 
     expect(await screen.findByText("Le Mans")).toBeTruthy();
+    expect(await screen.findByText("metric")).toBeTruthy();
   });
 
-  it("shows an unreachable state with a Retry button when all attempts fail, and Retry re-fetches", async () => {
-    vi.mocked(getStatus).mockRejectedValue(new Error("network"));
-    vi.mocked(getSettings).mockRejectedValue(new Error("network"));
-
+  it("shows an unreachable state with a Retry button when no frame arrives, and Retry recovers", async () => {
+    // Nothing pushed: the feed has never delivered a frame, so after the grace
+    // window (retryTries x retryDelayMs) the header says the server is gone.
     render(SessionBar, { props: { retryTries: 2, retryDelayMs: 5 } });
 
     const retryBtn = await screen.findByRole("button", { name: /retry/i });
     expect(screen.getByText(/no server/i)).toBeTruthy();
 
-    vi.mocked(getStatus).mockResolvedValue({
-      track: "Le Mans",
-      car: "Corvette Z06",
-      on_track: false,
-      has_map: true,
-      lmu_connected: true,
-    });
-    vi.mocked(getSettings).mockResolvedValue({
-      units: "metric",
-      input_device: "wheel",
-      model: "sonnet",
-      corner_naming: "names",
-      driver: { braking_style: null, balance_preference: null, risk_tolerance: null },
-      api_key_set: true,
-      data_dir: "x",
-      app_version: "0.1",
-      lmu_build: null,
-    });
-
     await fireEvent.click(retryBtn);
+    pushStatus();
 
     expect(await screen.findByText("Le Mans")).toBeTruthy();
+    expect(screen.queryByText(/no server/i)).toBeNull();
   });
 
-  it("polls getStatus periodically and reflects updated data", async () => {
-    vi.mocked(getStatus).mockResolvedValueOnce({
-      track: "Le Mans",
-      car: "Corvette Z06",
-      on_track: false,
-      has_map: true,
-      lmu_connected: true,
-    });
-    vi.mocked(getSettings).mockResolvedValue({
-      units: "metric",
-      input_device: "wheel",
-      model: "sonnet",
-      corner_naming: "names",
-      driver: { braking_style: null, balance_preference: null, risk_tolerance: null },
-      api_key_set: true,
-      data_dir: "x",
-      app_version: "0.1",
-      lmu_build: null,
-    });
-
-    render(SessionBar, { props: { pollMs: 5 } });
-
+  it("re-renders when the next status frame arrives (no polling)", async () => {
+    render(SessionBar);
+    pushStatus();
     expect(await screen.findByText("Le Mans")).toBeTruthy();
 
-    vi.mocked(getStatus).mockResolvedValue({
-      track: "Sebring",
-      car: "Corvette Z06",
-      on_track: true,
-      has_map: true,
-      lmu_connected: true,
-    });
+    pushStatus({ track: "Sebring", on_track: true });
 
-    expect(await screen.findByText("Sebring", {}, { timeout: 2000 })).toBeTruthy();
+    expect(await screen.findByText("Sebring")).toBeTruthy();
   });
 
-  it("keeps last good data and does not go unreachable on a transient poll failure", async () => {
-    vi.mocked(getStatus).mockResolvedValueOnce({
-      track: "Le Mans",
-      car: "Corvette Z06",
-      on_track: false,
-      has_map: true,
-      lmu_connected: true,
-    });
-    vi.mocked(getSettings).mockResolvedValue({
-      units: "metric",
-      input_device: "wheel",
-      model: "sonnet",
-      corner_naming: "names",
-      driver: { braking_style: null, balance_preference: null, risk_tolerance: null },
-      api_key_set: true,
-      data_dir: "x",
-      app_version: "0.1",
-      lmu_build: null,
-    });
-
-    render(SessionBar, { props: { pollMs: 5 } });
-
+  it("keeps last good data and does not go unreachable when the socket blips", async () => {
+    render(SessionBar, { props: { retryTries: 20, retryDelayMs: 50 } });
+    pushStatus();
     expect(await screen.findByText("Le Mans")).toBeTruthy();
 
-    // Establish a persistent good default for further polls, then fail exactly the next one.
-    vi.mocked(getStatus).mockResolvedValue({
-      track: "Le Mans",
-      car: "Corvette Z06",
-      on_track: false,
-      has_map: true,
-      lmu_connected: true,
-    });
-    vi.mocked(getStatus).mockRejectedValueOnce(new Error("transient"));
-
-    await vi.waitFor(() => expect(vi.mocked(getStatus).mock.calls.length).toBeGreaterThan(1), {
-      timeout: 2000,
-    });
+    // The socket drops, then a frame arrives well inside the grace window.
+    eventFeed.connected.set(false);
+    pushStatus();
 
     expect(screen.getByText("Le Mans")).toBeTruthy();
-    expect(screen.queryByText(/can't reach the coach server/i)).toBeNull();
+    expect(screen.queryByText(/no server/i)).toBeNull();
   });
 
-  it("does not re-fetch settings on every poll tick (#98)", async () => {
-    vi.mocked(getStatus).mockResolvedValue({
-      track: "Le Mans",
-      car: "Corvette Z06",
-      on_track: false,
-      has_map: true,
-      lmu_connected: true,
-    });
-    vi.mocked(getSettings).mockResolvedValue({
-      units: "metric",
-      input_device: "wheel",
-      model: "sonnet",
-      corner_naming: "names",
-      driver: { braking_style: null, balance_preference: null, risk_tolerance: null },
-      api_key_set: true,
-      data_dir: "x",
-      app_version: "0.1",
-      lmu_build: null,
-    });
-
-    render(SessionBar, { props: { pollMs: 5 } });
+  it("does not re-fetch settings on every frame (#98)", async () => {
+    render(SessionBar);
+    pushStatus();
 
     expect(await screen.findByText("Le Mans")).toBeTruthy();
-    const settingsCallsAfterLoad = vi.mocked(getSettings).mock.calls.length;
-    expect(settingsCallsAfterLoad).toBe(1); // the initial load() fetch
+    expect(vi.mocked(getSettings).mock.calls.length).toBe(1); // the one-shot mount fetch
 
-    await vi.waitFor(() => expect(vi.mocked(getStatus).mock.calls.length).toBeGreaterThan(10), {
-      timeout: 2000,
-    });
+    for (let i = 0; i < 20; i++) pushStatus({ lap_id: i });
+    expect(await screen.findByText("Le Mans")).toBeTruthy();
 
-    // Many status polls happened, but the 60s settings throttle held.
-    expect(vi.mocked(getSettings).mock.calls.length).toBe(settingsCallsAfterLoad);
+    expect(vi.mocked(getSettings).mock.calls.length).toBe(1);
   });
 
-  it("stops polling after unmount", async () => {
-    vi.mocked(getStatus).mockResolvedValue({
-      track: "Le Mans",
-      car: "Corvette Z06",
-      on_track: false,
-      has_map: true,
-      lmu_connected: true,
-    });
-    vi.mocked(getSettings).mockResolvedValue({
-      units: "metric",
-      input_device: "wheel",
-      model: "sonnet",
-      corner_naming: "names",
-      driver: { braking_style: null, balance_preference: null, risk_tolerance: null },
-      api_key_set: true,
-      data_dir: "x",
-      app_version: "0.1",
-      lmu_build: null,
-    });
+  it("re-fetches settings when a save announces itself", async () => {
+    render(SessionBar);
+    pushStatus();
+    expect(await screen.findByText("metric")).toBeTruthy();
 
-    const { unmount } = render(SessionBar, { props: { pollMs: 5 } });
+    vi.mocked(getSettings).mockResolvedValue({ ...SETTINGS, units: "imperial" } as never);
+    window.dispatchEvent(new Event("settings-changed"));
 
-    expect(await screen.findByText("Le Mans")).toBeTruthy();
-    await vi.waitFor(() => expect(vi.mocked(getStatus).mock.calls.length).toBeGreaterThan(1), {
-      timeout: 2000,
-    });
+    expect(await screen.findByText("imperial")).toBeTruthy();
+  });
+
+  it("unsubscribes from the feed on unmount", async () => {
+    const before = eventFeed.status.subscriberCount;
+    const { unmount } = render(SessionBar);
+    pushStatus();
+    await screen.findByText("Le Mans");
+    expect(eventFeed.status.subscriberCount).toBeGreaterThan(before);
 
     unmount();
-    const callsAtUnmount = vi.mocked(getStatus).mock.calls.length;
-    await new Promise((r) => setTimeout(r, 50));
-    expect(vi.mocked(getStatus).mock.calls.length).toBe(callsAtUnmount);
+
+    expect(eventFeed.status.subscriberCount).toBe(before);
+    expect(eventFeed.connected.subscriberCount).toBe(0);
   });
 });

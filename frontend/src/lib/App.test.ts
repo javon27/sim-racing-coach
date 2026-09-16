@@ -13,7 +13,19 @@ import {
   getChats,
   getSessionChats,
 } from "./api";
+import { eventFeed } from "./events";
 import App from "./App.svelte";
+
+const LIVE_STATUS = {
+  track: "Le Mans",
+  car: "Corvette Z06",
+  on_track: false,
+  activity: null,
+  has_map: true,
+  lmu_connected: true,
+  session_id: "s1",
+  lap_id: 5,
+};
 
 // App starts the shared live feed on mount; stub it so tests don't open a real
 // WebSocket (keep the module's other exports — CLASS_COLOR etc. — intact).
@@ -77,16 +89,10 @@ describe("App shell", () => {
 
 describe("Coach screen assembly", () => {
   beforeEach(() => {
-    vi.mocked(getStatus).mockResolvedValue({
-      track: "Le Mans",
-      car: "Corvette Z06",
-      on_track: false,
-      activity: null,
-      has_map: true,
-      lmu_connected: true,
-      session_id: "s1",
-      lap_id: 5,
-    });
+    // The screens read live state off the /events feed (#106), not getStatus.
+    // Seeding the frame before render means every subscriber gets it on replay.
+    eventFeed.push("status", LIVE_STATUS);
+    vi.mocked(getStatus).mockResolvedValue(LIVE_STATUS);
     vi.mocked(getSettings).mockResolvedValue({
       units: "metric",
       input_device: "wheel",

@@ -1,64 +1,75 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { getStatus, getSettings, withRetry, type StatusResponse, type SettingsResponse } from "./api";
+  import { getSettings, withRetry, type StatusResponse, type SettingsResponse } from "./api";
+  import { eventFeed } from "./events";
   import NestorWordmark from "./NestorWordmark.svelte";
 
   let {
     retryTries = 8,
     retryDelayMs = 750,
-    pollMs = 2000,
-  }: { retryTries?: number; retryDelayMs?: number; pollMs?: number } = $props();
+  }: { retryTries?: number; retryDelayMs?: number } = $props();
 
   let status: StatusResponse | null = $state(null);
   let units: SettingsResponse["units"] | null = $state(null);
   let phase: "connecting" | "ok" | "unreachable" = $state("connecting");
-  let pollTimer: ReturnType<typeof setInterval> | undefined;
 
-  // #98: getSettings was fetched alongside getStatus on every 2s poll tick (~100
-  // req/min against a ~130 KB-ish settings payload -- one of the self-inflicted
-  // load sources). Nothing in the app propagates a settings save today (every
-  // screen just calls getSettings on its own mount), so throttle it here instead.
-  const SETTINGS_REFRESH_MS = 60_000;
-  let lastSettingsFetch = 0;
-
-  async function poll() {
+  // #106: status used to be a 2 s getStatus() poll (with a 60 s settings throttle
+  // bolted on top for #98). Status now arrives on the shared /events feed, so the
+  // only thing left to fetch is the settings payload, which nothing streams: one
+  // shot on mount, plus the `settings-changed` event a save already dispatches.
+  async function loadSettings() {
     try {
-      status = await getStatus();
-      if (Date.now() - lastSettingsFetch >= SETTINGS_REFRESH_MS) {
-        lastSettingsFetch = Date.now();
-        units = (await getSettings()).units;
-      }
+      units = (await withRetry(getSettings, retryTries, retryDelayMs)).units;
     } catch {
-      // transient poll failure - keep last good data, don't touch phase
+      // keep the last known units; reachability is the feed's story, not this fetch's
     }
   }
 
-  function startPolling() {
-    if (pollTimer !== undefined) return;
-    pollTimer = setInterval(poll, pollMs);
+  // "Unreachable" is a feed story now: the socket is not delivering and nothing
+  // has arrived within the same grace the old retry loop had (tries x delay).
+  let deadTimer: ReturnType<typeof setTimeout> | undefined;
+  function clearDead() {
+    if (deadTimer !== undefined) clearTimeout(deadTimer);
+    deadTimer = undefined;
   }
-
-  async function load() {
-    phase = "connecting";
-    try {
-      const [s, settings] = await withRetry(
-        () => Promise.all([getStatus(), getSettings()]),
-        retryTries,
-        retryDelayMs,
-      );
-      status = s;
-      units = settings.units;
-      lastSettingsFetch = Date.now();
-      phase = "ok";
-      startPolling();
-    } catch {
+  function armDead() {
+    clearDead();
+    deadTimer = setTimeout(() => {
+      deadTimer = undefined;
       phase = "unreachable";
-    }
+    }, retryTries * retryDelayMs);
   }
 
-  onMount(load);
+  $effect(() =>
+    eventFeed.status.subscribe((s) => {
+      if (s === null) return; // nothing has arrived yet
+      status = s;
+      phase = "ok";
+      clearDead();
+    }),
+  );
+  $effect(() =>
+    eventFeed.connected.subscribe((live) => {
+      if (live) clearDead();
+      else armDead();
+    }),
+  );
+
+  // The socket reconnects itself; Retry just re-arms the header and re-reads
+  // settings, so a driver who fixed the server sees it clear without a restart.
+  function load() {
+    phase = "connecting";
+    armDead();
+    loadSettings();
+  }
+
+  onMount(() => {
+    loadSettings();
+    window.addEventListener("settings-changed", loadSettings);
+  });
   onDestroy(() => {
-    if (pollTimer !== undefined) clearInterval(pollTimer);
+    window.removeEventListener("settings-changed", loadSettings);
+    clearDead();
   });
 
   // Game connection state for the header indicator. Prefer the live driving
