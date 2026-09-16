@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/svelte";
 import { getSessionLaps, getLapMap, getStatus, getCurrentMap, type StatusResponse } from "./api";
+import { eventFeed } from "./events";
 import TrackMapPane from "./TrackMapPane.svelte";
 
 vi.mock("./api", async () => {
@@ -59,12 +60,14 @@ describe("TrackMapPane", () => {
     // Editing/capture moved to Track view — the rail no longer offers Generate map.
     expect(screen.queryByText("Generate map")).toBeNull();
     expect(getSessionLaps).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(getStatus).toHaveBeenCalled());
+    // #106: the live track/map come off the shared feed; the pane fetches neither.
+    expect(getStatus).not.toHaveBeenCalled();
+    expect(getCurrentMap).not.toHaveBeenCalled();
   });
 
   it("loads the live track's map as soon as the track is detected, with no lap yet", async () => {
-    vi.mocked(getStatus).mockResolvedValue({ ...noStatus, track: "Live Track", on_track: true, activity: "track", has_map: true });
-    vi.mocked(getCurrentMap).mockResolvedValue({ ...mapFixture, track_name: "Live Track" });
+    eventFeed.push("status", { ...noStatus, track: "Live Track", on_track: true, activity: "track", has_map: true });
+    eventFeed.push("map", { ...mapFixture, track_name: "Live Track" });
     const { container } = render(TrackMapPane, { props: { sessionId: undefined } });
     expect(await screen.findByText("Live Track")).toBeTruthy();
     expect(await screen.findByText("T1")).toBeTruthy();
@@ -73,11 +76,22 @@ describe("TrackMapPane", () => {
   });
 
   it("shows the build-me hint when a live track is detected but has no stored map", async () => {
-    vi.mocked(getStatus).mockResolvedValue({ ...noStatus, track: "New Track", on_track: true, activity: "track", has_map: false });
-    vi.mocked(getCurrentMap).mockResolvedValue({});
+    eventFeed.push("status", { ...noStatus, track: "New Track", on_track: true, activity: "track", has_map: false });
+    eventFeed.push("map", {});
     render(TrackMapPane, { props: { sessionId: undefined } });
     expect(await screen.findByText("New Track")).toBeTruthy();
     expect(await screen.findByText(/no map for this track yet/i)).toBeTruthy();
+  });
+
+  it("picks up a track detected after mount (a frame, not a poll)", async () => {
+    render(TrackMapPane, { props: { sessionId: undefined } });
+    expect(screen.getByText(/no map yet/i)).toBeTruthy();
+
+    eventFeed.push("status", { ...noStatus, track: "Live Track", on_track: true, activity: "track", has_map: true });
+    eventFeed.push("map", { ...mapFixture, track_name: "Live Track" });
+
+    expect(await screen.findByText("Live Track")).toBeTruthy();
+    expect(await screen.findByText("T1")).toBeTruthy();
   });
 
   it("resolves the session's first lap and renders its canonical map", async () => {
@@ -88,30 +102,28 @@ describe("TrackMapPane", () => {
     expect(container.querySelector("polyline")).toBeTruthy();
   });
 
-  it("only re-fetches the live map when the polled track/car changes (#98)", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.mocked(getStatus).mockResolvedValue({ ...noStatus, track: "Live Track", car: "GT3", on_track: true, activity: "track", has_map: true });
-      vi.mocked(getCurrentMap).mockResolvedValue({ ...mapFixture, track_name: "Live Track" });
+  it("never fetches the live map itself — the feed sends one only on a track change (#98/#106)", async () => {
+    const live = { ...noStatus, track: "Live Track", car: "GT3", on_track: true, activity: "track", has_map: true };
+    eventFeed.push("status", live);
+    eventFeed.push("map", { ...mapFixture, track_name: "Live Track" });
 
-      render(TrackMapPane, { props: { sessionId: undefined } });
-      await vi.waitFor(() => expect(getCurrentMap).toHaveBeenCalledTimes(1));
+    const { container } = render(TrackMapPane, { props: { sessionId: undefined } });
+    expect(await screen.findByText("Live Track")).toBeTruthy();
+    const drawn = container.querySelector("polyline");
+    expect(drawn).toBeTruthy();
 
-      // 5 more unchanged status ticks -> still just the one map fetch.
-      for (let i = 0; i < 5; i++) {
-        await vi.advanceTimersByTimeAsync(2000);
-      }
-      expect(getStatus).toHaveBeenCalledTimes(6); // initial poll + 5 ticks
-      expect(getCurrentMap).toHaveBeenCalledTimes(1);
+    // Status keeps ticking (1 Hz on the real feed) with no map frame: the ~130 KB
+    // map is neither re-fetched nor re-assigned, so the user's zoom/pan survives.
+    for (let i = 0; i < 5; i++) eventFeed.push("status", live);
+    expect(container.querySelector("polyline")).toBe(drawn);
 
-      // Track changes -> exactly one more map fetch.
-      vi.mocked(getStatus).mockResolvedValue({ ...noStatus, track: "Other Track", car: "GT3", on_track: true, activity: "track", has_map: true });
-      vi.mocked(getCurrentMap).mockResolvedValue({ ...mapFixture, track_name: "Other Track" });
-      await vi.advanceTimersByTimeAsync(2000);
-      expect(getCurrentMap).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
+    // A track change is what makes the sidecar send a new map frame.
+    eventFeed.push("status", { ...live, track: "Other Track" });
+    eventFeed.push("map", { ...mapFixture, track_name: "Other Track" });
+    expect(await screen.findByText("Other Track")).toBeTruthy();
+
+    expect(getStatus).not.toHaveBeenCalled();
+    expect(getCurrentMap).not.toHaveBeenCalled();
   });
 
   it("opens the map strictly read-only from the magnifier", async () => {

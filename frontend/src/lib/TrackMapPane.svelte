@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { withRetry, getSessionLaps, getStatus, getCurrentMap, type TrackMap as TrackMapData } from "./api";
+  import { withRetry, getSessionLaps, type TrackMap as TrackMapData } from "./api";
+  import { eventFeed } from "./events";
   import TrackMap from "./TrackMap.svelte";
   import TrackMapEditor from "./TrackMapEditor.svelte";
 
@@ -32,46 +33,23 @@
   });
 
   // No session selected yet (fresh live session, zero completed laps): resolve the
-  // map from LIVE track detection instead of waiting for a lap. Same /status signal
-  // SessionBar already polls; the canonical per-track map (no lap needed) is the
-  // same seam PitWall already uses for its live map.
-  let liveTrack: string | null = $state(null);
-  let liveMap: TrackMapData | null = $state(null);
+  // map from LIVE track detection instead of waiting for a lap.
+  //
+  // #106: this was a 2 s getStatus() poll plus a getCurrentMap() fetch guarded by a
+  // track/car key (#98, so a ~130 KB map wasn't re-pulled every tick). The sidecar
+  // now owns both: status streams, and a map frame is sent only when the track/car
+  // it belongs to changes — so the zoom/pan-preserving "same object" property is
+  // kept by the feed, not by a local key.
+  let feedStatus = $state(eventFeed.status.value);
+  let feedMap = $state(eventFeed.map.value);
+  $effect(() => eventFeed.status.subscribe((v) => (feedStatus = v)));
+  $effect(() => eventFeed.map.subscribe((v) => (feedMap = v)));
 
-  // #98: getCurrentMap fetched a full (~130 KB) map on every 2s status poll, even
-  // when the track hadn't changed. Keep polling /status every 2s, but only
-  // re-fetch the map when the track (or car) it names actually changed.
-  let lastFetchedKey: string | null = null;
-
-  async function pollLive() {
-    try {
-      const status = await getStatus();
-      liveTrack = status.track;
-      if (!status.track) {
-        liveMap = null;
-        lastFetchedKey = null;
-        return;
-      }
-      const key = `${status.track}|${status.car ?? ""}`;
-      if (key === lastFetchedKey) return;
-      const m = await getCurrentMap();
-      liveMap = "path" in m && m.path.length > 0 ? m : null;
-      lastFetchedKey = key;
-    } catch {
-      // transient poll failure - keep last good data
-    }
-  }
-
-  $effect(() => {
-    if (sessionId) {
-      liveTrack = null;
-      liveMap = null;
-      lastFetchedKey = null;
-      return;
-    }
-    pollLive();
-    const timer = setInterval(pollLive, 2000);
-    return () => clearInterval(timer);
+  const liveTrack = $derived(sessionId ? null : (feedStatus?.track ?? null));
+  const liveMap = $derived.by<TrackMapData | null>(() => {
+    if (sessionId) return null;
+    const m = feedMap;
+    return m && "path" in m && m.path.length > 0 ? m : null;
   });
 
   const displayTrack = $derived(sessionId ? trackName : liveTrack);
