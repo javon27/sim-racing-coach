@@ -293,6 +293,10 @@ def corner_descriptor(cmap, corner_no, analysis=None, sector_bounds=None) -> str
             tail.append(f"the {corner.direction}-hand hairpin")
         elif cls and corner.direction in ("left", "right"):
             tail.append(f"the {cls} {corner.direction}")
+        elif corner.direction in ("left", "right"):
+            # No speed class: "the left-hander", never a bare "left" -- spoken,
+            # "left after the straight" reads as "immediately after".
+            tail.append(f"the {corner.direction}-hander")
         else:
             tail.append(corner.direction)
 

@@ -554,7 +554,9 @@ def test_corner_descriptor_sector_bounds_pins_apex_not_start(synthetic_lap):
 
 def test_corner_descriptor_no_analysis_has_no_speed_class():
     out = corner_descriptor(_CMAP3000, 1, analysis=None)
-    assert "left" in out
+    # Spoken, a bare "left after the straight" means "immediately after": the
+    # geometry-only form names the corner as a left-hander instead.
+    assert "the left-hander" in out
     assert "hairpin" not in out
     assert not any(w in out for w in ("slow", "medium", "fast", "flat-out"))
 
