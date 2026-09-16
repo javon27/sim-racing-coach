@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/svelte";
 import { getStatus, getSessionLaps } from "./api";
+import { eventFeed } from "./events";
 import LapList from "./LapList.svelte";
 
 vi.mock("./api", async () => {
@@ -20,6 +21,11 @@ function status(session_id: string | null, lap_id: number | null) {
   };
 }
 
+/** A status frame off the /events feed — what used to be a getStatus() poll tick. */
+function pushStatus(session_id: string | null, lap_id: number | null) {
+  eventFeed.push("status", status(session_id, lap_id));
+}
+
 describe("LapList", () => {
   beforeEach(() => {
     vi.mocked(getStatus).mockReset();
@@ -29,7 +35,7 @@ describe("LapList", () => {
   afterEach(cleanup);
 
   it("cold start: no live session yet -> empty state, does not fetch laps", async () => {
-    vi.mocked(getStatus).mockResolvedValue(status(null, null));
+    pushStatus(null, null);
 
     render(LapList);
 
@@ -38,7 +44,7 @@ describe("LapList", () => {
   });
 
   it("live: renders the live session's laps and calls onselect on click", async () => {
-    vi.mocked(getStatus).mockResolvedValue(status("S1", 5));
+    pushStatus("S1", 5);
     vi.mocked(getSessionLaps).mockResolvedValue([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
 
     const onselect = vi.fn();
@@ -51,9 +57,8 @@ describe("LapList", () => {
     expect(onselect).toHaveBeenCalledWith({ lap_id: 9, session_id: "S1" });
   });
 
-  it("clicked session: renders laps immediately even if /status is slow/failing (fast path)", async () => {
-    // A deep-linked/clicked session must not be gated on the (live-LMU) /status call.
-    vi.mocked(getStatus).mockRejectedValue(new Error("status slow"));
+  it("clicked session: renders laps immediately even before any status frame (fast path)", async () => {
+    // A deep-linked/clicked session must not be gated on live state arriving.
     vi.mocked(getSessionLaps).mockResolvedValue([{ id: 42, lap_time: 90.0, valid: 1, ts: 100 }]);
 
     render(LapList, { props: { sessionId: "S2" } });
@@ -62,8 +67,64 @@ describe("LapList", () => {
     expect(vi.mocked(getSessionLaps)).toHaveBeenCalledWith("S2");
   });
 
+  it("never calls getStatus — live state is a subscription, not a poll (#106)", async () => {
+    pushStatus("S1", 5);
+    vi.mocked(getSessionLaps).mockResolvedValue([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
+
+    render(LapList);
+    await screen.findByText("Lap 1");
+
+    for (let i = 6; i < 12; i++) pushStatus("S1", i);
+    expect(vi.mocked(getStatus)).not.toHaveBeenCalled();
+  });
+
+  it("takes the live session's laps from the laps frame instead of re-fetching them", async () => {
+    pushStatus("S1", 5);
+    eventFeed.push("laps", { session_id: "S1", laps: [{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }] });
+
+    render(LapList);
+
+    expect(await screen.findByText("Lap 1")).toBeTruthy();
+    expect(vi.mocked(getSessionLaps)).not.toHaveBeenCalled();
+  });
+
+  it("appends laps from a laps frame with no status frame in between", async () => {
+    pushStatus("S1", 5);
+    eventFeed.push("laps", { session_id: "S1", laps: [{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }] });
+    render(LapList);
+    await screen.findByText("Lap 1");
+
+    eventFeed.push("laps", {
+      session_id: "S1",
+      laps: [
+        { id: 9, lap_time: 216.0, valid: 1, ts: 100 },
+        { id: 10, lap_time: 214.0, valid: 1, ts: 200 },
+      ],
+    });
+
+    expect(await screen.findByText("Lap 2")).toBeTruthy();
+  });
+
+  it("ignores a laps frame for a session it is not following (pinned review)", async () => {
+    vi.mocked(getSessionLaps).mockResolvedValue([{ id: 42, lap_time: 210.0, valid: 1, ts: 300 }]);
+    const { container } = render(LapList, { props: { sessionId: "OLD" } });
+    await screen.findByText("Lap 1");
+
+    // The live session keeps producing laps while the driver reviews an old one.
+    eventFeed.push("laps", {
+      session_id: "S1",
+      laps: [
+        { id: 1, lap_time: 100.0, valid: 1, ts: 1 },
+        { id: 2, lap_time: 101.0, valid: 1, ts: 2 },
+      ],
+    });
+
+    expect(screen.queryByText("Lap 2")).toBeNull();
+    expect(container.querySelector(".lap .t")?.textContent).toBe("3:30.000"); // still OLD's lap
+  });
+
   it("renders per-sector delta bars colored vs the fastest lap, omits them when null", async () => {
-    vi.mocked(getStatus).mockResolvedValue(status("S1", 6));
+    pushStatus("S1", 6);
     // Reference = fastest lap with sectors = lap9 (91.2s): S1 30.0, S2 30.5, S3 30.0.
     vi.mocked(getSessionLaps).mockResolvedValue([
       { id: 9, lap_time: 91.2, valid: 1, ts: 100, s1: 30.0, s2: 30.5, s3: 30.0 },
@@ -87,7 +148,7 @@ describe("LapList", () => {
   });
 
   it("expanding a lap's chevron reveals the sector delta detail", async () => {
-    vi.mocked(getStatus).mockResolvedValue(status("S1", 6));
+    pushStatus("S1", 6);
     vi.mocked(getSessionLaps).mockResolvedValue([
       { id: 9, lap_time: 91.2, valid: 1, ts: 100, s1: 30.0, s2: 30.5, s3: 30.0 },
       { id: 10, lap_time: 91.5, valid: 1, ts: 200, s1: 30.5, s2: 30.0, s3: 30.5 },
@@ -113,7 +174,7 @@ describe("LapList", () => {
   });
 
   it("left zone selects the lap; the right zone toggles detail without selecting", async () => {
-    vi.mocked(getStatus).mockResolvedValue(status("S1", 6));
+    pushStatus("S1", 6);
     vi.mocked(getSessionLaps).mockResolvedValue([
       { id: 9, lap_time: 91.2, valid: 1, ts: 100, s1: 30.0, s2: 30.5, s3: 30.0 },
     ]);
@@ -135,7 +196,7 @@ describe("LapList", () => {
   });
 
   it("a lap with no sectors makes the whole row select (no expand zone)", async () => {
-    vi.mocked(getStatus).mockResolvedValue(status("S1", 6));
+    pushStatus("S1", 6);
     vi.mocked(getSessionLaps).mockResolvedValue([
       { id: 9, lap_time: 216.0, valid: 1, ts: 100, s1: null, s2: null, s3: null },
     ]);
@@ -152,7 +213,7 @@ describe("LapList", () => {
   });
 
   it("groups laps by phase with per-phase numbering that restarts each phase", async () => {
-    vi.mocked(getStatus).mockResolvedValue(status("S1", 4));
+    pushStatus("S1", 4);
     vi.mocked(getSessionLaps).mockResolvedValue([
       { id: 1, lap_time: 95.0, valid: 1, ts: 100, s1: null, s2: null, s3: null, phase: "practice" },
       { id: 2, lap_time: 94.0, valid: 1, ts: 200, s1: null, s2: null, s3: null, phase: "practice" },
@@ -172,7 +233,7 @@ describe("LapList", () => {
   it("shows the game's own lap number when every lap in the session has one", async () => {
     // Issue #77: a session with a garage return (or an out-lap) shows the game's
     // real numbers/gaps, not a plain 1..N re-count.
-    vi.mocked(getStatus).mockResolvedValue(status("S1", 9));
+    pushStatus("S1", 9);
     vi.mocked(getSessionLaps).mockResolvedValue([
       { id: 1, lap_time: 95.0, valid: 1, ts: 100, lap_no: 2 },
       { id: 2, lap_time: 94.0, valid: 1, ts: 200, lap_no: 3 },
@@ -191,7 +252,7 @@ describe("LapList", () => {
   });
 
   it("falls back to 1..N numbering when any lap in the session lacks a lap_no (legacy)", async () => {
-    vi.mocked(getStatus).mockResolvedValue(status("S1", 3));
+    pushStatus("S1", 3);
     vi.mocked(getSessionLaps).mockResolvedValue([
       { id: 1, lap_time: 95.0, valid: 1, ts: 100, lap_no: 2 },
       { id: 2, lap_time: 94.0, valid: 1, ts: 200, lap_no: null },
@@ -206,7 +267,7 @@ describe("LapList", () => {
   });
 
   it("shows a best-lap header with the fastest lap time", async () => {
-    vi.mocked(getStatus).mockResolvedValue(status("S1", 6));
+    pushStatus("S1", 6);
     vi.mocked(getSessionLaps).mockResolvedValue([
       { id: 9, lap_time: 216.0, valid: 1, ts: 100 },
       { id: 10, lap_time: 210.5, valid: 1, ts: 200 },
@@ -222,7 +283,7 @@ describe("LapList", () => {
   });
 
   it("review hold then snap: holds on the deep-linked session until a new live lap arrives", async () => {
-    vi.mocked(getStatus).mockResolvedValue(status("S1", 5)); // live session already running
+    pushStatus("S1", 5); // live session already running
     vi.mocked(getSessionLaps).mockImplementation(async (sid: string) =>
       sid === "OLD"
         ? [{ id: 42, lap_time: 210.0, valid: 1, ts: 300 }]
@@ -230,19 +291,20 @@ describe("LapList", () => {
     );
 
     const onlive = vi.fn();
-    const { container } = render(LapList, { props: { sessionId: "OLD", pollMs: 5, onlive } });
+    const { container } = render(LapList, { props: { sessionId: "OLD", onlive } });
 
     // Holds on OLD (3:30.000) while live lap_id stays at the baseline (5).
     // Numbering is per-phase positional now, so discriminate by the row's time.
     await vi.waitFor(() =>
       expect(container.querySelector(".lap .t")?.textContent).toBe("3:30.000"),
     );
+    pushStatus("S1", 5); // another tick at the baseline changes nothing
+    expect(container.querySelector(".lap .t")?.textContent).toBe("3:30.000");
 
     // A new live lap arrives -> snap to the live session (3:36.000).
-    vi.mocked(getStatus).mockResolvedValue(status("S1", 6));
-    await vi.waitFor(
-      () => expect(container.querySelector(".lap .t")?.textContent).toBe("3:36.000"),
-      { timeout: 2000 },
+    pushStatus("S1", 6);
+    await vi.waitFor(() =>
+      expect(container.querySelector(".lap .t")?.textContent).toBe("3:36.000"),
     );
     // OLD -> S1 is a real switch of the followed session -> reported once.
     expect(onlive).toHaveBeenCalledTimes(1);
@@ -250,7 +312,7 @@ describe("LapList", () => {
   });
 
   it("pinned session, live session id changes: onlive fires once with the new id (snaps even before the baseline lap advances)", async () => {
-    vi.mocked(getStatus).mockResolvedValue(status("S1", 5));
+    pushStatus("S1", 5);
     vi.mocked(getSessionLaps).mockImplementation(async (sid: string) =>
       sid === "OLD"
         ? [{ id: 42, lap_time: 210.0, valid: 1, ts: 300 }]
@@ -260,7 +322,7 @@ describe("LapList", () => {
     );
 
     const onlive = vi.fn();
-    const { container } = render(LapList, { props: { sessionId: "OLD", pollMs: 5, onlive } });
+    const { container } = render(LapList, { props: { sessionId: "OLD", onlive } });
 
     await vi.waitFor(() =>
       expect(container.querySelector(".lap .t")?.textContent).toBe("3:30.000"), // OLD
@@ -268,17 +330,16 @@ describe("LapList", () => {
 
     // The live session id itself changes (same lap_id 5) -> the new-session-id
     // rule alone must end the hold, even though no new lap has arrived.
-    vi.mocked(getStatus).mockResolvedValue(status("S2", 5));
+    pushStatus("S2", 5);
     await vi.waitFor(
       () => expect(container.querySelector(".lap .t")?.textContent).toBe("3:40.000"), // S2
-      { timeout: 2000 },
     );
     expect(onlive).toHaveBeenCalledTimes(1);
     expect(onlive).toHaveBeenCalledWith({ session_id: "S2" });
   });
 
   it("no pinned session, live session changes: onlive fires with the new id", async () => {
-    vi.mocked(getStatus).mockResolvedValue(status("S1", 5));
+    pushStatus("S1", 5);
     vi.mocked(getSessionLaps).mockImplementation(async (sid: string) =>
       sid === "S1"
         ? [{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]
@@ -286,65 +347,68 @@ describe("LapList", () => {
     );
 
     const onlive = vi.fn();
-    const { container } = render(LapList, { props: { pollMs: 5, onlive } });
+    const { container } = render(LapList, { props: { onlive } });
 
     await vi.waitFor(() =>
       expect(container.querySelector(".lap .t")?.textContent).toBe("3:36.000"), // S1
     );
 
-    vi.mocked(getStatus).mockResolvedValue(status("S2", 6));
+    pushStatus("S2", 6);
     await vi.waitFor(
       () => expect(container.querySelector(".lap .t")?.textContent).toBe("3:40.000"), // S2
-      { timeout: 2000 },
     );
     expect(onlive).toHaveBeenCalledTimes(1);
     expect(onlive).toHaveBeenCalledWith({ session_id: "S2" });
   });
 
   it("cold start does not emit onlive (no prior followed session to switch away from)", async () => {
-    vi.mocked(getStatus).mockResolvedValueOnce(status(null, null)).mockResolvedValue(status("S1", 1));
+    pushStatus(null, null);
     vi.mocked(getSessionLaps).mockResolvedValue([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
 
     const onlive = vi.fn();
-    render(LapList, { props: { pollMs: 5, onlive } });
+    render(LapList, { props: { onlive } });
+    await screen.findByText(/no laps yet/i);
 
-    await screen.findByText("Lap 1", {}, { timeout: 2000 });
+    pushStatus("S1", 1);
+
+    await screen.findByText("Lap 1");
     expect(onlive).not.toHaveBeenCalled();
   });
 
-  it("retries through transient failures and eventually renders laps", async () => {
-    vi.mocked(getStatus)
+  it("recovers from a transient lap-fetch failure on the next frame", async () => {
+    pushStatus("S1", 5);
+    vi.mocked(getSessionLaps)
       .mockRejectedValueOnce(new Error("network"))
-      .mockRejectedValueOnce(new Error("network"))
-      .mockResolvedValue(status("S1", 5));
-    vi.mocked(getSessionLaps).mockResolvedValue([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
+      .mockResolvedValue([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
 
-    render(LapList, { props: { retryTries: 5, retryDelayMs: 5 } });
+    render(LapList);
+    await screen.findByText(/connecting/i);
+
+    pushStatus("S1", 6);
 
     expect(await screen.findByText("Lap 1")).toBeTruthy();
   });
 
-  it("shows an unreachable state with a Retry button when all attempts fail, and Retry re-fetches", async () => {
-    vi.mocked(getStatus).mockRejectedValue(new Error("network"));
-
+  it("shows an unreachable state with a Retry button when nothing arrives, and Retry recovers", async () => {
+    // No frame at all: after the grace window (retryTries x retryDelayMs) the
+    // list says the server is unreachable rather than spinning forever.
     render(LapList, { props: { retryTries: 2, retryDelayMs: 5 } });
 
     const retryBtn = await screen.findByRole("button", { name: /retry/i });
     expect(screen.getByText(/can't reach the coach server/i)).toBeTruthy();
 
-    vi.mocked(getStatus).mockResolvedValue(status("S1", 5));
     vi.mocked(getSessionLaps).mockResolvedValue([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
-
     await fireEvent.click(retryBtn);
+    pushStatus("S1", 5);
 
     expect(await screen.findByText("Lap 1")).toBeTruthy();
   });
 
-  it("polls for new laps periodically and shows them", async () => {
-    vi.mocked(getStatus).mockResolvedValue(status("S1", 5));
+  it("shows new laps when the next frame arrives", async () => {
+    pushStatus("S1", 5);
     vi.mocked(getSessionLaps).mockResolvedValueOnce([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
 
-    render(LapList, { props: { pollMs: 5 } });
+    render(LapList);
 
     expect(await screen.findByText("Lap 1")).toBeTruthy();
     expect(screen.queryByText("Lap 2")).toBeNull();
@@ -353,55 +417,43 @@ describe("LapList", () => {
       { id: 9, lap_time: 216.0, valid: 1, ts: 100 },
       { id: 10, lap_time: 214.0, valid: 1, ts: 200 },
     ]);
+    pushStatus("S1", 6);
 
-    expect(await screen.findByText("Lap 2", {}, { timeout: 2000 })).toBeTruthy();
+    expect(await screen.findByText("Lap 2")).toBeTruthy();
   });
 
-  it("keeps last good laps and does not go unreachable on a transient poll failure", async () => {
-    vi.mocked(getStatus).mockResolvedValue(status("S1", 5));
+  it("keeps last good laps and does not go unreachable on a transient failure", async () => {
+    pushStatus("S1", 5);
     vi.mocked(getSessionLaps).mockResolvedValue([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
 
-    render(LapList, { props: { pollMs: 5 } });
-
+    render(LapList);
     expect(await screen.findByText("Lap 1")).toBeTruthy();
 
-    vi.mocked(getStatus).mockResolvedValueOnce(status("S1", 5));
-    vi.mocked(getStatus).mockRejectedValueOnce(new Error("transient"));
-
-    await vi.waitFor(() => expect(vi.mocked(getStatus).mock.calls.length).toBeGreaterThan(2), {
-      timeout: 2000,
-    });
+    vi.mocked(getSessionLaps).mockRejectedValueOnce(new Error("transient"));
+    pushStatus("S1", 6);
+    await vi.waitFor(() => expect(vi.mocked(getSessionLaps).mock.calls.length).toBeGreaterThan(1));
 
     expect(screen.getByText("Lap 1")).toBeTruthy();
     expect(screen.queryByText(/can't reach the coach server/i)).toBeNull();
   });
 
-  it("stops polling after unmount", async () => {
-    // Fake timers: the old version raced a real 50ms setTimeout against a real 5ms
-    // setInterval poll, which lost ~half the time under full-suite load (issue #52).
-    // Advancing a fake clock makes the poll-then-unmount-then-no-more-polls sequence
-    // deterministic instead of wall-clock-dependent.
-    vi.useFakeTimers();
-    try {
-      vi.mocked(getStatus).mockResolvedValue(status("S1", 5));
-      vi.mocked(getSessionLaps).mockResolvedValue([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
+  it("unsubscribes from the feed on unmount", async () => {
+    pushStatus("S1", 5);
+    vi.mocked(getSessionLaps).mockResolvedValue([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
 
-      const { unmount } = render(LapList, { props: { pollMs: 5 } });
+    const before = eventFeed.status.subscriberCount;
+    const { unmount } = render(LapList);
+    await screen.findByText("Lap 1");
+    expect(eventFeed.status.subscriberCount).toBeGreaterThan(before);
 
-      // Initial load() is promise-driven (no timer involved); advanceTimersByTimeAsync(0)
-      // flushes those microtasks so the DOM and the poll interval are both up.
-      await vi.advanceTimersByTimeAsync(0);
-      expect(screen.getByText("Lap 1")).toBeTruthy();
+    unmount();
+    expect(eventFeed.status.subscriberCount).toBe(before);
+    expect(eventFeed.laps.subscriberCount).toBe(0);
 
-      await vi.advanceTimersByTimeAsync(20); // several 5ms poll ticks
-      expect(vi.mocked(getStatus).mock.calls.length).toBeGreaterThan(1);
-
-      unmount();
-      const callsAtUnmount = vi.mocked(getStatus).mock.calls.length;
-      await vi.advanceTimersByTimeAsync(50);
-      expect(vi.mocked(getStatus).mock.calls.length).toBe(callsAtUnmount);
-    } finally {
-      vi.useRealTimers();
-    }
+    // Frames after unmount do no work.
+    const calls = vi.mocked(getSessionLaps).mock.calls.length;
+    pushStatus("S1", 6);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(vi.mocked(getSessionLaps).mock.calls.length).toBe(calls);
   });
 });

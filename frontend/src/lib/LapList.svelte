@@ -1,13 +1,16 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { getStatus, getSessionLaps, withRetry, type LapRow } from "./api";
+  import { getSessionLaps, withRetry, type LapRow, type StatusResponse } from "./api";
+  import { eventFeed } from "./events";
 
   let {
     onselect,
     onlive,
     retryTries = 8,
     retryDelayMs = 750,
-    pollMs = 5000,
+    // pollMs: accepted but unused since #106 — the 5 s poll became an /events
+    // subscription. Kept so existing callers/tests don't break on an unknown prop.
+    pollMs: _pollMs = 5000,
     sessionId = null,
     selectedLapId = null,
   }: {
@@ -19,12 +22,16 @@
     sessionId?: string | null;
     selectedLapId?: number | null;
   } = $props();
+  void _pollMs;
 
   let laps: LapRow[] = $state([]);
   let bestId: number | null = $state(null);
-  let currentSessionId: string | null = $state(null);
+  // Plain `let`, deliberately NOT $state: nothing renders it, and fetchLatest both
+  // reads and writes it from inside an $effect's synchronous prefix — as reactive
+  // state that self-dependency would re-run the sessionId effect and re-arm the
+  // review hold the moment the list snapped to a new live session.
+  let currentSessionId: string | null = null;
   let phase: "connecting" | "ok" | "unreachable" = $state("connecting");
-  let pollTimer: ReturnType<typeof setInterval> | undefined;
 
   // Auto-scroll: keep the newest lap in view as laps are appended (session_laps
   // is ordered by ts, newest last).
@@ -93,8 +100,7 @@
     );
   }
 
-  async function fetchLatest() {
-    const st = await getStatus();
+  async function fetchLatest(st: StatusResponse) {
     const liveSessionId = st.session_id;
     const liveLapId = st.lap_id;
 
@@ -122,55 +128,78 @@
     const prev = currentSessionId;
     currentSessionId = target;
     if (!reviewing && prev !== null && target !== prev) onlive?.({ session_id: target });
-    const l = await getSessionLaps(target);
+    // The live session's rows ride along on the feed; only a session the feed
+    // isn't streaming (a pinned past session) still needs the indexed query.
+    const frame = eventFeed.laps.value;
+    const l = frame && frame.session_id === target ? frame.laps : await getSessionLaps(target);
     laps = l;
     bestId = bestIdOf(l);
   }
 
-  async function poll() {
+  // #106: this was a 5 s poll of getStatus + getSessionLaps. The status frame is
+  // now the trigger, and the same fetchLatest logic runs on it unchanged, so the
+  // review-hold / baseline / onlive semantics (#109) are untouched.
+  let lastHandled: StatusResponse | null = null;
+  async function handle(st: StatusResponse, force = false) {
+    if (!force && st === lastHandled) return; // load() already ran this frame
+    lastHandled = st;
+    clearDead();
     try {
-      await fetchLatest();
-    } catch {
-      // transient poll failure - keep last good data, don't touch phase
-    }
-  }
-
-  function startPolling() {
-    if (pollTimer !== undefined) return;
-    pollTimer = setInterval(poll, pollMs);
-  }
-
-  async function load() {
-    phase = "connecting";
-    // Fast path: a clicked/deep-linked session — render its laps IMMEDIATELY via a
-    // single indexed query, without gating on the (live-LMU, possibly slow) /status
-    // call that fetchLatest does first. fetchLatest still runs after to set the live
-    // baseline + start polling; it re-fetches the same rows (no flicker).
-    if (reviewTarget !== null) {
-      try {
-        const l = await getSessionLaps(reviewTarget);
-        laps = l;
-        bestId = bestIdOf(l);
-        currentSessionId = reviewTarget;
-        phase = "ok";
-      } catch {
-        /* fall through to the retry path below */
-      }
-    }
-    try {
-      await withRetry(fetchLatest, retryTries, retryDelayMs);
+      await fetchLatest(st);
       phase = "ok";
-      startPolling();
     } catch {
-      if (reviewTarget === null) {
+      // transient failure - keep last good data, don't touch phase; the next
+      // frame (≈1 s away) retries on its own
+    }
+  }
+
+  // "Unreachable" is a feed story now: nothing has arrived within the grace the
+  // old retry loop had (tries x delay). A pinned session never shows it — it has
+  // its own rows and doesn't depend on live state.
+  let deadTimer: ReturnType<typeof setTimeout> | undefined;
+  function clearDead() {
+    if (deadTimer !== undefined) clearTimeout(deadTimer);
+    deadTimer = undefined;
+  }
+  function armDead() {
+    clearDead();
+    deadTimer = setTimeout(() => {
+      deadTimer = undefined;
+      if (phase !== "ok" && reviewTarget === null) {
         laps = [];
         phase = "unreachable";
       }
+    }, retryTries * retryDelayMs);
+  }
+
+  function load() {
+    phase = "connecting";
+    const st = eventFeed.status.value;
+    if (st) {
+      void handle(st, true);
+      return;
+    }
+    // No live state yet. A clicked/deep-linked session still renders its laps
+    // IMMEDIATELY via a single indexed query rather than waiting on the feed.
+    armDead();
+    if (reviewTarget !== null) void loadPinned(reviewTarget);
+  }
+
+  async function loadPinned(target: string) {
+    try {
+      const l = await withRetry(() => getSessionLaps(target), retryTries, retryDelayMs);
+      if (target !== reviewTarget) return; // the prop moved on while we fetched
+      laps = l;
+      bestId = bestIdOf(l);
+      currentSessionId = target;
+      phase = "ok";
+    } catch {
+      /* the next status frame picks it up */
     }
   }
 
   // Keyed on the prop: entering (or re-entering) review resets the baseline so
-  // the next poll re-snapshots the live lap_id.
+  // the next frame re-snapshots the live lap_id.
   $effect(() => {
     reviewTarget = sessionId ?? null;
     reviewBaseline = null;
@@ -178,6 +207,27 @@
     reviewLiveSessionId = null;
     load();
   });
+
+  $effect(() =>
+    eventFeed.status.subscribe((st) => {
+      if (st !== null) void handle(st);
+    }),
+  );
+  // A laps frame for the session we're following updates the list on its own —
+  // no status frame, no fetch.
+  $effect(() =>
+    eventFeed.laps.subscribe((f) => {
+      if (!f || f.session_id === null || f.session_id !== currentSessionId) return;
+      laps = f.laps;
+      bestId = bestIdOf(f.laps);
+    }),
+  );
+  $effect(() =>
+    eventFeed.connected.subscribe((live) => {
+      if (live) clearDead();
+      else armDead();
+    }),
+  );
   // Scroll to the newest lap when the count grows (new lap captured, or first load).
   $effect(() => {
     if (laps.length > prevCount && lapsEl) {
@@ -186,9 +236,7 @@
     prevCount = laps.length;
   });
 
-  onDestroy(() => {
-    if (pollTimer !== undefined) clearInterval(pollTimer);
-  });
+  onDestroy(clearDead);
 
   function formatTime(seconds: number): string {
     // Round to ms before splitting so e.g. 119.9996 -> "2:00.000", not "1:60.000".

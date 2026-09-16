@@ -12,6 +12,7 @@ import {
   getSetup,
   getChats,
   getSessionChats,
+  getCurrentMap,
 } from "./api";
 import { eventFeed } from "./events";
 import App from "./App.svelte";
@@ -52,6 +53,7 @@ vi.mock("./api", async () => {
     getSetup: vi.fn(),
     getChats: vi.fn(),
     getSessionChats: vi.fn(),
+    getCurrentMap: vi.fn(),
   };
 });
 
@@ -150,6 +152,25 @@ describe("Coach screen assembly", () => {
     expect(await screen.findByText(/inputs.*lap vs best/i)).toBeTruthy(); // inputs panel (#95)
   });
 
+  it("#106: nothing polls once the shell has booted", async () => {
+    render(App);
+    await screen.findByText("Pit Wall"); // shell mounts past the splash
+    await screen.findByText("Lap 1"); // everything has loaded its first data
+
+    // A quiet window longer than the 2 s period the status/map pollers ran at.
+    // (LapList's 5 s poll is pinned in LapList.test.ts instead: it called
+    // getStatus on mount, so "never called at all" catches it there with no wait.
+    // getStatus can't be asserted here — Splash and Settings call it one-shot.)
+    vi.mocked(getStatus).mockClear();
+    vi.mocked(getSessionLaps).mockClear();
+    vi.mocked(getCurrentMap).mockClear();
+    await new Promise((r) => setTimeout(r, 2600));
+
+    expect(vi.mocked(getStatus)).not.toHaveBeenCalled();
+    expect(vi.mocked(getSessionLaps)).not.toHaveBeenCalled();
+    expect(vi.mocked(getCurrentMap)).not.toHaveBeenCalled();
+  });
+
   it("dragging the chat bar resizes the Inputs panel (#95 round 2)", async () => {
     const flat = (v: number[]) => ({ lo: [...v], hi: [...v], mean: [...v] });
     vi.mocked(getLapInputs).mockResolvedValue({
@@ -242,8 +263,8 @@ describe("Coach screen assembly", () => {
   });
 
   it("#109: a new live session starting while a past session is pinned unpins the map/strip/chat to follow it", async () => {
-    // LapList polls every 5s (App doesn't override pollMs) -- give this test
-    // room for that real poll to land instead of faking timers.
+    // This used to wait out LapList's real 5 s poll; the new live session is now
+    // a status frame, so it lands immediately.
     const { container } = render(App);
     await screen.findByText("Pit Wall"); // shell mounts past the splash
     const nav = within(container.querySelector(".nav") as HTMLElement);
@@ -261,28 +282,19 @@ describe("Coach screen assembly", () => {
     vi.mocked(getSessionChats).mockClear();
 
     // A new live session starts (s2), with a laps list distinguishable from s1's.
-    vi.mocked(getStatus).mockResolvedValue({
-      track: "Le Mans",
-      car: "Corvette Z06",
-      on_track: true,
-      activity: null,
-      has_map: true,
-      lmu_connected: true,
-      session_id: "s2",
-      lap_id: 7,
-    });
     vi.mocked(getSessionLaps).mockImplementation(async (sid: string) =>
       sid === "s2"
         ? [{ id: 20, lap_time: 200.0, valid: 1, ts: 500 }]
         : [{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }],
     );
+    eventFeed.push("status", { ...LIVE_STATUS, on_track: true, session_id: "s2", lap_id: 7 });
 
     // The lap list followed the new live session...
-    await screen.findByText("3:20.000", {}, { timeout: 7000 });
+    await screen.findByText("3:20.000");
     expect(vi.mocked(getSessionLaps)).toHaveBeenCalledWith("s2");
     // ...and the panes unpinned: no re-fetch of s1's chat after the flip, and the
     // chat composer is back to an empty new chat (not still showing s1's thread).
     expect(vi.mocked(getSessionChats)).not.toHaveBeenCalledWith("s1");
     expect(await screen.findByText(/new chat/i)).toBeTruthy();
-  }, 10000);
+  });
 });
