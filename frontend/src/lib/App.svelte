@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { liveField } from "./live";
+  import { eventFeed } from "./events";
   import { nextTheme, applyTheme, loadTheme, saveTheme, THEME_LABELS, THEME_ICONS, type ThemeMode } from "./theme";
   import SessionBar from "./SessionBar.svelte";
   import RaceStrip from "./RaceStrip.svelte";
@@ -30,9 +31,13 @@
   // string = open that specific chat.
   let activeChatId: string | null | undefined = $state(undefined);
 
-  // Start the shared live feed once, for the whole app lifetime, so the Pit Wall
-  // reflects live data no matter which view is active (e.g. while mapping a track).
-  onMount(() => liveField.start());
+  // Start the shared feeds once, for the whole app lifetime: the pit-wall field
+  // (so live data keeps flowing while another view is open) and the /events feed
+  // that replaced the screens' HTTP pollers (#106).
+  onMount(() => {
+    liveField.start();
+    eventFeed.start();
+  });
 
   function toggleTheme() {
     theme = nextTheme(theme);
