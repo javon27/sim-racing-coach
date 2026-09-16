@@ -733,8 +733,14 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # LMU hangs — a recently-probed connected client is trusted between windows.
         now = time.monotonic()
         rest = app.state.rest
-        if rest is not None and (now - app.state.rest_probed_at) < REST_PROBE_TTL:
+        # The cap applies to a FAILED probe too. While LMU's REST port accepts the
+        # connection but never answers (seen at the rig 2026-09-15: every /status
+        # took the full 4 s timeout, three pollers filled the browser's connection
+        # pool, and the whole UI queued behind them), a disconnected state must not
+        # re-probe on every poll -- remember the failure for one TTL as well.
+        if (now - app.state.rest_probed_at) < REST_PROBE_TTL:
             return rest
+        app.state.rest_probed_at = now
         if rest is None:
             if app.state.rest_factory is None:
                 return None
@@ -748,7 +754,6 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             app.state.rest = None
             return None
         app.state.rest = rest
-        app.state.rest_probed_at = now
         return rest
 
     def _live_track():

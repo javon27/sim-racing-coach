@@ -154,6 +154,33 @@ def test_status_probe_is_rate_capped(tmp_path):
     assert calls["n"] == 1  # one connect probe; the rest are served from cache
 
 
+def test_status_probe_is_rate_capped_while_disconnected_too(tmp_path):
+    # Rig 2026-09-15: with LMU's REST port accepting but not answering, every
+    # /status poll re-ran the 4 s probe because the cap only covered a CONNECTED
+    # client. A failed probe must be remembered for the same TTL.
+    from fastapi.testclient import TestClient
+
+    from simcoach.coach import Coach
+    from simcoach.model.fake import FakeModel
+    from simcoach.server.app import create_app
+    from simcoach.store import LapStore
+
+    calls = {"n": 0}
+
+    class HangingRest:
+        def get_setup(self):
+            calls["n"] += 1
+            raise TimeoutError("LMU REST not answering")
+
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    app = create_app(store, Coach(FakeModel(reply="ok")), rest_factory=HangingRest)
+    tc = TestClient(app, base_url="http://127.0.0.1")
+
+    for _ in range(5):
+        assert tc.get("/status", headers={"host": "127.0.0.1"}).json()["lmu_connected"] is False
+    assert calls["n"] == 1  # one failed probe per TTL, not one per poll
+
+
 def test_build_app_lmu_rest_failure_still_resolves_cmap(tmp_path, monkeypatch, mem_keyring):
     monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
