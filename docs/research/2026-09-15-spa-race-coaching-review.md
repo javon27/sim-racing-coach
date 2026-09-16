@@ -63,3 +63,17 @@ fix in the pipeline rather than prompt problems.
 
 Suggested order: 1 (cheap, removes the most confusing failure), 7 (evidence already
 in hand), 3+4 (one analysis pass + one tool), 2, 5, 6, 8.
+
+## Spoken vs written (driver feedback, 23:30)
+
+The driver's read from the headset: several spoken cues were not useful in the moment,
+especially when they leaned on corner **names** the driver did not know yet ("Malmedy",
+"Campus", "Bruxelles" on a first Spa outing). The written answers held up; the spoken
+line is where the loss was. The spoken line is stripped before storage, so this review
+cannot compare the two texts — a gap in itself.
+
+| # | Gap | Change | Where |
+|---|-----|--------|-------|
+| 9 | `spoken` is not stored | Persist the spoken cue on the chat row (`coach_chat.spoken`) and show it in the thread as a small "spoken:" line under the answer; `get_chat_messages` returns it | `store.py` (schema), `app.py` `coach_ws`, `ChatPanel.svelte` |
+| 10 | Spoken cue uses names the driver may not know | `SPOKEN_SENTENCE`: refer to corners as "Turn N" first, add the name only when `corner_naming = names` ("Turn 10, Pouhon"), never the name alone; one cue, one action, no figures beyond a single number | `coach.py` |
+| 11 | No review loop | After #9 lands, review a session's spoken vs written pairs: does the spoken line carry the written answer's top item, and is it actionable before the next corner? | this doc, next rig session |
