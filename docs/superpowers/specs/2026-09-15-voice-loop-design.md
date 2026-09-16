@@ -65,9 +65,12 @@ existing coach path. A voice question is a normal chat message marked 🎤.
   (≈250 MB) and streams progress; Settings shows it. Nothing is downloaded until the
   driver enables voice.
 - **Prompt flag** — `voice: "ptt"` adds one instruction to the agentic system prompt:
-  after the normal answer, append one line `[spoken] <2–3 sentences, one cue>`. The server
-  strips that line from the stored/displayed answer and sends it as `spoken` on the `done`
-  event. `voice: "conversation"` and typed questions add nothing.
+  write `[spoken] <2–3 sentences, one cue>` as the FIRST line, then the normal answer. The
+  server buffers just enough of the stream to find that line, emits it as its own `spoken`
+  event as soon as it arrives (well before the rest of the answer finishes), strips it from
+  the stored/displayed answer, and also sends it as `spoken` on the `done` event (the
+  client's authoritative copy, in case the streamed one was missed). `voice: "conversation"`
+  and typed questions add nothing.
 
 ### Data flow, PTT
 
@@ -76,16 +79,19 @@ existing coach path. A voice question is a normal chat message marked 🎤.
 3. Empty/garbled text (< 2 words) → speak "didn't catch that" → `idle`. Nothing is sent.
 4. Otherwise `asking`: the transcript is sent on `/coach` with `voice: "ptt"`; it appears
    in the chat marked 🎤.
-5. `done` → chat shows the full answer; `speaking` reads `spoken` (falls back to the first
-   paragraph if the model omitted the tag) → `idle`.
+5. The `[spoken]` cue streams in first: `speaking` starts reading it right away, well
+   before the rest of the answer has finished. `done` fills in the full written answer
+   (falls back to the first paragraph if the model omitted the tag) → `idle` once speech ends.
 6. A press during `speaking` cancels speech and starts a new `listening`.
 
 ### Data flow, conversation
 
 1. Tap mic → `listening` with VAD armed.
-2. VAD end → transcribe → ask (`voice: "conversation"`) → `done` → speak the full answer.
-3. When speech ends → back to `listening` automatically. Speech detected during
-   `speaking` → cancel and listen (barge-in).
+2. VAD end → transcribe → ask (`voice: "conversation"`) → `asking`. Each sentence is spoken
+   as soon as it completes in the stream, not held until `done`.
+3. When the whole queue finishes (any remainder flushed on `done`) → back to `listening`
+   automatically. Speech detected during `speaking` → cancel, drop what's still buffered
+   but unspoken, and listen (barge-in).
 4. Tap again, or say nothing for `conversation_idle_s` (default 30), → `idle`.
 
 ### Settings → Voice
@@ -109,8 +115,13 @@ that are not built yet (wake word) are not shown.
 ### Out of scope (seams left open)
 
 Wake word (`trigger` mode seam) · cloud STT/TTS (`Transcriber` / `Speaker` seams) ·
-streaming speech while the answer streams · live Pit Wall tools · any change to how
-the coach reasons or what it writes.
+live Pit Wall tools · any change to how the coach reasons or what it writes.
+
+Streaming speech while the answer streams was originally deferred, then brought in
+scope by driver request (2026-09-15, #104): PTT speaks the `[spoken]` cue the
+moment it streams in (now the FIRST line of the reply, not the last), and
+conversation mode speaks each completed sentence as it arrives rather than
+waiting for the full answer.
 
 ## Testing
 
@@ -139,4 +150,4 @@ the coach reasons or what it writes.
 4. Shell: global shortcut + wheel/gamepad poller + capture command; Settings → Voice.
 
 Follow-ups, each on its seam: toggle/VAD for PTT in the headset, wake word, cloud
-providers, streaming speech.
+providers.
