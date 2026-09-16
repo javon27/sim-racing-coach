@@ -63,10 +63,29 @@ jobs:
           curl -L -o kokoro-models/kokoro-v1.0.onnx "${base}kokoro-v1.0.onnx"
           curl -L -o kokoro-models/voices-v1.0.bin "${base}voices-v1.0.bin"
 
+      - name: Verify Kokoro model file hashes (fresh download or a stale/tampered cache)
+        shell: pwsh
+        run: |
+          # Pinned in simcoach/voice.py KOKORO_FILES -- keep both in sync on a model bump.
+          $expected = @{
+            "kokoro-models\kokoro-v1.0.onnx" = "7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5"
+            "kokoro-models\voices-v1.0.bin"  = "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d"
+          }
+          foreach ($path in $expected.Keys) {
+            $actual = (Get-FileHash -Algorithm SHA256 -Path $path).Hash.ToLower()
+            if ($actual -ne $expected[$path]) {
+              throw "$($path): sha256 mismatch (got $actual, expected $($expected[$path]))"
+            }
+          }
+
       - name: Build sidecar (PyInstaller onefile)
         run: pyinstaller packaging/simcoach-sidecar.spec --distpath dist-sidecar --workpath build-sidecar
 
       - name: Prove /voice/speak works in the frozen exe
+        # /voice/transcribe is NOT proven here: a real faster-whisper model (the
+        # `small` int8 CTranslate2 conversion, several hundred MB from Hugging
+        # Face) isn't cheap to fetch just for this proof -- the local dev proof
+        # in packaging/README.md covers it instead.
         shell: pwsh
         run: |
           $env:SIMCOACH_DATA_DIR = "$PWD\kokoro-data"
@@ -81,7 +100,10 @@ jobs:
               try { Invoke-WebRequest -Uri http://127.0.0.1:8765/voice/kokoro/status -UseBasicParsing | Out-Null; $ok = $true; break } catch {}
             }
             if (-not $ok) { throw "sidecar never came up" }
-            curl -f -X POST http://127.0.0.1:8765/voice/speak -H "content-type: application/json" -d '{\"text\":\"Turn ten.\"}' -o out.wav
+            # curl.exe on Windows mangles an inline -d '{\"...\"}' JSON literal through
+            # pwsh's quoting -- write the body to a file and reference it with @ instead.
+            Set-Content -Path speak.json -Value '{"text":"Turn ten."}' -NoNewline
+            curl -f -X POST http://127.0.0.1:8765/voice/speak -H "content-type: application/json" -d "@speak.json" -o out.wav
             $bytes = [System.IO.File]::ReadAllBytes("out.wav")[0..3]
             if (-not ([System.Text.Encoding]::ASCII.GetString($bytes) -eq "RIFF")) { throw "out.wav does not start with RIFF" }
           } finally {
