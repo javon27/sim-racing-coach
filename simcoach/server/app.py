@@ -255,8 +255,11 @@ def _capture_loop(source, store, app_state) -> None:
         # tagged phase="mapping" so it gives an immediately-editable lap + shows in
         # the session/lap list, but best_lap excludes it from coaching signals.
         if getattr(app_state, "mapping", False):
-            app_state.map_buffer.append(lap)
-            del app_state.map_buffer[:-_MAP_BUFFER_MAX]
+            # A partial lap (#77) is still persisted and still numbered, but never
+            # buffered for ribbon reconstruction -- mapping wants full boundary passes.
+            if lap.partial is None:
+                app_state.map_buffer.append(lap)
+                del app_state.map_buffer[:-_MAP_BUFFER_MAX]
             lap.phase = "mapping"
         lap_id = store.save(lap)
         app_state.latest = {"record": lap, "lap_id": lap_id}
@@ -398,11 +401,16 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # are summary-only with no file, so a track with ~991 imported laps and no
         # capture is correctly not buildable (#66). Slugged here because laps store the
         # raw live name ("Paul Ricard - ELMS") while a map file is keyed by slug.
+        #
+        # `partial IS NULL` drops out/in/spin laps (#77): they are stored now, but a
+        # pit-lane pass or a half lap is exactly the shape #69's width/banking gate
+        # exists to reject, and one guard here covers BOTH the /tracks badge counts
+        # and the rebuild that consumes them, so the two can never disagree.
         with store._lock:   # store.py shares one connection with the capture thread
             rows = store.conn.execute(
                 "SELECT track, telemetry_path FROM laps "
                 "WHERE telemetry_path IS NOT NULL AND track IS NOT NULL "
-                "ORDER BY id").fetchall()
+                "AND partial IS NULL ORDER BY id").fetchall()
         return [(track_slug(n), n, p) for n, p in rows if track_slug(n)]
 
     def _rebuild_clouds(track: str, rows=None, *, capture: bool = True,
@@ -571,7 +579,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         best = store.best_lap(track, car)
         best_t = best.lap_time if best is not None else None
         spans, recs = [], []
-        for lap_id in store.list_lap_ids(track, car):
+        for lap_id in store.list_lap_ids(track, car, complete_only=True):
             try:
                 rec = store.load(lap_id)
             except (KeyError, FileNotFoundError):
@@ -610,7 +618,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     def _any_pos_lap(track: str, car: str) -> bool:
         # Cheap "does this track+car have ANY position-captured lap" (early-exit,
         # for /status has_map) -- avoids averaging every clean lap just to poll.
-        for lap_id in store.list_lap_ids(track, car):
+        for lap_id in store.list_lap_ids(track, car, complete_only=True):
             try:
                 ch = store.load(lap_id).channels
             except (KeyError, FileNotFoundError):
@@ -2173,6 +2181,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             best = app.state.store.best_lap(track, car, session_id=session_id)
             weak_counts: dict = {}
             for row in laps:
+                if row.get("partial"):
+                    continue   # an out/in/spin lap is not evidence of a weak corner (#77)
                 try:
                     record = app.state.store.load(row["id"])
                 except Exception:

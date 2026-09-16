@@ -2289,3 +2289,121 @@ def test_session_setup_upsert_and_last(tmp_path):
     last = s.last_setup("Monza", "GT3")
     assert last["setup"] == {"wing": 8} and last["session_id"] == "sess-2"
     assert s.last_setup("Spa", "GT3") is None
+
+
+# --- issue #77: partial (out/in/spin) laps are stored but never coached from ----
+
+def _partial_of(synthetic_lap, kind, **over):
+    """A partial copy of the synthetic lap: no lap time, not valid, kind flagged."""
+    return LapRecord(**{**synthetic_lap.__dict__,
+                        "lap_time": None, "valid": False, "partial": kind, **over})
+
+
+def test_v19_schema_migrates_partial_column_to_v20(tmp_path, synthetic_lap):
+    """Issue #77: out/in/partial laps are stored with a kind flag. A v19 db migrates
+    with the column present and its existing rows intact (partial NULL = a normal
+    timed lap, which is what every `valid = 1` consumer keeps reading)."""
+    from simcoach.store import SCHEMA_VERSION, LapStore
+    db = str(tmp_path / "c.sqlite")
+    s = LapStore(db, str(tmp_path / "telem"))
+    old_id = s.save(synthetic_lap)
+    s.conn.execute("PRAGMA user_version = 19")
+    s.conn.commit(); s.conn.close()
+
+    s2 = LapStore(db, str(tmp_path / "telem"))
+    assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    cols = [r[1] for r in s2.conn.execute("PRAGMA table_info(laps)")]
+    assert "partial" in cols
+    assert s2.load(old_id).partial is None
+    assert s2.load(old_id).lap_time == synthetic_lap.lap_time
+
+
+def test_save_load_round_trips_the_partial_kind_and_a_null_lap_time(tmp_path, synthetic_lap):
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "telem"))
+    lid = s.save(_partial_of(synthetic_lap, "in", lap_no=10))
+    rec = s.load(lid)
+    assert rec.partial == "in"
+    assert rec.lap_time is None
+    assert rec.valid is False
+    assert rec.lap_no == 10
+    row = s.conn.execute("SELECT lap_time, valid FROM laps WHERE id = ?", (lid,)).fetchone()
+    assert row == (None, 0)
+
+
+def test_best_lap_and_session_rows_ignore_partials_but_the_lap_list_keeps_them(
+        tmp_path, synthetic_lap):
+    """The whole point of the ruling: a partial row is a LAP (it lists, it keeps its
+    number) but never a best lap and never a reference."""
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "telem"))
+    sid = "test-track--test-car--offline"
+    good = s.save(LapRecord(**{**synthetic_lap.__dict__, "lap_time": 90.0, "lap_no": 2,
+                               "session_id": sid, "timestamp": 100.0}))
+    part = s.save(_partial_of(synthetic_lap, "out", lap_no=3, session_id=sid,
+                              timestamp=200.0))
+
+    best = s.best_lap(synthetic_lap.track, synthetic_lap.car)
+    assert best is not None and best.lap_time == 90.0
+
+    rows = s.session_laps(sid)
+    assert [r["id"] for r in rows] == [good, part]
+    assert [r["partial"] for r in rows] == [None, "out"]
+
+
+def test_recent_laps_complete_only_skips_partials(tmp_path, synthetic_lap):
+    """`complete_only=True` is what keeps the coach's 'latest' the latest COMPLETE
+    lap: a garage return must not make the in-lap the default subject."""
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "telem"))
+    good = s.save(LapRecord(**{**synthetic_lap.__dict__, "lap_time": 90.0}))
+    part = s.save(_partial_of(synthetic_lap, "in"))
+
+    all_rows = s.recent_laps(synthetic_lap.track, synthetic_lap.car, 5)
+    assert [r["lap_id"] for r in all_rows] == [part, good]
+    assert all_rows[0]["partial"] == "in"
+
+    complete = s.recent_laps(synthetic_lap.track, synthetic_lap.car, 5, complete_only=True)
+    assert [r["lap_id"] for r in complete] == [good]
+
+
+def test_list_lap_ids_complete_only_skips_partials(tmp_path, synthetic_lap):
+    """Map building and the Tracks badge count clean laps only; lap REFERENCE
+    resolution (`_resolve_lap`) still has to see a partial, so the default stays
+    inclusive."""
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "telem"))
+    good = s.save(synthetic_lap)
+    part = s.save(_partial_of(synthetic_lap, "partial"))
+    t, c = synthetic_lap.track, synthetic_lap.car
+    assert set(s.list_lap_ids(t, c)) == {good, part}
+    assert s.list_lap_ids(t, c, complete_only=True) == [good]
+
+
+def test_an_untimed_result_lap_dedupes_against_the_live_partial_it_describes(
+        tmp_path, synthetic_lap):
+    """Result XMLs carry the untimed laps too (out lap, garage return, in-lap). Now
+    that live capture stores those, the two must not BOTH land -- the live row wins,
+    exactly as #68 pairs timed laps. Matched on the game's lap number, the only
+    identity an untimed lap has."""
+    from types import SimpleNamespace
+
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "telem"))
+    ts = synthetic_lap.timestamp
+    live_timed = s.save(LapRecord(**{**synthetic_lap.__dict__, "lap_time": 90.0,
+                                     "lap_no": 2, "phase": "practice"}))
+    live_out = s.save(_partial_of(synthetic_lap, "out", lap_no=1, phase="practice"))
+
+    rs = SimpleNamespace(
+        track=synthetic_lap.track, car=synthetic_lap.car, session_type="practice",
+        date_ts=ts, sim="lmu", position=None, class_position=None, finish_status=None,
+        incidents=[], penalties=[], grid_position=None, class_grid_position=None,
+        online=False,
+        laps=[SimpleNamespace(lap_time=None, valid=False, sectors=None, lap_no=1),
+              SimpleNamespace(lap_time=90.0, valid=True, sectors=None, lap_no=2)],
+    )
+    s.save_result_session(rs, "RESULT_SID")
+
+    ids = [r[0] for r in s.conn.execute("SELECT id FROM laps ORDER BY id")]
+    assert ids == [live_timed, live_out], "the result copies must both dedupe away"

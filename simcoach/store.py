@@ -76,7 +76,7 @@ def _session_base(sid: str) -> str:
     """The (track, car, mode) base of a session id, dropping any ~<instance> suffix."""
     return sid.split(_SESSION_SEP, 1)[0]
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
@@ -165,7 +165,8 @@ CREATE TABLE IF NOT EXISTS laps (
     position INTEGER,
     sector_bounds TEXT,
     lap_no INTEGER,
-    pit INTEGER
+    pit INTEGER,
+    partial TEXT
 );
 CREATE TABLE IF NOT EXISTS ingested_files (
     path TEXT PRIMARY KEY,
@@ -219,23 +220,38 @@ def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
             raise
 
 
-def _pair_laps(stored: list[tuple[int, float | None]],
-               lap_times: list[float | None]) -> list[int | None]:
+def _pair_laps(stored: list[tuple],
+               lap_times: list[float | None],
+               lap_nos: list[int | None] | None = None) -> list[int | None]:
     """For each incoming lap time, the id of the stored lap that already holds it, or
     None. THE lap-identity rule, shared by result ingest (#68) and the v16 cleanup
     (#71) so the two directions cannot drift apart: a lap time matches within
     _LAP_TIME_TOL_S (not `==`: the XML rounds to 4 decimals, 70.4068 vs
     70.40680694580078), an untimed lap matches only an untimed one, and each stored
     lap absorbs at most one incoming lap, so two genuinely identical times keep two
-    rows. `stored` is (id, lap_time) in the order candidates should be preferred."""
+    rows. `stored` is (id, lap_time[, lap_no]) in the order candidates should be
+    preferred.
+
+    An UNTIMED pair must also agree on the game's lap number when BOTH sides carry
+    one (`lap_nos`, and a third element on `stored`). Until #77 that half of the rule
+    was unreachable -- live capture could not write a NULL lap_time -- and "both
+    untimed" was identity enough. Now that out/in/partial laps are stored, a result
+    file lists several untimed laps and the stint may hold several partials, so the
+    lap number is the only thing that says WHICH untimed lap is which. Either side
+    missing it falls back to the old order-based match, so legacy rows and the v16
+    cleanup (which passes 2-tuples and no numbers) behave exactly as before."""
     unclaimed = list(stored)
     twins: list[int | None] = []
-    for lt in lap_times:
+    for i, lt in enumerate(lap_times):
+        want_no = lap_nos[i] if lap_nos is not None else None
         if lt is None:
-            at = next((k for k, (_, t) in enumerate(unclaimed) if t is None), None)
+            at = next((k for k, r in enumerate(unclaimed)
+                       if r[1] is None
+                       and (want_no is None or len(r) < 3 or r[2] is None
+                            or r[2] == want_no)), None)
         else:
-            at = next((k for k, (_, t) in enumerate(unclaimed)
-                       if t is not None and abs(t - lt) <= _LAP_TIME_TOL_S), None)
+            at = next((k for k, r in enumerate(unclaimed)
+                       if r[1] is not None and abs(r[1] - lt) <= _LAP_TIME_TOL_S), None)
         twins.append(None if at is None else unclaimed.pop(at)[0])
     return twins
 
@@ -608,6 +624,16 @@ class LapStore:
                 cols = [r[1] for r in self.conn.execute("PRAGMA table_info(coach_chat)")]
                 if cols and "spoken" not in cols:
                     _add_column(self.conn, "coach_chat", "spoken TEXT")
+            if current_version < 20:
+                # v19 -> v20: the kind of UNFINISHED lap a row is -- 'out', 'in',
+                # 'partial' -- or NULL for a normal timed lap (issue #77). Existing
+                # rows stay NULL, which is exactly what they are; a partial row also
+                # carries lap_time NULL and valid 0, so `best_lap`, `_stint_analyses`,
+                # consistency and tire trend keep ignoring it with no change. Guarded
+                # like the v18/v19 steps.
+                cols = [r[1] for r in self.conn.execute("PRAGMA table_info(laps)")]
+                if cols and "partial" not in cols:
+                    _add_column(self.conn, "laps", "partial TEXT")
         if current_version != stamp:
             self.conn.execute(f"PRAGMA user_version = {stamp}")
         self.conn.commit()
@@ -708,12 +734,13 @@ class LapStore:
                 pit = None if record.pit is None else int(record.pit)
                 cur = self.conn.execute(
                     "INSERT INTO laps (ts, sim, track, car, lap_time, valid, telemetry_path, "
-                    "phase, session_id, s1, s2, s3, position, sector_bounds, lap_no, pit) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "phase, session_id, s1, s2, s3, position, sector_bounds, lap_no, pit, "
+                    "partial) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (record.timestamp, record.sim, record.track, record.car,
                      record.lap_time, int(record.valid), None,
                      record.phase, sid, _sec(0), _sec(1), _sec(2),
-                     record.position, bounds, record.lap_no, pit),
+                     record.position, bounds, record.lap_no, pit, record.partial),
                 )
                 lap_id = cur.lastrowid
                 telemetry_path = os.path.join(self.data_dir, f"{lap_id}.npz")
@@ -757,19 +784,20 @@ class LapStore:
         with self._lock:
             row = self.conn.execute(
                 "SELECT ts, sim, track, car, lap_time, valid, telemetry_path, phase, session_id, "
-                "lap_no, pit FROM laps WHERE id = ?",
+                "lap_no, pit, partial FROM laps WHERE id = ?",
                 (lap_id,),
             ).fetchone()
             if row is None:
                 raise KeyError(f"no lap with id {lap_id}")
             (ts, sim, track, car, lap_time, valid, telemetry_path, phase, session_id,
-             lap_no, pit) = row
+             lap_no, pit, partial) = row
             if telemetry_path is None:
                 raise FileNotFoundError(f"lap {lap_id} has no telemetry (imported from a result log)")
             with np.load(telemetry_path) as npz:
                 channels = {k: npz[k] for k in npz.files}
             return LapRecord(sim, track, car, lap_time, bool(valid), ts, channels, phase, session_id,
-                              lap_no=lap_no, pit=(None if pit is None else bool(pit)))
+                              lap_no=lap_no, pit=(None if pit is None else bool(pit)),
+                              partial=partial)
 
     def best_lap(self, track: str, car: str, exclude_lap_id: int | None = None,
                  phase: str | None = None, session_id: str | None = None) -> LapRecord | None:
@@ -807,10 +835,15 @@ class LapStore:
                 return None
             return self.load(row[0])
 
-    def list_lap_ids(self, track: str, car: str) -> list[int]:
+    def list_lap_ids(self, track: str, car: str, complete_only: bool = False) -> list[int]:
+        """Every lap id for a track/car. complete_only drops out/in/partial laps (#77)
+        -- map building, the Tracks badge and "how much data do we have" counts want
+        only whole laps. The default stays inclusive because lap REFERENCE resolution
+        (`_resolve_lap`) must be able to reach a partial lap by its number."""
         with self._lock:
             rows = self.conn.execute(
-                "SELECT id FROM laps WHERE track = ? AND car = ?",
+                "SELECT id FROM laps WHERE track = ? AND car = ?"
+                + (" AND partial IS NULL" if complete_only else ""),
                 (track, car),
             ).fetchall()
             return [r[0] for r in rows]
@@ -836,26 +869,36 @@ class LapStore:
         return None
 
     def recent_laps(self, track: str, car: str, limit: int = 10,
-                    session_id: str | None = None) -> list[dict]:
+                    session_id: str | None = None,
+                    complete_only: bool = False) -> list[dict]:
         """Recent laps for a track/car (newest first) as lightweight rows — no
         telemetry loaded — so a tool can list laps for the model to choose from.
-        Pass session_id to scope to the current stint."""
+        Pass session_id to scope to the current stint.
+
+        complete_only drops out/in/partial laps (#77). The lap LIST wants them (they
+        are laps, and their numbers are the point); anything that treats "the most
+        recent lap" as the driver's subject or as data — the coach's `latest`, the
+        grip envelope, the wear baseline — wants the most recent COMPLETE one, or a
+        garage return makes the in-lap the default subject."""
         with self._lock:
             # session_id uniquely scopes a stint (track+car+online), so when it's
             # given, filter by it ALONE — the caller's `car` may be a resolved display
             # model ("BMW M4 LMGT3") while laps are stored under the raw entry name, so
             # matching on car would wrongly return nothing (matches the UI, which
             # scopes by session_id).
+            cols = "SELECT id, lap_time, valid, phase, partial FROM laps WHERE "
             if session_id is not None:
-                query = "SELECT id, lap_time, valid, phase FROM laps WHERE session_id = ?"
+                query = cols + "session_id = ?"
                 params: list = [session_id]
             else:
-                query = "SELECT id, lap_time, valid, phase FROM laps WHERE track = ? AND car = ?"
+                query = cols + "track = ? AND car = ?"
                 params = [track, car]
+            if complete_only:
+                query += " AND partial IS NULL"
             query += " ORDER BY id DESC LIMIT ?"
             params.append(limit)
             rows = self.conn.execute(query, params).fetchall()
-            keys = ("lap_id", "lap_time", "valid", "phase")
+            keys = ("lap_id", "lap_time", "valid", "phase", "partial")
             return [dict(zip(keys, r)) for r in rows]
 
     def split_merged_sessions(self) -> dict:
@@ -914,10 +957,12 @@ class LapStore:
             self.conn.commit()
         return {"split_sessions": split, "reassigned_laps": reassigned}
 
-    def session_lap_ids(self, session_id: str) -> list[int]:
+    def session_lap_ids(self, session_id: str, complete_only: bool = False) -> list[int]:
         with self._lock:
             rows = self.conn.execute(
-                "SELECT id FROM laps WHERE session_id = ? ORDER BY id ASC",
+                "SELECT id FROM laps WHERE session_id = ?"
+                + (" AND partial IS NULL" if complete_only else "")
+                + " ORDER BY id ASC",
                 (session_id,),
             ).fetchall()
             return [r[0] for r in rows]
@@ -1111,7 +1156,11 @@ class LapStore:
                 f"SELECT COUNT(*) FROM (SELECT session_id FROM laps WHERE {where} "
                 f"GROUP BY session_id)", params).fetchone()[0]
             rows = self.conn.execute(
-                "SELECT session_id, track, car, COUNT(*), "
+                # COUNT of COMPLETE laps: out/in/partial rows are stored now (#77) but
+                # this card's number is "laps you ran here", and counting them would
+                # silently inflate every historical session's total the day they
+                # started being stored.
+                "SELECT session_id, track, car, SUM(partial IS NULL), "
                 "MIN(CASE WHEN valid THEN lap_time END), MIN(ts), MAX(ts) "
                 f"FROM laps WHERE {where} GROUP BY session_id "
                 "ORDER BY MAX(ts) DESC LIMIT ? OFFSET ?",
@@ -1183,12 +1232,12 @@ class LapStore:
     def session_laps(self, session_id: str) -> list[dict]:
         with self._lock:
             rows = self.conn.execute(
-                "SELECT id, lap_time, valid, ts, s1, s2, s3, phase, track, car, lap_no, pit "
-                "FROM laps WHERE session_id = ? ORDER BY ts",
+                "SELECT id, lap_time, valid, ts, s1, s2, s3, phase, track, car, lap_no, pit, "
+                "partial FROM laps WHERE session_id = ? ORDER BY ts",
                 (session_id,),
             ).fetchall()
             keys = ("id", "lap_time", "valid", "ts", "s1", "s2", "s3", "phase", "track", "car",
-                    "lap_no", "pit")
+                    "lap_no", "pit", "partial")
             out = []
             for r in rows:
                 d = dict(zip(keys, r))
@@ -1272,13 +1321,14 @@ class LapStore:
 
         Known limit: the `source = 'live'` half is still scoped to the WINDOW, not to one
         live session, so a live lap from a neighbouring stint can absorb this file's lap.
-        Unreachable today -- a timed match needs a sub-millisecond coincidence across
-        stints, and an untimed one needs a live lap with a NULL lap_time, which capture
-        cannot produce (LapRecord.lap_time is a float; 0 of 173 live rows are NULL). It
-        goes live the day capture records an unfinished lap, and the fix then is to scope
-        this half to the live session the result's window actually overlaps."""
-        query = ("SELECT id, lap_time FROM laps WHERE track IS ? AND car IS ? AND phase IS ? "
-                 "AND (source = 'live' OR session_id = ?)")
+        A timed match still needs a sub-millisecond coincidence across stints. The
+        untimed half is no longer unreachable -- #77 made capture store out/in/partial
+        laps with a NULL lap_time -- so `_pair_laps` is handed each row's `lap_no` and an
+        untimed pair must agree on it. Two stints in one window whose untimed laps share
+        a lap number would still cross-match; scoping this half to the live session the
+        result's window overlaps is the fix if that is ever seen."""
+        query = ("SELECT id, lap_time, lap_no FROM laps WHERE track IS ? AND car IS ? "
+                 "AND phase IS ? AND (source = 'live' OR session_id = ?)")
         params: list = [rs.track, rs.car, rs.session_type, session_id]
         if rs.date_ts is not None:
             query += " AND ts BETWEEN ? AND ?"
@@ -1313,7 +1363,8 @@ class LapStore:
 
         with self._lock, self.conn:
             twins = _pair_laps(self._already_stored_laps(rs, session_id),
-                               [lap.lap_time for lap in rs.laps])
+                               [lap.lap_time for lap in rs.laps],
+                               [getattr(lap, "lap_no", None) for lap in rs.laps])
             rows, backfill = [], []
             for lap, twin in zip(rs.laps, twins):
                 s1, s2, s3 = (_sec(lap.sectors, i) for i in range(3))

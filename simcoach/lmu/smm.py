@@ -51,6 +51,13 @@ _FILE_MAP_READ = 0x0004
 # start/finish, or a teleport/reset). Smaller dips are off-track/jitter noise.
 _LAP_WRAP_M = 500.0
 
+# What separates an out/in/spin lap worth STORING (#77) from a garage return that
+# produced nothing to analyse. Both must hold: enough samples, over enough track.
+# ponytail: two flat knobs, not a model of the pit lane. A rig session that loses a
+# real out-lap (or stores a teleport blip) is what should move them.
+_PARTIAL_MIN_SAMPLES = 200
+_PARTIAL_MIN_SPAN_M = 200.0
+
 
 def open_mmap(name: str, size: int) -> mmap.mmap:
     """Open an EXISTING named shared-memory mapping for read.
@@ -487,7 +494,7 @@ def build_lap_record(
     sim: str,
     track: str,
     car: str,
-    lap_time: float,
+    lap_time: float | None,
     invalidated: bool,
     timestamp: float,
     channels: dict[str, list[float]],
@@ -498,6 +505,7 @@ def build_lap_record(
     sector_bounds: list[float] | None = None,
     lap_no: int | None = None,
     pit: bool | None = None,
+    partial: str | None = None,
 ) -> LapRecord | None:
     """Pure decision: turn a completed lap's raw fields into a LapRecord, or
     None if the lap shouldn't be stored.
@@ -506,15 +514,21 @@ def build_lap_record(
     yield those, or store.best_lap()'s ORDER BY lap_time ASC would treat the
     sentinel as the permanent fastest lap and poison every delta. validity is
     the inverse of mLapInvalidated (cut track / off-track).
+
+    `partial` (#77) is the one case an untimed lap IS stored: an out-lap, in-lap
+    or spin the driver really drove, kept so lap numbering never jumps and so the
+    corner tools can still read it. It lands with lap_time None and valid False --
+    NOT the -1 sentinel, which would still poison `ORDER BY lap_time`, and not
+    valid, so every consumer that filters on `valid = 1` skips it unchanged.
     """
-    if lap_time <= 0:
+    if partial is None and (lap_time is None or lap_time <= 0):
         return None
     return LapRecord(
         sim=sim,
         track=track,
         car=car,
-        lap_time=lap_time,
-        valid=not invalidated,
+        lap_time=None if partial is not None else lap_time,
+        valid=(not invalidated) and partial is None,
         timestamp=timestamp,
         channels={k: np.array(v) for k, v in channels.items()},
         phase=phase,
@@ -524,6 +538,7 @@ def build_lap_record(
         sector_bounds=sector_bounds,
         lap_no=lap_no,
         pit=pit,
+        partial=partial,
     )
 
 
@@ -659,6 +674,25 @@ class LmuSource:
         # True if mInPits was ever true at any polled instant during the in-progress
         # lap (issue #77/#69) -- reset alongside _channels/_sector_seq at each commit.
         self._pit_during_lap: bool = False
+        # mInPits on the FIRST polled frame of the in-progress lap, which is what
+        # makes a stored fragment an OUT-lap rather than a spin (#77). None until
+        # that first frame lands.
+        self._pit_at_lap_start: bool | None = None
+
+    def _partial_kind(self, player) -> str | None:
+        """The kind of unfinished lap the buffered fragment is ('out'/'in'/'partial'),
+        or None when there is not enough of it to be worth storing.
+
+        Called at a wrap that did NOT commit. 'out' when the car was in the pits on
+        the fragment's FIRST frame (a stint's first lap out of the box), 'in' when it
+        is in the pits on this wrap frame, else 'partial' (a spin, an off, a teleport).
+        """
+        d = self._channels.get("lap_distance") or []
+        if len(d) < _PARTIAL_MIN_SAMPLES or (max(d) - min(d)) <= _PARTIAL_MIN_SPAN_M:
+            return None
+        if self._pit_at_lap_start:
+            return "out"
+        return "in" if player.mInPits else "partial"
 
     def _poll_once(self, telemetry_name: str, scoring_name: str):
         """One read-and-decide step: read the current telemetry/scoring snapshot,
@@ -683,16 +717,23 @@ class LmuSource:
         # Finish line / lap boundary: lap distance jumped backward a long way.
         if self._prev_dist is not None and dist < self._prev_dist - _LAP_WRAP_M:
             lap_time = player.mLastLapTime
-            # Commit ONLY a completed, freshly-timed lap. A teleport/exit/out-lap
-            # also wraps here but carries a stale or sentinel (<=0) lap time.
-            if self._channels and lap_time > 0 and lap_time != self._committed_time:
+            # A completed, freshly-timed lap COMMITS. A teleport/exit/out-lap also
+            # wraps here but carries a stale or sentinel (<=0) lap time -- those used
+            # to be dropped outright, which made the app's lap numbering jump past
+            # every out-lap, in-lap and garage return (#77). One that holds a real
+            # fragment of driving is now stored too, flagged with its kind and no lap
+            # time; anything shorter (a garage return with a handful of samples) has
+            # nothing to analyse and is still dropped.
+            fresh = bool(self._channels) and lap_time > 0 and lap_time != self._committed_time
+            partial = None if fresh else self._partial_kind(player)
+            if fresh or partial is not None:
                 track = vt.mTrackName.decode(errors="replace")
                 car = vt.mVehicleName.decode(errors="replace")
                 phase = session_phase(scoring.mScoringInfo.mSession)
                 session_id = session_id_for(track, car, _is_online(scoring))
                 sectors = compute_sectors(
                     player.mLastSector1, player.mLastSector2, lap_time
-                )
+                ) if fresh else None
                 position = player_position(player.mPlace)
                 lap_dists = self._channels.get("lap_distance") or []
                 lap_len = max(lap_dists or [0.0])
@@ -706,17 +747,19 @@ class LmuSource:
                 # qualifying) -- the logged run never left practice.
                 lap_no = int(player.mTotalLaps)
                 record = build_lap_record(
-                    sim="lmu", track=track, car=car, lap_time=lap_time,
+                    sim="lmu", track=track, car=car,
+                    lap_time=lap_time if fresh else None,
                     invalidated=vt.mLapInvalidated, timestamp=self._now(),
                     channels=self._channels, phase=phase, session_id=session_id,
                     sectors=sectors, position=position, sector_bounds=sector_bounds,
-                    lap_no=lap_no, pit=self._pit_during_lap,
+                    lap_no=lap_no, pit=self._pit_during_lap, partial=partial,
                 )
-                if record is not None:
+                if record is not None and fresh:
                     self._committed_time = lap_time
             self._channels = {}  # start the next lap fresh (committed or discarded)
             self._sector_seq = []
             self._pit_during_lap = False
+            self._pit_at_lap_start = None
 
         sample = sample_from_telem(vt, dist)
         # Track-width usage lives on SCORING, not telemetry: path_lateral is the
@@ -729,6 +772,8 @@ class LmuSource:
         # PENDING LIVE VALIDATION: mPathLateral/mTrackEdge units + sign.
         sample["path_lateral"] = player.mPathLateral
         sample["track_edge"] = player.mTrackEdge
+        if self._pit_at_lap_start is None:
+            self._pit_at_lap_start = bool(player.mInPits)
         for k, v in sample.items():
             self._channels.setdefault(k, []).append(v)
         self._prev_dist = dist

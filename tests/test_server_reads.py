@@ -116,7 +116,7 @@ def test_session_laps(tmp_path, synthetic_lap):
                      "s1": None, "s2": None, "s3": None, "phase": None,
                      "track": synthetic_lap.track, "car": synthetic_lap.car,
                      "car_model": synthetic_lap.car,  # unknown entry -> raw name
-                     "lap_no": None, "pit": None}]
+                     "lap_no": None, "pit": None, "partial": None}]
 
 
 def test_analysis_404_without_cmap(tmp_path, synthetic_lap):

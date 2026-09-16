@@ -924,3 +924,132 @@ def test_compatibility_check_not_ok_when_nothing_opens():
     assert status.ok is False
     assert status.telemetry_mmf is None
     assert status.issues
+
+
+# --- issue #77: out/in/partial laps are STORED, not discarded -------------------
+
+def _partial_rig(tag: str):
+    """(write, step, src, records, close) over a private pair of test MMFs, the same
+    scripted-buffer harness the commit tests use. Extracted only because the four
+    partial-lap cases below each need their own fresh LmuSource."""
+    import mmap
+
+    from simcoach.lmu import smm
+    from simcoach.lmu.rf2structs import rF2Scoring, rF2Telemetry
+
+    tn, sn = f"$simcoach_test_telem_{tag}$", f"$simcoach_test_scoring_{tag}$"
+    tmap = mmap.mmap(-1, C.sizeof(rF2Telemetry), tagname=tn, access=mmap.ACCESS_WRITE)
+    smap = mmap.mmap(-1, C.sizeof(rF2Scoring), tagname=sn, access=mmap.ACCESS_WRITE)
+
+    def write(dist, last_lap, total_laps=0, in_pits=False, spd=180.0):
+        t = rF2Telemetry(); t.mVersionUpdateBegin = t.mVersionUpdateEnd = 1; t.mNumVehicles = 1
+        v = t.mVehicles[0]; v.mID = 1; v.mLocalVel.z = -spd / 3.6
+        v.mTrackName = b"Test Circuit"; v.mVehicleName = b"Car"
+        s = rF2Scoring(); s.mScoringInfo.mVersionUpdateBegin = s.mScoringInfo.mVersionUpdateEnd = 1
+        s.mScoringInfo.mNumVehicles = 1; s.mScoringInfo.mSession = 2
+        pv = s.mVehicles[0]; pv.mID = 1; pv.mIsPlayer = True; pv.mLapDist = dist
+        pv.mLastLapTime = last_lap; pv.mTotalLaps = total_laps; pv.mInPits = in_pits
+        tmap.seek(0); tmap.write(bytes(t)); smap.seek(0); smap.write(bytes(s))
+
+    src = smm.LmuSource(poll_hz=60, now_fn=lambda: 1_700_000_000.0)
+    records = []
+
+    def step():
+        record = src._poll_once(tn, sn)
+        if record is not None:
+            records.append(record)
+
+    def close():
+        tmap.close(); smap.close()
+
+    return write, step, records, close
+
+
+def test_out_lap_fragment_is_stored_as_a_partial_lap_with_no_time():
+    """Rig 2026-09-15: the out lap is the game's lap 1 and used to be DISCARDED
+    (mLastLapTime is still -1 at the line), so the app's numbering jumped. It is now
+    stored with lap_time None, valid False, partial 'out' and the game's own lap_no
+    -- 'out' because mInPits was true on the FIRST frame of the fragment."""
+    write, step, records, close = _partial_rig(uuid.uuid4().hex)
+
+    write(5.0, -1.0, total_laps=1, in_pits=True); step()     # leaves the pit box
+    for i in range(1, 250):                                   # drives the out lap
+        write(5.0 + i * 16.0, -1.0, total_laps=1); step()
+    write(3.0, -1.0, total_laps=1); step()                    # crosses S/F, still untimed
+    close()
+
+    assert len(records) == 1
+    r = records[0]
+    assert r.partial == "out"
+    assert r.lap_time is None
+    assert r.valid is False
+    assert r.lap_no == 1
+    assert r.sectors is None
+    assert len(r.channels["lap_distance"]) == 250
+
+
+def test_in_lap_fragment_is_stored_as_partial_in():
+    """The lap the driver pits on: untimed at the wrap, mInPits true on the WRAP
+    frame."""
+    write, step, records, close = _partial_rig(uuid.uuid4().hex)
+
+    write(5.0, -1.0, total_laps=9); step()
+    for i in range(1, 250):
+        write(5.0 + i * 16.0, -1.0, total_laps=9); step()
+    write(3.0, -1.0, total_laps=10, in_pits=True); step()     # dives into the pit lane
+    close()
+
+    assert len(records) == 1
+    assert records[0].partial == "in"
+    assert records[0].lap_no == 10
+    # `pit` keeps its shipped meaning -- mInPits over the lap's OWN sampled frames,
+    # which end before the wrap frame. The wrap frame's mInPits is what makes the
+    # kind 'in'; it is deliberately not retconned into this lap's pit flag.
+    assert records[0].pit is False
+
+
+def test_spin_fragment_with_no_pit_involvement_is_stored_as_partial():
+    """Neither in the pits at the start nor at the wrap (a spin/teleport back to
+    the line): still worth keeping -- a spin lap's inputs are exactly what the
+    driver asks about."""
+    write, step, records, close = _partial_rig(uuid.uuid4().hex)
+
+    write(5.0, -1.0, total_laps=4); step()
+    for i in range(1, 250):
+        write(5.0 + i * 16.0, -1.0, total_laps=4); step()
+    write(3.0, -1.0, total_laps=5); step()
+    close()
+
+    assert len(records) == 1
+    assert records[0].partial == "partial"
+    assert records[0].pit is False
+
+
+def test_garage_return_with_almost_no_telemetry_stores_nothing():
+    """A return to the garage ticks the game's lap counter with no line crossing and
+    leaves a handful of samples over a few metres. There is nothing to analyse, so it
+    is still DROPPED -- the fragment thresholds are what separate the two."""
+    write, step, records, close = _partial_rig(uuid.uuid4().hex)
+
+    write(5.0, -1.0, total_laps=5); step()
+    for i in range(1, 40):
+        write(5.0 + i * 2.0, -1.0, total_laps=5); step()      # 40 samples, ~80 m
+    write(1.0, -1.0, total_laps=6); step()
+    close()
+
+    assert records == []
+
+
+def test_build_lap_record_keeps_an_untimed_lap_when_it_is_flagged_partial():
+    from simcoach.lmu.smm import build_lap_record
+
+    ch = {"speed": [100.0, 101.0], "lap_distance": [0.0, 10.0]}
+    rec = build_lap_record(sim="lmu", track="T", car="C", lap_time=None, invalidated=False,
+                           timestamp=1.0, channels=ch, partial="out", lap_no=1)
+    assert rec is not None
+    assert rec.lap_time is None
+    assert rec.valid is False       # so every `valid = 1` consumer ignores it, unchanged
+    assert rec.partial == "out"
+    # Unflagged, an untimed lap is still the sentinel that must never be stored.
+    assert build_lap_record(sim="lmu", track="T", car="C", lap_time=-1.0, invalidated=False,
+                            timestamp=1.0, channels=ch) is None
