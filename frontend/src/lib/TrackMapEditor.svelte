@@ -195,6 +195,7 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { attachWheelZoom, attachPan, type Box } from "./mapzoom";
+  import { eventFeed } from "./events";
   import {
     getLapMap,
     getTrackMap,
@@ -204,7 +205,6 @@
     setTrackMapRotation,
     startMapCapture,
     cancelMapCapture,
-    mapCaptureStatus,
     buildRibbon,
     rebuildFromCapture,
     saveRibbon,
@@ -219,7 +219,6 @@
     open = false,
     onClose,
     onSaved,
-    pollMs = 2000,
     startMode = "edit",
     canEdit = true,
   }: {
@@ -228,7 +227,6 @@
     open?: boolean;
     onClose?: () => void;
     onSaved?: () => void;
-    pollMs?: number;
     startMode?: "view" | "edit"; // pane opens the modal in "view"; pencil -> "edit"
     canEdit?: boolean; // false = strictly read-only (no pencil/tools/save); editing lives in Track view
   } = $props();
@@ -291,14 +289,15 @@
   let capLaps: { idx: number; samples: number; length: number }[] = $state([]);
   let ribbon: RibbonPreview | null = $state(null);
   let genErr: string | null = $state(null);
-  let pollTimer: ReturnType<typeof setInterval> | undefined;
 
-  function stopPoll() {
-    if (pollTimer !== undefined) clearInterval(pollTimer);
-    pollTimer = undefined;
-  }
+  // #106: capture progress was a mapCaptureStatus() poll on `pollMs`; the sidecar
+  // now streams it, and only while a capture is running. Frames outside the
+  // capturing phase are ignored (e.g. the closing active:false frame after Build).
+  $effect(() => eventFeed.mapcapture.subscribe((f) => {
+    if (f && genPhase === "capturing") capLaps = f.laps;
+  }));
+
   function resetGen() {
-    stopPoll();
     genPhase = "off";
     capLaps = [];
     ribbon = null;
@@ -316,21 +315,10 @@
     capLaps = [];
     ribbon = null;
     genPhase = "capturing";
-    stopPoll();
-    pollTimer = setInterval(pollGen, pollMs);
-  }
-
-  async function pollGen() {
-    try {
-      capLaps = (await mapCaptureStatus()).laps;
-    } catch {
-      /* transient poll failure — keep waiting */
-    }
   }
 
   async function buildGen() {
     if (capLaps.length < 1) return;
-    stopPoll();
     genPhase = "building";
     genErr = null;
     try {
@@ -339,8 +327,7 @@
       genPhase = "preview";
     } catch {
       genErr = "Couldn't reconstruct the ribbon from those laps.";
-      genPhase = "capturing";
-      pollTimer = setInterval(pollGen, pollMs);
+      genPhase = "capturing"; // back to capturing: the feed resumes filling capLaps
     }
   }
 
@@ -399,7 +386,6 @@
   }
 
   async function cancelGen() {
-    stopPoll();
     try {
       await cancelMapCapture();
     } catch {
@@ -409,7 +395,6 @@
   }
 
   onDestroy(() => {
-    stopPoll();
     // Unmount mid-capture -> tell the server to leave mapping mode, else real
     // laps keep buffering unsaved.
     if (genPhase !== "off") cancelMapCapture().catch(() => {});

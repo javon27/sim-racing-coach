@@ -13,6 +13,7 @@ import {
   saveMapCloud,
   getTrackMap,
 } from "./api";
+import { eventFeed } from "./events";
 import TrackMapEditor, { nearestPathIndex, nearestDistIndex, layoutLabels, wrapLabel, localOutward, startMarker, type LabelItem } from "./TrackMapEditor.svelte";
 
 vi.mock("./api", async () => {
@@ -372,8 +373,9 @@ const ribbonFix = {
 };
 
 describe("TrackMapEditor — (re)generate map layout", () => {
-  // Shared mutable status; tests push buffered laps to drive the poll progression.
-  const cap = { active: true, live_track: "Monza", laps: [] as { idx: number; samples: number; length: number }[] };
+  // The sidecar streams capture progress on /events (#106); tests push frames.
+  const pushCapture = (laps: { idx: number; samples: number; length: number }[]) =>
+    eventFeed.push("mapcapture", { active: true, live_track: "Monza", laps });
 
   beforeEach(() => {
     vi.mocked(getLapMap).mockReset().mockResolvedValue(fixture);
@@ -384,15 +386,14 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     vi.mocked(rebuildFromCapture).mockReset().mockResolvedValue(ribbonFix);
     vi.mocked(saveRibbon).mockReset().mockResolvedValue({ saved: true, slug: "monza" });
     vi.mocked(saveMapCloud).mockReset().mockResolvedValue({ saved: true, slug: "monza" });
-    cap.laps = [];
-    vi.mocked(mapCaptureStatus).mockReset().mockImplementation(async () => ({ ...cap, laps: [...cap.laps] }));
+    vi.mocked(mapCaptureStatus).mockReset();
   });
   afterEach(cleanup);
 
   it("point-cloud capture: build with no designation, preview, and save", async () => {
     const onSaved = vi.fn();
     const onClose = vi.fn();
-    render(TrackMapEditor, { props: { lapId: 7, open: true, onSaved, onClose, pollMs: 5 } });
+    render(TrackMapEditor, { props: { lapId: 7, open: true, onSaved, onClose } });
     await screen.findByText("First"); // editor loaded
 
     await fireEvent.click(screen.getByText("Generate map layout"));
@@ -403,11 +404,12 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     const buildBtn = await screen.findByText("Build");
     expect((buildBtn as HTMLButtonElement).disabled).toBe(true);
 
-    cap.laps = [
+    pushCapture([
       { idx: 0, samples: 500, length: 5000 },
       { idx: 1, samples: 480, length: 4800 },
-    ];
+    ]);
     await waitFor(() => expect((screen.getByText("Build") as HTMLButtonElement).disabled).toBe(false));
+    expect(mapCaptureStatus).not.toHaveBeenCalled(); // no poller left
 
     await fireEvent.click(screen.getByText("Build"));
     expect(buildRibbon).toHaveBeenCalledWith(); // no left/right args
@@ -426,7 +428,7 @@ describe("TrackMapEditor — (re)generate map layout", () => {
   it("'Save capture only' persists the cloud without rebuilding geometry", async () => {
     const onSaved = vi.fn();
     const onClose = vi.fn();
-    render(TrackMapEditor, { props: { lapId: 7, open: true, onSaved, onClose, pollMs: 5 } });
+    render(TrackMapEditor, { props: { lapId: 7, open: true, onSaved, onClose } });
     await screen.findByText("First"); // map (with corners) loaded
 
     await fireEvent.click(screen.getByText("Generate map layout"));
@@ -435,10 +437,10 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     // Needs at least two passes; disabled until then.
     const btn = await screen.findByText("Save capture only");
     expect((btn as HTMLButtonElement).disabled).toBe(true);
-    cap.laps = [
+    pushCapture([
       { idx: 0, samples: 500, length: 5000 },
       { idx: 1, samples: 480, length: 4800 },
-    ];
+    ]);
     await waitFor(() => expect((screen.getByText("Save capture only") as HTMLButtonElement).disabled).toBe(false));
 
     await fireEvent.click(screen.getByText("Save capture only"));
@@ -448,7 +450,7 @@ describe("TrackMapEditor — (re)generate map layout", () => {
   });
 
   it("cancelling the capture calls cancelMapCapture and returns to the editor", async () => {
-    render(TrackMapEditor, { props: { lapId: 7, open: true, pollMs: 5 } });
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
     await screen.findByText("First");
 
     await fireEvent.click(screen.getByText("Generate map layout"));
@@ -460,7 +462,7 @@ describe("TrackMapEditor — (re)generate map layout", () => {
   });
 
   it("cancels mapping mode on unmount while capturing (no silent buffering)", async () => {
-    const { unmount } = render(TrackMapEditor, { props: { lapId: 7, open: true, pollMs: 5 } });
+    const { unmount } = render(TrackMapEditor, { props: { lapId: 7, open: true } });
     await screen.findByText("First");
     await fireEvent.click(screen.getByText("Generate map layout"));
     await screen.findByText(/three full laps/i);
@@ -470,7 +472,7 @@ describe("TrackMapEditor — (re)generate map layout", () => {
   });
 
   it("cancels mapping mode when open flips false while capturing", async () => {
-    const { rerender } = render(TrackMapEditor, { props: { lapId: 7, open: true, pollMs: 5 } });
+    const { rerender } = render(TrackMapEditor, { props: { lapId: 7, open: true } });
     await screen.findByText("First");
     await fireEvent.click(screen.getByText("Generate map layout"));
     await screen.findByText(/three full laps/i);
@@ -545,7 +547,7 @@ describe("TrackMapEditor — (re)generate map layout", () => {
   // NOT be torn down by the teardown effect — it used to cancelGen() the instant
   // genPhase became "capturing", killing the capture and leaking laps to the store.
   it("fresh session (lapId=null): capture starts and is NOT auto-cancelled", async () => {
-    render(TrackMapEditor, { props: { lapId: null, open: true, pollMs: 5 } });
+    render(TrackMapEditor, { props: { lapId: null, open: true } });
     // No lap map -> the capture-entry panel, not a dead "Loading…".
     // (Heading and button share this text here, so target the button.)
     await fireEvent.click(await screen.findByRole("button", { name: "Generate map layout" }));
@@ -554,7 +556,7 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     await screen.findByText(/three full laps/i); // entered + stayed in capturing
     expect(cancelMapCapture).not.toHaveBeenCalled(); // the bug: instant cancel
 
-    cap.laps = [{ idx: 0, samples: 500, length: 5000 }];
+    pushCapture([{ idx: 0, samples: 500, length: 5000 }]);
     await waitFor(() => expect(screen.getByText(/1 lap\(s\) buffered/i)).toBeTruthy());
     expect(cancelMapCapture).not.toHaveBeenCalled(); // still alive while buffering
   });
