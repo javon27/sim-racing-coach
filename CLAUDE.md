@@ -86,7 +86,12 @@ cd frontend && npx svelte-check         # frontend types
   `trackmap.py`/`mapbuild.py`/`ribbon.py`/`raceline.py` (corner maps +
   point-cloud track reconstruction), `track_lookup.py` (live-name → map/model
   resolution + `resolve_context`), `car_lookup.py` (live-name → car model),
-  `voice.py` (local speech-to-text model download/transcription).
+  `voice.py` (local speech-to-text + Kokoro model download/transcription),
+  `tts_kokoro.py` (offline Kokoro TTS behind the `Speaker` seam with NO GPL code loaded:
+  import stubs + misaki without spaCy — pinned to `kokoro-onnx==0.6.1`, `misaki==0.7.4`),
+  `speech_numbers.py` (number-to-words for spoken cues; also the `num2words` shim),
+  `pronunciations.py` (per-track `pronunciations` table → misaki inline markup;
+  harvested once by `scripts/harvest_pronunciations.py` on a dev machine, never shipped).
 - `simcoach/server/` — the FastAPI sidecar the desktop app talks to.
 - `simcoach/tracks/*.json` — committed shipped corner maps (curated defaults).
 - `frontend/` — Svelte + TypeScript desktop UI; `src-tauri/` — the Tauri shell.
