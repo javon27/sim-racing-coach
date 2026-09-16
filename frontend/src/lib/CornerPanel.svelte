@@ -98,7 +98,14 @@
             </td>
             <td>{Number.isFinite(c.min_spd) ? spd(c.min_spd).toFixed(0) : "—"}</td>
             <td title="metres before apex">{brakeBeforeApex(c)}</td>
-            <td>{(c.trailbrake_overlap * 100).toFixed(0)}%</td>
+            <!-- A corner the lap never reached comes back all-null (the sidecar maps
+                 NaN to null). `null * 100` is 0 in JS, which would print a measured-
+                 looking "0%" for a corner with no telemetry at all (#77). -->
+            <td
+              >{Number.isFinite(c.trailbrake_overlap)
+                ? `${(c.trailbrake_overlap * 100).toFixed(0)}%`
+                : "—"}</td
+            >
             <td
               class="delta"
               class:down={c.min_spd_delta !== null && c.min_spd_delta > 0}

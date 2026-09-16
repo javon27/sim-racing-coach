@@ -103,4 +103,30 @@ describe("CornerPanel", () => {
 
     expect(await screen.findByText(/no analysis for this lap/i)).toBeTruthy();
   });
+  it("a partial lap's untouched corners render as dashes, never a measured-looking 0", async () => {
+    // #77: an out/in/spin lap is stored and selectable. The corners it never reached
+    // come back all-null (the sidecar maps NaN to null), and `null * 100` is 0 in JS,
+    // so an unguarded cell would print "0%" trail-braking for a corner with no
+    // telemetry at all -- a fabricated number on a screen whose rule is measured-only.
+    vi.mocked(getLapAnalysis).mockResolvedValue({
+      lap_time: null,
+      corners: [
+        { ...cornerFixture, corner_no: 1, name: "Left Hairpin", direction: "left",
+          apex_dist: null, entry_spd: null, apex_spd: null, min_spd: null,
+          exit_spd: null, brake_point: null, throttle_point: null,
+          trailbrake_overlap: null, peak_brake: null, peak_lat_g: null,
+          min_spd_delta: null },
+        cornerFixture,
+      ],
+    } as never);
+
+    render(CornerPanel, { props: { lapId: 9 } });
+
+    await screen.findByText(/T1 Left Hairpin/);
+    const row = screen.getByText(/T1 Left Hairpin/).closest("tr")!;
+    const cells = [...row.querySelectorAll("td")].map((td) => td.textContent?.trim());
+    expect(cells.slice(1)).toEqual(["—", "—", "—", "—"]);
+    // The corner the lap DID reach still reads its real numbers.
+    expect(screen.getByText("12%")).toBeTruthy();
+  });
 });

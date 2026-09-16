@@ -361,6 +361,12 @@ body {
   font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
+/* An out/in/partial lap (#77): stored and numbered, but not a lap you drove a time
+   on. Muted with the existing token -- no new colour, and still fully clickable. */
+.lap.partial .n,
+.lap.partial .t {
+  color: var(--muted);
+}
 .lap .flag {
   font-size: 11px;
   font-family: var(--display);

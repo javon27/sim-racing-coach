@@ -143,4 +143,21 @@ describe("InputsPanel", () => {
     render(InputsPanel, { props: { lapId: null } });
     expect(screen.queryByText("selected lap")).toBeNull();
   });
+  it("draws a partial lap's traces: no lap time, a short distance span (#77)", async () => {
+    // A stored out/in/spin lap has real channels over part of the lap and lap_time
+    // null. The panel must draw it, not fall into "No telemetry for this lap."
+    vi.mocked(getLapInputs).mockResolvedValue({
+      lap: { lap_id: 11, lap_time: null, length: 1000, dist: [600, 800, 1000],
+             throttle: flat([1, 0, 1]), brake: flat([0, 1, 0]), steering: flat([0, 0, 0]) },
+      best: null,
+      corners: [],
+    } as never);
+
+    render(InputsPanel, { props: { lapId: 11 } });
+
+    await waitFor(() => expect(screen.queryByText(/loading/i)).toBeNull());
+    expect(screen.queryByText(/no telemetry for this lap/i)).toBeNull();
+    expect(screen.queryByText(/couldn't load inputs/i)).toBeNull();
+    expect(screen.getByText(/selected lap/i)).toBeTruthy();   // the trace legend
+  });
 });

@@ -478,4 +478,72 @@ describe("LapList", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(vi.mocked(getSessionLaps).mock.calls.length).toBe(calls);
   });
+  // --- issue #77: out/in/partial laps are listed, greyed, and never the best ----
+
+  /** The rig's shape: out lap, two timed laps, in-lap -- game lap numbers 1..4. */
+  const partialRun = [
+    { id: 11, lap_time: null, valid: 0, ts: 10, lap_no: 1, partial: "out" as const },
+    { id: 12, lap_time: 95.0, valid: 1, ts: 20, lap_no: 2 },
+    { id: 13, lap_time: 92.0, valid: 1, ts: 30, lap_no: 3 },
+    { id: 14, lap_time: null, valid: 0, ts: 40, lap_no: 4, partial: "in" as const },
+  ];
+
+  it("renders a partial lap greyed, with its kind instead of a time, still selectable", async () => {
+    pushStatus("S1", 14);
+    vi.mocked(getSessionLaps).mockResolvedValue(partialRun);
+
+    const onselect = vi.fn();
+    render(LapList, { props: { onselect } });
+
+    const outRow = await screen.findByText("Lap 1");
+    expect(screen.getByText("out lap")).toBeTruthy();
+    expect(screen.getByText("in lap")).toBeTruthy();
+    // Greyed via the shared muted class on the row, not a new colour.
+    expect(outRow.closest(".lap")?.classList.contains("partial")).toBe(true);
+    // A spin lap's inputs + corner panel are the point of storing it: still clickable.
+    await fireEvent.click(outRow);
+    expect(onselect).toHaveBeenCalledWith({ lap_id: 11, session_id: "S1" });
+  });
+
+  it("numbering runs 1,2,3,4 with no gap and no lap shows a bogus time", async () => {
+    pushStatus("S1", 14);
+    vi.mocked(getSessionLaps).mockResolvedValue(partialRun);
+
+    render(LapList);
+    await screen.findByText("Lap 1");
+    for (const n of [1, 2, 3, 4]) expect(screen.getByText(`Lap ${n}`)).toBeTruthy();
+    expect(screen.queryByText("0:00.000")).toBeNull();
+    expect(screen.queryByText("NaN:NaN")).toBeNull();
+  });
+
+  it("a partial lap is never the best lap", async () => {
+    pushStatus("S1", 14);
+    vi.mocked(getSessionLaps).mockResolvedValue(partialRun);
+
+    render(LapList);
+    const best = await screen.findByText("Lap 3");          // 92.0, the only real best
+    expect(best.closest(".lap")?.classList.contains("best")).toBe(true);
+    expect(screen.getByText("Lap 1").closest(".lap")?.classList.contains("best")).toBe(false);
+    // The Best header reads the real lap, not a null.
+    expect(document.querySelector(".best-head .t")?.textContent).toBe("1:32.000");
+  });
+
+  it("a partial lap never becomes the sector-delta reference", async () => {
+    // A null lap_time compares as 0 in JS, so an unguarded `<` makes the partial the
+    // reference and every real lap reads as slower. Give it sectors to be sure it is
+    // considered at all.
+    pushStatus("S1", 14);
+    vi.mocked(getSessionLaps).mockResolvedValue([
+      { id: 21, lap_time: null, valid: 0, ts: 10, lap_no: 1, partial: "in" as const,
+        s1: 1.0, s2: 1.0, s3: 1.0 },
+      { id: 22, lap_time: 95.0, valid: 1, ts: 20, lap_no: 2, s1: 30.0, s2: 32.0, s3: 33.0 },
+    ]);
+
+    render(LapList);
+    await screen.findByText("Lap 2");
+    // Lap 2 IS the reference, so each of its sectors reads "best", not a huge loss.
+    // Both rows carry sectors here, so target lap 2's own toggle.
+    await fireEvent.click(screen.getAllByLabelText("Toggle sector detail")[1]);
+    expect(screen.getAllByText("best").length).toBe(3);
+  });
 });

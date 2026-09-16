@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { getSessionLaps, withRetry, type LapRow, type StatusResponse } from "./api";
+  import { getSessionLaps, withRetry, type LapRow, type PartialKind, type StatusResponse } from "./api";
   import { eventFeed } from "./events";
 
   let {
@@ -92,10 +92,14 @@
   // equal the live session id, so this can't be compared against reviewTarget).
   let reviewLiveSessionId: string | null = null;
 
+  // A partial lap (#77) has lap_time null, and in JS `null < 92` is TRUE — an
+  // unguarded comparison would crown every out-lap the session best. Skip them
+  // outright: a lap with no time can never be the fastest one.
   function bestIdOf(l: LapRow[]): number | null {
     return (
       l.reduce<LapRow | null>(
-        (best, lap) => (best === null || lap.lap_time < best.lap_time ? lap : best),
+        (best, lap) =>
+          lap.lap_time == null ? best : best === null || lap.lap_time < best.lap_time! ? lap : best,
         null,
       )?.id ?? null
     );
@@ -253,12 +257,24 @@
 
   onDestroy(clearDead);
 
-  function formatTime(seconds: number): string {
+  function formatTime(seconds: number | null): string {
+    if (seconds == null || !Number.isFinite(seconds)) return "—";
     // Round to ms before splitting so e.g. 119.9996 -> "2:00.000", not "1:60.000".
     const totalMs = Math.round(seconds * 1000);
     const m = Math.floor(totalMs / 60000);
     const s = ((totalMs - m * 60000) / 1000).toFixed(3);
     return `${m}:${s.padStart(6, "0")}`;
+  }
+
+  // What a partial lap shows where its lap time would go. Its NUMBER is the reason
+  // the row exists, so the row keeps everything else and only the time is replaced.
+  const PARTIAL_WORD: Record<PartialKind, string> = {
+    out: "out lap",
+    in: "in lap",
+    partial: "partial",
+  };
+  function timeText(lap: LapRow): string {
+    return lap.partial ? PARTIAL_WORD[lap.partial] : formatTime(lap.lap_time);
   }
 
   // `== null` catches both null (API: no sectors) and undefined (defensive).
@@ -273,8 +289,9 @@
   const bests = $derived.by(() => {
     let ref: LapRow | null = null;
     for (const l of laps) {
+      if (l.lap_time == null) continue;   // a partial lap is never the reference (#77)
       if (l.s1 == null && l.s2 == null && l.s3 == null) continue;
-      if (ref === null || l.lap_time < ref.lap_time) ref = l;
+      if (ref === null || l.lap_time < ref.lap_time!) ref = l;
     }
     return { s1: ref?.s1 ?? null, s2: ref?.s2 ?? null, s3: ref?.s3 ?? null };
   });
@@ -351,6 +368,7 @@
           <div
             class="lap"
             class:best={lap.id === bestId}
+            class:partial={lap.partial != null}
             class:selected={lap.id === selectedLapId}
           >
             {#if sectors}
@@ -378,8 +396,8 @@
                 aria-expanded={open}
                 onclick={() => toggleDetail(lap.id)}
               >
-                <span class="t">{formatTime(lap.lap_time)}</span>
-                <span class="flag">{lap.valid ? "" : "✗ inv"}</span>
+                <span class="t">{timeText(lap)}</span>
+                <span class="flag">{lap.valid || lap.partial ? "" : "✗ inv"}</span>
                 <span class="chev">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6" /></svg>
                 </span>
@@ -393,8 +411,8 @@
                 onclick={() => select(lap.id)}
               >
                 <span class="n">Lap {lap.num}</span>
-                <span class="t">{formatTime(lap.lap_time)}</span>
-                <span class="flag">{lap.valid ? "" : "✗ inv"}</span>
+                <span class="t">{timeText(lap)}</span>
+                <span class="flag">{lap.valid || lap.partial ? "" : "✗ inv"}</span>
               </button>
             {/if}
           </div>

@@ -33,9 +33,13 @@ export interface SessionRow {
   has_chat?: boolean;
 }
 
+/** The kind of UNFINISHED lap a row is, or absent/null for a normal timed lap (#77). */
+export type PartialKind = "out" | "in" | "partial";
+
 export interface LapRow {
   id: number;
-  lap_time: number;
+  /** null ONLY on a partial lap — the game posts no time for one. */
+  lap_time: number | null;
   valid: number;
   ts: number;
   s1: number | null;
@@ -47,6 +51,7 @@ export interface LapRow {
   car_model?: string | null;
   lap_no?: number | null;
   pit?: boolean | null;
+  partial?: PartialKind | null;
 }
 
 export interface CornerMetrics {
