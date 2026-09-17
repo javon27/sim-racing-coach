@@ -1,6 +1,7 @@
 import sqlite3
 import sys
 import threading
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -2117,6 +2118,25 @@ def test_clear_all_forgets_race_rows_and_imports(tmp_path, synthetic_lap):
     assert s.conn.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 0
     assert s.conn.execute("SELECT COUNT(*) FROM race_sessions").fetchone()[0] == 0
     assert s.is_ingested("some/race.xml", 7.0) is False
+
+
+def test_clear_all_wipes_mapping_point_clouds_too(tmp_path):
+    # #17: the mapping point clouds app.py's _save_cloud writes to
+    # data_dir/captures/*.npz used to survive a reset the docstring describes
+    # as wiping the raw telemetry files.
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    top = Path(s.data_dir) / "lap1.npz"
+    top.parent.mkdir(parents=True, exist_ok=True)
+    top.write_bytes(b"x")
+    cloud = Path(s.data_dir) / "captures" / "some_track.npz"
+    cloud.parent.mkdir(parents=True, exist_ok=True)
+    cloud.write_bytes(b"x")
+
+    s.clear_all()
+
+    assert not top.exists()
+    assert not cloud.exists()
     assert s.race_session(_LIVE_SID) is None
     assert s.race_session(_RESULT_SID) is None
 

@@ -1285,8 +1285,10 @@ class LapStore:
 
     def clear_all(self) -> None:
         """Wipe all persisted data: laps, setups, corner metrics, coach chat, race
-        outcomes, the record of which result files were imported, and the raw per-lap
-        telemetry files. Used by Settings > reset data.
+        outcomes, the record of which result files were imported, the raw per-lap
+        telemetry files, AND the raw mapping point clouds under data_dir/captures/
+        (#17 -- these used to survive a reset the docstring described as wiping the
+        raw telemetry files). Used by Settings > reset data.
 
         race_sessions and ingested_files are cleared too: leaving them behind left race
         outcomes with no laps to belong to, and told the next ingest every result file
@@ -1302,7 +1304,7 @@ class LapStore:
                 if t in present:
                     self.conn.execute(f"DELETE FROM {t}")
             self.conn.commit()
-        for f in Path(self.data_dir).glob("*.npz"):
+        for f in Path(self.data_dir).rglob("*.npz"):
             f.unlink(missing_ok=True)
 
     def _already_stored_laps(self, rs, session_id: str) -> list[tuple[int, float | None]]:
