@@ -16,12 +16,13 @@ def test_make_model_fake():
     assert isinstance(make_model("fake"), FakeModel)
 
 
-def test_make_model_anthropic():
+def test_make_model_anthropic(monkeypatch):
+    import simcoach.model.factory as factory_mod
     from simcoach.model import make_model
     from simcoach.model.claude import ClaudeModel
+    monkeypatch.setattr(factory_mod, "get_api_key", lambda: "sk-test")
     assert isinstance(make_model("anthropic"), ClaudeModel)
     # factory.py itself must not import the anthropic SDK at module top level
-    import simcoach.model.factory as factory_mod
     assert "anthropic" not in factory_mod.__dict__
 
 
@@ -38,6 +39,7 @@ def test_make_model_bogus_raises_value_error():
 
 
 def test_make_model_default_provider_from_env(monkeypatch):
+    import simcoach.model.factory as factory_mod
     from simcoach.model import make_model
     from simcoach.model.claude import ClaudeModel
     from simcoach.model.fake import FakeModel
@@ -45,5 +47,6 @@ def test_make_model_default_provider_from_env(monkeypatch):
     monkeypatch.setenv("SIMCOACH_MODEL_PROVIDER", "fake")
     assert isinstance(make_model(), FakeModel)
 
+    monkeypatch.setattr(factory_mod, "get_api_key", lambda: "sk-test")
     monkeypatch.delenv("SIMCOACH_MODEL_PROVIDER", raising=False)
     assert isinstance(make_model(), ClaudeModel)
