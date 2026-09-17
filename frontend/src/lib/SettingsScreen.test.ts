@@ -78,7 +78,7 @@ function baseSettings(overrides: Partial<SettingsResponse> = {}): SettingsRespon
     log_level: "INFO",
     driver: { braking_style: null, balance_preference: null, risk_tolerance: null },
     voice: {
-      enabled: false, ptt_key: "F9", ptt_wheel: null, ptt_gamepad: null, tts_voice: null, tts_rate: 1.0,
+      enabled: false, ptt_key: "F9", ptt_wheel: null, ptt_gamepad: null, ptt_wheel_name: null, ptt_gamepad_name: null, tts_voice: null, tts_rate: 1.0,
       tts_engine: "windows", kokoro_voice: "af_heart",
       vad_threshold: 0.02, vad_silence_ms: 1000, vad_max_s: 20, conversation_idle_s: 30, mic_device_id: null,
     },
@@ -501,7 +501,7 @@ describe("SettingsScreen", () => {
   // --- Settings -> Voice (#104) ---
 
   const voiceDefaults = {
-    enabled: false, ptt_key: "F9", ptt_wheel: null, ptt_gamepad: null, tts_voice: null, tts_rate: 1,
+    enabled: false, ptt_key: "F9", ptt_wheel: null, ptt_gamepad: null, ptt_wheel_name: null, ptt_gamepad_name: null, tts_voice: null, tts_rate: 1,
     tts_engine: "windows" as const, kokoro_voice: "af_heart",
     vad_threshold: 0.02, vad_silence_ms: 1000, vad_max_s: 20, conversation_idle_s: 30, mic_device_id: null,
   };
@@ -641,6 +641,65 @@ describe("SettingsScreen", () => {
 
       await waitFor(() =>
         expect(within(row.closest(".field")!).getByText("Fanatec DD1 · button 2")).toBeTruthy(),
+      );
+    });
+
+    it("capturing a gamepad bind stores the device name from listDevices (#104)", async () => {
+      vi.mocked(isTauri).mockReturnValue(true);
+      vi.mocked(captureNext).mockResolvedValue("winmm:1:0");
+      vi.mocked(listDevices).mockResolvedValue([{ device: "winmm:1", name: "Xbox controller 2" }]);
+      vi.mocked(pushBinds).mockResolvedValue(null);
+      vi.mocked(getSettings).mockResolvedValue(baseSettings({ voice: voiceDefaults }));
+      vi.mocked(voiceStatus).mockResolvedValue({ installed: true, installing: false, progress_bytes: 0, total_bytes: null, error: null });
+      vi.mocked(putSettings).mockImplementation(async (cfg) =>
+        baseSettings({ voice: { ...voiceDefaults, ...(cfg.voice as object) } }),
+      );
+
+      render(SettingsScreen);
+      const row = await screen.findByText("Gamepad button");
+      await fireEvent.click(within(row.closest(".field")!).getByRole("button", { name: "Capture" }));
+
+      await waitFor(() =>
+        expect(vi.mocked(putSettings).mock.calls.at(-1)![0]).toMatchObject({
+          voice: { ptt_gamepad: "winmm:1:0", ptt_gamepad_name: "Xbox controller 2" },
+        }),
+      );
+    });
+
+    it("shows the stored name + not-connected hint when the bound device isn't currently listed (#104)", async () => {
+      vi.mocked(isTauri).mockReturnValue(true);
+      vi.mocked(listDevices).mockResolvedValue([]);
+      vi.mocked(getSettings).mockResolvedValue(
+        baseSettings({ voice: { ...voiceDefaults, ptt_gamepad: "winmm:1:0", ptt_gamepad_name: "Xbox controller 2" } }),
+      );
+      vi.mocked(voiceStatus).mockResolvedValue({ installed: true, installing: false, progress_bytes: 0, total_bytes: null, error: null });
+
+      render(SettingsScreen);
+      const row = await screen.findByText("Gamepad button");
+
+      await waitFor(() =>
+        expect(within(row.closest(".field")!).getByText("Xbox controller 2 · button 1 (not connected)")).toBeTruthy(),
+      );
+    });
+
+    it("Clear resets both the bind and its stored name (#104)", async () => {
+      vi.mocked(isTauri).mockReturnValue(true);
+      vi.mocked(getSettings).mockResolvedValue(
+        baseSettings({ voice: { ...voiceDefaults, ptt_gamepad: "winmm:1:0", ptt_gamepad_name: "Xbox controller 2" } }),
+      );
+      vi.mocked(voiceStatus).mockResolvedValue({ installed: true, installing: false, progress_bytes: 0, total_bytes: null, error: null });
+      vi.mocked(putSettings).mockImplementation(async (cfg) =>
+        baseSettings({ voice: { ...voiceDefaults, ...(cfg.voice as object) } }),
+      );
+
+      render(SettingsScreen);
+      const row = await screen.findByText("Gamepad button");
+      await fireEvent.click(within(row.closest(".field")!).getByRole("button", { name: "Clear" }));
+
+      await waitFor(() =>
+        expect(vi.mocked(putSettings).mock.calls.at(-1)![0]).toMatchObject({
+          voice: { ptt_gamepad: null, ptt_gamepad_name: null },
+        }),
       );
     });
 

@@ -59,17 +59,27 @@ export async function listDevices(shell: ShellApi = tauriShell()): Promise<Devic
   }
 }
 
-/** Mirrors the Rust `describe_bind`: "<name> · button <N+1>", falling back to the raw
- * device id when unknown, or the raw bind id when it doesn't parse. */
-export function describeBind(id: string | null, devices: DeviceInfo[]): string {
+/** The `<device>` part of a `<device>:<button>` bind id, or null if it doesn't parse. */
+export function deviceIdOf(id: string | null): string | null {
+  if (id === null) return null;
+  const i = id.lastIndexOf(":");
+  return i === -1 ? null : id.slice(0, i);
+}
+
+/** Mirrors the Rust `describe_bind`: "<name> · button <N+1>". The live device list wins;
+ * if the device isn't currently listed, falls back to the name captured at bind time
+ * (storedName, #104) with a "(not connected)" hint; else the raw device id as before. */
+export function describeBind(id: string | null, devices: DeviceInfo[], storedName?: string | null): string {
   if (id === null) return "not set";
   const i = id.lastIndexOf(":");
   if (i === -1) return id;
   const device = id.slice(0, i);
   const button = Number(id.slice(i + 1));
   if (!Number.isInteger(button)) return id;
-  const name = devices.find((d) => d.device === device)?.name ?? device;
-  return `${name} · button ${button + 1}`;
+  const live = devices.find((d) => d.device === device)?.name;
+  if (live) return `${live} · button ${button + 1}`;
+  if (storedName) return `${storedName} · button ${button + 1} (not connected)`;
+  return `${device} · button ${button + 1}`;
 }
 
 /** Arms capture and resolves with the next pressed bind id, or null on timeout. */

@@ -113,3 +113,14 @@ def test_voice_defaults_include_engine_and_kokoro_voice(tmp_path, monkeypatch):
     monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
     cfg = config.load_config()
     assert cfg["voice"]["tts_engine"] == "windows" and cfg["voice"]["kokoro_voice"] == "af_heart"
+
+
+def test_bind_names_default_none_and_round_trip(tmp_path):
+    """#104: the device name captured with a wheel/gamepad bind, so Settings can
+    show it even when the device is asleep at render time."""
+    p = str(tmp_path / "config.json")
+    v = config.load_config(p)["voice"]
+    assert v["ptt_wheel_name"] is None and v["ptt_gamepad_name"] is None
+    config.save_config({"voice": {"ptt_wheel_name": "Fanatec DD1", "ptt_gamepad_name": "Xbox controller 2"}}, p)
+    v = config.load_config(p)["voice"]
+    assert v["ptt_wheel_name"] == "Fanatec DD1" and v["ptt_gamepad_name"] == "Xbox controller 2"

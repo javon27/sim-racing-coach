@@ -25,7 +25,7 @@
   } from "./api";
   import { eventFeed } from "./events";
   import InfoTip from "./InfoTip.svelte";
-  import { isTauri as isTauriShell, captureNext, describeBind, listDevices, pushBinds, type DeviceInfo } from "./voice-shell";
+  import { isTauri as isTauriShell, captureNext, deviceIdOf, describeBind, listDevices, pushBinds, type DeviceInfo } from "./voice-shell";
   import { makeSpeaker } from "./audio";
 
   const KOKORO_PREVIEW_SENTENCE = "Brake later into turn four, the fast left after the long straight.";
@@ -223,12 +223,22 @@
     await syncVoiceShell();
   }
 
+  // Name known at capture time (device just answered) -- persisted alongside the bind
+  // so Settings can still show it if the device is asleep/unlisted later (#104).
+  async function nameForBind(id: string | null): Promise<string | null> {
+    const deviceId = deviceIdOf(id);
+    if (deviceId === null) return null;
+    devices = await listDevices();
+    return devices.find((d) => d.device === deviceId)?.name ?? null;
+  }
+
   async function captureWheel() {
     capturingWheel = true;
     const id = await captureNext();
     capturingWheel = false;
     if (!settings || id === null) return;
-    settings = { ...settings, voice: { ...settings.voice, ptt_wheel: id } };
+    const name = await nameForBind(id);
+    settings = { ...settings, voice: { ...settings.voice, ptt_wheel: id, ptt_wheel_name: name } };
     await saveVoiceConfig();
   }
 
@@ -237,19 +247,20 @@
     const id = await captureNext();
     capturingGamepad = false;
     if (!settings || id === null) return;
-    settings = { ...settings, voice: { ...settings.voice, ptt_gamepad: id } };
+    const name = await nameForBind(id);
+    settings = { ...settings, voice: { ...settings.voice, ptt_gamepad: id, ptt_gamepad_name: name } };
     await saveVoiceConfig();
   }
 
   function clearWheel() {
     if (!settings) return;
-    settings = { ...settings, voice: { ...settings.voice, ptt_wheel: null } };
+    settings = { ...settings, voice: { ...settings.voice, ptt_wheel: null, ptt_wheel_name: null } };
     saveVoiceConfig();
   }
 
   function clearGamepad() {
     if (!settings) return;
-    settings = { ...settings, voice: { ...settings.voice, ptt_gamepad: null } };
+    settings = { ...settings, voice: { ...settings.voice, ptt_gamepad: null, ptt_gamepad_name: null } };
     saveVoiceConfig();
   }
 
@@ -714,7 +725,7 @@
         <div class="field">
           <span class="lbl">Wheel button<InfoTip text="A wheel button held to talk, in addition to the keyboard key." /></span>
           <div class="control">
-            <span class="val" title={settings.voice.ptt_wheel ?? undefined}>{describeBind(settings.voice.ptt_wheel, devices)}</span>
+            <span class="val" title={settings.voice.ptt_wheel ?? undefined}>{describeBind(settings.voice.ptt_wheel, devices, settings.voice.ptt_wheel_name)}</span>
             <button type="button" onclick={captureWheel}>{capturingWheel ? "Press a button…" : "Capture"}</button>
             <button type="button" onclick={clearWheel} disabled={!settings.voice.ptt_wheel}>Clear</button>
           </div>
@@ -722,7 +733,7 @@
         <div class="field">
           <span class="lbl">Gamepad button<InfoTip text="A gamepad button held to talk, in addition to the keyboard key." /></span>
           <div class="control">
-            <span class="val" title={settings.voice.ptt_gamepad ?? undefined}>{describeBind(settings.voice.ptt_gamepad, devices)}</span>
+            <span class="val" title={settings.voice.ptt_gamepad ?? undefined}>{describeBind(settings.voice.ptt_gamepad, devices, settings.voice.ptt_gamepad_name)}</span>
             <button type="button" onclick={captureGamepad}>{capturingGamepad ? "Press a button…" : "Capture"}</button>
             <button type="button" onclick={clearGamepad} disabled={!settings.voice.ptt_gamepad}>Clear</button>
           </div>

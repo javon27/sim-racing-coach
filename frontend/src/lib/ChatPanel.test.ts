@@ -710,7 +710,7 @@ describe("ChatPanel", () => {
   it("switching voice.mic_device_id disposes the previous MicRecorder", async () => {
     Object.defineProperty(navigator, "mediaDevices", { value: {}, configurable: true });
     const voiceSettings = (mic_device_id: string) => ({
-      enabled: true, ptt_key: "F9", ptt_wheel: null, ptt_gamepad: null, tts_voice: null, tts_rate: 1,
+      enabled: true, ptt_key: "F9", ptt_wheel: null, ptt_gamepad: null, ptt_wheel_name: null, ptt_gamepad_name: null, tts_voice: null, tts_rate: 1,
       tts_engine: "windows" as const, kokoro_voice: "af_heart",
       vad_threshold: 0.02, vad_silence_ms: 1000, vad_max_s: 20, conversation_idle_s: 30, mic_device_id,
     });
@@ -734,7 +734,7 @@ describe("ChatPanel", () => {
   });
 
   const kokoroVoiceSettings = (engine: "windows" | "kokoro") => ({
-    enabled: true, ptt_key: "F9", ptt_wheel: null, ptt_gamepad: null, tts_voice: null, tts_rate: 1,
+    enabled: true, ptt_key: "F9", ptt_wheel: null, ptt_gamepad: null, ptt_wheel_name: null, ptt_gamepad_name: null, tts_voice: null, tts_rate: 1,
     tts_engine: engine, kokoro_voice: "af_heart",
     vad_threshold: 0.02, vad_silence_ms: 1000, vad_max_s: 20, conversation_idle_s: 30, mic_device_id: null,
   });

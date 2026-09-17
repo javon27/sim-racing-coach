@@ -34,6 +34,8 @@ DEFAULTS = {
         "ptt_key": "F9",          # keyboard PTT bind (KeyboardEvent.code / global-shortcut name)
         "ptt_wheel": None,        # "<device_id>:<button>" from the shell's capture flow (slice 4)
         "ptt_gamepad": None,
+        "ptt_wheel_name": None,   # display name captured with the bind (#104); None = unknown
+        "ptt_gamepad_name": None,
         "tts_voice": None,        # speechSynthesis voice name; None = browser default
         "tts_rate": 1.0,
         "tts_engine": "windows",  # "windows" | "kokoro" (#104)

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { attachShell, captureNext, describeBind, pushBinds, type ShellApi } from "./voice-shell";
+import { attachShell, captureNext, describeBind, deviceIdOf, pushBinds, type ShellApi } from "./voice-shell";
 
 function fakeShell() {
   const handlers = new Map<string, (p: unknown) => void>();
@@ -42,5 +42,26 @@ describe("voice-shell", () => {
     expect(describeBind("winmm:3:1", devices)).toBe("winmm:3 · button 2");
     expect(describeBind("garbage", devices)).toBe("garbage");
     expect(describeBind(null, devices)).toBe("not set");
+  });
+
+  it("describeBind: live name wins over a stored name (#104)", () => {
+    const devices = [{ device: "winmm:0", name: "Fanatec DD1" }];
+    expect(describeBind("winmm:0:1", devices, "Old Stored Name")).toBe("Fanatec DD1 · button 2");
+  });
+
+  it("describeBind: falls back to the stored name with a not-connected hint when the device isn't listed (#104)", () => {
+    expect(describeBind("winmm:3:1", [], "Xbox controller 2")).toBe("Xbox controller 2 · button 2 (not connected)");
+  });
+
+  it("describeBind: falls back to the raw id when there's no live or stored name (#104)", () => {
+    expect(describeBind("winmm:3:1", [], null)).toBe("winmm:3 · button 2");
+    expect(describeBind("garbage", [], "Stored")).toBe("garbage");
+  });
+
+  it("deviceIdOf extracts the device id from a bind id (#104)", () => {
+    expect(deviceIdOf("winmm:0:1")).toBe("winmm:0");
+    expect(deviceIdOf("xinput:0:4")).toBe("xinput:0");
+    expect(deviceIdOf("garbage")).toBe(null);
+    expect(deviceIdOf(null)).toBe(null);
   });
 });

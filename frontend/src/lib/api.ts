@@ -141,6 +141,8 @@ export interface VoiceSettings {
   ptt_key: string;
   ptt_wheel: string | null;
   ptt_gamepad: string | null;
+  ptt_wheel_name: string | null;
+  ptt_gamepad_name: string | null;
   tts_voice: string | null;
   tts_rate: number;
   tts_engine: "windows" | "kokoro";
