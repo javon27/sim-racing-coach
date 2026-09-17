@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -124,3 +125,25 @@ def test_bind_names_default_none_and_round_trip(tmp_path):
     config.save_config({"voice": {"ptt_wheel_name": "Fanatec DD1", "ptt_gamepad_name": "Xbox controller 2"}}, p)
     v = config.load_config(p)["voice"]
     assert v["ptt_wheel_name"] == "Fanatec DD1" and v["ptt_gamepad_name"] == "Xbox controller 2"
+
+
+def test_save_config_writes_atomically(tmp_path, monkeypatch):
+    # #11: a bare write_text leaves invalid JSON on a crash mid-write, which
+    # load_config's malformed-JSON fallback silently swallows back to defaults.
+    # save_config must write to a tmp file and os.replace it into place, like
+    # _write_track_json does for track maps.
+    p = tmp_path / "config.json"
+    calls = []
+    real_replace = os.replace
+
+    def recording_replace(src, dst):
+        calls.append((str(src), str(dst)))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", recording_replace)
+    config.save_config({"units": "imperial"}, str(p))
+    assert len(calls) == 1
+    src, dst = calls[0]
+    assert dst == str(p)
+    assert src != str(p) and src.startswith(str(p.parent))  # a distinct tmp path
+    assert config.load_config(str(p))["units"] == "imperial"

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from pathlib import Path
 
 from . import paths
@@ -60,6 +61,22 @@ def _path(path: str | None) -> Path:
     return Path(path) if path else paths.config_path()
 
 
+def _atomic_write_text(p: Path, text: str) -> None:
+    """Write `text` to `p` via a unique tmp file + os.replace, so a crash
+    mid-write never leaves a partial/corrupt file -- a bare write_text did
+    (#11); load_config's malformed-JSON fallback would then silently drop
+    wheel binds, model choice and driver prefs back to defaults."""
+    fd, tmp = tempfile.mkstemp(dir=str(p.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.replace(tmp, p)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
 def load_config(path: str | None = None) -> dict:
     """Read the config file merged over DEFAULTS, then apply env overrides.
     Writes a starter file with the defaults on first run so there's something
@@ -80,7 +97,7 @@ def load_config(path: str | None = None) -> dict:
             pass  # malformed/unreadable -> defaults
     else:
         try:
-            p.write_text(json.dumps(cfg, indent=2))
+            _atomic_write_text(p, json.dumps(cfg, indent=2))
         except OSError:
             pass
     for key, env in ENV_OVERRIDES.items():
@@ -108,4 +125,4 @@ def save_config(cfg: dict, path: str | None = None) -> None:
         if isinstance(default, dict) and isinstance(on_disk.get(key), dict) and isinstance(safe.get(key), dict):
             safe = {**safe, key: {**on_disk[key], **safe[key]}}
     on_disk.update(safe)
-    p.write_text(json.dumps(on_disk, indent=2))
+    _atomic_write_text(p, json.dumps(on_disk, indent=2))
