@@ -1545,3 +1545,20 @@ def test_saving_an_unchanged_spa_shaped_fixture_by_lap_route_keeps_directions_an
     assert after["_config_note"] == before["_config_note"]
     assert after["_distances_note"] == before["_distances_note"]
     assert after["length_m"] == before["length_m"]
+
+
+def test_in_rejects_a_slug_containing_a_separator(tmp_path):
+    # #18: `b in p.parents` alone accepts a slug with a path separator --
+    # "sub/evil" resolves INSIDE base (base is an ancestor, just not the
+    # immediate parent), so the old check let it through. Unreachable today
+    # (every real caller passes track_slug's [a-z0-9_]-only output), but the
+    # comment sold it as a guard this closed gap now actually provides.
+    from simcoach.server.app import _in
+    base = tmp_path / "tracks"
+    base.mkdir()
+    with pytest.raises(Exception) as exc:
+        _in(base, "sub/evil")
+    assert getattr(exc.value, "status_code", None) == 400
+    # A plain slug still resolves as a direct child of base.
+    p = _in(base, "circuit_de_spa_francorchamps")
+    assert p == (base / "circuit_de_spa_francorchamps.json").resolve()

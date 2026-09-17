@@ -249,6 +249,21 @@ def _load_cloud(path) -> list[dict]:
         return []
 
 
+def _in(base: Path, slug: str) -> Path:
+    # <base>/<slug>.json, rejecting any path that escapes base (defense in depth:
+    # track_slug already sanitizes to [a-z0-9_], but this guards owned data).
+    # `b in p.parents` alone accepts a slug containing a separator (e.g.
+    # "sub/evil") -- it resolves INSIDE base, so b is one of its parents, just
+    # not the immediate one. Also require the immediate parent be base itself
+    # (#18), so the result is always a direct child, never a subdirectory.
+    # Module-level (no closure over app/store) so it's directly unit-testable.
+    b = base.resolve()
+    p = (b / f"{slug}.json").resolve()
+    if b not in p.parents or p.parent != b:
+        raise HTTPException(400, "invalid track")
+    return p
+
+
 def _capture_loop(source, store, app_state) -> None:
     """One pass over `source.laps()`: save each completed lap to `store` and
     record it on `app_state.latest` so /status and the lap list see it live.
@@ -342,15 +357,6 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # .npz captures). Reads prefer the user copy so a re-map overrides a shipped
         # one; writes go to the install dir when writable (dev curation) else app-data.
         return Path(store.data_dir) / "tracks", app.state.tracks_dir
-
-    def _in(base: Path, slug: str) -> Path:
-        # <base>/<slug>.json, rejecting any path that escapes base (defense in depth:
-        # track_slug already sanitizes to [a-z0-9_], but this guards owned data).
-        b = base.resolve()
-        p = (b / f"{slug}.json").resolve()
-        if b not in p.parents:
-            raise HTTPException(400, "invalid track")
-        return p
 
     def _write_track_json(track: str, out: dict) -> dict:
         # Returns the authored per-corner notes this write dropped (key -> text), which
