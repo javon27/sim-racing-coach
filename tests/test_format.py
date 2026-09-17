@@ -336,10 +336,11 @@ def test_format_corner_line_silent_without_gg_fields():
 
 
 def test_format_lap_facts_shows_grip_envelope_line():
+    # #108 item 2: only once the envelope rests on >= 5 laps.
     from simcoach.analysis import LapAnalysis
     from simcoach.format import format_lap_facts
     a = LapAnalysis(lap_time=90.0, corners=[], has_reference=False,
-                    gg_envelope=1.85, gg_used=0.72)
+                    gg_envelope=1.85, gg_used=0.72, gg_envelope_laps=6)
     out = format_lap_facts(a)
     assert "Grip envelope ~1.9 g (observed); this lap used 72% of it in the corners." in out
 
@@ -350,6 +351,49 @@ def test_format_lap_facts_silent_without_gg_fields():
     a = LapAnalysis(lap_time=90.0, corners=[], has_reference=False)
     out = format_lap_facts(a)
     assert "envelope" not in out
+
+
+def test_format_lap_facts_reports_peak_g_while_envelope_still_forming():
+    # #108 item 2: fewer than 5 laps feeding the envelope -> peak g, not a
+    # meaningless (possibly >100%) percentage.
+    from simcoach.analysis import LapAnalysis
+    from simcoach.format import format_lap_facts
+    a = LapAnalysis(lap_time=90.0, corners=[], has_reference=False,
+                    gg_envelope=1.2, gg_used=1.43, gg_peak=1.72, gg_envelope_laps=2)
+    out = format_lap_facts(a)
+    assert "Peak combined grip this lap: 1.7 g (grip envelope still forming: 2 of 5 laps)." in out
+    assert "Grip envelope" not in out
+    assert "143%" not in out
+
+
+def test_format_lap_facts_clamps_grip_pct_at_100():
+    from simcoach.analysis import LapAnalysis
+    from simcoach.format import format_lap_facts
+    a = LapAnalysis(lap_time=90.0, corners=[], has_reference=False,
+                    gg_envelope=1.2, gg_used=1.43, gg_envelope_laps=6)
+    out = format_lap_facts(a)
+    assert "100%" in out
+    assert "143%" not in out
+
+
+def test_format_lap_facts_suppresses_per_corner_envelope_suffix_while_forming():
+    from simcoach.analysis import LapAnalysis
+    from simcoach.format import format_lap_facts
+    cm = _cm(1.0)
+    cm.gg_used = 0.92
+    a = LapAnalysis(lap_time=90.0, corners=[cm], has_reference=False,
+                    gg_envelope=1.2, gg_peak=1.1, gg_envelope_laps=2)
+    out = format_lap_facts(a)
+    assert "of envelope" not in out
+
+
+def test_format_corner_line_envelope_formed_false_suppresses_grip_suffix():
+    cm = _cm(1.0)
+    cm.gg_used = 0.92
+    line = format_corner_line(cm, envelope_formed=False)
+    assert "of envelope" not in line
+    # default (unspecified) stays formed, for callers with no lap-history context.
+    assert "grip 92% of envelope" in format_corner_line(cm)
 
 
 # --- gear/RPM sanity (#38 P1.7) ----------------------------------------------

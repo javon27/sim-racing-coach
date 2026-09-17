@@ -112,6 +112,11 @@ class LapAnalysis:
     # lat_g/long_g weren't captured or gave no usable samples.
     gg_envelope: Optional[float] = None
     gg_used: Optional[float] = None
+    # #108 item 2: how many recent-lap records fed `gg_envelope` (None from a
+    # caller with no lap history, e.g. the self-referenced fallback below) --
+    # format.py won't report a percentage off an envelope built from too few.
+    gg_envelope_laps: int | None = None
+    gg_peak: float | None = None   # p95 combined g in THIS lap's cornering phase (not ÷ envelope)
 
 
 _TIRE_KEYS = ("tire_temp_fl", "tire_temp_fr", "tire_temp_rl", "tire_temp_rr")
@@ -667,6 +672,11 @@ _GG_ENVELOPE_PCTL = 98.0  # ponytail: p98, not max -- a single crash spike must 
 _GG_USED_PCTL = 95.0      # ponytail: p95 of the cornering phase, not its own max
 _GG_DEAD_FRAC = 0.5       # ponytail: below half the envelope reads as "inputs not combined"
 _GG_MIN_SAMPLES = 10      # ponytail: fewer cornering-phase samples is noise, not a read
+# #108 item 2: fewer than this many laps' worth of samples feeding the envelope
+# isn't a real ceiling yet -- a first hot lap read "143% of the theoretical grip
+# envelope" off a 1-2 lap envelope. format.py reports peak g instead below this.
+# ponytail: a rig session settles whether 5 is the right knob.
+_ENVELOPE_MIN_LAPS = 5
 
 
 def combined_g(lat_g, long_g) -> np.ndarray:
@@ -705,6 +715,23 @@ def grip_envelope(records: "list[LapRecord]") -> float | None:
     return float(np.percentile(np.concatenate(samples), _GG_ENVELOPE_PCTL))
 
 
+def _cornering_phase_cg(lat_g, long_g) -> "np.ndarray | None":
+    """Combined g restricted to the cornering phase (|lat_g| > `_GG_LOAD_GATE`,
+    finite), or None with no channels or fewer than `_GG_MIN_SAMPLES` samples.
+    Shared by `_gg_used_and_dead` (divided by an envelope) and the lap-level
+    peak (#108 item 2: reads intelligibly on its own, before an envelope forms)."""
+    if lat_g is None or long_g is None:
+        return None
+    n = min(len(lat_g), len(long_g))
+    lat_g = np.asarray(lat_g[:n], dtype=float)
+    long_g = np.asarray(long_g[:n], dtype=float)
+    cg = combined_g(lat_g, long_g)
+    phase = (np.abs(lat_g) > _GG_LOAD_GATE) & np.isfinite(cg)
+    if int(np.sum(phase)) < _GG_MIN_SAMPLES:
+        return None
+    return cg[phase]
+
+
 def _gg_used_and_dead(lat_g, long_g, envelope: float | None) -> "tuple[float | None, float | None]":
     """(gg_used, gg_dead_middle) for one phase (a corner window or a whole lap):
     p95 combined g over cornering-phase samples (|lat_g| > `_GG_LOAD_GATE`)
@@ -712,16 +739,11 @@ def _gg_used_and_dead(lat_g, long_g, envelope: float | None) -> "tuple[float | N
     `_GG_DEAD_FRAC` of the envelope (coasting/inputs-not-combined). (None, None)
     when the envelope, or either channel, is missing, or fewer than
     `_GG_MIN_SAMPLES` cornering-phase samples survive."""
-    if envelope is None or lat_g is None or long_g is None:
+    if envelope is None:
         return None, None
-    n = min(len(lat_g), len(long_g))
-    lat_g = np.asarray(lat_g[:n], dtype=float)
-    long_g = np.asarray(long_g[:n], dtype=float)
-    cg = combined_g(lat_g, long_g)
-    phase = (np.abs(lat_g) > _GG_LOAD_GATE) & np.isfinite(cg)
-    if int(np.sum(phase)) < _GG_MIN_SAMPLES:
+    cg_phase = _cornering_phase_cg(lat_g, long_g)
+    if cg_phase is None:
         return None, None
-    cg_phase = cg[phase]
     used = float(np.percentile(cg_phase, _GG_USED_PCTL)) / envelope
     dead = float(np.mean(cg_phase < _GG_DEAD_FRAC * envelope))
     return used, dead
@@ -1164,8 +1186,8 @@ def _delta(cur, ref) -> float | None:
 
 
 def analyze_lap(
-    record: LapRecord, cmap: CornerMap, reference: Optional[LapRecord] = None,
-    envelope: float | None = None,
+    record: LapRecord, cmap: CornerMap, reference: LapRecord | None = None,
+    envelope: float | None = None, envelope_laps: int | None = None,
 ) -> LapAnalysis:
     if reference is not None and reference.track != record.track:
         raise ValueError(f"reference lap track {reference.track!r} != {record.track!r}")
@@ -1225,11 +1247,14 @@ def analyze_lap(
     tire_means, tire_warmup = _tire_summary(record)
     gg_used, _ = _gg_used_and_dead(
         record.channels.get("lat_g"), record.channels.get("long_g"), envelope)
+    gg_phase = _cornering_phase_cg(record.channels.get("lat_g"), record.channels.get("long_g"))
+    gg_peak = float(np.percentile(gg_phase, _GG_USED_PCTL)) if gg_phase is not None else None
     return LapAnalysis(
         lap_time=record.lap_time, corners=corners, has_reference=has_reference,
         tire_means=tire_means, tire_warmup=tire_warmup, wheels=_wheel_summary(record),
         coast_total=lap_coast_total(record),
         gg_envelope=envelope, gg_used=gg_used,
+        gg_envelope_laps=envelope_laps, gg_peak=gg_peak,
     )
 
 

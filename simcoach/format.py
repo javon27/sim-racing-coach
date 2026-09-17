@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import math
 
+from simcoach.analysis import _ENVELOPE_MIN_LAPS
+
 
 def format_laptime(seconds) -> str:
     """Race lap time as m:ss.mmm (e.g. 83.456 -> '1:23.456'), matching the UI lap
@@ -123,7 +125,7 @@ def _steer_reversals_txt(n) -> str:
     return f", steering sawing ({n})"
 
 
-def format_corner_line(cm, units: str = "metric") -> str:
+def format_corner_line(cm, units: str = "metric", envelope_formed: bool = True) -> str:
     """One driver-facing corner line: speeds, apex-relative brake/throttle, trail,
     peak g, and the delta vs best. Absolute lap-distance is never shown."""
     spd, _, spd_u, _ = unit_fns(units)
@@ -196,10 +198,12 @@ def format_corner_line(cm, units: str = "metric") -> str:
         line += ", lockup"
     if getattr(cm, "wheelspin", None):
         line += ", wheelspin"
-    # #38 P1.4: traction-circle utilization -- silent without an envelope read.
+    # #38 P1.4 / #108 item 2: traction-circle utilization -- silent without an
+    # envelope read, and silent (not just clamped) while the envelope is still
+    # forming: a ratio against a barely-sampled envelope is noise, not a read.
     gg_used = getattr(cm, "gg_used", None)
-    if gg_used is not None:
-        line += f", grip {gg_used:.0%} of envelope"
+    if gg_used is not None and envelope_formed:
+        line += f", grip {min(gg_used, 1.0):.0%} of envelope"
         dead = getattr(cm, "gg_dead_middle", None)
         if dead is not None and dead >= _GG_DEAD_REPORT:
             line += f", {dead:.0%} of corner under half grip (inputs not combined)"
@@ -517,17 +521,25 @@ def format_lap_facts(analysis, units: str = "metric", corner_order=None, top_los
     by_no = {cm.corner_no: cm for cm in analysis.corners}
     order = corner_order if corner_order is not None else list(by_no)
     top_loss = top_loss or set()
+    envelope_laps = getattr(analysis, "gg_envelope_laps", None)
+    envelope_formed = envelope_laps is not None and envelope_laps >= _ENVELOPE_MIN_LAPS
     for no in order:
         cm = by_no.get(no)
         if cm is None:
             continue
         mark = "\N{BLACK UP-POINTING TRIANGLE} " if no in top_loss else ""
-        lines.append(mark + format_corner_line(cm, units))
+        lines.append(mark + format_corner_line(cm, units, envelope_formed=envelope_formed))
     env = getattr(analysis, "gg_envelope", None)
     lap_gg_used = getattr(analysis, "gg_used", None)
-    if env is not None and lap_gg_used is not None:
+    lap_gg_peak = getattr(analysis, "gg_peak", None)
+    # #108 item 2: a percentage off an envelope resting on too few laps is
+    # meaningless (a first hot lap once read "143%") -- report peak g instead.
+    if envelope_formed and env is not None and lap_gg_used is not None:
         lines.append(f"Grip envelope ~{env:.1f} g (observed); this lap used "
-                     f"{lap_gg_used:.0%} of it in the corners.")
+                     f"{min(lap_gg_used, 1.0):.0%} of it in the corners.")
+    elif not envelope_formed and lap_gg_peak is not None:
+        lines.append(f"Peak combined grip this lap: {lap_gg_peak:.1f} g (grip envelope "
+                     f"still forming: {envelope_laps or 0} of {_ENVELOPE_MIN_LAPS} laps).")
     coast = getattr(analysis, "coast_total", None)
     if coast and coast[0] > _COAST_REPORT_S:
         lines.append(f"Coasting this lap: {coast[0]:.1f} s ({coast[1]:.0f} m) with "

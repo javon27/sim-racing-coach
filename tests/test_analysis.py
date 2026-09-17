@@ -1350,6 +1350,41 @@ def test_grip_envelope_none_without_load_channels(synthetic_lap):
     assert grip_envelope([]) is None
 
 
+def test_analyze_lap_gg_peak_is_p95_of_this_laps_own_cornering_phase(synthetic_lap):
+    # #108 item 2: gg_peak must read intelligibly (raw g, not a ratio) before an
+    # envelope has formed -- computed from the SAME cornering-phase samples
+    # gg_used uses (|lat_g| > the load gate), independent of the envelope value.
+    from simcoach.analysis import (
+        _GG_LOAD_GATE,
+        _GG_USED_PCTL,
+        analyze_lap,
+        combined_g,
+    )
+    from simcoach.corners import CornerMap
+
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    analysis = analyze_lap(synthetic_lap, cmap, envelope=1.5, envelope_laps=2)
+
+    lat_g = synthetic_lap.channels["lat_g"]
+    long_g = synthetic_lap.channels["long_g"]
+    cg = combined_g(lat_g, long_g)
+    phase = np.abs(lat_g) > _GG_LOAD_GATE
+    expected_peak = float(np.percentile(cg[phase], _GG_USED_PCTL))
+
+    assert analysis.gg_peak is not None
+    assert abs(analysis.gg_peak - expected_peak) < 1e-6
+    assert analysis.gg_envelope_laps == 2
+
+
+def test_analyze_lap_gg_envelope_laps_defaults_to_none(synthetic_lap):
+    from simcoach.analysis import analyze_lap
+    from simcoach.corners import CornerMap
+
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    analysis = analyze_lap(synthetic_lap, cmap)
+    assert analysis.gg_envelope_laps is None
+
+
 def test_gg_used_and_dead_middle_per_corner(synthetic_lap):
     import dataclasses
 

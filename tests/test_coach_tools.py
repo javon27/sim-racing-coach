@@ -106,10 +106,10 @@ def test_get_lap_summary_and_tires(tmp_path, synthetic_lap):
 
 
 def test_get_lap_summary_shows_grip_envelope(tmp_path, synthetic_lap):
-    # 3 stored laps give `grip_envelope` real samples to read (the fixture's
-    # own lat_g/long_g clear the load gate in both corners).
+    # 6 stored laps (>= _ENVELOPE_MIN_LAPS, #108 item 2) give `grip_envelope`
+    # a formed read (the fixture's own lat_g/long_g clear the load gate).
     store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
-    for _ in range(3):
+    for _ in range(6):
         store.save(synthetic_lap)
     cmap = CornerMap.load("simcoach/tracks/test_track.json")
     ctx = CoachContext(store, cmap=cmap, track=synthetic_lap.track, car=synthetic_lap.car,
@@ -117,6 +117,45 @@ def test_get_lap_summary_shows_grip_envelope(tmp_path, synthetic_lap):
     summary = ctx.get_lap_summary("latest")
     assert "Grip envelope" in summary
     assert "% of it in the corners" in summary
+
+
+def test_get_lap_summary_envelope_still_forming_under_5_laps(tmp_path, synthetic_lap):
+    # #108 item 2: with 2 stored laps, the envelope hasn't formed -- report
+    # peak g and say so, not a (possibly meaningless, >100%) percentage.
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    for _ in range(2):
+        store.save(synthetic_lap)
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    ctx = CoachContext(store, cmap=cmap, track=synthetic_lap.track, car=synthetic_lap.car,
+                       on_track=True)
+    summary = ctx.get_lap_summary("latest")
+    assert "still forming: 2 of 5 laps" in summary
+    assert "Peak combined grip this lap" in summary
+    for line in summary.splitlines():
+        assert "of envelope" not in line
+
+
+def test_get_lap_summary_clamps_grip_pct_at_100(tmp_path, synthetic_lap):
+    # #108 item 2: an envelope formed from 6 mild laps, read against a lap whose
+    # own g is amplified -- gg_used lands > 1.0 without a real crash spike. The
+    # driver must never see a percentage over 100.
+    import dataclasses
+
+    import numpy as np
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    for _ in range(6):
+        store.save(synthetic_lap)
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    hot_ch = {**synthetic_lap.channels,
+              "lat_g": np.asarray(synthetic_lap.channels["lat_g"]) * 2.0,
+              "long_g": np.asarray(synthetic_lap.channels["long_g"]) * 2.0}
+    hot_lap = dataclasses.replace(synthetic_lap, channels=hot_ch)
+    ctx = CoachContext(store, record=hot_lap, cmap=cmap, track=hot_lap.track,
+                       car=hot_lap.car, on_track=True)
+    summary = ctx.get_lap_summary("latest")
+    assert "100%" in summary
+    for pct in re.findall(r"(\d+)%", summary):
+        assert int(pct) <= 100, summary
 
 
 def test_get_lap_summary_envelope_computed_once_per_context(tmp_path, synthetic_lap, monkeypatch):

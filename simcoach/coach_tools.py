@@ -14,6 +14,7 @@ import time
 from collections import Counter
 
 from simcoach.analysis import (
+    _ENVELOPE_MIN_LAPS,
     analyze_lap,
     geometry_clause,
     grip_envelope,
@@ -513,6 +514,9 @@ class CoachContext:
         # #38 P1.4: grip envelope, computed once per context (see `_grip_envelope`).
         self._envelope: float | None = None
         self._envelope_computed = False
+        # #108 item 2: how many records fed that envelope -- format.py won't
+        # report a percentage off one resting on too few laps.
+        self._envelope_laps: int | None = None
         # The recent stored laps those reads are built from, loaded ONCE and shared
         # with the wear baseline (#108) so events cost no extra lap loads.
         self._recent: list | None = None
@@ -677,7 +681,18 @@ class CoachContext:
         if self._envelope_computed:
             return self._envelope
         self._envelope_computed = True
-        records = list(self._recent_records())
+        recent = self._recent_records()
+        # #108 item 2: how many of the driver's own recent laps actually had both
+        # g channels -- a envelope built from fewer than `_ENVELOPE_MIN_LAPS` of
+        # those isn't a real ceiling. The reference lap (below) isn't counted here:
+        # it's usually already inside `recent`, and the "N of 5 laps" message is
+        # about the driver's lap history, not a duplicate sample.
+        self._envelope_laps = sum(
+            1 for r in recent
+            if r is not None and r.channels.get("lat_g") is not None
+            and r.channels.get("long_g") is not None
+        )
+        records = list(recent)
         if reference is not None:
             records.append(reference)
         self._envelope = grip_envelope(records) if records else None
@@ -698,7 +713,8 @@ class CoachContext:
                 ref = self.store.best_lap(record.track, record.car, exclude_lap_id=lap_id)
             envelope = self._grip_envelope(ref)
             self._analysis_cache[key] = analyze_lap(record, self.cmap, reference=ref,
-                                                     envelope=envelope)
+                                                     envelope=envelope,
+                                                     envelope_laps=self._envelope_laps)
         return self._analysis_cache[key]
 
     def _resolve_lap(self, which):
@@ -1022,7 +1038,8 @@ class CoachContext:
         if cm is None:
             names = ", ".join(f"T{c.label or c.corner_no} {c.name}" for c in analysis.corners)
             return f"No corner matching {corner!r}. Corners this track: {names}"
-        line = format_corner_line(cm, self.units)
+        envelope_formed = (analysis.gg_envelope_laps or 0) >= _ENVELOPE_MIN_LAPS
+        line = format_corner_line(cm, self.units, envelope_formed=envelope_formed)
         usually = self._gear_usually_line(cm)
         if usually:
             line += f"\n{usually}"
