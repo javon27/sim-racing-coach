@@ -188,10 +188,25 @@ def test_kokoro_installer_downloads_both_files_and_reports(tmp_path):
 
 def test_kokoro_default_download_verifies_sha256(tmp_path, monkeypatch):
     from simcoach import voice as v
-    served = {"kokoro-v1.0.onnx": b"abc", "voices-v1.0.bin": b"def"}
+    # #15: the served bytes span multiple 1<<20 hash-reader chunks, so this also
+    # proves the chunked reader still hashes (and correctly rejects) a
+    # multi-chunk file, not just a single read() worth.
+    served = {"kokoro-v1.0.onnx": b"a" * ((1 << 20) + 5), "voices-v1.0.bin": b"def"}
     monkeypatch.setattr(v, "_fetch_to", lambda url, dest: dest.write_bytes(served[url.rsplit("/", 1)[1]]))
     with pytest.raises(RuntimeError, match="sha256"):
         v._default_kokoro_download(tmp_path / "kokoro")
+
+
+def test_sha256_file_chunked_matches_whole_file_digest(tmp_path):
+    # Direct check that _sha256_file's chunked read produces the SAME digest as
+    # hashing the bytes in one shot, across a chunk boundary (chunk_size=16).
+    import hashlib
+
+    from simcoach import voice as v
+    data = bytes(range(256)) * 5  # 1280 bytes, not a multiple of 16
+    p = tmp_path / "f.bin"
+    p.write_bytes(data)
+    assert v._sha256_file(p, chunk_size=16) == hashlib.sha256(data).hexdigest()
 
 
 def test_kokoro_installer_memoises_voices_once_populated(tmp_path):

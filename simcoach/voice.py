@@ -172,13 +172,24 @@ def _fetch_to(url: str, dest: Path) -> None:
             f.write(chunk)
 
 
-def _default_kokoro_download(dest: Path) -> None:
+def _sha256_file(p: Path, chunk_size: int = 1 << 20) -> str:
+    """sha256 of a file read in chunks -- `tmp.read_bytes()` loaded the whole
+    325 MB ONNX file into memory just to hash it (#15). Same chunk size the
+    download loop in `_fetch_to` already uses."""
     import hashlib
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        while chunk := f.read(chunk_size):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _default_kokoro_download(dest: Path) -> None:
     dest.mkdir(parents=True, exist_ok=True)
     for name, (size, sha) in KOKORO_FILES.items():
         tmp = dest / (name + ".part")
         _fetch_to(KOKORO_URL_BASE + name, tmp)
-        digest = hashlib.sha256(tmp.read_bytes()).hexdigest()
+        digest = _sha256_file(tmp)
         if digest != sha:
             tmp.unlink(missing_ok=True)
             raise RuntimeError(f"{name}: sha256 mismatch (got {digest[:12]}…) — download again")
