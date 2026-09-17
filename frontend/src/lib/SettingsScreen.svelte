@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import {
     getSettings,
     putSettings,
@@ -468,7 +469,7 @@
   let distilling = $state(false);
   let distillStatus: string | null = $state(null);
 
-  $effect(() => {
+  onMount(() => {
     (async () => {
       try {
         const [p, st] = await Promise.all([getProfile(), getStatus()]);
