@@ -562,13 +562,27 @@ def test_sector_boundary_dists_forward_transitions_only():
     assert sector_bounds_from(sector_boundary_dists(dists, sectors), 3000.0) == [1000.0, 2000.0]
 
 
-def test_sector_boundary_dists_messy_sequence_rejected_by_guard():
+def test_sector_boundary_dists_messy_flicker_is_accepted_by_the_guard():
+    # #115 audit finding 8: this test used to be named "..._rejected_by_guard" but
+    # never fed the flicker to the guard at all -- it only checked the extractor
+    # (sector_boundary_dists) and separately checked the guard's trivial
+    # len(...) != 2 arm on unrelated input. No assertion here would have failed
+    # if the guard rejected nothing. Fixed to assert what actually happens:
+    # a genuine 1->2->1->2 flicker produces exactly two FORWARD transitions
+    # (the guard's own bar, per its docstring), so it passes every check
+    # sector_bounds_from makes and is ACCEPTED, not rejected. That's a real
+    # behaviour gap (a flicker is not a clean single crossing) -- tracked as a
+    # follow-up decision (tighten the guard to require monotonic sectors, or
+    # ship [500.0, 900.0] as the real reported split), not fixed here: changing
+    # guard behaviour would change what lands in stored laps, which is outside
+    # this audit-cleanup finding's scope.
     from simcoach.lmu.smm import sector_boundary_dists, sector_bounds_from
-    # A genuine flicker 1->2->1->2 yields two forwards at odd places:
     flick_d = [0.0, 500.0, 700.0, 900.0]
     flick_s = [1, 2, 1, 2]
-    assert sector_boundary_dists(flick_d, flick_s) == [500.0, 900.0]
-    # An incomplete lap (only one transition) -> None.
+    boundaries = sector_boundary_dists(flick_d, flick_s)
+    assert boundaries == [500.0, 900.0]
+    assert sector_bounds_from(boundaries, 3000.0) == [500.0, 900.0]
+    # An incomplete lap (only one transition) IS rejected -> None.
     assert sector_bounds_from(sector_boundary_dists([0.0, 1000.0], [1, 2]), 3000.0) is None
 
 
