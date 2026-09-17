@@ -2489,6 +2489,15 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     async def voice_transcribe(request: Request):
         # Raw WAV body (not JSON). Localhost-only + the Host/Origin middleware already
         # gate this; a cross-origin no-cors POST could only cost local CPU.
+        # Reject on the DECLARED size before buffering it (#12) -- the post-read
+        # check below stays too, for a chunked body with no Content-Length.
+        declared = request.headers.get("content-length")
+        if declared is not None:
+            try:
+                if int(declared) > VOICE_MAX_BODY:
+                    raise HTTPException(413, "audio body too large")
+            except ValueError:
+                pass  # not a valid integer -- let the post-read check catch it
         data = await request.body()
         if len(data) > VOICE_MAX_BODY:
             raise HTTPException(413, "audio body too large")

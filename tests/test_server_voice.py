@@ -60,6 +60,18 @@ def test_transcribe_413_on_oversize_body(tmp_path, monkeypatch):
     assert _post_wav(c, b"\0" * 8_000_001).status_code == 413
 
 
+def test_transcribe_413_from_declared_content_length_before_reading(tmp_path, monkeypatch):
+    # #12: the old code read the whole body THEN compared it to VOICE_MAX_BODY --
+    # the cap bounded what got decoded, not what got allocated. Declare a
+    # Content-Length above the cap while the actual body sent is small and
+    # unreadable as WAV: if the check runs before the read, this 413s; if it
+    # (still) reads first, the small body decodes to a 422 instead.
+    c, _ = _app(tmp_path, monkeypatch, transcriber=FakeTranscriber(text="x"))
+    r = c.post("/voice/transcribe", content=b"nope",
+              headers={"content-type": "audio/wav", "content-length": "9000000"})
+    assert r.status_code == 413
+
+
 def test_default_transcriber_is_whisper_and_409s_without_a_model(tmp_path, monkeypatch):
     c, _ = _app(tmp_path, monkeypatch)          # no fake: the real WhisperTranscriber
     assert _post_wav(c, _wav()).status_code == 409
