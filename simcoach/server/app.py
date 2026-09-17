@@ -2540,15 +2540,30 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         eng = app.state.kokoro_engine
         if not eng.available():
             raise HTTPException(409, "Kokoro voice isn't installed — enable it in Settings")
-        cfg = config.load_config()["voice"]
-        voice = str(body.get("voice") or cfg.get("kokoro_voice") or "af_heart")
-        speed = float(body.get("speed") or cfg.get("tts_rate") or 1.0)
-        raw_slug = body.get("track_slug") or body.get("track") or _live_track() or ""
-        slug = track_slug(raw_slug) if raw_slug else ""
-        table = table_for(_track_file_data(slug)) if slug else {}
+        voice_in, speed_in, track_in = body.get("voice"), body.get("speed"), \
+            body.get("track_slug") or body.get("track")
+
+        def _synthesize() -> bytes:
+            # Prelude (disk config read, blocking SMM read, disk track reads) AND
+            # synthesis all run in the executor together, off the event loop (#13
+            # -- this fires once per spoken utterance while /live pushes at 4 Hz).
+            cfg = config.load_config()["voice"]
+            voice = str(voice_in or cfg.get("kokoro_voice") or "af_heart")
+            speed_raw = speed_in or cfg.get("tts_rate") or 1.0
+            try:
+                speed = float(speed_raw)
+            except (TypeError, ValueError):
+                raise ValueError(f"speed must be a number, got {speed_raw!r}") from None
+            raw_slug = track_in or _live_track() or ""
+            slug = track_slug(raw_slug) if raw_slug else ""
+            table = table_for(_track_file_data(slug)) if slug else {}
+            return eng.synthesize(text, voice, speed, table)
+
         loop = asyncio.get_running_loop()
         try:
-            wav = await loop.run_in_executor(None, eng.synthesize, text, voice, speed, table)
+            wav = await loop.run_in_executor(None, _synthesize)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
         except EngineUnavailable as e:
             raise HTTPException(503, str(e))
         return Response(content=wav, media_type="audio/wav")

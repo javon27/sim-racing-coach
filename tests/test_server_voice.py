@@ -149,6 +149,24 @@ def test_speak_400_on_empty_409_when_not_installed_503_when_engine_fails(tmp_pat
     assert r.status_code == 503 and "onnx failed" in r.json()["detail"]
 
 
+def test_speak_422_on_non_numeric_speed_not_500(tmp_path, monkeypatch):
+    # #13: float(body["speed"]) on a non-numeric string raised ValueError, which
+    # FastAPI turns into an uncaught 500 rather than a curated 422.
+    c, _ = _app(tmp_path, monkeypatch, kokoro_engine=FakeEngine())
+    r = c.post("/voice/speak", json={"text": "hi", "speed": "fast"})
+    assert r.status_code == 422
+
+
+def test_speak_still_returns_wav_with_the_fake_engine(tmp_path, monkeypatch):
+    # The executor-moved prelude (load_config/_live_track/_track_file_data) must
+    # still resolve a valid speed and reach synthesize normally.
+    eng = FakeEngine()
+    c, _ = _app(tmp_path, monkeypatch, kokoro_engine=eng)
+    r = c.post("/voice/speak", json={"text": "hi", "speed": 1.1})
+    assert r.status_code == 200 and r.headers["content-type"].startswith("audio/wav")
+    assert eng.calls[0][2] == 1.1
+
+
 def test_kokoro_setup_and_status_endpoints(tmp_path, monkeypatch):
     class Inst:
         started = False
