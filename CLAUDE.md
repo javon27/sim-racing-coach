@@ -42,11 +42,18 @@ Python on Windows; frontend is Svelte + TypeScript under `frontend/`.
 
 ```
 .venv/Scripts/python.exe -m pip install -e ".[dev]"
-.venv/Scripts/python.exe -m pytest      # backend
-ruff check                              # lint
-cd frontend && npm test                 # frontend (vitest)
-cd frontend && npx svelte-check         # frontend types
+.venv/Scripts/python.exe -m pytest              # backend
+ruff check simcoach tests scripts               # lint (the exact CI gate command; see #48)
+cd frontend && npm test                         # frontend (vitest)
+cd frontend && npx svelte-check                 # frontend types
 ```
+
+CI (`.github/workflows/test.yml`) runs `ruff check simcoach tests scripts`,
+`pytest -q`, `vitest run`, and `svelte-check --threshold error` on every push
+and PR. `ruff` is pinned (`pyproject.toml` `[project.optional-dependencies]
+dev`) with an explicit `[tool.ruff.lint] ignore` for the repo's deliberate
+patterns, so a clean `ruff check` is always achievable (#48) -- it does not
+silently drift as ruff's own default rule set broadens over releases.
 
 ## Architecture invariants (do not violate without updating the spec)
 
