@@ -13,7 +13,6 @@ import pytest
 
 from simcoach.lmu.rf2structs import (
     TelemInfoV01,
-    TelemWheelV01,
     VehicleScoringInfoV01,
     rF2Telemetry,
 )
@@ -431,6 +430,7 @@ def test_laps_commits_only_completed_freshly_timed_laps():
     single-step unit extracted so this can drive the decision deterministically.
     """
     import mmap
+
     from simcoach.lmu import smm
     from simcoach.lmu.rf2structs import rF2Scoring, rF2Telemetry
 
@@ -502,6 +502,7 @@ def test_laps_commits_game_lap_no_and_pit_flag_from_scoring():
     polled instant during the lap, else False -- needed by #69's map-rebuild gate
     to exclude pit laps by fact rather than by lateral-spread shape."""
     import mmap
+
     from simcoach.lmu import smm
     from simcoach.lmu.rf2structs import rF2Scoring, rF2Telemetry
 
@@ -581,6 +582,7 @@ def test_laps_records_sector_bounds_end_to_end():
     committed-lap test's cadence (proven deterministic) and shares its mechanism:
     see LmuSource._poll_once (smm.py)."""
     import mmap
+
     from simcoach.lmu import smm
     from simcoach.lmu.rf2structs import rF2Scoring, rF2Telemetry
 

@@ -1,18 +1,19 @@
 import numpy as np
 import pytest
+
 from simcoach.fuel import (
+    FuelPlan,
+    RatioAdvice,
+    SaveAdvice,
+    StintPlan,
+    binding_stint,
     fuel_per_lap_from_channel,
+    laps_remaining,
     mean_fuel_per_lap,
     plan_race,
     plan_stint,
-    binding_stint,
-    laps_remaining,
-    stint_save_advice,
     ratio_balance,
-    FuelPlan,
-    StintPlan,
-    SaveAdvice,
-    RatioAdvice,
+    stint_save_advice,
 )
 
 

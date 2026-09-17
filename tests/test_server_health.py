@@ -1,9 +1,9 @@
 from fastapi.testclient import TestClient
 
-from simcoach.server.app import create_app
-from simcoach.store import LapStore
 from simcoach.coach import Coach
 from simcoach.model.fake import FakeModel
+from simcoach.server.app import create_app
+from simcoach.store import LapStore
 
 
 def _client(tmp_path):

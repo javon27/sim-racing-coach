@@ -395,7 +395,6 @@ def test_extended_inputs_absent_without_channels(synthetic_lap):
 
 
 def test_tire_summary_absent_without_channels(synthetic_lap):
-    import numpy as np
 
     from simcoach.analysis import analyze_lap
     from simcoach.corners import CornerMap

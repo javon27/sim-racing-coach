@@ -1,11 +1,11 @@
 # tests/test_server_live.py
 from fastapi.testclient import TestClient
 
+from simcoach.coach import Coach
+from simcoach.lmu.live import FieldSnapshot, SessionState, VehicleState
+from simcoach.model.fake import FakeModel
 from simcoach.server.app import create_app
 from simcoach.store import LapStore
-from simcoach.coach import Coach
-from simcoach.model.fake import FakeModel
-from simcoach.lmu.live import FieldSnapshot, SessionState, VehicleState
 
 
 def _client(tmp_path):

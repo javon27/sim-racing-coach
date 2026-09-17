@@ -19,7 +19,7 @@ from ..model.factory import LazyModel
 from ..paths import db_path, telemetry_dir
 from ..store import LapStore
 from ..track_lookup import TRACKS_DIR, load_map_data
-from .app import SIDECAR_PORT, create_app, _capture_loop
+from .app import SIDECAR_PORT, _capture_loop, create_app
 
 
 def build_app():

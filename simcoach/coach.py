@@ -129,7 +129,7 @@ def _setup_lines(setup: dict, live: dict | None = None) -> list[str]:
     for key, v in setup.items():
         if not isinstance(v, dict) or "stringValue" not in v:
             continue
-        k = (key[3:] if key.startswith("VM_") else key).lower()
+        k = (key.removeprefix("VM_")).lower()
         if not any(t in k for t in _SETUP_TERMS):
             continue
         sv = str(v["stringValue"]).strip()

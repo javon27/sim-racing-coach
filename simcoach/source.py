@@ -1,4 +1,5 @@
-from typing import Iterator, Protocol
+from collections.abc import Iterator
+from typing import Protocol
 
 from simcoach.model_types import LapRecord
 from simcoach.store import LapStore

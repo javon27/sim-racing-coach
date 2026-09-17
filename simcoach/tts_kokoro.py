@@ -274,14 +274,14 @@ class KokoroEngine:
     def _phonemes_for(self, sentence: str) -> str | None:
         try:
             return self._g2p(sentence)
-        except Exception as e:      # noqa: BLE001 -- misaki raises on an unknown proper noun
+        except Exception as e:
             word = str(e).strip("'\" ") or "?"
             if word in sentence:
                 log.warning("kokoro g2p failed on %r (word %r); retrying spelled out", sentence, word)
                 spelled = re.sub(re.escape(word), " ".join(word), sentence)
                 try:
                     return self._g2p(spelled)
-                except Exception:   # noqa: BLE001 -- spelled-out retry also failed; drop below
+                except Exception:
                     log.debug("kokoro g2p spelled-out retry also failed for %r", spelled)
             else:
                 # Message doesn't name the failing word (e.g. misaki's bare TypeError on
@@ -292,7 +292,7 @@ class KokoroEngine:
                     log.warning("kokoro g2p failed on %r; retrying with %r spelled out", sentence, cw)
                     try:
                         return self._g2p(spelled)
-                    except Exception:   # noqa: BLE001 -- try the next capitalised word
+                    except Exception:
                         log.debug("kokoro g2p spelled-out retry also failed for %r", spelled)
                         continue
             log.warning("kokoro g2p dropped sentence %r", sentence)

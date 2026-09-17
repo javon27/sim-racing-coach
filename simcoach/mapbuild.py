@@ -128,8 +128,9 @@ def _main():
     out.write_text(json.dumps(obj, indent=2))
     print(f"wrote {out} — {len(obj['corners'])} corners, {obj['length_m']:.0f}m")
     # self-verify: load + check directions against the same lap
-    from simcoach.corners import CornerMap, verify_map_directions
     from types import SimpleNamespace
+
+    from simcoach.corners import CornerMap, verify_map_directions
     m = CornerMap.load(str(out))
     rec = SimpleNamespace(channels=channels)
     mm = verify_map_directions(rec, m)

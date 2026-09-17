@@ -1,5 +1,6 @@
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import Callable, Iterator, Protocol
+from typing import Protocol
 
 
 @dataclass(frozen=True)

@@ -26,8 +26,8 @@ def test_build_app_lmu_running(tmp_path, monkeypatch, mem_keyring):
     monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
-    from simcoach.server import __main__ as entry
     from simcoach.lmu import smm
+    from simcoach.server import __main__ as entry
 
     class FakeRest:
         def get_setup(self):
@@ -98,11 +98,11 @@ def test_status_detects_track_change_over_stale_latest(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
     from simcoach.coach import Coach
+    from simcoach.lmu import smm
     from simcoach.model.fake import FakeModel
+    from simcoach.model_types import LapRecord
     from simcoach.server.app import create_app
     from simcoach.store import LapStore
-    from simcoach.model_types import LapRecord
-    from simcoach.lmu import smm
 
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     coach = Coach(FakeModel(reply="ok"))
@@ -185,8 +185,8 @@ def test_build_app_lmu_rest_failure_still_resolves_cmap(tmp_path, monkeypatch, m
     monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
-    from simcoach.server import __main__ as entry
     from simcoach.lmu import smm
+    from simcoach.server import __main__ as entry
 
     class BrokenRest:
         def get_setup(self):

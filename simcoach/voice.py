@@ -139,7 +139,7 @@ class ModelInstaller:
     def _run(self) -> None:
         try:
             self._download(self.dest)
-        except Exception as e:      # noqa: BLE001 -- surfaced verbatim to Settings; never crashes the sidecar
+        except Exception as e:
             self._error = str(e) or type(e).__name__
 
     def status(self) -> dict:
@@ -205,7 +205,7 @@ class KokoroInstaller(ModelInstaller):
         if installed and not voices and self.voices_fn is not None:
             try:
                 voices = self.voices_fn()
-            except Exception:       # noqa: BLE001 -- a broken model reports as installed-but-no-voices; /speak says why
+            except Exception:
                 voices = []
             if voices:
                 self._voices = voices   # avoid loading the model on every 1 Hz status poll

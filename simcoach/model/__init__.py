@@ -1,6 +1,6 @@
 from simcoach.model.base import Model
 from simcoach.model.claude import ClaudeModel
+from simcoach.model.factory import PLANNED, SUPPORTED, make_model
 from simcoach.model.fake import FakeModel
-from simcoach.model.factory import make_model, SUPPORTED, PLANNED
 
-__all__ = ["Model", "ClaudeModel", "FakeModel", "make_model", "SUPPORTED", "PLANNED"]
+__all__ = ["PLANNED", "SUPPORTED", "ClaudeModel", "FakeModel", "Model", "make_model"]

@@ -17,17 +17,17 @@ import math
 import mmap
 import re
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Iterator
 
 import numpy as np
 
 from simcoach.lmu.rf2structs import (
     MAX_MAPPED_VEHICLES,
     TelemInfoV01,
+    VehicleScoringInfoV01,
     rF2Scoring,
     rF2Telemetry,
-    VehicleScoringInfoV01,
 )
 from simcoach.model_types import LapRecord
 

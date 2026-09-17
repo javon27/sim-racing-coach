@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from enum import Enum
 
 
@@ -39,4 +40,4 @@ def legal_adjustments(setup: dict) -> list[str] | None:
     free = adjustable_from_setup(setup)
     if not free or len(free) >= len(params):
         return None
-    return [(k[3:] if k.startswith("VM_") else k).replace("_", " ").title() for k in free]
+    return [(k.removeprefix("VM_")).replace("_", " ").title() for k in free]

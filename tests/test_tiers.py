@@ -1,4 +1,4 @@
-from simcoach.tiers import Tier, tier_adjustable, adjustable_from_setup
+from simcoach.tiers import Tier, adjustable_from_setup, tier_adjustable
 
 
 def test_bronze_adjustable():

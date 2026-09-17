@@ -1,7 +1,7 @@
 import os
 import time
 
-import simcoach.car_lookup as car_lookup
+from simcoach import car_lookup
 from simcoach.car_lookup import _scan_results, resolve_car, resolve_car_class
 
 _RESULT_XML = """<?xml version="1.0"?>
@@ -47,12 +47,12 @@ def test_known_entry_resolves_to_model_and_class(monkeypatch):
 
 
 def test_unknown_entry_falls_back_to_class(monkeypatch):
-    monkeypatch.setattr(car_lookup, "_entry_table", lambda: {})
+    monkeypatch.setattr(car_lookup, "_entry_table", dict)
     assert resolve_car("Some New Team #7:WEC", "GT3") == "GT3 car"
 
 
 def test_unknown_entry_no_class_returns_raw(monkeypatch):
-    monkeypatch.setattr(car_lookup, "_entry_table", lambda: {})
+    monkeypatch.setattr(car_lookup, "_entry_table", dict)
     assert resolve_car("Some New Team #7", None) == "Some New Team #7"
 
 

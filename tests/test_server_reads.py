@@ -3,12 +3,13 @@ from pathlib import Path
 
 import numpy as np
 from fastapi.testclient import TestClient
+
+from simcoach.coach import Coach
+from simcoach.corners import CornerMap
+from simcoach.model.fake import FakeModel
+from simcoach.model_types import LapRecord
 from simcoach.server.app import create_app
 from simcoach.store import LapStore
-from simcoach.coach import Coach
-from simcoach.model.fake import FakeModel
-from simcoach.corners import CornerMap
-from simcoach.model_types import LapRecord
 
 
 def _app(tmp_path, synthetic_lap, cmap=None):
@@ -1186,6 +1187,7 @@ def test_mapcapture_rebuild_fallback_skips_unreadable_laps(tmp_path):
 
 def test_mapping_laps_persisted_tagged_and_excluded_from_best(tmp_path):
     import types
+
     from simcoach.server.app import _capture_loop
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     app_state = types.SimpleNamespace(mapping=True, map_buffer=[], latest=None)
@@ -1278,8 +1280,8 @@ def test_installed_build_writes_maps_to_appdata_not_bundle(tmp_path, monkeypatch
     # A frozen (installed) build must save map edits to app-data, never the bundled
     # dir (read-only / a onefile temp dir wiped on exit). Simulate install via
     # sys.frozen; the write should land under store.data_dir/tracks.
-    from simcoach.track_lookup import track_slug
     from simcoach.server import app as app_module
+    from simcoach.track_lookup import track_slug
 
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     lid = store.save(_curve_lap("Imola", "GT3", 90.0))
@@ -1297,8 +1299,8 @@ def test_installed_build_writes_maps_to_appdata_not_bundle(tmp_path, monkeypatch
 
 def test_dev_build_writes_maps_to_bundle(tmp_path, monkeypatch):
     # Dev (not frozen) curates the shipped set: writes land in the repo tracks dir.
-    from simcoach.track_lookup import track_slug
     from simcoach.server import app as app_module
+    from simcoach.track_lookup import track_slug
 
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     lid = store.save(_curve_lap("Imola", "GT3", 90.0))

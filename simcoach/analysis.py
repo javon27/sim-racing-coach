@@ -1,10 +1,10 @@
 import math
 from dataclasses import dataclass
-from typing import Optional
+
 import numpy as np
 
-from simcoach.model_types import LapRecord
 from simcoach.corners import Corner, CornerMap, compute_direction, in_window
+from simcoach.model_types import LapRecord
 from simcoach.ribbon import _menger
 
 
@@ -44,56 +44,56 @@ class CornerMetrics:
     coast_time: float = float("nan")      # seconds in the corner with NEITHER pedal
     coast_dist: float = float("nan")      # meters in the corner with neither pedal
     brake_to_throttle_dist: float = float("nan")  # last brake-off -> first throttle (m)
-    min_spd_delta: Optional[float] = None
+    min_spd_delta: float | None = None
     # #102: every other comparable metric, diffed the same way (current - reference).
     # Distance fields are metres, positive = LATER than the reference (further along
     # the lap); the rest are in the field's own native unit. None when either side is
     # None/NaN -- never computed from a "not found" sentinel.
-    brake_point_delta: Optional[float] = None
-    throttle_point_delta: Optional[float] = None
-    trailbrake_overlap_delta: Optional[float] = None
-    coast_time_delta: Optional[float] = None
-    brake_to_throttle_dist_delta: Optional[float] = None
-    peak_brake_g_delta: Optional[float] = None
-    peak_lat_g_delta: Optional[float] = None
-    abs_pct_delta: Optional[float] = None
-    tc_pct_delta: Optional[float] = None
-    entry_spd_delta: Optional[float] = None
-    exit_spd_delta: Optional[float] = None
+    brake_point_delta: float | None = None
+    throttle_point_delta: float | None = None
+    trailbrake_overlap_delta: float | None = None
+    coast_time_delta: float | None = None
+    brake_to_throttle_dist_delta: float | None = None
+    peak_brake_g_delta: float | None = None
+    peak_lat_g_delta: float | None = None
+    abs_pct_delta: float | None = None
+    tc_pct_delta: float | None = None
+    entry_spd_delta: float | None = None
+    exit_spd_delta: float | None = None
     label: str = ""                          # displayed designation ("8A")
-    apexes: Optional[list[float]] = None     # apex lap_distances (>1 = multi-apex)
-    apex_min_speeds: Optional[list[float]] = None  # min speed per apex (parallel to apexes)
-    section: Optional[str] = None            # named section this corner sits in, if any
+    apexes: list[float] | None = None     # apex lap_distances (>1 = multi-apex)
+    apex_min_speeds: list[float] | None = None  # min speed per apex (parallel to apexes)
+    section: str | None = None            # named section this corner sits in, if any
     # #38: balance read. None when steering/lat_g weren't both captured, or the
     # window was too sparse to read (see handling_read).
-    handling: Optional[str] = None       # "understeer" | "oversteer" | "neutral" | None
-    handling_why: Optional[str] = None   # short driver-facing reason, or None
-    lockup: Optional[bool] = None        # a wheel stopped under braking; None if wheel_rot absent
-    wheelspin: Optional[bool] = None     # a driven wheel outpaced the front axle; None if absent
+    handling: str | None = None       # "understeer" | "oversteer" | "neutral" | None
+    handling_why: str | None = None   # short driver-facing reason, or None
+    lockup: bool | None = None        # a wheel stopped under braking; None if wheel_rot absent
+    wheelspin: bool | None = None     # a driven wheel outpaced the front axle; None if absent
     # #38 P1.4: traction-circle utilization. None when the envelope or the
     # corner's own cornering-phase sample count couldn't support a read (see
     # `grip_envelope` / `_gg_used_and_dead`).
-    gg_used: Optional[float] = None          # p95 combined g in the cornering phase / envelope
-    gg_dead_middle: Optional[float] = None   # fraction of the phase under half the envelope
+    gg_used: float | None = None          # p95 combined g in the cornering phase / envelope
+    gg_dead_middle: float | None = None   # fraction of the phase under half the envelope
     # #38 P1.7: gear/RPM sanity. None when gear/rpm weren't both captured (see
     # `gear_read`); gear_min is also None if the car was in neutral/reverse at
     # the min-speed sample.
-    gear_min: Optional[int] = None       # forward gear at the min-speed sample
-    bog: Optional[bool] = None           # rpm below its power band at the exit throttle pickup
-    short_shift: Optional[bool] = None   # an upshift inside the window well below redline
+    gear_min: int | None = None       # forward gear at the min-speed sample
+    bog: bool | None = None           # rpm below its power band at the exit throttle pickup
+    short_shift: bool | None = None   # an upshift inside the window well below redline
     # #38 P1.8: input-shape facts (see `input_shape`). Release fields are None
     # with no braking phase or no release inside the window; reversal counts
     # are None when their channel is absent.
-    brake_release_m: Optional[float] = None
-    brake_release_steep_frac: Optional[float] = None
-    brake_reversals: Optional[int] = None
-    throttle_reversals: Optional[int] = None
-    steer_reversals: Optional[int] = None
-    brake_release_m_delta: Optional[float] = None
-    brake_release_steep_frac_delta: Optional[float] = None
-    brake_reversals_delta: Optional[int] = None
-    throttle_reversals_delta: Optional[int] = None
-    steer_reversals_delta: Optional[int] = None
+    brake_release_m: float | None = None
+    brake_release_steep_frac: float | None = None
+    brake_reversals: int | None = None
+    throttle_reversals: int | None = None
+    steer_reversals: int | None = None
+    brake_release_m_delta: float | None = None
+    brake_release_steep_frac_delta: float | None = None
+    brake_reversals_delta: int | None = None
+    throttle_reversals_delta: int | None = None
+    steer_reversals_delta: int | None = None
 
 
 @dataclass
@@ -103,15 +103,15 @@ class LapAnalysis:
     has_reference: bool
     # Lap-level tire state (the coachable signal: imbalance + warm-up). Per-corner
     # tire temps are deferred until the replay overlay actually consumes them.
-    tire_means: Optional[dict[str, float]] = None      # {'fl','fr','rl','rr'}: °C mean over lap
-    tire_warmup: Optional[tuple[float, float]] = None  # (early °C, late °C), all-wheel mean
-    wheels: Optional[dict] = None  # lap-level brake/pressure/wear from extended capture
+    tire_means: dict[str, float] | None = None      # {'fl','fr','rl','rr'}: °C mean over lap
+    tire_warmup: tuple[float, float] | None = None  # (early °C, late °C), all-wheel mean
+    wheels: dict | None = None  # lap-level brake/pressure/wear from extended capture
     coast_total: "tuple[float, float] | None" = None   # (seconds, meters) with neither pedal
     # #38 P1.4: the car's usable grip radius in g (see `grip_envelope`) and this
     # lap's own p95 combined g in cornering samples / that envelope. None when
     # lat_g/long_g weren't captured or gave no usable samples.
-    gg_envelope: Optional[float] = None
-    gg_used: Optional[float] = None
+    gg_envelope: float | None = None
+    gg_used: float | None = None
     # #108 item 2: how many recent-lap records fed `gg_envelope` (None from a
     # caller with no lap history, e.g. the self-referenced fallback below) --
     # format.py won't report a percentage off an envelope built from too few.
@@ -1718,7 +1718,7 @@ def corner_geometry(path, dist, corners, *, width=None, bank=None, elev=None):
 
     def window(start: float, end: float) -> list[int]:
         i, j = at(start), at(end)
-        return list(range(i, j + 1)) if i <= j else list(range(i, n)) + list(range(0, j + 1))
+        return list(range(i, j + 1)) if i <= j else list(range(i, n)) + list(range(j + 1))
 
     out: dict[str, dict] = {}
     for c in corners:

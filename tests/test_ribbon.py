@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 
 from simcoach.ribbon import (
     multi_signal_direction,

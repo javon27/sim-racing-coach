@@ -1,4 +1,3 @@
-from pathlib import Path
 from simcoach.lmu import install
 
 

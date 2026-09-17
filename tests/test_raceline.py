@@ -3,10 +3,10 @@ import pytest
 
 from simcoach.raceline import (
     CarParams,
-    min_curvature_line,
-    speed_profile,
-    solve_corners,
     _split_run_apexes,
+    min_curvature_line,
+    solve_corners,
+    speed_profile,
 )
 
 

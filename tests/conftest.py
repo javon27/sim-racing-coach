@@ -1,9 +1,9 @@
+import keyring as _keyring
 import numpy as np
 import pytest
-from simcoach.model_types import LapRecord
-import keyring as _keyring
 from keyring.backend import KeyringBackend
 
+from simcoach.model_types import LapRecord
 
 _G = 9.80665
 

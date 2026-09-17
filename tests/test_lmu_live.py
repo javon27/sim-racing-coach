@@ -1,6 +1,7 @@
 import pytest
-from simcoach.lmu.rf2structs import rF2Scoring, VehicleScoringInfoV01
-from simcoach.lmu.live import read_field, empty_snapshot, FieldSnapshot
+
+from simcoach.lmu.live import FieldSnapshot, empty_snapshot, read_field
+from simcoach.lmu.rf2structs import VehicleScoringInfoV01, rF2Scoring
 
 
 def _veh(**kw) -> VehicleScoringInfoV01:

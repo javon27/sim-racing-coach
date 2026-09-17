@@ -3,9 +3,9 @@ from __future__ import annotations
 import os
 import threading
 
+from ..secrets import get_api_key
 from .base import Model
 from .claude import ClaudeModel
-from ..secrets import get_api_key
 
 SUPPORTED = ("anthropic", "fake")          # implemented now
 PLANNED = ("openai", "gemini", "local")    # extension points
@@ -20,7 +20,6 @@ MODEL_ALIASES = {
 class CoachUserError(RuntimeError):
     """Raised for errors whose message is safe (and useful) to show the user
     verbatim, as opposed to internal errors that must be masked."""
-    pass
 
 
 def make_model(provider: str | None = None, model: str | None = None,

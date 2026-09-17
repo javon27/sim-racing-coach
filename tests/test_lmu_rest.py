@@ -1,4 +1,3 @@
-import pytest
 from simcoach.lmu.rest import LmuRest
 
 # Real shapes observed on localhost:6397 during the feasibility spike:

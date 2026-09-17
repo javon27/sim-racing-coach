@@ -17,7 +17,6 @@ def test_make_model_fake():
 
 
 def test_make_model_anthropic():
-    import sys
     from simcoach.model import make_model
     from simcoach.model.claude import ClaudeModel
     assert isinstance(make_model("anthropic"), ClaudeModel)
@@ -40,8 +39,8 @@ def test_make_model_bogus_raises_value_error():
 
 def test_make_model_default_provider_from_env(monkeypatch):
     from simcoach.model import make_model
-    from simcoach.model.fake import FakeModel
     from simcoach.model.claude import ClaudeModel
+    from simcoach.model.fake import FakeModel
 
     monkeypatch.setenv("SIMCOACH_MODEL_PROVIDER", "fake")
     assert isinstance(make_model(), FakeModel)
