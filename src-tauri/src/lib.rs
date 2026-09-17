@@ -319,8 +319,12 @@ pub fn run() {
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
             ) {
                 if let Some(sidecar) = app_handle.try_state::<Sidecar>() {
-                    if let Some(mut child) = sidecar.0.lock().unwrap().take() {
-                        let _ = child.kill();
+                    // A poisoned mutex (a prior panic while holding the lock) must not
+                    // skip the sidecar kill -- this is the one place it can't be missed.
+                    if let Ok(mut g) = sidecar.0.lock() {
+                        if let Some(mut child) = g.take() {
+                            let _ = child.kill();
+                        }
                     }
                 }
                 // Backstop: also kill a REUSED (un-owned) bundled sidecar, so closing
