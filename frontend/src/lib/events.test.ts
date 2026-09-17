@@ -148,6 +148,15 @@ describe("EventFeed", () => {
     expect(feed.connected.value).toBe(false);
   });
 
+  it("start() is idempotent: a second call does not open a second socket", () => {
+    const feed = new EventFeed();
+    feed.start();
+    const first = FakeWS.last!;
+    feed.start();
+    expect(FakeWS.last).toBe(first);
+    expect(first.close).not.toHaveBeenCalled();
+  });
+
   it("push() routes a frame the same way the socket does", () => {
     const feed = new EventFeed();
     feed.push("status", STATUS);

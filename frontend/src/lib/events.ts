@@ -72,6 +72,7 @@ export class EventFeed {
 
   start(): void {
     if (typeof WebSocket === "undefined") return; // SSR / non-browser
+    if (this.#ws) return; // already started: don't leak a second socket
     this.#stopped = false;
     this.#open();
   }
