@@ -865,6 +865,32 @@ def test_mapcapture_build_returns_ribbon_shape(tmp_path):
     assert body["left"] and len(body["center"]) == len(body["left"])
 
 
+class _SpyList(list):
+    """#16: counts __iter__ calls. The capture thread appends to/dels from
+    app.state.map_buffer from another thread; a reader that re-derives from it
+    at more than one point in the same request (len(), two separate
+    comprehensions, buf[0]) can see a different buffer at each point. A reader
+    that snapshots ONCE at the top (`buf = list(app.state.map_buffer)`) and
+    uses only that snapshot afterward calls __iter__ on the LIVE object
+    exactly once per request, no matter how many times it later reads buf."""
+    def __iter__(self):
+        self.iter_calls = getattr(self, "iter_calls", 0) + 1
+        return super().__iter__()
+
+
+def test_mapcapture_build_reads_the_live_buffer_exactly_once(tmp_path):
+    app, _ = _map_app(tmp_path)
+    spy = _SpyList([_edge("MapTrack", 1, 100.0), _edge("MapTrack", -1, 100.0)])
+    app.state.map_buffer = spy
+    r = _tc(app).post("/mapcapture/build", json={})
+    assert r.status_code == 200
+    # mapcapture_build reads buf via two separate comprehensions PLUS buf[0]
+    # twice -- if it re-read app.state.map_buffer at each point instead of a
+    # snapshot, iter_calls would be 2, and the two comprehensions could see
+    # different contents if the buffer changed between them.
+    assert spy.iter_calls == 1
+
+
 def test_mapcapture_save_writes_track_json(tmp_path):
     app, _ = _map_app(tmp_path)
     app.state.latest = {"record": _edge("MapTrack", 1, 100.0), "lap_id": 0}  # live track

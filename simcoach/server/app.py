@@ -1596,8 +1596,12 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
 
     @app.get("/mapcapture/status")
     def mapcapture_status():
+        # Snapshot once (#16): the capture thread appends to and dels from
+        # app.state.map_buffer from another thread, so iterating the live list
+        # directly can see it mutate mid-loop.
+        buf = list(app.state.map_buffer)
         laps = []
-        for i, r in enumerate(app.state.map_buffer):
+        for i, r in enumerate(buf):
             ld = r.channels.get("lap_distance")
             n = len(ld) if ld is not None else 0
             length = float(max(ld)) if n else 0.0
@@ -1608,7 +1612,9 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     def mapcapture_build(body: dict = Body(...)):
         # Reconstruct from the ENTIRE buffer as a point cloud -- no left/right
         # designation. Body {} (Body(...) still required for the CSRF preflight).
-        buf = app.state.map_buffer
+        # Snapshot once (#16): app.state.map_buffer is mutated by the capture
+        # thread; a bare reference here would see appends/dels mid-iteration.
+        buf = list(app.state.map_buffer)
         if len(buf) < 2:
             raise HTTPException(422, "need at least 2 passes across the width")
         ribbon = reconstruct_surface([r.channels for r in buf])
@@ -1687,7 +1693,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # cross-section extraction (width/banking/elevation) WITHOUT replacing
         # its geometry. See docs/superpowers/specs/2026-09-08-per-corner-
         # geometry-metrics-design.md.
-        buf = app.state.map_buffer
+        # Snapshot once (#16): see mapcapture_build's comment above.
+        buf = list(app.state.map_buffer)
         if len(buf) < 2:
             raise HTTPException(422, "need at least 2 passes across the width")
         track = buf[0].track
