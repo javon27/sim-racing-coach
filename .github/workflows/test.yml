@@ -48,3 +48,31 @@ jobs:
 
       - name: svelte-check
         run: npx svelte-check --threshold error
+
+  rust:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # src-tauri/build.rs (tauri_build::build()) only checks that the
+      # externalBin and frontendDist paths named in tauri.conf.json exist on
+      # disk -- it doesn't run the sidecar or bundle the frontend. Empty
+      # placeholders satisfy that check so `cargo test` can compile here without
+      # a full PyInstaller build or `npm run build` (both happen for real, with
+      # real content, in build-installer.yml on a release tag).
+      - name: Placeholder externalBin + frontendDist for the build script
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force src-tauri/binaries | Out-Null
+          New-Item -ItemType File -Force src-tauri/binaries/simcoach-sidecar-x86_64-pc-windows-msvc.exe | Out-Null
+          New-Item -ItemType Directory -Force frontend/dist | Out-Null
+          Set-Content -Path frontend/dist/index.html -Value "<!doctype html>" -NoNewline
+
+      - name: cargo test
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
