@@ -43,6 +43,12 @@ pub enum Output { None, Transitions(Vec<Transition>), Captured(String) }
 /// source) is reported as `Output::Captured` and never reaches `held`, so it
 /// can never leave the PTT looking held.
 pub fn step(sources: &mut [Box<dyn ButtonSource>], held: &mut HeldSet, state: &mut PollerState) -> Output {
+    // No binds and not capturing: nothing this poll could produce would matter, so
+    // skip touching winmm/XInput entirely rather than paying 125 Hz for a disabled
+    // feature (voice off is the common case on a sim rig).
+    if !state.capture_armed && state.binds.wheel.is_none() && state.binds.gamepad.is_none() {
+        return Output::None;
+    }
     let mut transitions = vec![];
     for s in sources.iter_mut() {
         for e in s.poll() {
@@ -387,6 +393,29 @@ mod tests {
         assert!(matches!(out, Output::Captured(ref id) if id == "s:0:1"));
         assert!(!st.capture_armed);
         assert!(h.held.is_empty(), "a captured press must not leave the PTT held");
+    }
+
+    struct CountingSource(std::sync::Arc<std::sync::atomic::AtomicU32>);
+    impl ButtonSource for CountingSource {
+        fn poll(&mut self) -> Vec<Edge> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            vec![]
+        }
+    }
+
+    #[test]
+    fn step_with_no_binds_and_not_capturing_polls_no_source() {
+        let mut st = PollerState { binds: Binds::default(), capture_armed: false };
+        let mut h = HeldSet::new();
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let mut src: Vec<Box<dyn ButtonSource>> = vec![Box::new(CountingSource(calls.clone()))];
+        let out = step(&mut src, &mut h, &mut st);
+        assert!(matches!(out, Output::None));
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "no binds and not capturing must not touch a source"
+        );
     }
 
     #[test]
