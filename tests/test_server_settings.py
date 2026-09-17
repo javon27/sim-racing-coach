@@ -47,6 +47,25 @@ def test_put_show_cost_round_trips_through_the_whitelist(tmp_path, monkeypatch, 
     assert c.put("/settings", json={"show_cost": True}).json()["show_cost"] is True
 
 
+def test_put_settings_rejects_a_nested_injected_key(tmp_path, monkeypatch, mem_keyring):
+    # #10: the whitelist only checked TOP-level keys, so {"voice": {...}} passed
+    # any nested keys and any nested values straight through save_config's
+    # nested merge onto disk -- an injected voice.api_key never reaches the file.
+    c, _ = _client(tmp_path, monkeypatch, mem_keyring)
+    c.put("/settings", json={"voice": {"enabled": True, "api_key": "sk-nested-leak"}})
+    body = c.get("/settings").json()
+    assert body["voice"]["enabled"] is True          # legit nested key still saved
+    assert "api_key" not in body["voice"]
+    from simcoach import paths
+    assert "sk-nested-leak" not in paths.config_path().read_text()
+
+
+def test_put_settings_413_on_oversize_body(tmp_path, monkeypatch, mem_keyring):
+    c, _ = _client(tmp_path, monkeypatch, mem_keyring)
+    r = c.put("/settings", json={"units": "x" * 70_000})
+    assert r.status_code == 413
+
+
 def test_delete_requires_confirmation(tmp_path, monkeypatch, mem_keyring, synthetic_lap):
     c, store = _client(tmp_path, monkeypatch, mem_keyring)
     store.save(synthetic_lap)

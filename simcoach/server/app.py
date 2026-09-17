@@ -2429,12 +2429,32 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     def get_settings():
         return _settings_view()
 
-    @app.put("/settings")
-    def put_settings(body: dict = Body(...)):
+    _MAX_SETTINGS_BODY_BYTES = 64 * 1024  # #10: no legitimate settings body is anywhere close
+
+    def _whitelist_settings(body: dict) -> dict:
         # Whitelist to config.DEFAULTS keys before saving — this is the
         # secret-leak guard: an injected "key"/"api_key" field can never
-        # reach the JSON file on disk.
-        whitelisted = {k: body[k] for k in config.DEFAULTS if k in body}
+        # reach the JSON file on disk. A DEFAULTS value that's itself a dict
+        # (voice, driver) is whitelisted the SAME way one level down, or
+        # {"voice": {"api_key": "..."}} would pass straight through whole and
+        # land in the file via config.save_config's nested merge (#10).
+        out = {}
+        for key, default in config.DEFAULTS.items():
+            if key not in body:
+                continue
+            v = body[key]
+            if isinstance(default, dict):
+                if isinstance(v, dict):
+                    out[key] = {sk: v[sk] for sk in default if sk in v}
+            else:
+                out[key] = v
+        return out
+
+    @app.put("/settings")
+    def put_settings(body: dict = Body(...)):
+        if len(json.dumps(body).encode("utf-8")) > _MAX_SETTINGS_BODY_BYTES:
+            raise HTTPException(413, "settings body too large")
+        whitelisted = _whitelist_settings(body)
         config.save_config(whitelisted)
         if "log_level" in whitelisted:
             logging_setup.apply_log_level(whitelisted["log_level"])
