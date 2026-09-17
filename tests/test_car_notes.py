@@ -83,3 +83,37 @@ def test_get_car_notes_registered_and_dispatchable():
 def test_shipped_cars_dir_has_the_migrated_cars():
     for slug in ("ferrari_296_lmgt3", "porsche_911_gt3_r_lmgt3"):
         assert (CARS_DIR / f"{slug}.json").exists()
+
+
+# --- electronics map direction (#108 item 6) ---------------------------------
+
+def test_get_car_notes_renders_electronics_block_when_present():
+    ctx = _ctx(car_notes={"overview": "Balanced.",
+                          "electronics": {"tc_map": "higher = more intervention",
+                                          "abs_map": "lower = more intervention"}},
+               setup_concepts={})
+    out = ctx.get_car_notes()
+    assert ("Electronics: tc_map — higher = more intervention; "
+            "abs_map — lower = more intervention") in out
+
+
+def test_get_car_notes_silent_on_electronics_when_absent():
+    ctx = _ctx(car_notes={"overview": "Balanced."}, setup_concepts={})
+    out = ctx.get_car_notes()
+    assert "Electronics:" not in out
+
+
+def test_get_setup_states_map_direction_from_car_notes():
+    setup = {"VM_FRONT_WING": {"stringValue": "5", "isFreeSetting": True}}
+    ctx = CoachContext(store=None, car="Ferrari 296 LMGT3", setup=setup,
+                       car_notes={"electronics": {"tc_map": "higher = more intervention"}})
+    out = ctx.get_setup()
+    assert "Map direction (from car notes): tc_map — higher = more intervention" in out
+
+
+def test_get_setup_states_map_direction_unknown_without_car_notes():
+    setup = {"VM_FRONT_WING": {"stringValue": "5", "isFreeSetting": True}}
+    ctx = CoachContext(store=None, car="Ferrari 296 LMGT3", setup=setup, car_notes={})
+    out = ctx.get_setup()
+    assert ("Map direction: unknown for this car — do not guess which way is "
+            "more intervention.") in out

@@ -252,3 +252,19 @@ def test_prompt_routes_incidents_to_get_stint_events():
     from simcoach.coach import AGENTIC_SYSTEM_PROMPT
     assert "get_stint_events" in AGENTIC_SYSTEM_PROMPT
     assert "flat spot" in AGENTIC_SYSTEM_PROMPT
+
+
+def test_system_prompt_grounds_car_facts_in_measured_data():
+    """#108 item 5: the coach must never assert a car's class or aid availability
+    from memory -- get_session_status states it from data, or "unknown"."""
+    from simcoach.coach import AGENTIC_SYSTEM_PROMPT
+    assert "CAR FACTS" in AGENTIC_SYSTEM_PROMPT
+    assert "get_session_status" in AGENTIC_SYSTEM_PROMPT.split("CAR FACTS", 1)[1][:200]
+
+
+def test_system_prompt_flags_electronics_direction_as_unknown_by_default():
+    """#108 item 6: which way a TC/ABS/motor map means MORE intervention is only
+    known when get_setup says so from the car notes; otherwise it's unknown."""
+    from simcoach.coach import AGENTIC_SYSTEM_PROMPT
+    assert "ELECTRONICS DIRECTION" in AGENTIC_SYSTEM_PROMPT
+    assert "get_setup" in AGENTIC_SYSTEM_PROMPT.split("ELECTRONICS DIRECTION", 1)[1][:200]

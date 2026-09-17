@@ -489,7 +489,7 @@ class CoachContext:
     def __init__(self, store, units="metric", record=None, lap_id=None, cmap=None,
                  setup=None, track=None, car=None, on_track=None,
                  allowed_adjustments=None, session_id=None,
-                 car_notes=None, setup_concepts=None):
+                 car_notes=None, setup_concepts=None, car_class=None):
         self.store = store
         self.units = units
         self.record = record
@@ -498,6 +498,9 @@ class CoachContext:
         self.setup = setup
         self.track = track or (record.track if record else None)
         self.car = car or (record.car if record else None)
+        # #108 item 5: the car's CLASS, from data (REST carClass or the scraped
+        # result-log table) -- never asserted from memory. None -> "unknown".
+        self.car_class = car_class
         self.on_track = on_track
         self.allowed_adjustments = allowed_adjustments
         # Authored car knowledge (merged shipped+overlay `notes` dict) and the shared
@@ -766,6 +769,23 @@ class CoachContext:
             return f"No lap matching {which!r}. This session is {phase}, laps 1-{n}."
         return "No lap available for that request (none captured yet, or unknown lap)."
 
+    def _aid_status(self, key: str) -> str:
+        """#108 item 5: 'available' / 'not fitted' / 'unknown' for a driver-aid
+        availability flag (e.g. VM_ANTILOCK_BRAKES), read from the garage setup's
+        stringValue -- never asserted from memory. 'unknown' with no setup, a
+        missing key, or any stringValue that isn't a recognized availability read."""
+        if not self.setup:
+            return "unknown"
+        entry = self.setup.get(key)
+        if not isinstance(entry, dict):
+            return "unknown"
+        sv = str(entry.get("stringValue", "")).strip()
+        if sv == "Available":
+            return "available"
+        if sv in ("N/A", "None"):
+            return "not fitted"
+        return "unknown"
+
     # --- tools -----------------------------------------------------------
     def get_session_status(self):
         # Complete laps only, in all three counts (#77): these say how much DATA the
@@ -796,7 +816,10 @@ class CoachContext:
         return (f"Track: {self.track or 'unknown'} | Car: {self.car or 'unknown'} | "
                 f"Session type: {phase or 'unknown'} | State: {on} | Current lap: {lap} | "
                 f"Laps ({laps_txt}) | Corner map: {cmap_txt} | "
-                f"Reference (best) lap available: {'yes' if has_ref else 'no'}")
+                f"Reference (best) lap available: {'yes' if has_ref else 'no'} | "
+                f"Class: {self.car_class or 'unknown'} | "
+                f"ABS: {self._aid_status('VM_ANTILOCK_BRAKES')} | "
+                f"TC: {self._aid_status('VM_TRACTION_CONTROL')}")
 
     def list_recent_laps(self, limit=10):
         if not (self.track and self.car):
@@ -1155,6 +1178,12 @@ class CoachContext:
             val = (notes.get(key) or "").strip()
             if val:
                 lines.append(f"{label}: {val}")
+        # #108 item 6: which way a map means MORE intervention -- only stated
+        # when the car notes carry it; never guessed.
+        electronics = notes.get("electronics") or {}
+        if electronics:
+            pairs = "; ".join(f"{k} \N{EM DASH} {v}" for k, v in electronics.items())
+            lines.append(f"Electronics: {pairs}")
         sources = notes.get("sources") or []
         if sources:
             lines.append("Sources: " + "; ".join(sources))
@@ -1259,6 +1288,15 @@ class CoachContext:
             out += "\nLive values are from the latest captured lap."
         if self.allowed_adjustments is not None:
             out += "\nLegal to change this tier: " + ", ".join(self.allowed_adjustments)
+        # #108 item 6: electronics map direction -- from the car notes when
+        # authored, else say so rather than guessing which way is more intervention.
+        electronics = (self.car_notes or {}).get("electronics") or {}
+        if electronics:
+            pairs = "; ".join(f"{k} \N{EM DASH} {v}" for k, v in electronics.items())
+            out += f"\nMap direction (from car notes): {pairs}"
+        else:
+            out += ("\nMap direction: unknown for this car \N{EM DASH} do not guess "
+                     "which way is more intervention.")
         return out
 
     def record_driver_learning(self, text, track=None, car=None):

@@ -206,6 +206,29 @@ def test_session_status_and_recent_laps(tmp_path, synthetic_lap):
     assert f"lap {lap_id}:" in listing
 
 
+def test_session_status_reports_class_and_aid_availability(tmp_path, synthetic_lap):
+    # #108 item 5: class + ABS/TC come from data (car_class + the setup's
+    # availability flags), never asserted from memory.
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    ctx.car_class = "LMGT3"
+    ctx.setup = {
+        "VM_ANTILOCK_BRAKES": {"stringValue": "Available"},
+        "VM_TRACTION_CONTROL": {"stringValue": "N/A"},
+    }
+    status = ctx.get_session_status()
+    assert "Class: LMGT3" in status
+    assert "ABS: available" in status
+    assert "TC: not fitted" in status
+
+
+def test_session_status_class_and_aids_unknown_without_data(tmp_path, synthetic_lap):
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    status = ctx.get_session_status()
+    assert "Class: unknown" in status
+    assert "ABS: unknown" in status
+    assert "TC: unknown" in status
+
+
 def test_session_status_uses_current_phase_lap_count(tmp_path, synthetic_lap):
     from simcoach.model_types import LapRecord
     store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))

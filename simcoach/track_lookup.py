@@ -233,11 +233,14 @@ def load_map_data(
 
 def resolve_context(rest, tracks_dir, track_name: str, vehicle: str, channels=None,
                     user_dir=None):
-    """Resolve the coaching context (corner map, car display name, track-note slug)
-    for a live (track, car). Builds+saves a numbered map (named by the track slug, so
-    it resolves next time) from `channels` if none exists yet. Returns
-    (CornerMap | None, car, note_slug); cmap is None when no map exists and no lap is
-    available to build one from.
+    """Resolve the coaching context (corner map, car display name, track-note slug,
+    car class) for a live (track, car). Builds+saves a numbered map (named by the
+    track slug, so it resolves next time) from `channels` if none exists yet.
+    Returns (CornerMap | None, car, note_slug, car_class); cmap is None when no map
+    exists and no lap is available to build one from. car_class is the REST garage's
+    carClass, or None if REST is unavailable or doesn't carry it -- callers wanting
+    the scraped result-log fallback (#108 item 5) do that themselves rather than a
+    second REST call here.
 
     Used by the desktop app's sidecar (`simcoach/server/app.py`) to orient the coach
     to the live session."""
@@ -254,8 +257,8 @@ def resolve_context(rest, tracks_dir, track_name: str, vehicle: str, channels=No
         data = build_map(slug, channels)
         (Path(tracks_dir) / f"{slug}.json").write_text(json.dumps(data, indent=2))
     if not data.get("corners"):
-        return None, car, slug
-    return CornerMap.from_data(data), car, slug
+        return None, car, slug, car_class
+    return CornerMap.from_data(data), car, slug, car_class
 
 
 def corner_apex_key(corner: dict) -> float | None:

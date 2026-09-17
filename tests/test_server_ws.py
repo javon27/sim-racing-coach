@@ -463,6 +463,33 @@ def test_ws_coach_respects_imperial_units(tmp_path, monkeypatch):
     assert "km/h" not in fake.last_system
 
 
+def test_ws_coach_context_carries_car_class_from_rest(tmp_path, monkeypatch):
+    # #108 item 5: the live coach turn's CoachContext must carry the REST
+    # garage's carClass -- get_session_status states it from data.
+    from simcoach.lmu import smm
+    monkeypatch.setattr(smm, "read_session_track_car", lambda: ("test_track", "test_car"))
+
+    class FakeRest:
+        def get_setup(self):
+            return {"carClass": "LMGT3"}
+
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    fake = FakeModel(reply="ok", tool_script=[("get_session_status", {})])
+    coach = Coach(fake)
+    app = create_app(store, coach, rest=FakeRest())
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "what class is this car?"})
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"):
+                break
+
+    assert fake.dispatched and fake.dispatched[0][0] == "get_session_status"
+    assert "Class: LMGT3" in fake.dispatched[0][2]
+
+
 # --- token usage / cost meter (issue #39) ---------------------------------
 
 def _ask(client, payload: dict) -> list[dict]:

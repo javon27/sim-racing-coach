@@ -1904,6 +1904,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             # the reference lap work. Priority: live session -> most-recent lap ->
             # the lap the client is viewing (for track/car only, never pinned).
             track = car = cmap = None
+            car_class = None
             on_track = None
             try:
                 from ..lmu.smm import read_session_track_car
@@ -1915,11 +1916,20 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 track, vehicle = live
                 try:
                     from ..track_lookup import resolve_context
-                    cmap, car, _ = resolve_context(
+                    cmap, car, _, car_class = resolve_context(
                         rest, str(app.state.tracks_dir), track, vehicle,
                         user_dir=str(Path(store.data_dir) / "tracks"))
                 except Exception:
                     cmap, car = _map_for(track), vehicle
+                # #108 item 5: REST didn't have a class (no REST, or no carClass on
+                # the payload) -- fall back to the scraped result-log table, still
+                # without a second REST call.
+                if car_class is None:
+                    try:
+                        from ..car_lookup import resolve_car_class
+                        car_class = resolve_car_class(vehicle)
+                    except Exception:
+                        car_class = None
             if track is None and app.state.latest is not None:
                 lr = app.state.latest["record"]
                 track, car = lr.track, resolve_car(lr.car)
@@ -1957,7 +1967,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                                session_id=eff_session_id,
                                car_notes=load_car_notes(
                                    car, user_dir=str(Path(store.data_dir) / "cars")),
-                               setup_concepts=load_setup_concepts())
+                               setup_concepts=load_setup_concepts(),
+                               car_class=car_class)
             car = ctx.car or "car"
 
             # Concise always-on profile tier: static prefs from settings + the active
