@@ -1,4 +1,5 @@
 use std::fs::File;
+use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -98,8 +99,38 @@ fn spawn_sidecar() -> std::io::Result<Child> {
         .spawn()
 }
 
+/// Pure: does an HTTP response (status line + headers + body, as read off the
+/// socket) indicate a healthy sidecar? Split out so the check is unit-testable
+/// without a real TCP connection.
+fn is_sidecar_health(response: &str) -> bool {
+    let status_line = response.split("\r\n").next().unwrap_or("");
+    let is_200 = status_line.split_whitespace().nth(1) == Some("200");
+    is_200 && response.contains("\"status\":\"ok\"")
+}
+
+/// A successful TCP connect alone doesn't prove the listener on 8765 is our
+/// sidecar -- anything could be squatting the port. GET /health over the same
+/// connection and require our shape before reusing it.
+fn probe_sidecar_health() -> bool {
+    let Ok(addr) = SIDECAR_ADDR.parse() else { return false };
+    let timeout = Duration::from_millis(500);
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, timeout) else { return false };
+    if stream.set_read_timeout(Some(timeout)).is_err() || stream.set_write_timeout(Some(timeout)).is_err() {
+        return false;
+    }
+    let req = format!("GET /health HTTP/1.1\r\nHost: {SIDECAR_ADDR}\r\nConnection: close\r\n\r\n");
+    if stream.write_all(req.as_bytes()).is_err() {
+        return false;
+    }
+    let mut body = String::new();
+    // Best-effort: a slow/chunked response just fails the check within the
+    // read timeout rather than hanging startup.
+    let _ = stream.read_to_string(&mut body);
+    is_sidecar_health(&body)
+}
+
 fn is_sidecar_already_running() -> bool {
-    TcpStream::connect_timeout(&SIDECAR_ADDR.parse().unwrap(), Duration::from_millis(300)).is_ok()
+    probe_sidecar_health()
 }
 
 /// Windows Job Object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: the OS kills the
@@ -336,8 +367,31 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{claim_once, is_on_screen};
+    use super::{claim_once, is_on_screen, is_sidecar_health};
     use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn sidecar_health_accepts_200_with_status_ok() {
+        let resp = "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"status\":\"ok\"}";
+        assert!(is_sidecar_health(resp));
+    }
+
+    #[test]
+    fn sidecar_health_rejects_non_200() {
+        let resp = "HTTP/1.1 404 Not Found\r\n\r\n{\"status\":\"ok\"}";
+        assert!(!is_sidecar_health(resp));
+    }
+
+    #[test]
+    fn sidecar_health_rejects_200_without_the_expected_body() {
+        let resp = "HTTP/1.1 200 OK\r\n\r\n<html>hello</html>";
+        assert!(!is_sidecar_health(resp));
+    }
+
+    #[test]
+    fn sidecar_health_rejects_empty_response() {
+        assert!(!is_sidecar_health(""));
+    }
 
     #[test]
     fn claim_once_only_lets_the_first_caller_through() {
