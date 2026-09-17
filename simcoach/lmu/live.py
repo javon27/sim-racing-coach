@@ -147,14 +147,17 @@ def read_field(scoring: rF2Scoring) -> FieldSnapshot:
     if player is None or player.mInGarageStall:
         return empty_snapshot()
 
+    # Practice/timed sessions report an INT_MAX-ish sentinel for "unlimited" —
+    # only show a lap target for a real lap-count race.
+    raw_max_laps = int(info.mMaxLaps)
+    max_laps = raw_max_laps if 0 < raw_max_laps <= 1000 else None
+
     return FieldSnapshot(
         session=SessionState(
             live=True,
             phase=_phase(int(info.mSession)),
             current_lap=int(player.mTotalLaps) + 1,
-            # Practice/timed sessions report an INT_MAX-ish sentinel for "unlimited"
-            # — only show a lap target for a real lap-count race.
-            max_laps=(lambda ml: ml if 0 < ml <= 1000 else None)(int(info.mMaxLaps)),
+            max_laps=max_laps,
             track_len=float(info.mLapDist),
             elapsed=float(info.mCurrentET),
             end_time=float(info.mEndET),

@@ -64,9 +64,9 @@ class ClaudeModel:
         call alike — so summing the usage events is structurally complete rather than
         something a later edit can forget on one code path. That is also why the
         cache breakpoint goes here: one place, every billed call."""
-        kw = dict(model=self.model, max_tokens=self.max_tokens,
-                  system=_cached_system(system),
-                  messages=convo, thinking=self._thinking_param())
+        kw = {"model": self.model, "max_tokens": self.max_tokens,
+              "system": _cached_system(system),
+              "messages": convo, "thinking": self._thinking_param()}
         if tools is not None:
             kw["tools"] = tools
         if not hasattr(self.client.messages, "stream"):

@@ -51,7 +51,7 @@ def test_imperial_prompt_converts_speed_and_temp(synthetic_lap):
 
 def test_corner_line_has_richer_inputs(synthetic_lap):
     user = format_lap_facts(_analysis(synthetic_lap))
-    t1 = [l for l in user.splitlines() if l.startswith("T1 ")][0]
+    t1 = next(l for l in user.splitlines() if l.startswith("T1 "))
     assert "peak" in t1 and "g" in t1        # peak lateral g surfaced
     assert "trail" in t1
     assert "→min" in t1                       # entry→min→exit speeds surfaced

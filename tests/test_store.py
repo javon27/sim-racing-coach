@@ -730,11 +730,11 @@ def _fake_result_session(**overrides):
         ResultLap(lap_no=1, lap_time=91.234, sectors=[30.1, 30.2, 30.9], valid=True),
         ResultLap(lap_no=2, lap_time=90.876, sectors=[29.9, 30.1, 30.9], valid=True),
     ])
-    defaults = dict(
-        sim="lmu", track="Sebring", car="GT3 Vantage", car_class="GT3",
-        date_ts=1234567890, session_type="race", position=3, class_position=2,
-        best_lap=90.876, finish_status="Finished", laps=laps, incidents=[], penalties=[],
-    )
+    defaults = {
+        "sim": "lmu", "track": "Sebring", "car": "GT3 Vantage", "car_class": "GT3",
+        "date_ts": 1234567890, "session_type": "race", "position": 3, "class_position": 2,
+        "best_lap": 90.876, "finish_status": "Finished", "laps": laps, "incidents": [], "penalties": [],
+    }
     defaults.update(overrides)
     return ResultSession(**defaults)
 

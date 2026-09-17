@@ -51,6 +51,8 @@ def test_live_reports_not_live_when_unavailable(tmp_path, monkeypatch):
 def test_live_rejects_spoofed_host(tmp_path):
     import pytest
     from starlette.websockets import WebSocketDisconnect
-    with pytest.raises(WebSocketDisconnect):
-        with _client(tmp_path).websocket_connect("/live", headers={"host": "evil.com"}) as ws:
-            ws.receive_json()
+    with (
+        pytest.raises(WebSocketDisconnect),
+        _client(tmp_path).websocket_connect("/live", headers={"host": "evil.com"}) as ws,
+    ):
+        ws.receive_json()

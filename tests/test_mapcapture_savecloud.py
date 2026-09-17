@@ -32,7 +32,7 @@ def _edge(track, zsign, dist_max, *, elevation=True):
 
 
 def test_save_cloud_writes_capture_without_touching_map(tmp_path):
-    app, store = _app(tmp_path)
+    app, _store = _app(tmp_path)
     app.state.map_buffer = [_edge("MapTrack", 1, 100.0), _edge("MapTrack", -1, 100.0)]
     app.state.mapping = True
     tj = tmp_path / "tracks" / "maptrack.json"
@@ -48,14 +48,14 @@ def test_save_cloud_writes_capture_without_touching_map(tmp_path):
 
 
 def test_save_cloud_needs_two_passes(tmp_path):
-    app, store = _app(tmp_path)
+    app, _store = _app(tmp_path)
     app.state.map_buffer = [_edge("MapTrack", 1, 100.0)]
     assert _tc(app).post("/mapcapture/save-cloud", json={}).status_code == 422
 
 
 def test_save_cloud_requires_elevation(tmp_path):
     # No pos_y -> rejected; capturing elevation is the whole point.
-    app, store = _app(tmp_path)
+    app, _store = _app(tmp_path)
     app.state.map_buffer = [_edge("MapTrack", 1, 100.0, elevation=False),
                             _edge("MapTrack", -1, 100.0, elevation=False)]
     assert _tc(app).post("/mapcapture/save-cloud", json={}).status_code == 422

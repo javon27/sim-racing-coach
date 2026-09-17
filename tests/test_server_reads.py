@@ -28,7 +28,7 @@ def _tc(app):
 
 
 def test_chats_and_messages(tmp_path, synthetic_lap):
-    app, lap_id, cid = _app(tmp_path, synthetic_lap)
+    app, _lap_id, cid = _app(tmp_path, synthetic_lap)
     c = _tc(app)
     chats = c.get("/chats").json()
     assert any(x["chat_id"] == cid for x in chats)
@@ -37,7 +37,7 @@ def test_chats_and_messages(tmp_path, synthetic_lap):
 
 
 def test_session_chats_endpoint(tmp_path, synthetic_lap):
-    app, lap_id, cid = _app(tmp_path, synthetic_lap)
+    app, _lap_id, cid = _app(tmp_path, synthetic_lap)
     c = _tc(app)
     # _app saved a chat stamped session_id="s1".
     rows = c.get("/sessions/s1/chats").json()
@@ -72,7 +72,7 @@ def test_setup_empty_without_rest(tmp_path, synthetic_lap):
 
 
 def test_sessions_from_laps_table(tmp_path, synthetic_lap):
-    app, lap_id, cid = _app(tmp_path, synthetic_lap)
+    app, _lap_id, _cid = _app(tmp_path, synthetic_lap)
     body = _tc(app).get("/sessions").json()
     assert body["total"] == 1
     assert body["tracks"] == [synthetic_lap.track]
@@ -88,7 +88,7 @@ def test_sessions_from_laps_table(tmp_path, synthetic_lap):
 
 
 def test_sessions_filter_and_paginate(tmp_path, synthetic_lap):
-    app, lap_id, cid = _app(tmp_path, synthetic_lap)
+    app, _lap_id, _cid = _app(tmp_path, synthetic_lap)
     # Filtering to a non-matching track yields an empty page; the facet lists
     # still reflect the full dataset.
     body = _tc(app).get("/sessions", params={"track": "Nowhere"}).json()
@@ -102,7 +102,7 @@ def test_sessions_filter_and_paginate(tmp_path, synthetic_lap):
 
 
 def test_sessions_summary(tmp_path, synthetic_lap):
-    app, lap_id, cid = _app(tmp_path, synthetic_lap)
+    app, _lap_id, _cid = _app(tmp_path, synthetic_lap)
     body = _tc(app).get("/sessions/summary").json()
     assert body["count"] == 1
     assert body["personal_best"] == synthetic_lap.lap_time
@@ -110,7 +110,7 @@ def test_sessions_summary(tmp_path, synthetic_lap):
 
 
 def test_session_laps(tmp_path, synthetic_lap):
-    app, lap_id, cid = _app(tmp_path, synthetic_lap)
+    app, lap_id, _cid = _app(tmp_path, synthetic_lap)
     rows = _tc(app).get("/sessions/s1/laps").json()
     assert rows == [{"id": lap_id, "lap_time": synthetic_lap.lap_time,
                      "valid": 1, "ts": synthetic_lap.timestamp,
@@ -121,14 +121,14 @@ def test_session_laps(tmp_path, synthetic_lap):
 
 
 def test_analysis_404_without_cmap(tmp_path, synthetic_lap):
-    app, lap_id, cid = _app(tmp_path, synthetic_lap)
+    app, lap_id, _cid = _app(tmp_path, synthetic_lap)
     r = _tc(app).get(f"/laps/{lap_id}/analysis")
     assert r.status_code == 404
 
 
 def test_analysis_happy_path(tmp_path, synthetic_lap):
     cmap = CornerMap.load("simcoach/tracks/test_track.json")
-    app, lap_id, cid = _app(tmp_path, synthetic_lap, cmap=cmap)
+    app, lap_id, _cid = _app(tmp_path, synthetic_lap, cmap=cmap)
     r = _tc(app).get(f"/laps/{lap_id}/analysis")
     assert r.status_code == 200
     body = r.json()
@@ -140,7 +140,7 @@ def test_analysis_happy_path(tmp_path, synthetic_lap):
 
 def test_analysis_404_missing_lap(tmp_path, synthetic_lap):
     cmap = CornerMap.load("simcoach/tracks/test_track.json")
-    app, lap_id, cid = _app(tmp_path, synthetic_lap, cmap=cmap)
+    app, _lap_id, _cid = _app(tmp_path, synthetic_lap, cmap=cmap)
     r = _tc(app).get("/laps/99999/analysis")
     assert r.status_code == 404
 
@@ -169,14 +169,14 @@ def test_lap_inputs_happy_path(tmp_path, synthetic_lap):
 
 
 def test_lap_inputs_no_map_no_corners(tmp_path, synthetic_lap):
-    app, lap_id, cid = _app(tmp_path, synthetic_lap)  # no cmap
+    app, lap_id, _cid = _app(tmp_path, synthetic_lap)  # no cmap
     body = _tc(app).get(f"/laps/{lap_id}/inputs").json()
     assert body["corners"] == []
     assert body["best"] is None  # only one lap saved
 
 
 def test_lap_inputs_404_missing_lap(tmp_path, synthetic_lap):
-    app, lap_id, cid = _app(tmp_path, synthetic_lap)
+    app, _lap_id, _cid = _app(tmp_path, synthetic_lap)
     r = _tc(app).get("/laps/99999/inputs")
     assert r.status_code == 404
     assert r.json()["detail"] == "lap not found"
@@ -367,7 +367,7 @@ def test_analysis_for_result_log_lap_says_no_telemetry(tmp_path):
 
 
 def test_map_cache_invalidated_after_put(tmp_path):
-    app, lap_id, tracks = _curve_app(tmp_path)
+    app, lap_id, _tracks = _curve_app(tmp_path)
     c = _tc(app)
     c.get(f"/laps/{lap_id}/map")  # populate the canonical cache
     c.put(f"/laps/{lap_id}/map", json={"corners": [{"number": 1, "name": "Fresh", "apex_dist": 200.0}]})
@@ -510,7 +510,7 @@ def test_put_map_no_clean_laps_is_422(tmp_path):
 
 def test_map_without_pos_channels_is_empty(tmp_path, synthetic_lap):
     # synthetic_lap has no pos_x/pos_z -> {} per contract.
-    app, lap_id, cid = _app(tmp_path, synthetic_lap)
+    app, lap_id, _cid = _app(tmp_path, synthetic_lap)
     assert _tc(app).get(f"/laps/{lap_id}/map").json() == {}
 
 
@@ -930,7 +930,7 @@ def test_mapcapture_save_persists_raw_capture_and_rebuild(tmp_path, monkeypatch)
     # not whatever sim happens to be running on the dev machine.
     from simcoach.lmu import smm
     monkeypatch.setattr(smm, "read_session_track_car", lambda: None)
-    app, store = _map_app(tmp_path)
+    app, _store = _map_app(tmp_path)
     app.state.latest = {"record": _edge("MapTrack", 1, 100.0), "lap_id": 0}
     app.state.map_buffer = [_edge("MapTrack", 1, 100.0), _edge("MapTrack", -1, 100.0)]
     c = _tc(app)
@@ -974,7 +974,7 @@ def test_coach_resolves_live_track_car_with_zero_stored_laps(tmp_path, monkeypat
 
 def test_mapcapture_rebuild_offline_uses_newest_capture(tmp_path, monkeypatch):
     from simcoach.lmu import smm
-    app, store = _map_app(tmp_path)
+    app, _store = _map_app(tmp_path)
     app.state.latest = {"record": _edge("MapTrack", 1, 100.0), "lap_id": 0}
     app.state.map_buffer = [_edge("MapTrack", 1, 100.0), _edge("MapTrack", -1, 100.0)]
     c = _tc(app)
@@ -1264,7 +1264,7 @@ def test_rotation_csrf_and_validation(tmp_path):
 
 def test_analysis_unanalyzable_is_422(tmp_path, synthetic_lap, monkeypatch):
     cmap = CornerMap.load("simcoach/tracks/test_track.json")
-    app, lap_id, cid = _app(tmp_path, synthetic_lap, cmap=cmap)
+    app, lap_id, _cid = _app(tmp_path, synthetic_lap, cmap=cmap)
 
     from simcoach.server import app as app_module
 

@@ -114,7 +114,7 @@ def test_average_racing_line_one_lap_is_resample():
     d = np.array([0.0, 100.0, 200.0])
     lap = {"pos_x": np.array([0.0, 2.0, 4.0]), "pos_z": np.array([0.0, 1.0, 2.0]),
            "lap_distance": d}
-    path, dist = average_racing_line([lap], bins=3)
+    path, _dist = average_racing_line([lap], bins=3)
     assert [p[0] for p in path] == pytest.approx([0.0, 2.0, 4.0])
     assert [p[1] for p in path] == pytest.approx([0.0, 1.0, 2.0])
 

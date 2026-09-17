@@ -51,9 +51,11 @@ def test_ws_coach_rejects_bad_host(tmp_path):
     client, _ = _client(tmp_path)
     import pytest
     from starlette.websockets import WebSocketDisconnect
-    with pytest.raises(WebSocketDisconnect):
-        with client.websocket_connect("/coach", headers={"host": "evil.com"}) as ws:
-            ws.receive_json()
+    with (
+        pytest.raises(WebSocketDisconnect),
+        client.websocket_connect("/coach", headers={"host": "evil.com"}) as ws,
+    ):
+        ws.receive_json()
 
 
 def test_ws_coach_rejects_hostile_origin_good_host(tmp_path):
@@ -62,10 +64,12 @@ def test_ws_coach_rejects_hostile_origin_good_host(tmp_path):
     client, _ = _client(tmp_path)
     import pytest
     from starlette.websockets import WebSocketDisconnect
-    with pytest.raises(WebSocketDisconnect):
-        with client.websocket_connect("/coach", headers={"host": "127.0.0.1",
-                                                          "origin": "http://evil.com"}) as ws:
-            ws.receive_json()
+    with (
+        pytest.raises(WebSocketDisconnect),
+        client.websocket_connect("/coach", headers={"host": "127.0.0.1",
+                                                      "origin": "http://evil.com"}) as ws,
+    ):
+        ws.receive_json()
 
 
 def test_ws_coach_rejects_another_localhost_port(tmp_path):

@@ -63,7 +63,7 @@ _RACE_LOG_LAG_S = 600
 
 
 def _is_deterministic_sid(sid: str) -> bool:
-    return sid.endswith("--online") or sid.endswith("--offline")
+    return sid.endswith(("--online", "--offline"))
 
 
 # Instance separator: '~' is URL-unreserved (RFC 3986), so a suffixed id stays safe

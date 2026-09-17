@@ -256,7 +256,7 @@ def test_extended_corner_inputs(synthetic_lap):
     from simcoach.model_types import LapRecord
     cmap = CornerMap.load("simcoach/tracks/test_track.json")
     ch = dict(synthetic_lap.channels)
-    brake, throttle = ch["brake"], ch["throttle"]
+    brake = ch["brake"]
     dist = ch["lap_distance"]
     left = (dist > 800) & (dist < 1200)   # the first corner (braking, close to edge)
     # LMU sign: +1.4 g under braking, -0.3 g on throttle (#70). The metrics are

@@ -325,7 +325,7 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
 
     # Distance-based smoothing half-window (bins), so it's ~_SMOOTH_HALF_M metres on
     # EVERY track -- a fixed bin count over-smoothed long tracks (chicanes flattened).
-    sw = max(1, int(round(_SMOOTH_HALF_M * bins / max_len)))
+    sw = max(1, round(_SMOOTH_HALF_M * bins / max_len))
     # Light structural smoothing for the reconstruction; corner-preserving detail on
     # the rendered edges/center comes from the adaptive final pass (_smooth_curve),
     # so a fixed wide window no longer flattens tight esses.
@@ -364,7 +364,7 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
         wid = np.hypot(lx - rx, lz - rz)
         med = float(np.median(wid))
         seam = np.zeros(bins, dtype=bool)
-        w = max(1, int(round(bins * 0.03)))
+        w = max(1, round(bins * 0.03))
         seam[:w] = True; seam[-w:] = True
         bad = seam & (med > 0) & (wid < 0.5 * med)
         if bad.any() and (~bad).any():
@@ -384,7 +384,7 @@ def reconstruct_surface(laps: list[dict], bins: int = 500) -> dict:
         solid = (cnt >= 2) & np.isfinite(wid)
         med = float(np.median(wid[solid])) if solid.any() else 0.0
         seam = np.zeros(bins, dtype=bool)
-        w = max(1, int(round(bins * 0.03)))
+        w = max(1, round(bins * 0.03))
         seam[:w] = True; seam[-w:] = True
         bad = (cnt < 2) | (seam & (med > 0) & (wid < 0.5 * med))
         if (~bad).any():

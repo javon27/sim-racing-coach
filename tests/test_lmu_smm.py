@@ -564,10 +564,7 @@ def test_sector_boundary_dists_forward_transitions_only():
 
 def test_sector_boundary_dists_messy_sequence_rejected_by_guard():
     from simcoach.lmu.smm import sector_boundary_dists, sector_bounds_from
-    # Flicker adds a spurious third forward change -> guard rejects (need exactly 2).
-    dists = [0.0, 1000.0, 1100.0, 2000.0]
-    sectors = [1, 2, 3, 2]  # 1->2, 2->3 (only two forward); 3->2 is a decrease
-    # ...but a genuine flicker 1->2->1->2 yields two forwards at odd places:
+    # A genuine flicker 1->2->1->2 yields two forwards at odd places:
     flick_d = [0.0, 500.0, 700.0, 900.0]
     flick_s = [1, 2, 1, 2]
     assert sector_boundary_dists(flick_d, flick_s) == [500.0, 900.0]
@@ -700,7 +697,7 @@ def test_laps_resets_buffer_across_reused_instance_no_ghost_lap(monkeypatch):
         records = []
         try:
             for lap in gen:
-                records.append(lap)
+                records.append(lap)  # noqa: PERF402 -- must keep partial results on the exception below; list(gen) can't
         except RuntimeError:
             pass  # what a reconnecting capture loop catches before retrying
         return records

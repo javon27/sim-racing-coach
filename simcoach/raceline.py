@@ -340,10 +340,10 @@ def solve_corners(left_edge, right_edge, car=CarParams(), telem=None, bank=None,
     seg = _seg_lengths(center)
     dist = _dist_along(center)
     length = float(dist[-1] + seg[-1])                # closed-loop total
-    sw = max(2, int(round(smooth_m / max(length, _EPS) * n)))
+    sw = max(2, round(smooth_m / max(length, _EPS) * n))
     kappa = _smooth_closed(_curvature(center), sw)
     apexes = _detect_apexes(kappa, kappa_min, min_prom)
-    max_half = max(1, int(round(80.0 / max(length, _EPS) * n)))  # window bound ~80 m/side
+    max_half = max(1, round(80.0 / max(length, _EPS) * n))  # window bound ~80 m/side
 
     corners = []
     for i in apexes:
