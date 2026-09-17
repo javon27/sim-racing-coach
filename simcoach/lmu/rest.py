@@ -16,9 +16,9 @@ class LmuRest:
         self.timeout = timeout
         self._fetch = fetch or self._http_get
 
-    def _http_get(self, path: str):
+    def _http_get(self, path: str, timeout: float | None = None):
         url = self.base_url + path
-        with urllib.request.urlopen(url, timeout=self.timeout) as r:
+        with urllib.request.urlopen(url, timeout=timeout if timeout is not None else self.timeout) as r:
             return json.loads(r.read().decode("utf-8"))
 
     def reachable(self, timeout: float = 0.3) -> bool:
@@ -38,8 +38,14 @@ class LmuRest:
             return False
 
     # --- raw endpoints ---
-    def get_setup(self) -> dict:
-        """GET /rest/garage/getPlayerGarageData -> {KEY: {stringValue, isFreeSetting, minValue, maxValue, ...}}"""
+    def get_setup(self, probe_timeout: float | None = None) -> dict:
+        """GET /rest/garage/getPlayerGarageData -> {KEY: {stringValue, isFreeSetting, minValue, maxValue, ...}}
+
+        `probe_timeout` overrides `self.timeout` for this call only -- used by
+        a liveness probe that must return well inside its own re-probe TTL,
+        never by a real setup read (see `_ensure_rest` in server/app.py)."""
+        if probe_timeout is not None and self._fetch is self._http_get:
+            return self._http_get("/rest/garage/getPlayerGarageData", timeout=probe_timeout)
         return self._fetch("/rest/garage/getPlayerGarageData")
 
     def get_player_standing(self) -> dict | None:

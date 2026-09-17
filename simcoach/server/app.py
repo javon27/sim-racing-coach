@@ -126,6 +126,10 @@ _MAP_BUFFER_MAX = 8      # cap mapping-mode buffer (need only 2 edges; keep last
 # auto-admit http://tauri.localhost:5173 and :8765. Widen this set deliberately.
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
 REST_PROBE_TTL = 2.0  # s: liveness probe rate cap so /status polling can't hammer LMU's REST
+# The liveness probe itself must finish well inside REST_PROBE_TTL, or a hung LMU
+# re-blocks the next tick before this one's failure is even cached (#1). LmuRest's
+# normal request timeout (4.0s) is for real setup reads, not this probe.
+REST_PROBE_TIMEOUT = 1.5
 _EVENTS_PERIOD = 1.0  # s: /events push loop period (module constant so tests can monkeypatch it)
 SIDECAR_PORT = 8765   # the port simcoach/server/__main__.py serves on (it imports this)
 VITE_DEV_PORT = 5173  # `npm run dev` / src-tauri/tauri.conf.json devUrl
@@ -786,7 +790,15 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             reachable = getattr(rest, "reachable", None)
             if reachable is not None and not reachable():
                 raise ConnectionError("LMU REST port not accepting connections")
-            rest.get_setup()  # liveness probe
+            # Bound this call to REST_PROBE_TIMEOUT (< REST_PROBE_TTL) so a port that
+            # accepts but never answers can't cost the full 4s request timeout (#1).
+            # Falls back to the plain call for test doubles that don't accept the
+            # kwarg -- get_setup(probe_timeout=...) raises TypeError before running
+            # any of the fake's body, so the fallback call is the only real one.
+            try:
+                rest.get_setup(probe_timeout=REST_PROBE_TIMEOUT)
+            except TypeError:
+                rest.get_setup()
         except Exception:
             app.state.rest = None
             return None

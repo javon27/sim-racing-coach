@@ -1,4 +1,5 @@
 import json
+import time
 
 import numpy as np
 from fastapi.testclient import TestClient
@@ -151,3 +152,28 @@ def test_track_map_with_frozen_outline_behaves_as_before(tmp_path, monkeypatch):
     assert client.get("/status").json()["has_map"] is True
     m = client.get("/track/map").json()
     assert m.get("path") and len(m["corners"]) == 1
+
+
+def test_status_probe_bounded_by_probe_timeout_not_a_full_hang(tmp_path, monkeypatch):
+    # #1: LMU's REST port can accept and then never answer. The liveness probe
+    # in _ensure_rest must be bounded by REST_PROBE_TIMEOUT (1.5s, < the 2s
+    # REST_PROBE_TTL), not LmuRest's normal 4s request timeout. This fake mimics
+    # urllib honoring a timeout: it sleeps only up to the `probe_timeout` it was
+    # given, then raises -- so this test fails (sleeps 0.3s) if the probe call
+    # ever drops the kwarg and falls back to the fake's hang duration.
+    from simcoach.server import app as app_module
+
+    class SlowRest:
+        def get_setup(self, probe_timeout=None):
+            time.sleep(probe_timeout if probe_timeout is not None else 0.3)
+            raise TimeoutError("LMU REST not answering")
+
+    monkeypatch.setattr(app_module, "REST_PROBE_TIMEOUT", 0.1)
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    app = create_app(store, Coach(FakeModel()), rest_factory=SlowRest)
+    c = TestClient(app, base_url="http://127.0.0.1")
+    start = time.monotonic()
+    b = c.get("/status").json()
+    elapsed = time.monotonic() - start
+    assert b["lmu_connected"] is False
+    assert elapsed < 0.25  # well under the fake's 0.3s hang -- proves probe_timeout was honored
