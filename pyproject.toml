@@ -24,7 +24,7 @@ dependencies = ["numpy>=1.26", "anthropic>=0.40", "keyring>=25", "fastapi>=0.132
 include = ["simcoach*"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = ["pytest>=8", "ruff==0.16.8"]
 voice = ["faster-whisper>=1.1", "kokoro-onnx==0.6.1", "misaki==0.7.4", "onnxruntime==1.30.0", "regex>=2024.0"]
 
 [tool.pytest.ini_options]
@@ -32,3 +32,16 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
+
+# No explicit `select`: ruff's own default rule set is used, and the pinned
+# `ruff==0.16.8` above (see [project.optional-dependencies] dev) freezes what
+# that default resolves to, so a `pip install -e .[dev]` can't silently pick
+# up a broader default rule set the way it did before (see #48). Only the
+# repo's deliberate patterns are carved out below.
+[tool.ruff.lint]
+ignore = [
+    "BLE001",  # except Exception is the sidecar/coach's designed silent-degrade path: it must never crash the capture thread
+    "B008",    # FastAPI's own Body(...)/Depends(...) idiom in route signatures -- see the CSRF-guard note above
+    "S110",    # try/except/pass is a deliberate silent-degrade pattern in capture/coach code
+    "S112",    # try/except/continue -- same deliberate degrade pattern, loop form
+]
