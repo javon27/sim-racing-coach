@@ -2122,8 +2122,14 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                     # the driver chooses whether to start a New chat. 0 disables it.
                     soft = cfg.get("chat_token_soft_limit") or 0
                     terminal["long_chat"] = bool(soft) and terminal["usage"]["total"] >= soft
-                except Exception:
-                    pass
+                except Exception as e:
+                    # Still best-effort (the answer must reach the driver either way),
+                    # but no longer silent: a failure here loses the turn from history
+                    # AND leaves the meter showing the pre-turn total with no sign
+                    # anything went wrong (#5). Log it, and tell the client so the UI
+                    # can show "usage unavailable" instead of a stale number.
+                    logging.getLogger(__name__).warning("coach turn not persisted", exc_info=True)
+                    terminal["usage_error"] = str(e)
             _emit(terminal)
             _emit(_SENTINEL)
 

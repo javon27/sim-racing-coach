@@ -250,6 +250,33 @@ def test_ws_coach_error_without_text_persists_nothing(tmp_path, monkeypatch):
     assert store.list_chats() == []
 
 
+def test_ws_coach_persist_failure_is_logged_and_flagged_not_swallowed(tmp_path, monkeypatch, caplog):
+    # #5: create_chat/save_chat/chat_usage all sat under one bare `except Exception:
+    # pass`. A failure there silently dropped the turn from history AND left
+    # `terminal` with no `usage`, which the client reads as "no update" -- the
+    # meter kept showing the stale, lower total with no error anywhere. Now the
+    # failure is logged and surfaced to the client as `usage_error`.
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    monkeypatch.setattr(store, "save_chat",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("disk full")))
+    coach = Coach(FakeModel(reply="Brake later into Turn 1."))
+    app = create_app(store, coach)
+    client = TestClient(app, base_url="http://127.0.0.1")
+    import logging
+    with caplog.at_level(logging.WARNING), client.websocket_connect(
+            "/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "where do I lose time?"})
+        events = []
+        while True:
+            ev = ws.receive_json(); events.append(ev)
+            if ev["type"] in ("done", "error"): break
+    done = events[-1]
+    assert done["type"] == "done"          # the answer still reaches the driver
+    assert "chat_id" not in done
+    assert done.get("usage_error") == "disk full"
+    assert any("coach turn not persisted" in r.message for r in caplog.records)
+
+
 def test_ws_coach_threads_prior_chat_history(tmp_path):
     # Regression: the WS worker must pass the chat's prior turns as history so the
     # coach continues the conversation instead of treating each question standalone
