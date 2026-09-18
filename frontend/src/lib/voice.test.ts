@@ -135,19 +135,19 @@ describe("VoiceLoop PTT", () => {
     expect(recorder.open).toBe(false);
     expect(asked).toEqual([["where am I losing time", "ptt"]]); expect(loop.state).toBe("asking");
     loop.onAnswer("Full **answer**.\n\nMore.", "Brake later."); await flush();
-    expect(loop.state).toBe("speaking"); expect(speaker.spoken).toEqual(["Brake later."]);
-    speaker.end(); await flush();
+    expect(loop.state).toBe("speaking"); expect(speaker.enqueued).toEqual(["Brake later."]);
+    speaker.drain(); await flush();
     expect(loop.state).toBe("idle");
   });
   it("onSpoken speaks before onAnswer; onAnswer does not re-speak", async () => {
     const { loop, speaker } = make();
     loop.press(); await flush(); loop.release(); await flush(); await flush();
     loop.onSpoken("Brake later into four."); await flush();
-    expect(loop.state).toBe("speaking"); expect(speaker.spoken).toEqual(["Brake later into four."]);
+    expect(loop.state).toBe("speaking"); expect(speaker.enqueued).toEqual(["Brake later into four."]);
     // done arrives while the cue is still being spoken: no second utterance.
     loop.onAnswer("Full answer.", "Brake later into four."); await flush();
-    expect(speaker.spoken).toEqual(["Brake later into four."]);
-    speaker.end(); await flush();
+    expect(speaker.enqueued).toEqual(["Brake later into four."]);
+    speaker.drain(); await flush();
     expect(loop.state).toBe("idle");
   });
   it("onSpoken outside asking/ptt is ignored", async () => {
@@ -159,7 +159,7 @@ describe("VoiceLoop PTT", () => {
     const { loop, speaker } = make();
     loop.press(); await flush(); loop.release(); await flush(); await flush();
     loop.onAnswer("First **para**.\n\nSecond.", null); await flush();
-    expect(speaker.spoken).toEqual(["First para."]);
+    expect(speaker.enqueued).toEqual(["First para."]);
   });
   it("empty transcript: says didn't catch that, sends nothing, idle", async () => {
     const { loop, transcriber, speaker, asked } = make();
@@ -401,7 +401,7 @@ describe("mic release after idle", () => {
       setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout: () => {},
     });
     loop.press(); await flush(); loop.release(); await flush(); await flush();
-    loop.onAnswer("A.", "A."); await flush(); speaker.end(); await flush();
+    loop.onAnswer("A.", "A."); await flush(); speaker.drain(); await flush();
     expect(loop.state).toBe("idle");
     const release = timers.filter((t) => t.ms === 60000).at(-1);
     expect(release).toBeTruthy();
@@ -419,11 +419,44 @@ describe("mic release after idle", () => {
 describe("speakMessage (▶)", () => {
   it("toggles, is exclusive, and a PTT press stops it", async () => {
     const { loop, speaker } = make();
-    loop.speakMessage(0, "**One**"); expect(loop.speakingMessage).toBe(0); expect(speaker.spoken).toEqual(["One"]);
+    loop.speakMessage(0, "**One**"); expect(loop.speakingMessage).toBe(0); expect(speaker.enqueued).toEqual(["One"]);
     loop.speakMessage(1, "Two"); expect(speaker.cancels).toBe(1); expect(loop.speakingMessage).toBe(1);
+    expect(speaker.enqueued).toEqual(["One", "Two"]);
     loop.speakMessage(1, "Two"); expect(loop.speakingMessage).toBe(null); expect(loop.state).toBe("idle");
     loop.speakMessage(2, "Three"); loop.press(); await flush();
     expect(loop.speakingMessage).toBe(null); expect(loop.state).toBe("listening");
+  });
+
+  // #121: the whole message used to go to the speaker as one item, so playback
+  // couldn't start until every sentence was synthesised.
+  it("enqueues each sentence separately and calls after only once idle() resolves", async () => {
+    const { loop, speaker } = make();
+    loop.speakMessage(0, "One. Two. Three.");
+    expect(speaker.enqueued).toEqual(["One.", "Two.", "Three."]);
+    expect(loop.state).toBe("speaking"); expect(loop.speakingMessage).toBe(0);
+    speaker.drain(); await flush();
+    expect(loop.state).toBe("idle"); expect(loop.speakingMessage).toBe(null);
+  });
+
+  it("a text with no sentence terminator is still a single item", async () => {
+    const { loop, speaker } = make();
+    loop.speakMessage(0, "Brake later");
+    expect(speaker.enqueued).toEqual(["Brake later"]);
+  });
+});
+
+// #121: onSpoken (the PTT cue) goes through the same #speakThen sentence split.
+describe("onSpoken sentence splitting (#121)", () => {
+  it("speaks the cue sentence by sentence; a barge-in cancel mid-way never runs after", async () => {
+    const { loop, speaker } = make();
+    loop.press(); await flush(); loop.release(); await flush(); await flush();
+    loop.onSpoken("Brake later. Watch four.");
+    expect(speaker.enqueued).toEqual(["Brake later.", "Watch four."]);
+    expect(loop.state).toBe("speaking");
+    loop.press(); await flush();   // barge-in cancels before idle() would resolve
+    expect(speaker.cancels).toBe(1);
+    // after() (mode=null, state=idle) never ran -- press() re-listens instead.
+    expect(loop.state).toBe("listening"); expect(loop.mode).toBe("ptt");
   });
 });
 

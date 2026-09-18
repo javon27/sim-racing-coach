@@ -355,11 +355,23 @@ export class VoiceLoop {
     this.#o.ask(text, this.mode ?? "ptt");
   }
 
+  // Enqueues `text` sentence by sentence (#121: the whole cue/answer as ONE
+  // item made the server synthesise every sentence before any audio played).
+  // The existing one-ahead pipeline (KokoroSpeaker#pump) then starts playing
+  // after just the first sentence while later ones keep synthesising.
   async #speakThen(text: string, after: () => void): Promise<void> {
     const seq = ++this.#speakSeq;
     this.#set("speaking");
     if (this.mode === "conversation") this.#startRecorder().catch(() => {});  // keep the mic open for barge-in
-    await this.#o.speaker.speak(text);
+    let rest = text;
+    let popped: { sentence: string; rest: string } | null;
+    while ((popped = popSentence(rest))) {
+      rest = popped.rest;
+      const sentence = popped.sentence.trim();
+      if (sentence) this.#o.speaker.enqueue(sentence);
+    }
+    if (rest.trim()) this.#o.speaker.enqueue(rest.trim());
+    await this.#o.speaker.idle();
     if (seq === this.#speakSeq) after();
   }
   #cancelSpeech(): void { this.#speakSeq++; this.#o.speaker.cancel(); this.#textBuf = ""; }

@@ -160,6 +160,68 @@ describe("KokoroSpeaker", () => {
   });
 });
 
+describe("KokoroSpeaker decoded-audio cache (#121)", () => {
+  it("replaying the same text fetches once and decodes once", async () => {
+    const { ctx, sources } = fakeAudio();
+    const fetchWav = vi.fn(async () => wav(100));
+    const sp = new KokoroSpeaker({ fetchWav, audio: ctx });
+
+    const first = sp.speak("Turn ten.");
+    await vi.waitFor(() => expect(sources.length).toBe(1));
+    sources[0].stop(); await first;
+
+    const second = sp.speak("Turn ten.");
+    await vi.waitFor(() => expect(sources.length).toBe(2));
+    sources[1].stop(); await second;
+
+    expect(fetchWav).toHaveBeenCalledTimes(1);
+    expect(ctx.decodeAudioData).toHaveBeenCalledTimes(1);
+    expect(sources.length).toBe(2);   // two independent sources played from the one buffer
+  });
+
+  it("a different voice/rate/trackSlug is a different cache key -- fetches again", async () => {
+    const { ctx, sources } = fakeAudio();
+    const fetchWav = vi.fn(async () => wav(100));
+    const sp = new KokoroSpeaker({ fetchWav, audio: ctx });
+
+    const first = sp.speak("Turn ten.");
+    await vi.waitFor(() => expect(sources.length).toBe(1));
+    sources[0].stop(); await first;
+
+    sp.voice = "am_michael";
+    const second = sp.speak("Turn ten.");
+    await vi.waitFor(() => expect(sources.length).toBe(2));
+    sources[1].stop(); await second;
+
+    expect(fetchWav).toHaveBeenCalledTimes(2);
+  });
+
+  it("caches at most 64 entries; the oldest is evicted and refetched on replay", async () => {
+    const { ctx, sources } = fakeAudio();
+    const fetchWav = vi.fn(async () => wav(10));
+    const sp = new KokoroSpeaker({ fetchWav, audio: ctx });
+
+    for (let i = 0; i < 65; i++) {
+      const p = sp.speak(`Sentence ${i}.`);
+      await vi.waitFor(() => expect(sources.length).toBe(i + 1));
+      sources[i].stop(); await p;
+    }
+    expect(fetchWav).toHaveBeenCalledTimes(65);
+
+    // "Sentence 0." was the 65th-oldest of a 64-cap cache -- evicted, refetches.
+    const evicted = sp.speak("Sentence 0.");
+    await vi.waitFor(() => expect(sources.length).toBe(66));
+    sources[65].stop(); await evicted;
+    expect(fetchWav).toHaveBeenCalledTimes(66);
+
+    // "Sentence 64." is the most recently cached entry -- still a hit.
+    const stillCached = sp.speak("Sentence 64.");
+    await vi.waitFor(() => expect(sources.length).toBe(67));
+    sources[66].stop(); await stillCached;
+    expect(fetchWav).toHaveBeenCalledTimes(66);
+  });
+});
+
 describe("makeSpeaker", () => {
   it("returns a KokoroSpeaker with voice/rate set when the engine is kokoro and installed", () => {
     const v = voiceSettings({ tts_engine: "kokoro", kokoro_voice: "am_michael", tts_rate: 1.3 });

@@ -216,6 +216,13 @@ export class KokoroSpeaker implements Speaker {
   #playing: AudioBufferSourceNode | null = null;
   #idleWaiters: (() => void)[] = [];
   #failed = false;
+  // Decoded-audio cache (#121): replaying the same text -- voice/rate/track
+  // held fixed -- skips both the fetch and the decode. An AudioBuffer can be
+  // played by any number of AudioBufferSourceNodes, so the cached value is
+  // reused as-is. Insertion order doubles as LRU order: a hit is deleted and
+  // re-inserted so the oldest key is always the true least-recently-used one.
+  #cache = new Map<string, AudioBuffer>();
+  static readonly CACHE_MAX = 64;
   // Bumped by cancel() so an in-flight #play() -- even one already past its
   // synthesis, decoded and waiting inside #drainPlaying() for the previous
   // sentence to end -- notices and bails instead of playing a cancelled sentence.
@@ -250,10 +257,33 @@ export class KokoroSpeaker implements Speaker {
     if (this.#queue.length || this.#ahead || this.#playing) return;
     const w = this.#idleWaiters; this.#idleWaiters = []; w.forEach((f) => f());
   }
+  #cacheKey(text: string): string {
+    return `${this.voice}|${this.rate}|${this.trackSlug ?? ""}|${text}`;
+  }
+  #cacheGet(key: string): AudioBuffer | null {
+    const hit = this.#cache.get(key);
+    if (!hit) return null;
+    this.#cache.delete(key); this.#cache.set(key, hit);   // refresh LRU order
+    return hit;
+  }
+  #cacheSet(key: string, buf: AudioBuffer): void {
+    this.#cache.delete(key); this.#cache.set(key, buf);
+    if (this.#cache.size > KokoroSpeaker.CACHE_MAX) {
+      const oldest = this.#cache.keys().next().value;
+      if (oldest !== undefined) this.#cache.delete(oldest);
+    }
+  }
   // One synthesis in flight ahead of playback: fetch the head while the previous plays.
   #pump(): void {
     if (this.#ahead || !this.#queue.length) return;
     const item = this.#queue.shift()!;
+    const key = this.#cacheKey(item.text);
+    const cached = this.#cacheGet(key);
+    if (cached) {
+      this.#ahead = { buffer: Promise.resolve(cached), resolve: item.resolve, abort: new AbortController() };
+      void this.#play();
+      return;
+    }
     const abort = new AbortController();
     const bytes = this.#fetchWav(item.text, { voice: this.voice, speed: this.rate, trackSlug: this.trackSlug ?? undefined }, abort.signal)
       .catch((e: unknown) => {
@@ -263,17 +293,22 @@ export class KokoroSpeaker implements Speaker {
         this.#fail(e);
         return null;
       });
-    const buffer = bytes.then((b) => (b ? this.#decode(b) : null));
+    const buffer = bytes.then((b) => (b ? this.#decode(b, key) : null));
     this.#ahead = { buffer, resolve: item.resolve, abort };
     void this.#play();
   }
   // A bad/empty WAV for one sentence (e.g. an all-OOV sentence, #118) isn't an
   // engine failure -- skip just that sentence. Getting/creating the AudioContext
   // itself failing IS an engine failure (no Web Audio support), same as before.
-  #decode(bytes: ArrayBuffer): Promise<AudioBuffer | null> {
+  // A null/failed decode is never cached -- only a successful decode is worth
+  // replaying, and caching a miss would make a transient failure sticky.
+  #decode(bytes: ArrayBuffer, key: string): Promise<AudioBuffer | null> {
     let ctx: AudioContext;
     try { ctx = this.#audio(); } catch (e) { this.#fail(e); return Promise.resolve(null); }
-    return ctx.decodeAudioData(bytes).catch((e: unknown) => {
+    return ctx.decodeAudioData(bytes).then((buf) => {
+      this.#cacheSet(key, buf);
+      return buf;
+    }).catch((e: unknown) => {
       console.warn("Kokoro: couldn't decode synthesised audio, skipping sentence", e);
       return null;
     });

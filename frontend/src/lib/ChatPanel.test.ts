@@ -458,10 +458,22 @@ describe("ChatPanel", () => {
   function fakeVoice() {
     const speaker = {
       spoken: [] as string[], enqueued: [] as string[], cancels: 0,
+      // #121: #speakThen now drives enqueue()+idle() (not speak()), so idle()
+      // must stay pending -- like the real speaker -- until cancel() drains it,
+      // or state would snap back to idle before a test can see "speaking".
+      _pending: 0, _idleWaiters: [] as (() => void)[],
       speak(text: string) { this.spoken.push(text); return new Promise<void>(() => {}); },
-      enqueue(text: string) { this.enqueued.push(text); },
-      idle() { return Promise.resolve(); },
-      cancel() { this.cancels++; },
+      enqueue(text: string) { this.enqueued.push(text); this._pending++; },
+      idle() {
+        if (this._pending === 0) return Promise.resolve();
+        return new Promise<void>((r) => this._idleWaiters.push(r));
+      },
+      cancel() {
+        this.cancels++;
+        this._pending = 0;
+        const waiters = this._idleWaiters; this._idleWaiters = [];
+        waiters.forEach((w) => w());
+      },
       earcon() { /* no-op */ },
     };
     const recorder = {
@@ -493,7 +505,7 @@ describe("ChatPanel", () => {
     expect(plays).toHaveLength(2);
 
     await fireEvent.click(plays[0]);
-    expect(speaker.spoken).toEqual(["A1"]);
+    expect(speaker.enqueued).toEqual(["A1"]);
     expect(screen.getAllByRole("button", { name: "Stop" })).toHaveLength(1);
 
     await fireEvent.click(screen.getByRole("button", { name: "Stop" }));
@@ -592,7 +604,7 @@ describe("ChatPanel", () => {
     await waitFor(() => expect(voice.state).toBe("asking"));
     stream.emit({ phase: "done", answer: "Full answer.", spoken: "Short cue.", chatId: "c1" });
 
-    await waitFor(() => expect(speaker.spoken).toContain("Short cue."));
+    await waitFor(() => expect(speaker.enqueued).toContain("Short cue."));
     expect(screen.getByText("Full answer.")).toBeTruthy(); // written chat is the full answer
     expect(screen.getByText(/Short cue\./)).toBeTruthy();  // shown under the new coach message
   });
@@ -609,12 +621,12 @@ describe("ChatPanel", () => {
     await waitFor(() => expect(voice.state).toBe("asking"));
 
     stream.emit({ phase: "streaming", spoken: "Brake later into four." });
-    await waitFor(() => expect(speaker.spoken).toEqual(["Brake later into four."]));
+    await waitFor(() => expect(speaker.enqueued).toEqual(["Brake later into four."]));
     expect(voice.state).toBe("speaking"); // speaking already, well before `done`
 
     stream.emit({ phase: "done", answer: "Full answer.", spoken: "Brake later into four.", chatId: "c1" });
     await new Promise((r) => setTimeout(r, 0));
-    expect(speaker.spoken).toEqual(["Brake later into four."]); // not spoken a second time
+    expect(speaker.enqueued).toEqual(["Brake later into four."]); // not spoken a second time
   });
 
   it("conversation mode: text deltas reach the loop's onText as they stream", async () => {
