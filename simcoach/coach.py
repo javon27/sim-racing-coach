@@ -400,4 +400,20 @@ class Coach:
             system += " " + SPOKEN_SENTENCE
         messages = list(history) if history else []
         messages.append({"role": "user", "content": question})
-        yield from self.model.run_stream(system, messages, TOOLS, context.dispatch)
+        # #133: a text block that starts right after a tool round (rather than
+        # continuing the same block) needs a paragraph break, or two openings glue
+        # together ("...pair.Good news first..."). Model-agnostic: every adapter's
+        # run_stream yields the same {"type": ...} event shape, so this one seam
+        # covers the fake model in tests and the real one alike.
+        text_so_far = ""
+        saw_tool_since_text = False
+        for ev in self.model.run_stream(system, messages, TOOLS, context.dispatch):
+            if ev["type"] == "text":
+                if saw_tool_since_text and text_so_far and not text_so_far[-1].isspace():
+                    yield {"type": "text", "text": "\n\n"}
+                    text_so_far += "\n\n"
+                saw_tool_since_text = False
+                text_so_far += ev["text"]
+            elif ev["type"] != "usage":
+                saw_tool_since_text = True
+            yield ev

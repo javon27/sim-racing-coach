@@ -10,11 +10,17 @@ class FakeModel:
     """Fake model for testing. Records calls and returns a fixed reply. `run` and
     `run_stream` can be scripted with tool calls to exercise the agentic loop offline."""
 
-    def __init__(self, reply: str = "ok", tool_script: list | None = None):
+    def __init__(self, reply: str = "ok", tool_script: list | None = None,
+                 stream_script: list[tuple] | None = None):
         self.reply = reply
         # tool_script: list of (tool_name, input_dict) the fake "model" will call
         # via dispatch before returning `reply`. Empty = answer with no tool calls.
         self.tool_script = tool_script or []
+        # stream_script (run_stream only): list of ("text", str) / ("tool", name,
+        # input) in emission order, for tests that need text blocks interleaved
+        # with tool calls (#133) rather than tool_script's tools-then-one-reply
+        # shape. None -> fall back to tool_script + reply.
+        self.stream_script = stream_script
         self.last_system: str | None = None
         self.last_messages: list[dict] | None = None
         self.last_tools: list[dict] | None = None
@@ -44,13 +50,30 @@ class FakeModel:
 
     def run_stream(self, system: str, messages: list[dict], tools: list[dict],
                    dispatch: Callable[[str, dict], str]):
-        """Dispatch the scripted tool calls, yielding a tool event per call, then
-        yield the fixed reply as one text event and one usage event. Mirrors
-        ClaudeModel: shows the tool event before dispatching, swallows a raising
-        dispatch so the loop continues, and puts usage last (one "turn")."""
+        """With stream_script set, replay it verbatim (dispatching each "tool" step)
+        so callers can script text/tool/text interleavings (#133). Otherwise: dispatch
+        the scripted tool calls, yielding a tool event per call, then yield the fixed
+        reply as one text event and one usage event. Mirrors ClaudeModel: shows the
+        tool event before dispatching, swallows a raising dispatch so the loop
+        continues, and puts usage last (one "turn")."""
         self.last_system = system
         self.last_messages = messages
         self.last_tools = tools
+        if self.stream_script is not None:
+            for step in self.stream_script:
+                if step[0] == "text":
+                    yield {"type": "text", "text": step[1]}
+                else:
+                    _, name, inp = step
+                    yield {"type": "tool", "name": name, "input": inp}
+                    try:
+                        result = dispatch(name, inp)
+                        self.dispatched.append((name, inp, result))
+                    except Exception:
+                        pass
+            yield {"type": "usage", "usage": self._usage(messages).as_dict(),
+                   "model": FAKE_MODEL_ID}
+            return
         for name, inp in self.tool_script:
             yield {"type": "tool", "name": name, "input": inp}
             try:

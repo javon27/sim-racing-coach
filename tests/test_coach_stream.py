@@ -38,6 +38,53 @@ def test_ask_agentic_and_stream_build_same_system_prompt(tmp_path):
     assert system_from_ask == system_from_stream
 
 
+# --- #133: text blocks around a tool round get a paragraph separator ------
+
+def test_stream_inserts_separator_between_text_blocks_around_a_tool_round(tmp_path):
+    from simcoach.store import LapStore
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    ctx = CoachContext(store, track="T", car="C")
+    model = FakeModel(stream_script=[
+        ("text", "A."), ("tool", "get_corner", {"corner": "1"}), ("text", "B"),
+    ])
+    events = list(Coach(model).ask_agentic_stream(ctx, "q", car="C"))
+    texts = [e["text"] for e in events if e["type"] == "text"]
+    assert texts == ["A.", "\n\n", "B"]
+    assert "".join(texts) == "A.\n\nB"
+
+
+def test_stream_no_extra_separator_when_text_already_ends_in_whitespace(tmp_path):
+    from simcoach.store import LapStore
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    ctx = CoachContext(store, track="T", car="C")
+    model = FakeModel(stream_script=[
+        ("text", "A.\n\n"), ("tool", "get_corner", {"corner": "1"}), ("text", "B"),
+    ])
+    events = list(Coach(model).ask_agentic_stream(ctx, "q", car="C"))
+    texts = [e["text"] for e in events if e["type"] == "text"]
+    assert texts == ["A.\n\n", "B"]
+
+
+def test_stream_unchanged_with_no_tool_round(tmp_path):
+    from simcoach.store import LapStore
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    ctx = CoachContext(store, track="T", car="C")
+    model = FakeModel(stream_script=[("text", "A."), ("text", "B")])
+    events = list(Coach(model).ask_agentic_stream(ctx, "q", car="C"))
+    texts = [e["text"] for e in events if e["type"] == "text"]
+    assert texts == ["A.", "B"]
+
+
+def test_stream_no_leading_separator_when_tool_round_comes_first(tmp_path):
+    from simcoach.store import LapStore
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    ctx = CoachContext(store, track="T", car="C")
+    model = FakeModel(stream_script=[("tool", "get_corner", {"corner": "1"}), ("text", "B")])
+    events = list(Coach(model).ask_agentic_stream(ctx, "q", car="C"))
+    texts = [e["text"] for e in events if e["type"] == "text"]
+    assert texts == ["B"]
+
+
 def test_spoken_sentence_only_for_ptt(tmp_path):
     from simcoach.coach import SPOKEN_SENTENCE
     from simcoach.store import LapStore
