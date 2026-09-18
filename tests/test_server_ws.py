@@ -585,6 +585,40 @@ def test_ws_coach_context_carries_car_class_from_rest(tmp_path, monkeypatch):
     assert "Class: LMGT3" in fake.dispatched[0][2]
 
 
+def test_ws_coach_falls_back_to_newest_stored_lap_after_restart(tmp_path, synthetic_lap, monkeypatch):
+    # #137: sidecar restarted with LMU sitting in the lobby -- no live SMM, and no
+    # lap captured yet by THIS process (app.state.latest stays None). The coach
+    # context must still resolve the newest STORED lap's track/car/session, so a
+    # corner-placed tool like get_stint_events works instead of degrading.
+    from simcoach.corners import CornerMap
+    from simcoach.lmu import smm
+    monkeypatch.setattr(smm, "read_session_track_car", lambda: None)
+
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    synthetic_lap.session_id = "s1"
+    store.save(synthetic_lap)
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    fake = FakeModel(reply="ok", tool_script=[("get_stint_events", {})])
+    coach = Coach(fake)
+    app = create_app(store, coach, cmap=cmap)
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "what happened on that lap?"})
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"):
+                break
+
+    assert fake.dispatched and fake.dispatched[0][0] == "get_stint_events"
+    result = fake.dispatched[0][2]
+    assert "No corner map for this track yet" not in result
+    assert "No active session" not in result
+
+    msgs = store.chat_messages(ev["chat_id"])
+    assert msgs[0]["session_id"] == "s1"
+
+
 # --- token usage / cost meter (issue #39) ---------------------------------
 
 def _ask(client, payload: dict) -> list[dict]:

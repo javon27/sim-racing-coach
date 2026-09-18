@@ -908,7 +908,16 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         elif live:
             track, car = live["track"], live["car"]
         else:
-            track, car = None, None
+            # #137: no live SMM and nothing captured this process (a sidecar
+            # restart with LMU in the lobby) -- fall back to the newest stored
+            # lap so the strip isn't blank. on_track/activity stay False/None
+            # below (live is None here), which is correct: we don't know the
+            # driver is on track, only what they last drove.
+            row = store.latest_lap_row()
+            if row is not None:
+                track, car, session_id = row["track"], row["car"], row["session_id"]
+            else:
+                track, car = None, None
         # `activity` is the live driving state (track/pits/garage), detected from
         # scoring immediately — not gated on a captured lap. on_track mirrors it.
         activity = live["state"] if live else None
@@ -1990,6 +1999,16 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                     cmap, on_track = _map_for(track), False
                 except Exception:
                     pass
+            # #137: no live SMM, no in-process latest lap, no client-supplied lap_id
+            # either -- e.g. LMU sitting in the lobby after a sidecar restart, asked
+            # for post-race analysis. Fall back to the store: the client's viewed
+            # session first, then whatever lap is newest overall.
+            if track is None:
+                row = store.latest_lap_row(session_id) or store.latest_lap_row()
+                if row is not None:
+                    track, car = row["track"], resolve_car(row["car"])
+                    eff_session_id = eff_session_id or row["session_id"]
+                    cmap, on_track = _map_for(track), False
             # Backfill the current stint id from the latest lap when the client didn't
             # supply one (auto-anchor) — the live path above resolves track/car but not
             # the session stamp.

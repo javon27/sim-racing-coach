@@ -763,6 +763,26 @@ def test_status_has_map_reflects_canonical(tmp_path, monkeypatch):
     assert _tc(app).get("/status").json()["has_map"] is False
 
 
+def test_status_falls_back_to_newest_stored_lap_after_restart(tmp_path, monkeypatch, synthetic_lap):
+    # #137: sidecar restarted with LMU sitting in the lobby -- no live SMM, and
+    # nothing captured yet by THIS process (app.state.latest stays None). /status
+    # must still report the newest stored lap's track/car/session, not a blank strip.
+    from simcoach.lmu import smm
+    monkeypatch.setattr(smm, "read_live_status", lambda: None)
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    synthetic_lap.session_id = "s1"
+    store.save(synthetic_lap)
+    coach = Coach(FakeModel())
+    app = create_app(store, coach, tracks_dir=str(tmp_path / "tracks"))
+
+    body = _tc(app).get("/status").json()
+    assert body["track"] == synthetic_lap.track
+    assert body["car"] == synthetic_lap.car
+    assert body["session_id"] == "s1"
+    assert body["on_track"] is False
+    assert body["activity"] is None
+
+
 def _map_app(tmp_path):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     coach = Coach(FakeModel())

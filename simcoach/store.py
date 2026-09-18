@@ -780,6 +780,24 @@ class LapStore:
             ).fetchone()
         return (row[0], row[1]) if row is not None else None
 
+    def latest_lap_row(self, session_id: str | None = None) -> dict | None:
+        """The newest live-captured lap (by ts), optionally scoped to a session --
+        the store-backed fallback for `/coach` and `/status` when there's no live
+        SMM and no in-memory `app.state.latest` (#137: a sidecar restart with LMU
+        sitting in the lobby). Only `source = 'live'` rows are candidates -- a
+        result-log import carries no live session to resume into."""
+        with self._lock:
+            query = "SELECT id, track, car, session_id, ts FROM laps WHERE source = 'live'"
+            params: list = []
+            if session_id is not None:
+                query += " AND session_id = ?"
+                params.append(session_id)
+            query += " ORDER BY ts DESC LIMIT 1"
+            row = self.conn.execute(query, params).fetchone()
+        if row is None:
+            return None
+        return dict(zip(("id", "track", "car", "session_id", "ts"), row))
+
     def load(self, lap_id: int) -> LapRecord:
         with self._lock:
             row = self.conn.execute(
