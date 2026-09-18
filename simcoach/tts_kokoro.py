@@ -24,6 +24,7 @@ from pathlib import Path
 import numpy as np
 
 from simcoach import speech_numbers
+from simcoach.pronunciations import _MARKUP
 from simcoach.pronunciations import apply as apply_pronunciations
 
 KOKORO_ONNX_VERSION = "0.6.1"
@@ -238,6 +239,28 @@ def _wav_bytes(samples: np.ndarray, rate: int) -> bytes:
     return buf.getvalue()
 
 
+
+def _split_markup(sentence: str, keep_whitespace: bool = False) -> list[tuple[str, bool]]:
+    """(segment, is_markup) pairs: markup spans intact, the text between them either
+    whitespace-split into tokens (default) or kept as raw segments (keep_whitespace)."""
+    out: list[tuple[str, bool]] = []
+    pos = 0
+    for m in _MARKUP.finditer(sentence):
+        between = sentence[pos:m.start()]
+        out += [(between, False)] if keep_whitespace else [(t, False) for t in between.split()]
+        out.append((m.group(0), True))
+        pos = m.end()
+    tail = sentence[pos:]
+    out += [(tail, False)] if keep_whitespace else [(t, False) for t in tail.split()]
+    return out
+
+
+def _spell_out(segment: str, words: list[str]) -> str:
+    for w in words:
+        segment = re.sub(r"\b" + re.escape(w) + r"\b", lambda m, w=w: " ".join(w), segment)
+    return segment
+
+
 class KokoroEngine:
     """One loaded Kokoro per process, lazy; synthesis serialised (CPU-bound, ordered)."""
 
@@ -293,15 +316,18 @@ class KokoroEngine:
         except Exception:
             pass
 
-        words = [(tok, w) for tok in sentence.split() if (w := tok.strip(string.punctuation))]
-        failing = [w for _tok, w in words if not self._word_probe(w)]
+        # `[Name](/phonemes/)` spans from the pronunciation table are atomic: never
+        # split into words, probed, spelled out or rebuilt -- G2P copies them verbatim.
+        words = [(tok, "" if is_markup else tok.strip(string.punctuation), is_markup)
+                 for tok, is_markup in _split_markup(sentence)]
+        failing = [w for _tok, w, is_markup in words if w and not is_markup and not self._word_probe(w)]
 
         if failing:
             unique_failing = list(dict.fromkeys(failing))
             log.warning("kokoro g2p: spelling out %r in %r", unique_failing, sentence)
-            rebuilt = sentence
-            for w in unique_failing:
-                rebuilt = re.sub(rf"\b{re.escape(w)}\b", lambda m, w=w: " ".join(w), rebuilt)
+            rebuilt = "".join(
+                seg if is_markup else _spell_out(seg, unique_failing)
+                for seg, is_markup in _split_markup(sentence, keep_whitespace=True))
             try:
                 return self._g2p(rebuilt)
             except Exception:
@@ -309,9 +335,11 @@ class KokoroEngine:
 
         failing_set = set(failing)
         parts = []
-        for _tok, w in words:
+        for tok, w, is_markup in words:
+            if not is_markup and not w:
+                continue
             try:
-                parts.append(self._g2p(" ".join(w) if w in failing_set else w))
+                parts.append(self._g2p(tok if is_markup else (" ".join(w) if w in failing_set else w)))
             except Exception:
                 continue
         return " ".join(parts) if parts else None

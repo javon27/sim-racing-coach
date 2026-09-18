@@ -228,3 +228,27 @@ def test_misaki_without_spacy_matches_the_spike_reference_phonemes():
     assert phonemize("ABS is on 3, TC on 6.") == "ˌAbˌiˈɛs ɪz ˌɔn θɹˈi, tˌisˈi ˌɔn sˈɪks."
     assert phonemize("Record the lap; a new record.") == "ɹəkˈɔɹd ðə lˈæp; ɐ nˈu ɹˈɛkəɹd."
     assert "spacy" not in sys.modules or getattr(sys.modules["spacy"], "__simcoach_stub__", False)
+
+
+def test_phonemes_for_keeps_pronunciation_markup_atomic_next_to_an_oov_word(tmp_path):
+    """A `[Name](/phonemes/)` span from the track table must reach G2P verbatim even
+    when ANOTHER word in the sentence is OOV -- never split into words, probed, spelled
+    out or dropped (rig 2026-09-17: 'Pouhon' vanished from speech next to 'Kemmel')."""
+    seen = []
+
+    markup = re.compile(r"\[[^\]]*\]\(/[^)]*/\)")
+
+    def g2p(text):
+        seen.append(text)
+        # Like misaki: an unknown word raises, and so does a torn markup fragment
+        # (`[Pouhon` or `Pouhon](/pˈaʊhɑːn` on its own is not valid inline markup).
+        leftover = markup.sub("", text)
+        if "Kemmel" in text or "[" in leftover or "]" in leftover:
+            raise TypeError("unsupported operand type(s) for +: 'NoneType' and 'str'")
+        return text
+
+    eng = KokoroEngine(tmp_path, backend=None, g2p=g2p)
+    out = eng._phonemes_for("Brake late at [Pouhon](/pˈaʊhɑːn/) after the Kemmel straight.")
+    assert out == "Brake late at [Pouhon](/pˈaʊhɑːn/) after the K e m m e l straight."
+    assert not any(s.startswith("[Pouhon") and "(/" not in s for s in seen)   # never probed as a bare fragment
+    assert not any(s == "Pouhon" or s == "P o u h o n" for s in seen)
