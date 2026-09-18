@@ -157,6 +157,45 @@ def test_speak_422_on_non_numeric_speed_not_500(tmp_path, monkeypatch):
     assert r.status_code == 422
 
 
+def test_speak_second_call_with_same_body_hits_the_disk_cache(tmp_path, monkeypatch):
+    eng = FakeEngine()
+    c, _ = _app(tmp_path, monkeypatch, kokoro_engine=eng)
+    body = {"text": "Turn 10", "voice": "am_michael", "speed": 1.2}
+    r1 = c.post("/voice/speak", json=body)
+    r2 = c.post("/voice/speak", json=body)
+    assert r1.status_code == 200 and r2.status_code == 200
+    assert r1.content == r2.content
+    assert len(eng.calls) == 1
+
+
+def test_speak_cache_disabled_when_tts_cache_mb_is_zero(tmp_path, monkeypatch):
+    from simcoach import config
+    eng = FakeEngine()
+    c, _ = _app(tmp_path, monkeypatch, kokoro_engine=eng)
+    config.save_config({"voice": {"tts_cache_mb": 0}})
+    body = {"text": "Turn 10"}
+    c.post("/voice/speak", json=body)
+    c.post("/voice/speak", json=body)
+    assert len(eng.calls) == 2
+
+
+def test_tts_cache_stats_and_clear_endpoints(tmp_path, monkeypatch):
+    eng = FakeEngine()
+    c, _ = _app(tmp_path, monkeypatch, kokoro_engine=eng)
+    assert c.get("/voice/tts-cache").json() == {"files": 0, "bytes": 0}
+    c.post("/voice/speak", json={"text": "Turn 10"})
+    stats = c.get("/voice/tts-cache").json()
+    assert stats["files"] == 1 and stats["bytes"] > 0
+    r = c.request("DELETE", "/voice/tts-cache", json={"confirm": True})
+    assert r.status_code == 200 and r.json() == {"removed": 1}
+    assert c.get("/voice/tts-cache").json() == {"files": 0, "bytes": 0}
+
+
+def test_tts_cache_delete_without_confirm_400s(tmp_path, monkeypatch):
+    c, _ = _app(tmp_path, monkeypatch, kokoro_engine=FakeEngine())
+    assert c.request("DELETE", "/voice/tts-cache", json={}).status_code == 400
+
+
 def test_speak_still_returns_wav_with_the_fake_engine(tmp_path, monkeypatch):
     # The executor-moved prelude (load_config/_live_track/_track_file_data) must
     # still resolve a valid speed and reach synthesize normally.

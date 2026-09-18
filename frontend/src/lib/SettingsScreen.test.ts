@@ -18,6 +18,8 @@ import {
   voiceSetup,
   kokoroStatus,
   kokoroSetup,
+  ttsCacheStats,
+  ttsCacheClear,
   speak,
   type SettingsResponse,
   type DriverProfileData,
@@ -47,6 +49,8 @@ vi.mock("./api", async () => {
     voiceSetup: vi.fn(),
     kokoroStatus: vi.fn(),
     kokoroSetup: vi.fn(),
+    ttsCacheStats: vi.fn(),
+    ttsCacheClear: vi.fn(),
     speak: vi.fn(),
   };
 });
@@ -134,6 +138,8 @@ describe("SettingsScreen", () => {
     vi.mocked(voiceSetup).mockReset();
     vi.mocked(kokoroStatus).mockReset();
     vi.mocked(kokoroSetup).mockReset();
+    vi.mocked(ttsCacheStats).mockReset().mockResolvedValue({ files: 0, bytes: 0 });
+    vi.mocked(ttsCacheClear).mockReset();
     vi.mocked(speak).mockReset();
     vi.mocked(isTauri).mockReset().mockReturnValue(false);
     vi.mocked(captureNext).mockReset();
@@ -821,6 +827,27 @@ describe("SettingsScreen", () => {
           expect.anything(),
         ),
       );
+    });
+
+    it("shows the cached-audio readout and Clear removes it and refreshes stats", async () => {
+      vi.mocked(getSettings).mockResolvedValue(
+        baseSettings({ voice: { ...voiceDefaults, tts_engine: "kokoro" } }),
+      );
+      vi.mocked(kokoroStatus).mockResolvedValue({
+        engine: "kokoro", installed: true, installing: false, progress_bytes: 0, total_bytes: null, error: null,
+        voices: ["af_heart"],
+      });
+      vi.mocked(ttsCacheStats).mockResolvedValueOnce({ files: 58, bytes: 12_400_000 });
+
+      render(SettingsScreen);
+      expect(await screen.findByText(/Cached audio: 12\.4 MB \(58 clips\)/)).toBeTruthy();
+
+      vi.mocked(ttsCacheClear).mockResolvedValue({ removed: 58 });
+      vi.mocked(ttsCacheStats).mockResolvedValueOnce({ files: 0, bytes: 0 });
+      await fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+
+      expect(await screen.findByText(/Cached audio: 0\.0 MB \(0 clips\)/)).toBeTruthy();
+      expect(ttsCacheClear).toHaveBeenCalled();
     });
 
     it("voice_setup frames with engine kokoro drive the dialog progress", async () => {

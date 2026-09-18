@@ -17,12 +17,15 @@
     voiceSetup,
     kokoroStatus,
     kokoroSetup,
+    ttsCacheStats,
+    ttsCacheClear,
     type SettingsResponse,
     type IngestResult,
     type DriverProfileData,
     type DriverMemory,
     type VoiceStatus,
     type KokoroStatus,
+    type TtsCacheStats,
   } from "./api";
   import { eventFeed } from "./events";
   import InfoTip from "./InfoTip.svelte";
@@ -106,6 +109,26 @@
   let kokoroDialogPhase: VoiceDialogPhase = $state("ask");
   let kokoroDialogError: string | null = $state(null);
   let previewing = $state(false);
+  let ttsCacheInfo: TtsCacheStats | null = $state(null);
+  let clearingCache = $state(false);
+
+  async function loadTtsCacheStats() {
+    try {
+      ttsCacheInfo = await ttsCacheStats();
+    } catch {
+      /* the readout just stays blank until the next successful load */
+    }
+  }
+
+  async function clearTtsCache() {
+    clearingCache = true;
+    try {
+      await ttsCacheClear();
+      await loadTtsCacheStats();
+    } finally {
+      clearingCache = false;
+    }
+  }
 
   function kokoroSetupPct(): number {
     const st = kokoroStatusInfo;
@@ -167,7 +190,10 @@
     try {
       const st = await kokoroStatus();
       kokoroStatusInfo = st;
-      if (st.installed) return;
+      if (st.installed) {
+        await loadTtsCacheStats();
+        return;
+      }
     } catch {
       /* fall through -- still offer the dialog so the driver can retry */
     }
@@ -182,6 +208,7 @@
     try {
       const speaker = makeSpeaker(settings.voice, !!kokoroStatusInfo?.installed, () => {});
       await speaker.speak(KOKORO_PREVIEW_SENTENCE);
+      if (settings.voice.tts_engine === "kokoro") await loadTtsCacheStats();
     } finally {
       previewing = false;
     }
@@ -358,6 +385,7 @@
           } catch {
             /* Voice section just shows "not installed" until a retry succeeds */
           }
+          await loadTtsCacheStats();
         }
         await syncVoiceShell();
       } catch {
@@ -765,6 +793,14 @@
       </div>
       {#if settings.voice.tts_engine === "kokoro" && kokoroStatusInfo && !showKokoroDialog}
         <p class="status">{kokoroStatusText()}</p>
+        {#if ttsCacheInfo}
+          <p class="status inline">
+            Cached audio: {(ttsCacheInfo.bytes / 1_000_000).toFixed(1)} MB ({ttsCacheInfo.files} clips)
+            <button type="button" onclick={clearTtsCache} disabled={clearingCache || ttsCacheInfo.files === 0}>
+              {clearingCache ? "Clearing…" : "Clear"}
+            </button>
+          </p>
+        {/if}
       {/if}
       {#if showKokoroDialog}
         <dialog use:openVoiceDialog aria-label="Set up Kokoro voice">

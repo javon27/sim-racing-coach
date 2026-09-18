@@ -271,6 +271,16 @@ def _in(base: Path, slug: str) -> Path:
     return p
 
 
+def _clamp_tts_cache_mb(voice_cfg: dict) -> int:
+    # A hand-edited config file must never break speech (#135): fall back to
+    # the default on anything non-numeric, then clamp to a sane range.
+    try:
+        mb = int(voice_cfg.get("tts_cache_mb", 200))
+    except (TypeError, ValueError):
+        mb = 200
+    return max(0, min(mb, 5000))
+
+
 def _capture_loop(source, store, app_state) -> None:
     """One pass over `source.laps()`: save each completed lap to `store` and
     record it on `app_state.latest` so /status and the lap list see it live.
@@ -301,6 +311,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     # The whisper model lives at the app-data ROOT (next to the config), not in the
     # telemetry dir the store owns; move an install from the first release across.
     from .. import paths as _paths
+    from ..tts_cache import TtsCache
     from ..tts_kokoro import EngineUnavailable, KokoroEngine, gpl_free
     from ..voice import (
         KokoroInstaller,
@@ -319,6 +330,10 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     app.state.kokoro_installer = kokoro_installer or KokoroInstaller(voice_root)
     app.state.kokoro_engine = kokoro_engine or KokoroEngine(kokoro_dir(voice_root))
     app.state.kokoro_installer.voices_fn = app.state.kokoro_engine.voices
+    app.state.tts_cache = TtsCache(
+        Path(voice_root) / "tts-cache",
+        _clamp_tts_cache_mb(config.load_config()["voice"]) * 1024 * 1024,
+    )
     app.state.tracks_dir = Path(tracks_dir) if tracks_dir else _DEFAULT_TRACKS_DIR
     # #105: GET /tracks' per-lap usable-cloud check, keyed on (telemetry_path, mtime).
     # Only /tracks reads this (via _rebuild_clouds(..., cache=...)) -- the build path
@@ -2602,7 +2617,18 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             raw_slug = track_in or _live_track() or ""
             slug = track_slug(raw_slug) if raw_slug else ""
             table = table_for(_track_file_data(slug)) if slug else {}
-            return eng.synthesize(text, voice, speed, table)
+            cache_mb = _clamp_tts_cache_mb(cfg)
+            if not cache_mb:
+                return eng.synthesize(text, voice, speed, table)
+            cache = app.state.tts_cache
+            cache.cap_bytes = cache_mb * 1024 * 1024
+            key = cache.key(text, voice, speed, table)
+            cached = cache.get(key)
+            if cached is not None:
+                return cached
+            wav = eng.synthesize(text, voice, speed, table)
+            cache.put(key, wav)
+            return wav
 
         loop = asyncio.get_running_loop()
         try:
@@ -2612,6 +2638,16 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         except EngineUnavailable as e:
             raise HTTPException(503, str(e))
         return Response(content=wav, media_type="audio/wav")
+
+    @app.get("/voice/tts-cache")
+    def tts_cache_stats():
+        return app.state.tts_cache.stats()
+
+    @app.delete("/voice/tts-cache")
+    def tts_cache_clear(body: dict = Body(default={})):
+        if not body.get("confirm"):
+            raise HTTPException(400, "confirmation required")
+        return {"removed": app.state.tts_cache.clear()}
 
     @app.post("/ingest")
     def ingest(body: dict = Body(...)):

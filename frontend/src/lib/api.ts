@@ -837,6 +837,20 @@ export function kokoroSetup(): Promise<KokoroStatus & { started: boolean }> {
   return request("/voice/kokoro/setup", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({}) });
 }
 
+export interface TtsCacheStats { files: number; bytes: number }
+
+export function ttsCacheStats(): Promise<TtsCacheStats> {
+  return request<TtsCacheStats>("/voice/tts-cache");
+}
+
+export function ttsCacheClear(): Promise<{ removed: number }> {
+  return request<{ removed: number }>("/voice/tts-cache", {
+    method: "DELETE",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ confirm: true }),
+  });
+}
+
 // Dedicated fetch (not `request()`): mirrors transcribe() -- the thrown message
 // must be the server's `detail` alone (Speaker surfaces it via onUnavailable).
 export async function speak(
