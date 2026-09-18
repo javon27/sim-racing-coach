@@ -33,7 +33,7 @@ MODEL_FILE = "kokoro-v1.0.onnx"
 VOICES_FILE = "voices-v1.0.bin"
 SAMPLE_RATE = 24_000
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
-_INTRA_WORD_HYPHEN = re.compile(r"(?<=\w)-(?=\w)")
+_INTRA_WORD_HYPHEN = re.compile(r"(?<=[A-Za-z])-(?=[A-Za-z])")   # letters only: "2-4" stays a range/pause
 _SENTENCE_GAP_S = 0.25
 log = logging.getLogger(__name__)
 
@@ -230,10 +230,11 @@ def _patch_kokoro():
 
 def preprocess(text: str, table: dict[str, str] | None) -> str:
     # Intra-word hyphens ("trail-braking") read as a pause in G2P; despace them before
-    # number expansion and the pronunciation table. Spaced dashes (" — ", " - ") and a
-    # negative number's leading "-" have no word char on both sides and are untouched.
-    text = _INTRA_WORD_HYPHEN.sub(" ", text)
-    return apply_pronunciations(speech_numbers.expand(text), table or {})
+    # the pronunciation table. Spaced dashes (" — ", " - ") and a negative number's
+    # leading "-" have no letter on both sides and are untouched.
+    # Runs AFTER number expansion: expand() renders "2-4" as "two to four" itself and
+    # emits "forty-three", which would otherwise pause mid-word too.
+    return apply_pronunciations(_INTRA_WORD_HYPHEN.sub(" ", speech_numbers.expand(text)), table or {})
 
 
 def _wav_bytes(samples: np.ndarray, rate: int) -> bytes:

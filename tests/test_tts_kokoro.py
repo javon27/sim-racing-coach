@@ -53,7 +53,7 @@ def test_install_stubs_registers_num2words_as_our_shim():
 
 def test_preprocess_expands_numbers_then_applies_table():
     out = preprocess("Turn 10, Pouhon. Best 1:52.3.", {"Pouhon": "pˈaʊhɑːn"})
-    assert out == "Turn ten, [Pouhon](/pˈaʊhɑːn/). Best one fifty-two point three."
+    assert out == "Turn ten, [Pouhon](/pˈaʊhɑːn/). Best one fifty two point three."
 
 
 def test_preprocess_despaces_intra_word_hyphens_but_keeps_real_dashes(tmp_path):
@@ -62,6 +62,9 @@ def test_preprocess_despaces_intra_word_hyphens_but_keeps_real_dashes(tmp_path):
     # other bare negative integer -- that's expand()'s job, not the hyphen fix's.
     out = preprocess("trail-braking right-left-right — fine - ok -3", {})
     assert out == "trail braking right left right — fine - ok minus three"
+    # Numeric ranges are expand()'s job ("two to four"); the hyphen expand() itself
+    # emits inside "forty-three" is despaced too (the rule runs after expansion).
+    assert preprocess("Turns 2-4 and 143-145", {}) == "Turns two to four and one hundred forty three to one hundred forty five"
 
 
 def test_synthesize_inserts_silence_between_sentences_not_around_a_single_one(tmp_path):
