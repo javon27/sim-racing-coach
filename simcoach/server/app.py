@@ -2173,8 +2173,15 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                                 continue          # first line not complete yet — keep buffering
                             first_line, rest = spoken_buf.split("\n", 1)
                             spoken_resolved = True
-                            m = _SPOKEN_RE.match(first_line)
+                            # #120: search, not match -- the tag may sit mid-line after
+                            # a preamble (no tool round in between to insert #133's
+                            # separating blank line). Text before the tag on that line
+                            # still belongs to the answer.
+                            m = _SPOKEN_RE.search(first_line)
                             if m and m.group(1):
+                                before = first_line[:m.start()]
+                                if before:
+                                    _emit({"type": "text", "text": before})
                                 _emit({"type": "spoken", "text": m.group(1)})
                                 rest = rest.removeprefix("\n")   # also drop the blank line after the tag
                                 if rest:
@@ -2185,8 +2192,11 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                     _emit(ev)
                 if not spoken_resolved and spoken_buf:
                     # Stream ended before a newline ever arrived (single-line reply).
-                    m = _SPOKEN_RE.match(spoken_buf)
+                    m = _SPOKEN_RE.search(spoken_buf)
                     if m and m.group(1):
+                        before = spoken_buf[:m.start()]
+                        if before:
+                            _emit({"type": "text", "text": before})
                         _emit({"type": "spoken", "text": m.group(1)})
                     else:
                         _emit({"type": "text", "text": spoken_buf})

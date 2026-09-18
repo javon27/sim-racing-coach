@@ -314,23 +314,27 @@ SPOKEN_SENTENCE = (
     "the locator's own numbers, at most one figure in the whole spoken part."
 )
 
-_SPOKEN_RE = re.compile(r"^\s*(?:\*\*)?\[spoken\](?:\*\*)?:?(?:\*\*)?\s*(.*?)\s*$", re.IGNORECASE)
+# #120: NOT anchored to a line start (the tag can land mid-line, after a
+# preamble the model wrote before its first newline) -- `search`, not `match`.
+# MULTILINE so `$` bounds the capture to the tag's own line rather than
+# requiring the tag to be on the last line of the text. `[ \t]*`, not `\s*`,
+# around the cue -- `\s` matches `\n` too, which would let the trailing
+# whitespace eat into the blank line that follows the cue.
+_SPOKEN_RE = re.compile(r"(?:\*\*)?\[spoken\](?:\*\*)?:?(?:\*\*)?[ \t]*(.*?)[ \t]*$",
+                        re.IGNORECASE | re.MULTILINE)
 
 
 def split_spoken(text: str) -> tuple[str, str | None]:
-    """Pull the `[spoken] ...` line out of an answer (tag may be the first line or
-    the last -- scans from the start so a tag-first reply is found immediately as
-    it streams). Returns (answer without that line, spoken) or (text, None) when
-    absent/empty."""
-    lines = text.split("\n")
-    for i in range(len(lines)):
-        m = _SPOKEN_RE.match(lines[i])
-        if m:
-            if not m.group(1):
-                return text, None
-            rest = "\n".join(lines[:i] + lines[i + 1:]).strip()
-            return rest, m.group(1)
-    return text, None
+    """Pull the `[spoken] ...` cue out of an answer (tag may be at a line start,
+    mid-line after a preamble, or on the last line -- scans the whole text so a
+    tag-first reply is found immediately as it streams). Whatever text preceded
+    the tag on its line stays in the answer; the rest of that line is the cue.
+    Returns (answer without the tag/cue, spoken) or (text, None) when absent/empty."""
+    m = _SPOKEN_RE.search(text)
+    if not m or not m.group(1):
+        return text, None
+    answer = (text[:m.start()].rstrip() + text[m.end():]).strip()
+    return answer, m.group(1)
 
 
 def first_paragraph(text: str) -> str:

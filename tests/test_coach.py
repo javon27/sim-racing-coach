@@ -222,6 +222,16 @@ def test_split_spoken_absent_or_malformed_returns_text_unchanged():
     assert split_spoken("[spoken] only a summary") == ("", "only a summary")
 
 
+def test_split_spoken_finds_the_tag_mid_line_after_a_preamble():
+    # #120: the model can write a preamble before the tag with no newline (no tool
+    # round happened to trigger #133's separating blank line). The preamble stays
+    # in the answer; only the tag and the rest of its line become the cue.
+    text = "Preamble. [spoken] Cue here.\n\nBody"
+    answer, spoken = split_spoken(text)
+    assert spoken == "Cue here."
+    assert answer == "Preamble.\n\nBody"   # documented join: preamble + the rest of the text, tag/cue cut out
+
+
 def test_first_paragraph_is_the_fallback():
     assert first_paragraph("\n\nFirst block\nstill first.\n\nSecond.") == "First block\nstill first."
     assert first_paragraph("") == ""

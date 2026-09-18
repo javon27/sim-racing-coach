@@ -293,6 +293,55 @@ def test_ptt_spoken_streams_before_text_and_is_never_in_text_events(tmp_path, mo
     assert done["answer"] == "Full answer.\n\nMore."
 
 
+def test_ptt_spoken_streams_mid_line_after_a_preamble(tmp_path, monkeypatch):
+    # #120: the tag can land mid-line, after a preamble with no newline before it
+    # (no tool round happened to trigger #133's separating blank line, so this is
+    # still all one streamed text block/delta). The preamble is emitted as its own
+    # text event before the spoken event, and the tag never leaks into any text.
+    monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    model = FakeModel(reply="Preamble. [spoken] Cue here.\n\nBody")
+    c = TestClient(create_app(store, Coach(model)), base_url="http://127.0.0.1")
+    events = _ask_all(c, {"question": "q", "voice": "ptt"})
+    spoken_idx = next(i for i, e in enumerate(events) if e["type"] == "spoken")
+    assert events[spoken_idx]["text"] == "Cue here."
+    joined_text = "".join(e["text"] for e in events if e["type"] == "text")
+    assert "[spoken]" not in joined_text
+    assert joined_text == "Preamble. Body"
+    done = events[-1]
+    assert done["type"] == "done"
+    assert done["answer"] == "Preamble.\n\nBody"
+    assert done["spoken"] == "Cue here."
+
+
+def test_ptt_spoken_row_152_preamble_then_tool_then_tag(tmp_path, monkeypatch):
+    # #120's real rig payload (chat row 152, Spa): the model writes a preamble
+    # with no newline, calls a tool, then opens the next block with the tag.
+    # #133 inserts a "\n\n" separator between those two text blocks, so by the
+    # time the full answer is assembled the tag is at a line start and both the
+    # stored answer and spoken cue come out clean.
+    # ponytail: the LIVE per-chunk `spoken` event still doesn't fire early here
+    # (the buffer resolves off #133's separator, one delta before the tag's own
+    # block arrives) -- the tag can flash in a text delta mid-stream before
+    # `done` corrects it. Only the final `done.answer`/`done.spoken` are
+    # guaranteed clean by this interim fix. Fix properly if/when #119 lands.
+    monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    model = FakeModel(stream_script=[
+        ("text", "I'll pull up what we know about Spa and give you a walkthrough."),
+        ("tool", "get_corner", {"corner": "1"}),
+        ("text", ("[spoken] Welcome to Spa, mind the Eau Rouge exit kerb.\n\n"
+                   "Big picture: strong straights, tricky Eau Rouge.")),
+    ])
+    c = TestClient(create_app(store, Coach(model)), base_url="http://127.0.0.1")
+    ev = _ask(c, {"question": "q", "voice": "ptt"})
+    assert ev["type"] == "done"
+    assert ev["answer"] == ("I'll pull up what we know about Spa and give you a walkthrough.\n\n"
+                             "Big picture: strong straights, tricky Eau Rouge.")
+    assert ev["spoken"] == "Welcome to Spa, mind the Eau Rouge exit kerb."
+    assert "[spoken]" not in ev["answer"]
+
+
 def test_ptt_no_spoken_event_when_tag_missing(tmp_path, monkeypatch):
     monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
