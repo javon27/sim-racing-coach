@@ -14,7 +14,8 @@ def _tc(tmp_path):
 
 def test_cors_allows_dev_and_tauri_origins(tmp_path):
     c = _tc(tmp_path)
-    for origin in ("http://localhost:5173", "http://tauri.localhost"):
+    for origin in ("http://localhost:5173", "http://tauri.localhost",
+                   "https://tauri.localhost", "tauri://localhost"):
         r = c.get("/health", headers={"host": "127.0.0.1", "origin": origin})
         assert r.status_code == 200
         assert r.headers.get("access-control-allow-origin") == origin

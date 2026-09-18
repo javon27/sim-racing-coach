@@ -142,33 +142,29 @@ REST_PROBE_TIMEOUT = 1.5
 _EVENTS_PERIOD = 1.0  # s: /events push loop period (module constant so tests can monkeypatch it)
 SIDECAR_PORT = 8765   # the port simcoach/server/__main__.py serves on (it imports this)
 VITE_DEV_PORT = 5173  # `npm run dev` / src-tauri/tauri.conf.json devUrl
-FRONTEND_ORIGINS = ["http://localhost:5173", "http://tauri.localhost"]
+# #54: Tauri's webview origin is platform-dependent. Windows uses
+# "http://tauri.localhost"; macOS/Linux use "https://tauri.localhost" and
+# "tauri://localhost". Listing all three costs nothing on Windows and avoids a
+# CORS-shaped "server not reachable" misdiagnosis on the other platforms.
+FRONTEND_ORIGINS = ["http://localhost:5173", "http://tauri.localhost",
+                     "https://tauri.localhost", "tauri://localhost"]
 
 # FULL origins (scheme + host + port), never bare hostnames. Comparing the
 # hostname alone let ANY app on ANY localhost port through the guard (#60) --
 # another local dev server, or an XSS in one, could drive every guarded route,
-# which is exactly what the guard exists to stop. Three sources, no invention:
+# which is exactly what the guard exists to stop. Two sources, no invention:
 #   - FRONTEND_ORIGINS: the Vite dev origin (src-tauri/tauri.conf.json devUrl)
-#     and the Windows Tauri webview origin.
-#   - "tauri://localhost", the webview origin Tauri uses on macOS/Linux. NOT a
-#     new permission: the old hostname-only compare accepted it (hostname
-#     "localhost"), so dropping it here would lock the app's own webview out of
-#     its own sidecar on those platforms. #54 tracks the wider cross-platform
-#     origin question and stays untouched -- FRONTEND_ORIGINS (the CORS list) is
-#     deliberately NOT changed here.
+#     and the three Tauri webview origins above (#54).
 #   - our two local ports (sidecar + Vite dev) under BOTH names ALLOWED_HOSTS
 #     accepts as a Host. 127.0.0.1 and localhost are the same machine and the
 #     same server: accepting Host "localhost:8765" while refusing Origin
 #     "http://localhost:8765" would be incoherent, and the same argument applies
 #     to the dev port -- hence the cross product rather than four literals, so
 #     the host list and the port list cannot drift apart.
-# Deliberately dropped vs the old behaviour: "https://tauri.localhost" and every
-# other scheme on these hostnames. Nothing serves them; the old guard only let
-# them through because it never looked past the hostname.
 # NOT auto-widened: if Vite falls back to 5174 (5173 already taken) or you use
 # `vite preview` on 4173, that origin is refused with a 403 -- add the port here
 # deliberately. Allowing a range would hand the guard back to any local app.
-ALLOWED_ORIGINS = set(FRONTEND_ORIGINS) | {"tauri://localhost"} | {
+ALLOWED_ORIGINS = set(FRONTEND_ORIGINS) | {
     f"http://{h}:{p}" for h in ALLOWED_HOSTS for p in (SIDECAR_PORT, VITE_DEV_PORT)
 }
 
