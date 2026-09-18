@@ -212,8 +212,11 @@ def test_ws_coach_new_since_last_turn_when_a_race_lap_landed_after_it(tmp_path):
             ev = ws.receive_json()
             if ev["type"] in ("done", "error"): break
 
-    assert "NEW SINCE YOUR LAST ANSWER: race lap 2" in model.last_system
-    assert "1:31.000" in model.last_system
+    user_turn = model.last_messages[-1]["content"]
+    assert user_turn.startswith("NEW SINCE YOUR LAST ANSWER: race lap 2")
+    assert "1:31.000" in user_turn and user_turn.endswith("how was that?")
+    # The fact never touches the cached system prompt, and the stored question is raw.
+    assert "1:31.000" not in model.last_system   # the prompt names the rule, never the fact
 
 
 def test_ws_coach_no_new_since_last_turn_when_nothing_landed(tmp_path):
@@ -241,6 +244,7 @@ def test_ws_coach_no_new_since_last_turn_when_nothing_landed(tmp_path):
 
     # The static prompt RULE mentions the phrase; only the injected FACT (with the
     # colon) proves the line was actually added.
+    assert "NEW SINCE YOUR LAST ANSWER:" not in model.last_messages[-1]["content"]
     assert "NEW SINCE YOUR LAST ANSWER:" not in model.last_system
 
 

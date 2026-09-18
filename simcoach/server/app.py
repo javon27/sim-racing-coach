@@ -35,7 +35,13 @@ from ..analysis import (
 from ..car_lookup import resolve_car
 from ..car_notes import load_car_notes, load_setup_concepts
 from ..coach import _SPOKEN_RE, first_paragraph, split_spoken
-from ..coach_tools import CoachContext, _lap_age, race_result_text, scrub_stored_answer
+from ..coach_tools import (
+    _PARTIAL_LIST_WORD,
+    CoachContext,
+    _lap_age,
+    race_result_text,
+    scrub_stored_answer,
+)
 from ..corners import CornerMap, in_window, validated_sections, validated_sectors
 from ..driver import DriverProfile
 from ..format import format_laptime
@@ -2063,9 +2069,16 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                     if latest["ts"] > last_chat_ts:
                         label_by_id, _ = ctx._lap_numbering()
                         label = label_by_id.get(latest["id"]) or f"lap {latest['id']}"
+                        # A partial/out/in lap has no time: name its kind instead.
+                        detail = (format_laptime(latest["lap_time"]) if latest.get("lap_time")
+                                  else _PARTIAL_LIST_WORD.get(latest.get("partial"), "no time"))
                         new_since_last_turn = (
-                            f"{label} ({format_laptime(latest['lap_time'])}) landed "
-                            f"{_lap_age(latest['ts'])}.")
+                            f"{label} ({detail}) landed {_lap_age(latest['ts'])}.")
+            # The fact rides in the USER turn, not the system prompt: the system block is
+            # prompt-cached and a per-turn value there would bust the cache every question.
+            # The stored question (below) stays the driver's own words.
+            model_question = (f"NEW SINCE YOUR LAST ANSWER: {new_since_last_turn}\n\n{question}"
+                              if new_since_last_turn else question)
 
             text = ""
             # What this turn billed. One usage event arrives per model call, so a
@@ -2082,9 +2095,9 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             spoken = None   # defined even if the stream raises before it's resolved below
             try:
                 for ev in app.state.coach.ask_agentic_stream(
-                        ctx, question, car=car, input_device=req.get("input_device"),
+                        ctx, model_question, car=car, input_device=req.get("input_device"),
                         history=history, units=ctx.units, driver_profile=driver_profile,
-                        voice=voice, new_since_last_turn=new_since_last_turn):
+                        voice=voice):
                     if ev["type"] == "usage":
                         # Keep the per-turn breakdown server-side (noise on the wire);
                         # the client gets one cumulative figure on `done`. The model id

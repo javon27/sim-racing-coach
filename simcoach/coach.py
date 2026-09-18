@@ -335,13 +335,12 @@ class Coach:
         self.model = model
 
     @staticmethod
-    def _augment_system(system, allowed_adjustments, driver_profile, input_device,
-                        new_since_last_turn=None):
+    def _augment_system(system, allowed_adjustments, driver_profile, input_device):
         """Shared system-prompt additions (tier constraint, driver profile, input
-        device, #131 fresh-lap fact) used by both agentic paths (`ask_agentic`,
-        `ask_agentic_stream`)."""
-        if new_since_last_turn:
-            system += f" NEW SINCE YOUR LAST ANSWER: {new_since_last_turn}"
+        device) used by both agentic paths (`ask_agentic`, `ask_agentic_stream`).
+        Per-turn facts (#131's NEW SINCE line) go in the USER turn instead: the
+        system block is prompt-cached, and a value that changes every turn there
+        would bust the cache on every question."""
         if allowed_adjustments is not None:
             system += (
                 f" SETUP CONSTRAINT: in this race only these adjustments are legal — "
@@ -373,7 +372,6 @@ class Coach:
         driver_profile: DriverProfile | None = None,
         input_device: str | None = None,
         units: str = "metric",
-        new_since_last_turn: str | None = None,
     ):
         """Answer via the on-demand tool loop: the model fetches exactly the data the
         question needs through `context`'s tools instead of receiving the whole lap.
@@ -384,7 +382,7 @@ class Coach:
         _, _, spd_u, temp_u = unit_fns(units)
         system = self._augment_system(
             AGENTIC_SYSTEM_PROMPT.format(car=car, speed_unit=spd_u, temp_unit=temp_u),
-            context.allowed_adjustments, driver_profile, input_device, new_since_last_turn,
+            context.allowed_adjustments, driver_profile, input_device,
         )
         messages = list(history) if history else []
         messages.append({"role": "user", "content": question})
@@ -400,7 +398,6 @@ class Coach:
         input_device: str | None = None,
         units: str = "metric",
         voice: str | None = None,
-        new_since_last_turn: str | None = None,
     ):
         """Like `ask_agentic`, but yields tool/text events as they occur instead of
         returning a final string. Does not persist or emit done/error — the caller does."""
@@ -408,7 +405,7 @@ class Coach:
         _, _, spd_u, temp_u = unit_fns(units)
         system = self._augment_system(
             AGENTIC_SYSTEM_PROMPT.format(car=car, speed_unit=spd_u, temp_unit=temp_u),
-            context.allowed_adjustments, driver_profile, input_device, new_since_last_turn,
+            context.allowed_adjustments, driver_profile, input_device,
         )
         if voice == "ptt":
             system += " " + SPOKEN_SENTENCE
