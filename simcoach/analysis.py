@@ -96,6 +96,22 @@ class CornerMetrics:
     steer_reversals_delta: int | None = None
 
 
+def corner_tag(cm) -> str:
+    """'T16 Kemmel' for a real name, 'T16' alone when the map has no name for
+    this corner beyond its own number/label ('Turn 16', 'T16', or the bare
+    label) -- rendering those next to the number produces 'Turn 16 (Turn 16)'
+    (#141). Accepts either a raw map Corner (`.number`) or a CornerMetrics
+    (`.corner_no`)."""
+    no = cm.corner_no if hasattr(cm, "corner_no") else cm.number
+    label = cm.label or no
+    tag = f"T{label}"
+    name = (cm.name or "").strip()
+    generic = {str(label).lower(), tag.lower(), f"turn {label}".lower()}
+    if not name or name.lower() in generic:
+        return tag
+    return f"{tag} {name}"
+
+
 @dataclass
 class LapAnalysis:
     lap_time: float
@@ -417,7 +433,7 @@ def time_loss_buckets(record: LapRecord, reference: LapRecord, cmap: CornerMap):
             tiled.append((a, b, no))
 
     tag = {i: f"T{c.label or c.number}" for i, c in enumerate(cmap.corners)}
-    name = {i: f"T{c.label or c.number} {c.name}".strip() for i, c in enumerate(cmap.corners)}
+    name = {i: corner_tag(c) for i, c in enumerate(cmap.corners)}
     wrapped = {i: c for i, c in enumerate(cmap.corners) if c.start_dist > c.end_dist}
 
     def gap_label(i: int) -> str:
@@ -1302,7 +1318,7 @@ def stint_consistency(analyses: "list[LapAnalysis]", lap_times: "list[float]") -
     samples: dict[str, dict[str, list[float]]] = {}
     for a in analyses:
         for cm in a.corners:
-            label = f"T{cm.label or cm.corner_no} {cm.name}".strip()
+            label = corner_tag(cm)
             if label not in samples:
                 samples[label] = {f: [] for f in _CONSISTENCY_FIELDS}
                 order.append(label)

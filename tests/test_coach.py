@@ -283,6 +283,38 @@ def test_system_prompt_resolves_that_lap_to_the_fresh_lap():
     assert "do not ask which" in refs
 
 
+def test_driver_memory_prompt_confirms_before_saving_and_supports_replaces():
+    """#139: an incident note waits for the driver to confirm lap+corner, and a
+    correction inside the same chat uses replaces=<id> instead of a new row."""
+    from simcoach.coach import AGENTIC_SYSTEM_PROMPT
+    assert "DRIVER MEMORY" in AGENTIC_SYSTEM_PROMPT
+    section = AGENTIC_SYSTEM_PROMPT.split("DRIVER MEMORY", 1)[1][:600]
+    assert "confirmed the lap and corner" in section
+    assert "neither a tool nor the driver stated" in section
+    assert "replaces=<its id>" in section
+
+
+def test_history_prompt_routes_cross_car_comparisons_through_car_argument():
+    """#140: 'slower than the Corvette' must route through get_personal_best/
+    get_progress/get_lap_summary with car= set to the other car, never a flat
+    'no data' refusal."""
+    from simcoach.coach import AGENTIC_SYSTEM_PROMPT
+    assert "HISTORY:" in AGENTIC_SYSTEM_PROMPT
+    section = AGENTIC_SYSTEM_PROMPT.split("HISTORY:", 1)[1][:800]
+    assert "car= / track=" in section
+    assert "Never claim you have no data for the other car without having asked" in section
+
+
+def test_corner_identity_prompt_guards_the_turn_n_turn_n_stutter():
+    """#141: on a map whose name is only the corner's own number, the coach must
+    say the number once plus a descriptor, never 'Turn 16 (Turn 16)'."""
+    from simcoach.coach import AGENTIC_SYSTEM_PROMPT
+    assert "Turn 1 (Copse)" in AGENTIC_SYSTEM_PROMPT
+    section = AGENTIC_SYSTEM_PROMPT.split("Turn 1 (Copse)", 1)[1][:300]
+    assert "Turn 16, the heavy stop" in section
+    assert "never 'Turn 16 (Turn 16)'" in section
+
+
 def test_system_prompt_never_asks_permission_to_call_a_tool():
     """#131: 'want me to check X?' wastes a turn when the tool could just answer --
     the coach must call it and answer instead of asking permission."""

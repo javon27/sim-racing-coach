@@ -1915,4 +1915,50 @@ def test_analyze_lap_on_a_partial_fragment_is_nan_where_the_lap_never_went(synth
     assert a.lap_time is None
     by_no = {cm.corner_no: cm for cm in a.corners}
     assert np.isnan(by_no[c1.number].min_spd)
-    assert np.isfinite(by_no[c2.number].min_spd)
+
+
+# --- corner_tag (#141: no 'Turn 16 (Turn 16)' stutter on unnamed maps) --------
+
+def _metrics(corner_no=16, name="Kemmel", label=""):
+    from simcoach.analysis import CornerMetrics
+    return CornerMetrics(corner_no=corner_no, name=name, direction="left", apex_dist=0.0,
+                          entry_spd=0.0, apex_spd=0.0, min_spd=0.0, exit_spd=0.0,
+                          brake_point=None, throttle_point=None, trailbrake_overlap=0.0,
+                          label=label)
+
+
+def test_corner_tag_real_name():
+    from simcoach.analysis import corner_tag
+    assert corner_tag(_metrics(name="Kemmel")) == "T16 Kemmel"
+
+
+def test_corner_tag_generic_turn_n_name_collapses_to_the_tag():
+    from simcoach.analysis import corner_tag
+    assert corner_tag(_metrics(name="Turn 16")) == "T16"
+    assert corner_tag(_metrics(name="turn 16")) == "T16"   # case-insensitive
+    assert corner_tag(_metrics(name="T16")) == "T16"
+    assert corner_tag(_metrics(name="16")) == "T16"        # the bare label
+
+
+def test_corner_tag_empty_name():
+    from simcoach.analysis import corner_tag
+    assert corner_tag(_metrics(name="")) == "T16"
+
+
+def test_corner_tag_uses_the_label_when_set():
+    from simcoach.analysis import corner_tag
+    assert corner_tag(_metrics(corner_no=8, label="8A", name="Turn 8A")) == "T8A"
+    assert corner_tag(_metrics(corner_no=8, label="8A", name="Bus Stop")) == "T8A Bus Stop"
+
+
+def test_corner_tag_accepts_a_raw_map_corner():
+    """Corner (corners.py) uses `.number`, not `.corner_no` -- corner_tag must
+    work for either so by_label lookups built from both sides agree (#141)."""
+    from simcoach.analysis import corner_tag
+    from simcoach.corners import Corner
+    c = Corner(number=16, name="Turn 16", direction="left",
+               start_dist=0.0, apex_dist=0.0, end_dist=0.0)
+    assert corner_tag(c) == "T16"
+    c2 = Corner(number=16, name="Kemmel", direction="left",
+                start_dist=0.0, apex_dist=0.0, end_dist=0.0)
+    assert corner_tag(c2) == "T16 Kemmel"

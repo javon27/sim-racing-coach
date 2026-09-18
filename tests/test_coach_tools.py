@@ -757,6 +757,46 @@ def test_record_driver_learning_writes_pending(tmp_path, synthetic_lap):
     assert "consistently late on throttle" not in ctx.get_driver_memories()
 
 
+# --- #139: replaces updates a note in place instead of appending a correction -
+
+def test_record_driver_learning_first_save_returns_the_id(tmp_path, synthetic_lap):
+    ctx, store, _ = _ctx(tmp_path, synthetic_lap)
+    out = ctx.record_driver_learning("contact exiting Turn 15")
+    m = re.search(r"note (\d+)", out)
+    assert m, out
+    row = store.get_learning(int(m.group(1)))
+    assert row["text"] == "contact exiting Turn 15"
+
+
+def test_record_driver_learning_replaces_updates_the_row_in_place(tmp_path, synthetic_lap):
+    ctx, store, _ = _ctx(tmp_path, synthetic_lap)
+    first = ctx.record_driver_learning("contact exiting Turn 15")
+    note_id = int(re.search(r"note (\d+)", first).group(1))
+
+    out = ctx.record_driver_learning("contact at Turn 13, not 15", replaces=note_id)
+
+    assert f"note {note_id}" in out
+    row = store.get_learning(note_id)
+    assert row["text"] == "contact at Turn 13, not 15"
+    assert row["status"] == "pending"
+    # no new row -- the correction replaced, it didn't append
+    assert len(store.list_learnings(status="pending")) == 1
+
+
+def test_record_driver_learning_replaces_a_nonqualifying_id_appends_instead(tmp_path, synthetic_lap):
+    ctx, store, _ = _ctx(tmp_path, synthetic_lap)
+    # a note from a different, already-reviewed conversation
+    other_id = store.add_learning("unrelated fact", status="active", track="t", car="c",
+                                   source="coach_tool", session_id="some-other-session")
+
+    out = ctx.record_driver_learning("new correction", replaces=other_id)
+
+    assert "wasn't from this conversation" in out
+    assert store.get_learning(other_id)["text"] == "unrelated fact"     # untouched
+    pending = store.list_learnings(status="pending")
+    assert any(r["text"] == "new correction" for r in pending)          # appended
+
+
 def test_get_driver_memories_active_and_topic(tmp_path, synthetic_lap):
     ctx, store, _ = _ctx(tmp_path, synthetic_lap)
     store.add_learning("brakes early in the wet", status="active", source="manual")
@@ -1242,6 +1282,40 @@ def test_get_lap_summary_reorders_the_worst_corner_ahead_of_track_order(tmp_path
     assert out.splitlines()[1].startswith("Events this lap: ")   # #108 items 3+4
     assert out.splitlines()[2].startswith("Net")
     assert out.index("T2 Right Sweeper") < out.index("T1 Left Hairpin")
+
+
+def test_get_lap_summary_no_name_stutter_on_an_unnamed_map(tmp_path, synthetic_lap):
+    """#141: a map whose corner names are just 'Turn N' must render the tag
+    once ('T1'), not 'T1 Turn 1', anywhere in the time-loss block."""
+    import dataclasses
+
+    from simcoach.corners import Corner, CornerMap
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    cmap = CornerMap([
+        Corner(number=1, name="Turn 1", direction="left",
+               start_dist=800.0, apex_dist=1000.0, end_dist=1200.0),
+        Corner(number=2, name="Turn 2", direction="right",
+               start_dist=2000.0, apex_dist=2200.0, end_dist=2400.0),
+    ])
+
+    def clone(lap_time, slow_in_t1=False):
+        ch = {k: v.copy() for k, v in synthetic_lap.channels.items()}
+        if slow_in_t1:
+            d = ch["lap_distance"]
+            ch["speed"][(d >= 900) & (d <= 1100)] = 15.0
+        return dataclasses.replace(synthetic_lap, lap_time=lap_time, channels=ch,
+                                   session_id="s1--online", phase="race", timestamp=lap_time)
+
+    store.save(clone(90.0))
+    cur = clone(95.0, slow_in_t1=True)
+    cur_id = store.save(cur)
+    ctx = CoachContext(store, record=cur, lap_id=cur_id, cmap=cmap,
+                       track=cur.track, car=cur.car, session_id="s1--online", on_track=True)
+
+    out = ctx.get_lap_summary("latest")
+    assert "T1 Turn 1" not in out
+    assert "T2 Turn 2" not in out
+    assert "T1" in out and "T2" in out
 
 
 def test_get_lap_summary_unchanged_without_a_reference(tmp_path, synthetic_lap):

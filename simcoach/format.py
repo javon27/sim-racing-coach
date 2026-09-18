@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import math
 
-from simcoach.analysis import _ENVELOPE_MIN_LAPS
+from simcoach.analysis import _ENVELOPE_MIN_LAPS, corner_tag
 
 
 def format_laptime(seconds) -> str:
@@ -129,12 +129,12 @@ def format_corner_line(cm, units: str = "metric", envelope_formed: bool = True) 
     """One driver-facing corner line: speeds, apex-relative brake/throttle, trail,
     peak g, and the delta vs best. Absolute lap-distance is never shown."""
     spd, _, spd_u, _ = unit_fns(units)
-    tag = f"T{cm.label or cm.corner_no}"
+    tag = corner_tag(cm)
     sect = f" [part of {cm.section}]" if cm.section else ""
     if math.isnan(cm.min_spd):
         # No telemetry in this corner's window (e.g. a sparse out-lap): say so
         # rather than render nan speeds + the defaulted (fake) brake/throttle.
-        return f"{tag} {cm.name} ({cm.direction}){sect}: no telemetry captured here"
+        return f"{tag} ({cm.direction}){sect}: no telemetry captured here"
     # None = the driver never braked here. Guard on the field, not on the sign of the
     # subtraction: the sign only stood in for "not found" while the sentinel happened
     # to sit past the apex.
@@ -147,7 +147,7 @@ def format_corner_line(cm, units: str = "metric", envelope_formed: bool = True) 
     thr_txt = (f", back to throttle {cm.throttle_point - cm.apex_dist:.0f}m after apex"
                if cm.throttle_point is not None else "")
     line = (
-        f"{tag} {cm.name} ({cm.direction}){sect}: "
+        f"{tag} ({cm.direction}){sect}: "
         f"{spd(cm.entry_spd):.0f}→min {spd(cm.min_spd):.0f}→{spd(cm.exit_spd):.0f} {spd_u}, "
         f"{brake_txt}{thr_txt}, trail {cm.trailbrake_overlap:.0%}, peak {cm.peak_lat_g:.1f}g"
     )
@@ -558,7 +558,7 @@ def _event_corner_tag(cmap, corner_no) -> str:
         return ""
     for c in getattr(cmap, "corners", []):
         if c.number == corner_no:
-            return f"T{c.label or c.number} {c.name}".strip()
+            return corner_tag(c)
     return f"T{corner_no}"
 
 

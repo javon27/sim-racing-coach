@@ -1643,6 +1643,15 @@ class LapStore:
                 (text, time.time(), learning_id),
             )
 
+    def get_learning(self, learning_id: int) -> dict | None:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT id, text, status, track, car, source, session_id, "
+                "created_ts, updated_ts FROM driver_learnings WHERE id = ?",
+                (learning_id,),
+            ).fetchone()
+            return dict(zip(self._LEARNING_KEYS, row)) if row else None
+
     def active_learnings(self, track: str | None = None, car: str | None = None,
                           limit: int = 50) -> list[dict]:
         """Active learnings for the coach prompt: general ones (track/car both

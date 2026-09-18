@@ -16,6 +16,7 @@ from collections import Counter
 from simcoach.analysis import (
     _ENVELOPE_MIN_LAPS,
     analyze_lap,
+    corner_tag,
     geometry_clause,
     grip_envelope,
     lap_events,
@@ -273,6 +274,10 @@ TOOLS = [
                           "description": "Optional: scope this to the current track only."},
                 "car": {"type": "string",
                         "description": "Optional: scope this to the current car only."},
+                "replaces": {"type": "integer",
+                             "description": "Id of a note saved earlier in THIS conversation "
+                                             "that this corrects; the old text is replaced, "
+                                             "no new row."},
             },
             "required": ["text"],
         },
@@ -928,8 +933,7 @@ class CoachContext:
         buckets = time_loss_buckets(record, ref, self.cmap) if ref is not None else None
         if not buckets:
             return lap_line + "\n" + format_lap_facts(analysis, self.units)
-        by_label = {f"T{cm.label or cm.corner_no} {cm.name}".strip(): cm.corner_no
-                    for cm in analysis.corners}
+        by_label = {corner_tag(cm): cm.corner_no for cm in analysis.corners}
         losses = sorted((b for b in buckets if b["kind"] == "corner" and b["delta"] > 0),
                         key=lambda b: -b["delta"])[:3]
         top = [by_label[b["label"]] for b in losses if b["label"] in by_label]
@@ -1083,8 +1087,7 @@ class CoachContext:
             if cm.wheelspin:
                 flags.append("wheelspin under throttle")
             if flags:
-                tag = f"T{cm.label or cm.corner_no} {cm.name}"
-                lines.append(f"{tag}: " + ". ".join(flags) + ".")
+                lines.append(f"{corner_tag(cm)}: " + ". ".join(flags) + ".")
         if not lines:
             return (lap_line + "\n" + f"No handling flags on this lap — balance read neutral "
                     f"in all {len(analysis.corners)} corners.")
@@ -1105,10 +1108,9 @@ class CoachContext:
         analysis = self._latest_analysis()
         parts = []
         for c in self.cmap.corners:
-            label = c.label or str(c.number)
             multi = " (double-apex)" if c.apexes and len(c.apexes) > 1 else ""
             descriptor = corner_descriptor(self.cmap, c.number, analysis=analysis)
-            parts.append(f"T{label} {c.name} — {c.direction}{multi} — {descriptor}")
+            parts.append(f"{corner_tag(c)} — {c.direction}{multi} — {descriptor}")
         return (f"Corners for {self.track or 'this track'} ({len(parts)}), from the saved map:\n"
                 + "\n".join(parts))
 
@@ -1121,7 +1123,7 @@ class CoachContext:
         analysis = self._analysis_for(record, lap_id)
         cm = find_corner(analysis, corner)
         if cm is None:
-            names = ", ".join(f"T{c.label or c.corner_no} {c.name}" for c in analysis.corners)
+            names = ", ".join(corner_tag(c) for c in analysis.corners)
             return f"No corner matching {corner!r}. Corners this track: {names}"
         envelope_formed = (analysis.gg_envelope_laps or 0) >= _ENVELOPE_MIN_LAPS
         line = format_corner_line(cm, self.units, envelope_formed=envelope_formed)
@@ -1361,11 +1363,19 @@ class CoachContext:
                      "which way is more intervention.")
         return out
 
-    def record_driver_learning(self, text, track=None, car=None):
-        self.store.add_learning(text, status="pending", track=track or self.track,
+    def record_driver_learning(self, text, track=None, car=None, replaces=None):
+        if replaces is not None:
+            row = self.store.get_learning(replaces)
+            if row and (row["session_id"] == self.session_id or row["status"] == "pending"):
+                self.store.update_learning(replaces, text)
+                return f"Updated note {replaces} for your review."
+        note_id = self.store.add_learning(text, status="pending", track=track or self.track,
                                 car=car or self.car, source="coach_tool",
                                 session_id=self.session_id)
-        return "Saved for your review."
+        if replaces is not None:
+            return (f"Note {replaces} wasn't from this conversation — saved as a new "
+                    f"note for your review (note {note_id}).")
+        return f"Saved for your review (note {note_id})."
 
     def get_driver_memories(self, track=None, car=None, topic=None):
         rows = self.store.active_learnings(track=track or self.track, car=car or self.car)
@@ -1477,7 +1487,7 @@ class CoachContext:
             "get_race_result": lambda: self.get_race_result(),
             "get_setup": lambda: self.get_setup(),
             "record_driver_learning": lambda: self.record_driver_learning(
-                args.get("text", ""), args.get("track"), args.get("car")),
+                args.get("text", ""), args.get("track"), args.get("car"), args.get("replaces")),
             "get_driver_memories": lambda: self.get_driver_memories(
                 args.get("track"), args.get("car"), args.get("topic")),
             "get_personal_best": lambda: self.get_personal_best(args.get("track"), args.get("car")),
