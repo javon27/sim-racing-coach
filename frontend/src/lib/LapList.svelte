@@ -8,9 +8,6 @@
     onlive,
     retryTries = 8,
     retryDelayMs = 750,
-    // pollMs: accepted but unused since #106 — the 5 s poll became an /events
-    // subscription. Kept so existing callers/tests don't break on an unknown prop.
-    pollMs: _pollMs = 5000,
     sessionId = null,
     selectedLapId = null,
   }: {
@@ -18,11 +15,9 @@
     onlive?: (detail: { session_id: string }) => void;
     retryTries?: number;
     retryDelayMs?: number;
-    pollMs?: number;
     sessionId?: string | null;
     selectedLapId?: number | null;
   } = $props();
-  void _pollMs;
 
   let laps: LapRow[] = $state([]);
   let bestId: number | null = $state(null);
