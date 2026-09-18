@@ -33,6 +33,8 @@ MODEL_FILE = "kokoro-v1.0.onnx"
 VOICES_FILE = "voices-v1.0.bin"
 SAMPLE_RATE = 24_000
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
+_INTRA_WORD_HYPHEN = re.compile(r"(?<=\w)-(?=\w)")
+_SENTENCE_GAP_S = 0.25
 log = logging.getLogger(__name__)
 
 
@@ -227,6 +229,10 @@ def _patch_kokoro():
 
 
 def preprocess(text: str, table: dict[str, str] | None) -> str:
+    # Intra-word hyphens ("trail-braking") read as a pause in G2P; despace them before
+    # number expansion and the pronunciation table. Spaced dashes (" — ", " - ") and a
+    # negative number's leading "-" have no word char on both sides and are untouched.
+    text = _INTRA_WORD_HYPHEN.sub(" ", text)
     return apply_pronunciations(speech_numbers.expand(text), table or {})
 
 
@@ -358,4 +364,10 @@ class KokoroEngine:
         if not chunks:
             return _wav_bytes(np.zeros(0, dtype=np.float32), SAMPLE_RATE)
         rate = chunks[0][1]
-        return _wav_bytes(np.concatenate([c for c, _ in chunks]), rate)
+        gap = np.zeros(int(_SENTENCE_GAP_S * rate), dtype=np.float32)
+        parts: list[np.ndarray] = []
+        for i, (c, _) in enumerate(chunks):
+            if i:
+                parts.append(gap)
+            parts.append(c)
+        return _wav_bytes(np.concatenate(parts), rate)

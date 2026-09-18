@@ -56,6 +56,32 @@ def test_preprocess_expands_numbers_then_applies_table():
     assert out == "Turn ten, [Pouhon](/pˈaʊhɑːn/). Best one fifty-two point three."
 
 
+def test_preprocess_despaces_intra_word_hyphens_but_keeps_real_dashes(tmp_path):
+    # "-3" has no word char before the hyphen, so it's a negative number, not an
+    # intra-word hyphen; the number-expansion rule then spells it out same as any
+    # other bare negative integer -- that's expand()'s job, not the hyphen fix's.
+    out = preprocess("trail-braking right-left-right — fine - ok -3", {})
+    assert out == "trail braking right left right — fine - ok minus three"
+
+
+def test_synthesize_inserts_silence_between_sentences_not_around_a_single_one(tmp_path):
+    class FakeKokoro:
+        def __init__(self, *a): pass
+        def get_voices(self): return ["af_heart"]
+        def create(self, ph, voice, speed=1.0, is_phonemes=False, lang="en-us"):
+            return np.zeros(240, dtype=np.float32), 24000
+
+    _touch_model_files(tmp_path)
+    eng = KokoroEngine(tmp_path, backend=FakeKokoro, g2p=lambda t: t)
+
+    one = eng.synthesize("Brake later.", voice="af_heart", speed=1.0)
+    two = eng.synthesize("Brake later. Turn in earlier.", voice="af_heart", speed=1.0)
+
+    assert len(one) == 44 + 240 * 2                       # unchanged: no gap added or removed
+    gap_samples = int(0.25 * 24000)
+    assert len(two) == 44 + (240 + gap_samples + 240) * 2  # one 250 ms gap between the two sentences
+
+
 def _wav_header(b: bytes):
     assert b[:4] == b"RIFF" and b[8:12] == b"WAVE"
     channels, rate, _, _, bits = struct.unpack("<HIIHH", b[22:36])
