@@ -420,6 +420,51 @@ def scrub_stored_answer(answer: str, ts: float, track: str | None = None) -> str
                             if ts < cutoff and pattern.search(answer))
 
 
+def _race_of_turn(ts: float, windows: list[dict]) -> dict | None:
+    """The race a chat turn written at `ts` was about: the last one already under way
+    when it was written. None for a turn from before the sitting's first race lap."""
+    found = None
+    for win in windows:
+        if win["start_ts"] <= ts:
+            found = win
+    return found
+
+
+def race_turn_note(ts: float, windows: list[dict]) -> str:
+    """Prefix marking a stored coach answer as being about an EARLIER race of this
+    session, or '' (issue #136).
+
+    Same shape as scrub_stored_answer: computed from stored timestamps on READ, never
+    written to disk, no LLM. A session id spans a whole evening, so resuming the chat
+    during race 3 re-fed the model its race-1 answers as its own prior reasoning with
+    nothing to say they were about another race -- and it answered about race 3 with
+    race 1's spin, lap times and 'cleanest laps'.
+
+    Silent with one race: there is nothing to mistake it for."""
+    if len(windows) < 2 or ts >= windows[-1]["start_ts"]:
+        return ""
+    win = _race_of_turn(ts, windows)
+    if win is None:
+        return ""
+    started = time.strftime("%H:%M", time.localtime(win["start_ts"]))
+    return (f"[About an earlier race in this session (race {win['index']}, started "
+            f"{started}) — not the current one.] ")
+
+
+def current_race_fact(windows: list[dict]) -> str:
+    """The CURRENT RACE line for the user turn, or '' with at most one race (#136).
+
+    Rides in the user turn (the #131 seam), not the system prompt: it changes every
+    race, and the system block is prompt-cached."""
+    if len(windows) < 2:
+        return ""
+    win = windows[-1]
+    started = time.strftime("%H:%M", time.localtime(win["start_ts"]))
+    return (f"CURRENT RACE: race {win['index']} of this session (started {started}, "
+            f"{win['laps']} laps). Earlier turns marked as earlier races are history, "
+            f"not this race.")
+
+
 def race_result_text(store, session_id) -> str:
     """The session's race outcome as prompt text: grid slot, finish, incidents, and
     the live per-lap position arc.
@@ -441,8 +486,14 @@ def race_result_text(store, session_id) -> str:
     # back to the floor the store derives from the last logged race.
     arc = None
     if session_id:
-        since = (rr.get("race_ts") if rr
-                 else store.unlogged_race_since(session_id))
+        since = rr.get("race_ts") if rr else store.unlogged_race_since(session_id)
+        if not rr and since is None:
+            # #136: no result row and no logged race to floor on (never imported, or an
+            # online race whose log we never see). The sitting's own race windows still
+            # say where THIS race began, so the arc describes one race rather than every
+            # race of the evening -- and agrees with the race get_race_result names.
+            windows = store.race_windows(session_id)
+            since = windows[-1]["start_ts"] if windows else None
         arc = store.session_position_arc(
             session_id, phase="race", since=since,
             until=rr.get("next_race_ts") if rr else None)
@@ -531,6 +582,8 @@ class CoachContext:
         self._analysis_cache: dict = {}
         self._lap_numbering_cache: tuple[dict, dict] | None = None
         self._current_lap_cache: tuple | None = None
+        # #136: this session's races (store.race_windows), loaded once per turn.
+        self._race_windows_cache: list[dict] | None = None
         # #38 P1.4: grip envelope, computed once per context (see `_grip_envelope`).
         self._envelope: float | None = None
         self._envelope_computed = False
@@ -568,6 +621,39 @@ class CoachContext:
                     found = (None, None)
         self._current_lap_cache = found
         return found
+    def _race_windows(self) -> list[dict]:
+        """This session's races, oldest first (store.race_windows), cached per turn.
+        Empty when there is no session or no race lap."""
+        if self._race_windows_cache is None:
+            self._race_windows_cache = (self.store.race_windows(self.session_id)
+                                        if self.session_id else [])
+        return self._race_windows_cache
+
+    def _current_race(self) -> dict | None:
+        """The race this session is in, or its most recent one -- the last window.
+        None when the session has no race lap. What 'this race' means everywhere:
+        an unqualified lap reference, the stint-event scan, the CURRENT RACE fact."""
+        windows = self._race_windows()
+        return windows[-1] if windows else None
+
+    def _race_line(self, race_ts: float | None = None) -> str:
+        """'Race 3 of this session (started 00:26, 8 laps).' for the race a tool is
+        about, or '' when the session holds at most one race (nothing to disambiguate,
+        and a lone 'Race 1 of this session' is noise). `race_ts` names a specific race
+        by the moment its result log says it began; without one the CURRENT race."""
+        windows = self._race_windows()
+        if len(windows) < 2:
+            return ""
+        win = self._current_race()
+        if race_ts is not None:
+            # The window this result describes: the first one still running at race_ts.
+            # race_ts is the race's own start stamp, which is exactly how the position
+            # arc is floored (`since=race_ts`), so the two can never disagree.
+            win = next((w for w in windows if w["end_ts"] >= race_ts), win)
+        started = time.strftime("%H:%M", time.localtime(win["start_ts"]))
+        return (f"Race {win['index']} of this session (started {started}, "
+                f"{win['laps']} laps).")
+
     def _lap_numbering(self) -> tuple[dict, dict]:
         """In-session lap numbering matching the UI (LapList.svelte): laps are
         grouped into CONSECUTIVE same-phase runs in ts order. Within a run, the
@@ -581,7 +667,15 @@ class CoachContext:
         label_by_id[lap_id] -> e.g. 'race lap 3'; id_by_ref maps textual refs the
         model might use ('race 3', 'race lap 3', and -- for the current phase's
         run -- the UI's unprefixed 'lap 3' or a bare '3') back to the DB lap_id.
-        Cached per turn."""
+        Cached per turn.
+
+        #136: when the session holds more than one RACE (store.race_windows -- three
+        races in an evening share one session id), a race lap's label carries the race
+        too: 'race 3 lap 2'. "race lap 2" is ambiguous across three races, and that
+        ambiguity is what let the coach answer about race 3 with race 1's lap times.
+        The unqualified refs ('race lap 2', 'lap 2', a bare '2') then resolve in the
+        CURRENT race only -- an earlier race's laps must be asked for by name. A
+        single-race session is unchanged."""
         if self._lap_numbering_cache is not None:
             return self._lap_numbering_cache
         label_by_id: dict[int, str] = {}
@@ -589,25 +683,43 @@ class CoachContext:
         if self.session_id:
             cur_rec, _ = self._current_lap()
             cur_phase = cur_rec.phase if cur_rec is not None else None
+            windows = self._race_windows()
+            multi = len(windows) > 1
+            cur_win = windows[-1]["index"] if windows else None
+            win_of_lap = {lid: w["index"] for w in windows for lid in w["lap_ids"]}
+            # A race window boundary starts a new run as well as a phase change: the
+            # second race's laps count from 1 (or from the game's own lap_no), never
+            # on from the first race's total.
+            win_starts = {w["lap_ids"][0] for w in windows}
             runs: list[list[dict]] = []
             prev_phase: object = object()  # sentinel -- never equals a real phase value
             for lap in self.store.session_laps(self.session_id):
                 ph = lap.get("phase")
-                if ph == prev_phase and runs:
+                if ph == prev_phase and runs and lap["id"] not in win_starts:
                     runs[-1].append(lap)
                 else:
                     runs.append([lap])
                 prev_phase = ph
             for run in runs:
                 ph = run[0].get("phase")
+                win = win_of_lap.get(run[0]["id"]) if ph == "race" else None
+                # The phase word the label and the refs are built from: 'race 3' once
+                # the session holds more than one race, plain 'race' otherwise.
+                name = f"race {win}" if (multi and win) else ph
+                # Unqualified refs belong to the current race only (see docstring).
+                unqualified = not multi or win is None or win == cur_win
                 use_lap_no = all(lap.get("lap_no") is not None for lap in run)
                 for i, lap in enumerate(run):
                     n = lap["lap_no"] if use_lap_no else i + 1
-                    label_by_id[lap["id"]] = f"{ph} lap {n}" if ph else f"lap {n}"
+                    label_by_id[lap["id"]] = f"{name} lap {n}" if ph else f"lap {n}"
                     if ph:
-                        id_by_ref[f"{ph} {n}".lower()] = lap["id"]
-                        id_by_ref[f"{ph} lap {n}".lower()] = lap["id"]
-                        if ph == cur_phase:
+                        if multi and win:
+                            id_by_ref[f"race {win} lap {n}".lower()] = lap["id"]
+                            id_by_ref[f"lap {n} of race {win}".lower()] = lap["id"]
+                        if unqualified:
+                            id_by_ref[f"{ph} {n}".lower()] = lap["id"]
+                            id_by_ref[f"{ph} lap {n}".lower()] = lap["id"]
+                        if ph == cur_phase and unqualified:
                             # Bare number AND the UI's own unprefixed wording ("lap 35"),
                             # which is what the driver reads off the lap list and the model
                             # then echoes -- it must resolve, not look like a third scheme.
@@ -841,9 +953,13 @@ class CoachContext:
         phase = cur_rec.phase if cur_rec else None
         # Current-phase count: "8 laps into the race" must be race laps, not the
         # whole session (qualy + race). Grouped like _lap_numbering's counts[ph].
-        n_phase = (sum(1 for r in self.store.session_laps(self.session_id)
-                       if r.get("phase") == phase and not r.get("partial"))
-                   if self.session_id and phase else None)
+        # #136: for a race that count is THIS race's, not every race the sitting
+        # holds -- "8 laps into the race" was reporting all three races' laps.
+        cur_race = self._current_race() if phase == "race" else None
+        n_phase = (cur_race["laps"] if cur_race is not None else
+                   (sum(1 for r in self.store.session_laps(self.session_id)
+                        if r.get("phase") == phase and not r.get("partial"))
+                    if self.session_id and phase else None))
         if n_sess is not None:
             head = f"this {phase}: {n_phase}, " if n_phase is not None else ""
             laps_txt = f"{head}session: {n_sess}, all-time this track/car: {n_all}"
@@ -871,10 +987,21 @@ class CoachContext:
         # #134: live race-position arc (started/low/current) when this phase is a race.
         pos_txt = ""
         if phase == "race" and self.session_id:
-            arc = self.store.session_position_arc(self.session_id, phase="race")
+            # #136: floored on THIS race. Unbounded, the arc spans every race of the
+            # sitting, so race 1's worst place was reported as this race's.
+            arc = self.store.session_position_arc(
+                self.session_id, phase="race",
+                since=cur_race["start_ts"] if cur_race else None)
             if arc:
                 pos_txt = (f" | Position: P{arc['last']} (started P{arc['start']}, "
                            f"low P{arc['worst']})")
+        # #136: how many races this one session id covers, and which one is current.
+        races_txt = ""
+        if len(self._race_windows()) > 1:
+            cur = self._current_race()
+            races_txt = (f" | Races this session: {len(self._race_windows())} "
+                         f"(current: race {cur['index']}, started "
+                         f"{time.strftime('%H:%M', time.localtime(cur['start_ts']))})")
         return (f"Track: {self.track or 'unknown'} | Car: {self.car or 'unknown'} | "
                 f"Session type: {phase or 'unknown'} | State: {on} | Current lap: {lap} | "
                 f"Latest stored lap: {latest_txt} | "
@@ -882,7 +1009,7 @@ class CoachContext:
                 f"Reference (best) lap available: {'yes' if has_ref else 'no'} | "
                 f"Class: {self.car_class or 'unknown'} | "
                 f"ABS: {self._aid_status('VM_ANTILOCK_BRAKES')} | "
-                f"TC: {self._aid_status('VM_TRACTION_CONTROL')}{pos_txt}")
+                f"TC: {self._aid_status('VM_TRACTION_CONTROL')}{pos_txt}{races_txt}")
 
     def list_recent_laps(self, limit=10):
         if not (self.track and self.car):
@@ -1036,7 +1163,15 @@ class CoachContext:
         except (TypeError, ValueError):
             n = 10
         n = max(1, min(n, _MAX_EVENT_LAPS))
-        rows = self.store.session_laps(self.session_id)[-n:]   # session_laps is ts order
+        rows = self.store.session_laps(self.session_id)   # ts order
+        # #136: counting back N laps from the newest one walks straight out of this
+        # race and into the previous one when a sitting holds several -- which is how
+        # "that spin a few laps ago" came back as race 1's spin during race 3. Scan
+        # this race only; an earlier race's laps stay reachable by name ('race 1 lap 2').
+        cur_race = self._current_race()
+        if cur_race is not None and len(self._race_windows()) > 1:
+            rows = [r for r in rows if r["ts"] >= cur_race["start_ts"]]
+        rows = rows[-n:]
         loaded = []
         for row in rows:
             try:
@@ -1337,7 +1472,13 @@ class CoachContext:
         text = race_result_text(self.store, self.session_id)
         laps = self.store.session_laps(self.session_id) if self.session_id else []
         track = laps[0].get("track") if laps else None
-        return f"Session track: {track}.\n{text}" if track else text
+        head = [f"Session track: {track}." if track else ""]
+        # #136: WHICH race of the sitting these figures describe. race_result_text
+        # already bounds the arc to one race (race_ts..next_race_ts); this names it,
+        # so an answer about race 3 can't be read as being about race 1.
+        rr = self.store.race_session(self.session_id) if self.session_id else None
+        head.append(self._race_line(rr.get("race_ts") if rr else None))
+        return "\n".join([h for h in head if h] + [text])
 
     def get_setup(self):
         if not self.setup:

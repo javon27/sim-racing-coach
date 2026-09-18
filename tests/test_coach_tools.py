@@ -1914,3 +1914,201 @@ def test_lap_identity_prompt_explains_the_pit_flag():
     from simcoach.coach import AGENTIC_SYSTEM_PROMPT
     assert "pit stop this lap" in AGENTIC_SYSTEM_PROMPT
     assert "not a pace lap" in AGENTIC_SYSTEM_PROMPT
+
+
+# --- #136: race boundaries inside one session -------------------------------
+
+_T0 = 1_700_000_000.0
+
+
+def _two_race_session(store, base, sid="s1"):
+    """Tonight's shape (#136): race 1, a qualifying lap, then race 2 -- all under one
+    session id, because the instance only splits after 6 h. Returns (race1, race2) lap
+    ids."""
+    from simcoach.model_types import LapRecord
+
+    def _save(ts, phase, position=None):
+        return store.save(LapRecord(**{**base.__dict__, "session_id": sid,
+                                       "phase": phase, "timestamp": ts,
+                                       "position": position}))
+
+    # Race 1 is the LONGER one on purpose: an unqualified 'lap 3' then has a lap it
+    # could wrongly resolve to in the earlier race, which is the failure being guarded.
+    race1 = [_save(_T0 + i * 100, "race", 20 + i) for i in range(3)]
+    _save(_T0 + 300, "qualifying")
+    race2 = [_save(_T0 + 400 + i * 100, "race", 5 + i) for i in range(2)]
+    return race1, race2
+
+
+def _hhmm(ts):
+    import time
+    return time.strftime("%H:%M", time.localtime(ts))
+
+
+def test_lap_labels_name_the_race_when_a_session_holds_more_than_one(tmp_path, synthetic_lap):
+    """#136: 'race lap 2' is ambiguous across three races in one evening, and that
+    ambiguity is what let the coach answer about race 3 with race 1's lap times."""
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    race1, race2 = _two_race_session(store, synthetic_lap)
+    ctx = CoachContext(store, session_id="s1", track=synthetic_lap.track,
+                       car=synthetic_lap.car)
+
+    label_by_id, _ = ctx._lap_numbering()
+    assert label_by_id[race1[0]] == "race 1 lap 1"
+    assert label_by_id[race1[2]] == "race 1 lap 3"
+    # Race 2 counts from 1 again -- it does not carry on from race 1's total.
+    assert label_by_id[race2[0]] == "race 2 lap 1"
+    assert label_by_id[race2[1]] == "race 2 lap 2"
+    listing = ctx.list_recent_laps()
+    assert "race 1 lap 1" in listing and "race 2 lap 1" in listing
+
+
+def test_a_bare_lap_reference_resolves_in_the_current_race(tmp_path, synthetic_lap):
+    """An unqualified reference means THIS race; an earlier one must be asked for by
+    name ('race 1 lap 2' / 'lap 2 of race 1')."""
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    race1, race2 = _two_race_session(store, synthetic_lap)
+    ctx = CoachContext(store, session_id="s1", track=synthetic_lap.track,
+                       car=synthetic_lap.car)
+
+    assert ctx._resolve_lap("lap 2")[1] == race2[1]
+    assert ctx._resolve_lap("2")[1] == race2[1]
+    assert ctx._resolve_lap("race lap 2")[1] == race2[1]
+    assert ctx._resolve_lap("race 1 lap 2")[1] == race1[1]
+    assert ctx._resolve_lap("lap 2 of race 1")[1] == race1[1]
+    assert ctx._resolve_lap("race 2 lap 1")[1] == race2[0]
+    # This race has two laps. An unqualified 'lap 3' must NOT reach back and hand
+    # over race 1's third lap -- silently answering about the wrong race is #136.
+    assert ctx._resolve_lap("lap 3") == (None, None)
+    assert ctx._resolve_lap("race 1 lap 3")[1] == race1[2]
+
+
+def test_the_second_race_counts_from_lap_1_across_a_gap_only_boundary(
+        tmp_path, synthetic_lap):
+    """Two races back to back with no other phase captured between them: the numbering
+    has to restart at the boundary too, or race 2's first lap is called 'lap 4'."""
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    ids = [store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1",
+                                   "phase": "race", "timestamp": ts}))
+           for ts in (_T0, _T0 + 100, _T0 + 200, _T0 + 1800, _T0 + 1900)]
+    ctx = CoachContext(store, session_id="s1", track=synthetic_lap.track,
+                       car=synthetic_lap.car)
+
+    label_by_id, _ = ctx._lap_numbering()
+    assert label_by_id[ids[2]] == "race 1 lap 3"
+    assert label_by_id[ids[3]] == "race 2 lap 1"
+    assert ctx._resolve_lap("lap 1")[1] == ids[3]
+
+
+def test_one_race_keeps_the_plain_lap_label(tmp_path, synthetic_lap):
+    """Nothing changes for the ordinary single-race session -- no race number to
+    disambiguate, and 'race 1 lap 1' would just be noise."""
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    ids = [store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1",
+                                   "phase": "race", "timestamp": _T0 + i * 100}))
+           for i in range(2)]
+    ctx = CoachContext(store, session_id="s1", track=synthetic_lap.track,
+                       car=synthetic_lap.car)
+
+    label_by_id, _ = ctx._lap_numbering()
+    assert label_by_id[ids[0]] == "race lap 1"
+    assert "race 1 lap" not in ctx.list_recent_laps()
+    assert ctx._resolve_lap("race lap 1")[1] == ids[0]
+
+
+def test_get_session_status_counts_the_races_and_scopes_the_race_to_this_one(
+        tmp_path, synthetic_lap):
+    """'8 laps into the race' must be THIS race's laps, and the position arc this
+    race's places -- unbounded, both spanned every race of the sitting."""
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    _two_race_session(store, synthetic_lap)
+    ctx = CoachContext(store, session_id="s1", track=synthetic_lap.track,
+                       car=synthetic_lap.car)
+
+    out = ctx.get_session_status()
+    assert f"Races this session: 2 (current: race 2, started {_hhmm(_T0 + 400)})" in out
+    assert "this race: 2," in out          # race 2's two laps, not all four
+    assert "Position: P6 (started P5, low P6)" in out   # race 2's places only
+
+
+def test_get_race_result_names_which_race_of_the_sitting_it_reports(
+        tmp_path, synthetic_lap):
+    """The arc is already bounded to one race; without a name on it, an answer about
+    race 2 reads exactly like an answer about race 1."""
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    _two_race_session(store, synthetic_lap)
+    ctx = CoachContext(store, session_id="s1", track=synthetic_lap.track,
+                       car=synthetic_lap.car)
+
+    out = ctx.get_race_result()
+    assert f"Race 2 of this session (started {_hhmm(_T0 + 400)}, 2 laps)." in out
+    # And the figures under that heading are race 2's, not all four laps'.
+    assert "over 2 captured lap(s)" in out
+    assert "P5 on the first captured lap" in out and "P6 on the most recent" in out
+
+
+def test_get_race_result_says_nothing_about_races_in_a_single_race_session(
+        tmp_path, synthetic_lap):
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    for i in range(2):
+        store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1",
+                                "phase": "race", "timestamp": _T0 + i * 100,
+                                "position": 4}))
+    ctx = CoachContext(store, session_id="s1", track=synthetic_lap.track,
+                       car=synthetic_lap.car)
+
+    out = ctx.get_race_result()
+    assert "of this session (started" not in out
+    assert "Races this session" not in ctx.get_session_status()
+
+
+def test_get_stint_events_does_not_walk_back_into_the_previous_race(
+        tmp_path, synthetic_lap):
+    """'that spin a few laps ago' asked in race 2 came back with race 1's spin: the
+    scan counts back N laps from the newest one and walked straight out of this race."""
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    _two_race_session(store, synthetic_lap)
+    ctx = CoachContext(store, session_id="s1", track=synthetic_lap.track,
+                       car=synthetic_lap.car,
+                       cmap=CornerMap.load("simcoach/tracks/test_track.json"))
+
+    out = ctx.get_stint_events(laps=10)
+    assert "race 2 lap 1" in out and "race 2 lap 2" in out
+    assert "race 1 lap" not in out
+
+
+def test_race_turn_note_marks_only_turns_from_an_earlier_race():
+    """History annotation on READ, from stored timestamps (#136) -- the same shape as
+    scrub_stored_answer, which never rewrites the driver's stored conversation."""
+    from simcoach.coach_tools import race_turn_note
+    windows = [{"index": 1, "start_ts": _T0, "end_ts": _T0 + 200, "lap_ids": [1, 2],
+                "laps": 2},
+               {"index": 2, "start_ts": _T0 + 400, "end_ts": _T0 + 500,
+                "lap_ids": [4, 5], "laps": 2}]
+
+    note = race_turn_note(_T0 + 250, windows)
+    assert note == (f"[About an earlier race in this session (race 1, started "
+                    f"{_hhmm(_T0)}) — not the current one.] ")
+    # A turn inside the current race, and one from before any race lap, are left alone.
+    assert race_turn_note(_T0 + 450, windows) == ""
+    assert race_turn_note(_T0 - 60, windows) == ""
+    # One race: nothing to mistake it for.
+    assert race_turn_note(_T0 + 250, windows[:1]) == ""
+
+
+def test_current_race_fact_only_when_the_session_holds_several_races():
+    from simcoach.coach_tools import current_race_fact
+    windows = [{"index": 1, "start_ts": _T0, "end_ts": _T0 + 200, "lap_ids": [1, 2],
+                "laps": 2},
+               {"index": 2, "start_ts": _T0 + 400, "end_ts": _T0 + 500,
+                "lap_ids": [4, 5], "laps": 2}]
+
+    fact = current_race_fact(windows)
+    assert fact.startswith(f"CURRENT RACE: race 2 of this session (started "
+                           f"{_hhmm(_T0 + 400)}, 2 laps).")
+    assert "Earlier turns marked as earlier races are history" in fact
+    assert current_race_fact(windows[:1]) == ""
+    assert current_race_fact([]) == ""

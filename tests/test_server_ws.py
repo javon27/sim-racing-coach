@@ -193,7 +193,9 @@ def test_ws_coach_new_since_last_turn_when_a_race_lap_landed_after_it(tmp_path):
     from simcoach.model_types import LapRecord
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     now = time_mod.time()
-    old = LapRecord("lmu", "test_track", "test_car", 95.0, True, now - 3600,
+    # Consecutive laps of ONE race: #136 reads an hour's silence between two race
+    # laps as two different races, and this test is about the NEW SINCE line only.
+    old = LapRecord("lmu", "test_track", "test_car", 95.0, True, now - 600,
                     {"lap_distance": [0.0]}, phase="race", session_id="s1", lap_no=1)
     old_id = store.save(old)
     cid = store.create_chat()
