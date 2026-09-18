@@ -110,7 +110,15 @@ def migrate_model_dir(old_root: str, new_root: str) -> bool:
 def _default_download(dest: Path) -> None:
     from faster_whisper import download_model  # optional extra; imported only here
     dest.mkdir(parents=True, exist_ok=True)
-    download_model(MODEL_SIZE, output_dir=str(dest))
+    download_model(MODEL_SIZE, output_dir=str(dest), revision=WHISPER_REVISION)
+    # #114: verify against the pinned hashes, same as _default_kokoro_download --
+    # same RuntimeError type, so ModelInstaller.status()["error"] surfaces it in
+    # Settings and the Windows STT fallback applies, exactly as a Kokoro hash
+    # mismatch already does.
+    for name, (size, sha) in WHISPER_FILES.items():
+        p = dest / name
+        if not p.exists() or p.stat().st_size != size or _sha256_file(p) != sha:
+            raise RuntimeError(f"{name}: hash mismatch -- download again")
 
 
 def _dir_bytes(p: Path) -> int:
@@ -148,6 +156,24 @@ class ModelInstaller:
                 "progress_bytes": _dir_bytes(self.dest), "total_bytes": EXPECTED_MODEL_BYTES,
                 "error": self._error}
 
+
+# #114: pin the faster-whisper "small" model the same way as the Kokoro files
+# below -- an unpinned `download_model` silently tracks the repo's default
+# branch, so the model could change under the app without anyone noticing.
+# Revision = the HF commit sha of Systran/faster-whisper-small looked up
+# 2026-09-18 via `HfApi().model_info("Systran/faster-whisper-small").sha`
+# (repo's only commit; lastModified 2023-11-23).
+WHISPER_REVISION = "536b0662742c02347bc0e980a01041f333bce120"
+# (size, sha256) per file at that revision, computed once from a real
+# `download_model(..., revision=WHISPER_REVISION)` in this worktree 2026-09-18.
+# This is the exact file set faster-whisper's `allow_patterns` fetches that
+# actually exist in the repo (no preprocessor_config.json at this revision).
+WHISPER_FILES = {
+    "config.json": (2370, "b55496ac7940a7ae47d2c01eab40edfd8701feec1229d9cce3b40014383fb828"),
+    "model.bin": (483546902, "3e305921506d8872816023e4c273e75d2419fb89b24da97b4fe7bce14170d671"),
+    "tokenizer.json": (2203239, "fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab"),
+    "vocabulary.txt": (459861, "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913"),
+}
 
 KOKORO_FILES = {
     "kokoro-v1.0.onnx": (325_532_387, "7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5"),

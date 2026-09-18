@@ -209,6 +209,54 @@ def test_sha256_file_chunked_matches_whole_file_digest(tmp_path):
     assert v._sha256_file(p, chunk_size=16) == hashlib.sha256(data).hexdigest()
 
 
+def test_default_download_passes_pinned_revision_and_verifies_matching_hashes(tmp_path, monkeypatch):
+    # #114: same shape as the Kokoro sha256 test above, but for
+    # `_default_download` -- a fake `faster_whisper.download_model` (no real
+    # dependency needed: CI installs `[dev]` only, no voice extra) records how
+    # it was called, and a small synthetic WHISPER_FILES table stands in for
+    # the real one so the test doesn't need a 483 MB model.bin fixture.
+    import hashlib
+    import types
+
+    from simcoach import voice as v
+
+    calls = {}
+
+    def fake_download_model(size_or_id, output_dir=None, revision=None, **_kw):
+        calls["size_or_id"] = size_or_id
+        calls["output_dir"] = output_dir
+        calls["revision"] = revision
+        (Path(output_dir) / "a.bin").write_bytes(b"content")
+
+    monkeypatch.setitem(sys.modules, "faster_whisper",
+                        types.SimpleNamespace(download_model=fake_download_model))
+    monkeypatch.setattr(v, "WHISPER_FILES",
+                        {"a.bin": (len(b"content"), hashlib.sha256(b"content").hexdigest())})
+
+    dest = tmp_path / "whisper"
+    v._default_download(dest)   # must not raise -- hashes match
+
+    assert calls == {"size_or_id": v.MODEL_SIZE, "output_dir": str(dest), "revision": v.WHISPER_REVISION}
+
+
+def test_default_download_raises_on_hash_mismatch(tmp_path, monkeypatch):
+    import hashlib
+    import types
+
+    from simcoach import voice as v
+
+    def fake_download_model(size_or_id, output_dir=None, revision=None, **_kw):
+        (Path(output_dir) / "a.bin").write_bytes(b"wrong content")
+
+    monkeypatch.setitem(sys.modules, "faster_whisper",
+                        types.SimpleNamespace(download_model=fake_download_model))
+    monkeypatch.setattr(v, "WHISPER_FILES",
+                        {"a.bin": (len(b"content"), hashlib.sha256(b"content").hexdigest())})
+
+    with pytest.raises(RuntimeError, match="hash mismatch"):
+        v._default_download(tmp_path / "whisper")
+
+
 def test_kokoro_installer_memoises_voices_once_populated(tmp_path):
     def fake_download(dest: Path):
         dest.mkdir(parents=True, exist_ok=True)
