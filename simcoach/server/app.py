@@ -39,7 +39,9 @@ from ..coach_tools import (
     _PARTIAL_LIST_WORD,
     CoachContext,
     _lap_age,
+    current_race_fact,
     race_result_text,
+    race_turn_note,
     scrub_stored_answer,
 )
 from ..corners import CornerMap, in_window, validated_sections, validated_sectors
@@ -2074,6 +2076,11 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                     chat_id_in = app.state.store.create_chat()
                 else:
                     try:
+                        # #136: which race each earlier turn was about. A chat is meant
+                        # to span the races of a sitting (they share one session id), so
+                        # without this an answer about race 1 re-enters the context as
+                        # the model's own prior reasoning about the race being driven now.
+                        race_windows = ctx._race_windows()
                         for row in messages:
                             if row.get("question"):
                                 history.append({"role": "user", "content": row["question"]})
@@ -2084,9 +2091,10 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                                 # resuming the chat would re-feed it to the model as its own
                                 # prior reasoning.
                                 history.append({"role": "assistant",
-                                                "content": scrub_stored_answer(row["answer"],
-                                                                               row["ts"],
-                                                                               row.get("track"))})
+                                                "content": race_turn_note(row["ts"], race_windows)
+                                                + scrub_stored_answer(row["answer"],
+                                                                      row["ts"],
+                                                                      row.get("track"))})
                         last_chat_ts = messages[-1]["ts"] if messages else None
                     except Exception:
                         history = []
@@ -2108,11 +2116,15 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                                   else _PARTIAL_LIST_WORD.get(latest.get("partial"), "no time"))
                         new_since_last_turn = (
                             f"{label} ({detail}) landed {_lap_age(latest['ts'])}.")
-            # The fact rides in the USER turn, not the system prompt: the system block is
+            # The facts ride in the USER turn, not the system prompt: the system block is
             # prompt-cached and a per-turn value there would bust the cache every question.
             # The stored question (below) stays the driver's own words.
-            model_question = (f"NEW SINCE YOUR LAST ANSWER: {new_since_last_turn}\n\n{question}"
-                              if new_since_last_turn else question)
+            # #136's CURRENT RACE line leads: it frames every number in the turn, including
+            # the lap the NEW SINCE line names. Both are silent when there is nothing to say.
+            facts = [f for f in (current_race_fact(ctx._race_windows()),
+                                 f"NEW SINCE YOUR LAST ANSWER: {new_since_last_turn}"
+                                 if new_since_last_turn else "") if f]
+            model_question = "\n\n".join([*facts, question])
 
             text = ""
             # What this turn billed. One usage event arrives per model call, so a

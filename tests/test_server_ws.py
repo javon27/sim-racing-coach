@@ -816,3 +816,99 @@ def test_ws_coach_starts_a_new_chat_when_session_changes(tmp_path):
     s2_chats = [c["chat_id"] for c in store.chats_for_session("s2")]
     assert s1_chats == [chat_id_1]
     assert s2_chats == [chat_id_2]
+
+
+def _two_race_chat(tmp_path, now, races=2):
+    """A session whose chat spans two races (#136): race 1, a qualifying lap, race 2 --
+    with the chat's only earlier turn written during race 1. `races=1` builds the same
+    chat over a single race. Returns (store, chat_id)."""
+    from simcoach.model_types import LapRecord
+
+    def _lap(store, ts, phase, lap_no):
+        return store.save(LapRecord("lmu", "test_track", "test_car", 95.0, True, ts,
+                                    {"lap_distance": [0.0]}, phase=phase,
+                                    session_id="s1", lap_no=lap_no))
+
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    first = _lap(store, now - 7200, "race", 1)
+    _lap(store, now - 7100, "race", 2)
+    cid = store.create_chat()
+    store.save_chat(cid, "s1", "test_track", "test_car", first, "how did that go?",
+                    "You spun on lap 2 and lost four places.", ts=now - 7000)
+    if races > 1:
+        _lap(store, now - 3600, "qualifying", 1)
+        _lap(store, now - 600, "race", 1)
+        _lap(store, now - 300, "race", 2)
+    return store, cid
+
+
+def test_ws_coach_marks_an_earlier_races_turn_in_the_history(tmp_path):
+    """#136: asked at 01:12 after race 3, the coach answered about race 3 with race 1's
+    spin and lap times -- nothing in the resumed history said which race a turn was
+    about, and one session id covers the whole evening."""
+    import time as time_mod
+    now = time_mod.time()
+    store, cid = _two_race_chat(tmp_path, now)
+
+    model = FakeModel(reply="ok")
+    app = create_app(store, Coach(model))
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "how am I doing?", "session_id": "s1", "chat_id": cid})
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"): break
+
+    prior = [m for m in model.last_messages if m["role"] == "assistant"]
+    assert prior, "the earlier turn must still be threaded, not dropped"
+    assert prior[0]["content"].startswith(
+        "[About an earlier race in this session (race 1, started ")
+    assert "not the current one.] You spun on lap 2" in prior[0]["content"]
+    # The stored row is untouched -- the annotation exists only in the model's copy.
+    assert store.chat_messages(cid)[0]["answer"] == "You spun on lap 2 and lost four places."
+
+
+def test_ws_coach_leaves_history_alone_in_a_single_race_session(tmp_path):
+    import time as time_mod
+    now = time_mod.time()
+    store, cid = _two_race_chat(tmp_path, now, races=1)
+
+    model = FakeModel(reply="ok")
+    app = create_app(store, Coach(model))
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "how am I doing?", "session_id": "s1", "chat_id": cid})
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"): break
+
+    prior = [m for m in model.last_messages if m["role"] == "assistant"]
+    assert prior[0]["content"].startswith("You spun on lap 2")
+    assert "CURRENT RACE:" not in model.last_messages[-1]["content"]
+
+
+def test_ws_coach_current_race_fact_leads_the_user_turn(tmp_path):
+    """The CURRENT RACE line frames every number in the turn, so it comes before the
+    #131 NEW SINCE line -- and neither touches the cached system prompt or the stored
+    question."""
+    import time as time_mod
+    now = time_mod.time()
+    store, cid = _two_race_chat(tmp_path, now)
+
+    model = FakeModel(reply="ok")
+    app = create_app(store, Coach(model))
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "how was that?", "session_id": "s1", "chat_id": cid})
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"): break
+
+    user_turn = model.last_messages[-1]["content"]
+    assert user_turn.startswith("CURRENT RACE: race 2 of this session (started ")
+    assert "2 laps)." in user_turn.split("\n", 1)[0]
+    assert user_turn.index("CURRENT RACE:") < user_turn.index("NEW SINCE YOUR LAST ANSWER:")
+    assert user_turn.endswith("how was that?")
+    assert "CURRENT RACE:" not in model.last_system
+    # The driver's own words are what gets stored, not the injected facts.
+    assert store.chat_messages(cid)[-1]["question"] == "how was that?"

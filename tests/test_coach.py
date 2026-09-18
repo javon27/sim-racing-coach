@@ -329,3 +329,13 @@ def test_system_prompt_notes_position_changes_never_gaps_or_traffic():
     racecraft = AGENTIC_SYSTEM_PROMPT.split("RACECRAFT:", 1)[1][:600]
     assert "position change" in racecraft
     assert "never state gaps or traffic" in racecraft
+
+
+def test_system_prompt_forbids_reusing_an_earlier_races_numbers():
+    """#136: a chat spans the races of an evening, so an earlier turn's spin, lap time
+    or position is history -- this turn's numbers come from this turn's tool calls."""
+    from simcoach.coach import AGENTIC_SYSTEM_PROMPT
+    identity = AGENTIC_SYSTEM_PROMPT.split("LAP IDENTITY:", 1)[1][:800]
+    assert "more than one race" in identity
+    assert "a tool call in THIS turn" in identity
+    assert "marked as an earlier race" in identity
