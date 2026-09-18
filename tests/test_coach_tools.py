@@ -201,7 +201,7 @@ def test_get_energy_report(tmp_path, synthetic_lap):
 def test_session_status_and_recent_laps(tmp_path, synthetic_lap):
     ctx, _store, lap_id = _ctx(tmp_path, synthetic_lap)
     status = ctx.get_session_status()
-    assert "test_track" in status and "Laps" in status
+    assert "test_track" in status and "Complete laps" in status
     listing = ctx.list_recent_laps()
     assert f"lap {lap_id}:" in listing
 
@@ -243,7 +243,7 @@ def test_session_status_uses_current_phase_lap_count(tmp_path, synthetic_lap):
     )
     status = ctx.get_session_status()
     assert "this race: 6" in status          # phase count, not the 8 session total
-    assert "session total: 8" in status
+    assert "session: 8" in status
 
 
 def test_recent_laps_use_in_session_phase_numbering(tmp_path, synthetic_lap):
@@ -1689,4 +1689,27 @@ def test_session_status_counts_complete_laps_only(tmp_path, synthetic_lap):
     inflate every 'laps captured' number the day partials started being stored."""
     ctx, _, _ = _partial_session(tmp_path, synthetic_lap)
     out = ctx.get_session_status()
-    assert "this practice: 2, session total: 2, all-time this track/car: 2" in out
+    assert "this practice: 2, session: 2, all-time this track/car: 2" in out
+
+
+def test_session_status_names_the_latest_lap_and_labels_counts_as_counts(tmp_path, synthetic_lap):
+    """#126: the coach read 'this practice: 1' (a COUNT of complete laps) as a lap
+    NUMBER and narrated a session reset. The status line must say what the latest
+    STORED lap is (any kind) by its own label, and never use the bare word 'Laps'
+    for a count. Game lap numbers have a gap at 3 (a garage return), same shape as
+    the rig log, so the last row's label is 'practice lap 5', not 'lap 4'."""
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    base = dict(synthetic_lap.__dict__, session_id="s1", phase="practice")
+    for n, (lt, kind, ts) in enumerate(
+            [(None, "out", 10.0), (95.0, None, 20.0), (None, "partial", 30.0),
+             (None, "partial", 40.0)], start=1):
+        lap_no = n if n < 3 else n + 1   # gap at game lap 3
+        store.save(LapRecord(**{**base, "lap_time": lt, "valid": kind is None,
+                                 "partial": kind, "lap_no": lap_no, "timestamp": ts}))
+    ctx = CoachContext(store, track=synthetic_lap.track, car=synthetic_lap.car,
+                       session_id="s1", on_track=True)
+    out = ctx.get_session_status()
+    assert "Latest stored lap: practice lap 5 (partial)" in out
+    assert "Complete laps (this practice: 1" in out
+    assert "Other laps this session (out/in/partial): 3" in out

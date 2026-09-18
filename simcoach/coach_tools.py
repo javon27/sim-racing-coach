@@ -807,15 +807,32 @@ class CoachContext:
                    if self.session_id and phase else None)
         if n_sess is not None:
             head = f"this {phase}: {n_phase}, " if n_phase is not None else ""
-            laps_txt = f"{head}session total: {n_sess}, all-time this track/car: {n_all}"
+            laps_txt = f"{head}session: {n_sess}, all-time this track/car: {n_all}"
         else:
             laps_txt = f"this track/car: {n_all} (no session split)"
+        # Latest STORED lap (any kind -- out/in/partial included): the count above is
+        # complete laps only, so a driver asking about "lap 5" while only 1 lap is
+        # "complete" must not read that 1 as a lap number (#126). ANY kind so a spin on
+        # a partial lap is still the latest thing the coach knows about.
+        sess_laps = self.store.session_laps(self.session_id) if self.session_id else []
+        n_other = sum(1 for r in sess_laps if r.get("partial"))
+        if sess_laps:
+            latest = sess_laps[-1]
+            label_by_id, _ = self._lap_numbering()
+            label = label_by_id.get(latest["id"]) or f"lap {latest.get('lap_no') or '?'}"
+            kind = _PARTIAL_LIST_WORD.get(latest.get("partial"))
+            latest_txt = f"{label} ({kind})" if kind else label
+        else:
+            latest_txt = "none"
         n_corners = len(self.cmap.corners) if (self.cmap and self.cmap.corners) else 0
         cmap_txt = (f"yes ({n_corners} corners — use list_track_corners)" if n_corners
                     else "no")
+        other_txt = (f" | Other laps this session (out/in/partial): {n_other}"
+                     if n_other else "")
         return (f"Track: {self.track or 'unknown'} | Car: {self.car or 'unknown'} | "
                 f"Session type: {phase or 'unknown'} | State: {on} | Current lap: {lap} | "
-                f"Laps ({laps_txt}) | Corner map: {cmap_txt} | "
+                f"Latest stored lap: {latest_txt} | "
+                f"Complete laps ({laps_txt}){other_txt} | Corner map: {cmap_txt} | "
                 f"Reference (best) lap available: {'yes' if has_ref else 'no'} | "
                 f"Class: {self.car_class or 'unknown'} | "
                 f"ABS: {self._aid_status('VM_ANTILOCK_BRAKES')} | "
