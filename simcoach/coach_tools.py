@@ -630,8 +630,25 @@ class CoachContext:
         # An out/in/partial lap says so right here (#77), so the model can never read
         # its missing lap time or NaN corners as a timed lap that went wrong.
         kind = _PARTIAL_WORD.get(record.partial, "")
+        # #134: a race lap's stored position, plus the previous race lap's position
+        # (so a spin's cost or a recovery is visible right in the identity line) --
+        # looked up from session_laps rather than `record` (store.load() doesn't
+        # thread position onto LapRecord).
+        tail_bits = [kind] if kind else []
+        if record.phase == "race" and lap_id is not None and self.session_id:
+            sess_laps = self.store.session_laps(self.session_id)
+            idx = next((i for i, r in enumerate(sess_laps) if r["id"] == lap_id), None)
+            cur_pos = sess_laps[idx]["position"] if idx is not None else None
+            if cur_pos is not None:
+                prev_pos = next((r["position"] for r in reversed(sess_laps[:idx])
+                                 if r.get("phase") == "race" and r.get("position") is not None),
+                                None)
+                pos_txt = f"position P{cur_pos}"
+                if prev_pos is not None:
+                    pos_txt += f" (from P{prev_pos})"
+                tail_bits.append(pos_txt)
         return (f"Lap: {head}" + (f" ({', '.join(parts)})" if parts else "")
-                + (f" — {kind}" if kind else ""))
+                + (f" — {'; '.join(tail_bits)}" if tail_bits else ""))
 
     def _lap_id_for(self, record) -> int | None:
         """Best-effort DB lap_id for a record with no id attached (e.g. `best_lap`,
@@ -841,6 +858,13 @@ class CoachContext:
                     else "no")
         other_txt = (f" | Other laps this session (out/in/partial): {n_other}"
                      if n_other else "")
+        # #134: live race-position arc (started/low/current) when this phase is a race.
+        pos_txt = ""
+        if phase == "race" and self.session_id:
+            arc = self.store.session_position_arc(self.session_id, phase="race")
+            if arc:
+                pos_txt = (f" | Position: P{arc['last']} (started P{arc['start']}, "
+                           f"low P{arc['worst']})")
         return (f"Track: {self.track or 'unknown'} | Car: {self.car or 'unknown'} | "
                 f"Session type: {phase or 'unknown'} | State: {on} | Current lap: {lap} | "
                 f"Latest stored lap: {latest_txt} | "
@@ -848,7 +872,7 @@ class CoachContext:
                 f"Reference (best) lap available: {'yes' if has_ref else 'no'} | "
                 f"Class: {self.car_class or 'unknown'} | "
                 f"ABS: {self._aid_status('VM_ANTILOCK_BRAKES')} | "
-                f"TC: {self._aid_status('VM_TRACTION_CONTROL')}")
+                f"TC: {self._aid_status('VM_TRACTION_CONTROL')}{pos_txt}")
 
     def list_recent_laps(self, limit=10):
         if not (self.track and self.car):
@@ -868,12 +892,15 @@ class CoachContext:
             label = label_by_id.get(r["lap_id"]) or (
                 f"lap {r['lap_id']}" + (f" [{r['phase']}]" if r["phase"] else "")
             )
+            # #134: race-phase position, appended when the column is set.
+            pos = (f" P{r['position']}" if r.get("phase") == "race"
+                   and r.get("position") is not None else "")
             # A partial lap keeps its NUMBER (that is why it is stored) but has no
             # time to print and is not "INVALID" -- it is unfinished (#77).
             if r.get("partial"):
-                out.append(f"{label}: {_PARTIAL_LIST_WORD[r['partial']]} (no time)")
+                out.append(f"{label}: {_PARTIAL_LIST_WORD[r['partial']]} (no time){pos}")
             else:
-                out.append(f"{label}: {format_laptime(r['lap_time'])} {valid}")
+                out.append(f"{label}: {format_laptime(r['lap_time'])} {valid}{pos}")
         return "\n".join(out)
 
     def get_lap_summary(self, which="latest"):

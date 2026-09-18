@@ -272,6 +272,60 @@ def test_recent_laps_use_in_session_phase_numbering(tmp_path, synthetic_lap):
     assert ctx._resolve_lap("2")[1] == ids[3]  # bare number -> current (race) phase
 
 
+def test_race_position_in_recent_laps_lap_line_and_status(tmp_path, synthetic_lap):
+    # #134: P8 -> P25 -> P20 -> P11 (a lap-2 spin, then a recovery) must surface in
+    # list_recent_laps, the Lap: identity line, and get_session_status -- all read
+    # from the stored `laps.position` column, no LLM guess.
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    positions = [8, 25, 20, 11]
+    ids = [store.save(LapRecord(**{**synthetic_lap.__dict__,
+                                   "session_id": "s1", "phase": "race",
+                                   "timestamp": float(i + 1), "lap_no": i + 1,
+                                   "position": p}))
+           for i, p in enumerate(positions)]
+    ctx = CoachContext(
+        store,
+        record=LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1", "phase": "race"}),
+        lap_id=ids[-1], session_id="s1", cmap=cmap,
+        track=synthetic_lap.track, car=synthetic_lap.car,
+    )
+
+    listing = ctx.list_recent_laps()
+    for label, pos in zip(("race lap 1", "race lap 2", "race lap 3", "race lap 4"), positions):
+        line = next(l for l in listing.splitlines() if l.startswith(label + ":"))
+        assert line.endswith(f"P{pos}"), line
+
+    # The spin's cost: lap 3 (P20) shown against the previous race lap's position (P25).
+    lap_line = ctx.get_lap_summary("race lap 3").splitlines()[0]
+    assert "position P20 (from P25)" in lap_line
+
+    status = ctx.get_session_status()
+    assert "Position: P11 (started P8, low P25)" in status
+
+
+def test_practice_session_shows_no_position(tmp_path, synthetic_lap):
+    # A position value stored on a non-race lap must never surface -- position is
+    # only meaningful (and only asked about) during a race.
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    lap_id = store.save(LapRecord(**{**synthetic_lap.__dict__,
+                                     "session_id": "s1", "phase": "practice",
+                                     "timestamp": 1.0, "lap_no": 1, "position": 5}))
+    ctx = CoachContext(
+        store,
+        record=LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1", "phase": "practice"}),
+        lap_id=lap_id, session_id="s1", cmap=cmap,
+        track=synthetic_lap.track, car=synthetic_lap.car,
+    )
+
+    assert "P5" not in ctx.list_recent_laps()
+    assert "position P" not in ctx.get_lap_summary("practice lap 1")
+    assert "Position:" not in ctx.get_session_status()
+
+
 def test_lap_numbering_matches_ui_contiguous_phase_grouping(tmp_path, synthetic_lap):
     # Issue #34: the UI (LapList.svelte) groups laps into a NEW block -- restarting
     # "Lap 1" -- every time the phase value changes, even if that same phase

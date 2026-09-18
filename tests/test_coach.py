@@ -288,3 +288,12 @@ def test_system_prompt_never_asks_permission_to_call_a_tool():
     the coach must call it and answer instead of asking permission."""
     from simcoach.coach import AGENTIC_SYSTEM_PROMPT
     assert "Never ask permission to call a tool" in AGENTIC_SYSTEM_PROMPT
+
+
+def test_system_prompt_notes_position_changes_never_gaps_or_traffic():
+    """#134: a race lap call may note a position change when it matters, but must
+    never invent gaps or traffic -- neither is measured."""
+    from simcoach.coach import AGENTIC_SYSTEM_PROMPT
+    racecraft = AGENTIC_SYSTEM_PROMPT.split("RACECRAFT:", 1)[1][:600]
+    assert "position change" in racecraft
+    assert "never state gaps or traffic" in racecraft
