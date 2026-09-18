@@ -904,7 +904,7 @@ class LapStore:
             # model ("BMW M4 LMGT3") while laps are stored under the raw entry name, so
             # matching on car would wrongly return nothing (matches the UI, which
             # scopes by session_id).
-            cols = "SELECT id, lap_time, valid, phase, partial, position FROM laps WHERE "
+            cols = "SELECT id, lap_time, valid, phase, partial, position, pit FROM laps WHERE "
             if session_id is not None:
                 query = cols + "session_id = ?"
                 params: list = [session_id]
@@ -916,8 +916,11 @@ class LapStore:
             query += " ORDER BY id DESC LIMIT ?"
             params.append(limit)
             rows = self.conn.execute(query, params).fetchall()
-            keys = ("lap_id", "lap_time", "valid", "phase", "partial", "position")
-            return [dict(zip(keys, r)) for r in rows]
+            keys = ("lap_id", "lap_time", "valid", "phase", "partial", "position", "pit")
+            out = [dict(zip(keys, r)) for r in rows]
+            for d in out:
+                d["pit"] = None if d["pit"] is None else bool(d["pit"])
+            return out
 
     def split_merged_sessions(self) -> dict:
         """One-time migration: split deterministic sessions that merged multiple

@@ -635,6 +635,11 @@ class CoachContext:
         # looked up from session_laps rather than `record` (store.load() doesn't
         # thread position onto LapRecord).
         tail_bits = [kind] if kind else []
+        # #138: a pit-stop lap's time and corner deltas are the stop, not the
+        # driving -- flag it right in the identity line so the model doesn't
+        # read a stint-ending outlier as damage or a spin.
+        if record.pit:
+            tail_bits.append("pit stop this lap")
         if record.phase == "race" and lap_id is not None and self.session_id:
             sess_laps = self.store.session_laps(self.session_id)
             idx = next((i for i, r in enumerate(sess_laps) if r["id"] == lap_id), None)
@@ -895,12 +900,13 @@ class CoachContext:
             # #134: race-phase position, appended when the column is set.
             pos = (f" P{r['position']}" if r.get("phase") == "race"
                    and r.get("position") is not None else "")
+            pit = " (pit)" if r.get("pit") else ""
             # A partial lap keeps its NUMBER (that is why it is stored) but has no
             # time to print and is not "INVALID" -- it is unfinished (#77).
             if r.get("partial"):
-                out.append(f"{label}: {_PARTIAL_LIST_WORD[r['partial']]} (no time){pos}")
+                out.append(f"{label}: {_PARTIAL_LIST_WORD[r['partial']]} (no time){pos}{pit}")
             else:
-                out.append(f"{label}: {format_laptime(r['lap_time'])} {valid}{pos}")
+                out.append(f"{label}: {format_laptime(r['lap_time'])} {valid}{pos}{pit}")
         return "\n".join(out)
 
     def get_lap_summary(self, which="latest"):

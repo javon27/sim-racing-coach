@@ -1807,3 +1807,36 @@ def test_session_status_names_the_latest_lap_and_labels_counts_as_counts(tmp_pat
     assert "Latest stored lap: practice lap 5 (partial)" in out
     assert "Complete laps (this practice: 1" in out
     assert "Other laps this session (out/in/partial): 3" in out
+
+
+def test_pit_lap_flagged_in_lap_line_and_recent_laps(tmp_path, synthetic_lap):
+    """#138: a pit-stop lap's time/deltas are the stop, not the driving -- both the
+    `Lap: …` identity line and the recent-laps list must say so, and a normal lap
+    must not."""
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    base = dict(synthetic_lap.__dict__, session_id="s1", phase="race")
+    pit_id = store.save(LapRecord(**{**base, "lap_time": 140.0, "lap_no": 4,
+                                     "timestamp": 10.0, "pit": True}))
+    clean_id = store.save(LapRecord(**{**base, "lap_time": 95.0, "lap_no": 5,
+                                       "timestamp": 20.0, "pit": False}))
+    ctx = CoachContext(store, cmap=cmap, track=synthetic_lap.track, car=synthetic_lap.car,
+                       session_id="s1", on_track=True)
+
+    pit_record, _ = ctx._resolve_lap("race lap 4")
+    clean_record, _ = ctx._resolve_lap("race lap 5")
+    assert "pit stop this lap" in ctx._lap_line(pit_record, pit_id)
+    assert "pit stop this lap" not in ctx._lap_line(clean_record, clean_id)
+
+    listing = ctx.list_recent_laps()
+    pit_line = next(l for l in listing.splitlines() if l.startswith("race lap 4:"))
+    clean_line = next(l for l in listing.splitlines() if l.startswith("race lap 5:"))
+    assert pit_line.endswith("(pit)")
+    assert not clean_line.endswith("(pit)")
+
+
+def test_lap_identity_prompt_explains_the_pit_flag():
+    from simcoach.coach import AGENTIC_SYSTEM_PROMPT
+    assert "pit stop this lap" in AGENTIC_SYSTEM_PROMPT
+    assert "not a pace lap" in AGENTIC_SYSTEM_PROMPT
