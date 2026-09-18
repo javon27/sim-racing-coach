@@ -776,6 +776,34 @@ describe("ChatPanel", () => {
     delete (navigator as { mediaDevices?: unknown }).mediaDevices;
   });
 
+  // #125: a cancel used to be treated as a runtime failure and showed the same
+  // wrong "isn't installed" notice a build-time missing-install shows. A real
+  // runtime failure (e.g. a non-OK /voice/speak response) must say "failed" instead.
+  it("a runtime Kokoro failure shows 'failed' wording, not 'isn't installed'", async () => {
+    Object.defineProperty(navigator, "mediaDevices", { value: {}, configurable: true });
+    vi.mocked(getSettings).mockResolvedValue({
+      show_cost: true, voice: kokoroVoiceSettings("kokoro"),
+    } as unknown as SettingsResponse);
+    vi.mocked(kokoroStatus).mockResolvedValue({
+      engine: "kokoro", installed: true, installing: false, progress_bytes: 0, total_bytes: null, error: null,
+      voices: ["af_heart"],
+    });
+    vi.mocked(getChatMessages).mockResolvedValue([{ question: "q1", answer: "A1", ...rowDefaults }]);
+    const fetchMock = vi.fn(async () => ({ ok: false, json: async () => ({ detail: "couldn't synthesise speech" }) }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(ChatPanel, { props: { stream: new FakeStream(), chatId: "c1" } });
+
+    const play = await screen.findByRole("button", { name: "Read aloud" });
+    await fireEvent.click(play);
+
+    expect(await screen.findByText(/Kokoro voice failed/i)).toBeTruthy();
+    expect(screen.queryByText(/isn't installed/i)).toBeNull();
+
+    vi.unstubAllGlobals();
+    delete (navigator as { mediaDevices?: unknown }).mediaDevices;
+  });
+
   function statusFrame(track: string | null) {
     return {
       track, car: null, on_track: false, activity: null, has_map: false,

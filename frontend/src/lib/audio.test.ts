@@ -108,6 +108,56 @@ describe("KokoroSpeaker", () => {
     expect(onUnavailable).toHaveBeenCalledTimes(1);
     expect(onUnavailable).toHaveBeenCalledWith("Kokoro voice isn't installed");
   });
+
+  // #125: cancel() aborts the in-flight fetch -- that's a cancel, not an engine
+  // failure, and must never trigger the "not installed" fallback.
+  it("cancel() during an in-flight fetch does not report onUnavailable", async () => {
+    const { ctx } = fakeAudio();
+    // Matches real fetch: an aborted request rejects with an object named "AbortError".
+    const fetchWav = vi.fn((_t: string, _o: unknown, signal: AbortSignal) => new Promise<ArrayBuffer>((_resolve, reject) => {
+      signal.addEventListener("abort", () => {
+        const e = new Error("The operation was aborted.");
+        (e as Error & { name: string }).name = "AbortError";
+        reject(e);
+      });
+    }));
+    const sp = new KokoroSpeaker({ fetchWav, audio: ctx });
+    const onUnavailable = vi.fn(); sp.onUnavailable = onUnavailable;
+    const done = sp.speak("hello");
+    await Promise.resolve();
+    sp.cancel();
+    await done;
+    await new Promise((r) => setTimeout(r, 0));   // let the aborted fetch's rejection settle
+    expect(onUnavailable).not.toHaveBeenCalled();
+  });
+
+  // Regression guard for the real fallback: a genuine fetch failure (non-OK
+  // response / network error) must still demote to Windows voices.
+  it("a non-abort fetch rejection still reports onUnavailable exactly once", async () => {
+    const { ctx } = fakeAudio();
+    const fetchWav = vi.fn(() => Promise.reject(new Error("couldn't synthesise speech")));
+    const sp = new KokoroSpeaker({ fetchWav, audio: ctx });
+    const onUnavailable = vi.fn(); sp.onUnavailable = onUnavailable;
+    await sp.speak("a");
+    expect(onUnavailable).toHaveBeenCalledTimes(1);
+    expect(onUnavailable).toHaveBeenCalledWith("couldn't synthesise speech");
+  });
+
+  it("a decodeAudioData rejection skips that sentence and continues with the next, without calling onUnavailable", async () => {
+    const { ctx, sources } = fakeAudio();
+    (ctx.decodeAudioData as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => { throw new Error("bad wav"); });
+    const fetchWav = vi.fn(async () => wav(10));
+    const sp = new KokoroSpeaker({ fetchWav, audio: ctx });
+    const onUnavailable = vi.fn(); sp.onUnavailable = onUnavailable;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    sp.enqueue("bad one"); sp.enqueue("good one");
+    await vi.waitFor(() => expect(sources.length).toBe(1));   // only "good one" ever played
+    sources[0].stop();
+    await sp.idle();
+    expect(fetchWav).toHaveBeenCalledTimes(2);
+    expect(onUnavailable).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
 });
 
 describe("makeSpeaker", () => {

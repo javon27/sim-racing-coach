@@ -8,6 +8,7 @@
   import { eventFeed } from "./events";
 
   const KOKORO_FALLBACK_NOTICE = "Kokoro voice isn't installed — using Windows voices";
+  const KOKORO_RUNTIME_FAILURE_NOTICE = "Kokoro voice failed — using Windows voices until reload";
 
   let {
     sessionId,
@@ -177,8 +178,8 @@
       const ks = v.tts_engine === "kokoro" ? await kokoroStatus().catch(() => null) : null;
       const installed = !!ks?.installed;
       voiceNotice = v.tts_engine === "kokoro" && !installed ? KOKORO_FALLBACK_NOTICE : null;
-      const speaker = makeSpeaker(v, installed, () => {
-        voiceNotice = KOKORO_FALLBACK_NOTICE;
+      const speaker = makeSpeaker(v, installed, (reason) => {
+        voiceNotice = reason.length <= 80 ? `${KOKORO_RUNTIME_FAILURE_NOTICE} (${reason})` : KOKORO_RUNTIME_FAILURE_NOTICE;
         rebuildWithWindows();
       });
       if (speaker instanceof KokoroSpeaker) speaker.trackSlug = eventFeed.status.value?.track ?? null;

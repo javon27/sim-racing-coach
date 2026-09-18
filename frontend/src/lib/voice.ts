@@ -149,8 +149,14 @@ export class VoiceLoop {
     return () => this.#listeners.delete(run);
   }
   /** Swap the active speaker in place (e.g. a failed Kokoro fetch falling back to
-   *  Windows TTS mid-session) without tearing down the rest of the loop. */
-  setSpeaker(s: Speaker): void { this.#o = { ...this.#o, speaker: s }; }
+   *  Windows TTS mid-session) without tearing down the rest of the loop. Cancels
+   *  the old speaker so it can't keep playing/queuing as an orphan, unreachable
+   *  from stop/barge-in/▶ from now on. */
+  setSpeaker(s: Speaker): void {
+    const old = this.#o.speaker;
+    this.#o = { ...this.#o, speaker: s };
+    if (old !== s) old.cancel();
+  }
   /** The active speaker (e.g. so a host can keep a KokoroSpeaker's trackSlug live
    *  as the driver's track changes, without holding its own separate reference). */
   get speaker(): Speaker { return this.#o.speaker; }

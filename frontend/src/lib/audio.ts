@@ -104,6 +104,12 @@ export class HttpTranscriber implements Transcriber {
 
 const EARCON_HZ: Record<Earcon, number> = { "listen-start": 880, "listen-end": 660, error: 220 };
 
+// fetch() rejects an aborted request with a DOMException named "AbortError" --
+// jsdom/vitest mocks may reject with a plain object of the same shape instead.
+function isAbortError(e: unknown): boolean {
+  return typeof e === "object" && e !== null && (e as { name?: string }).name === "AbortError";
+}
+
 // Shared by both speakers -- SynthSpeaker keeps its own lazy AudioContext, KokoroSpeaker
 // reuses the one it already opened for playback.
 export function playEarcon(ctx: AudioContext, kind: Earcon): void {
@@ -249,11 +255,28 @@ export class KokoroSpeaker implements Speaker {
     if (this.#ahead || !this.#queue.length) return;
     const item = this.#queue.shift()!;
     const abort = new AbortController();
-    const buffer = this.#fetchWav(item.text, { voice: this.voice, speed: this.rate, trackSlug: this.trackSlug ?? undefined }, abort.signal)
-      .then((bytes) => this.#audio().decodeAudioData(bytes))
-      .catch((e: unknown) => { this.#fail(e); return null; });
+    const bytes = this.#fetchWav(item.text, { voice: this.voice, speed: this.rate, trackSlug: this.trackSlug ?? undefined }, abort.signal)
+      .catch((e: unknown) => {
+        // cancel() aborting this fetch is not an engine failure -- only a non-OK
+        // response (api.speak throws) or a network error should fall back to Windows.
+        if (isAbortError(e)) return null;
+        this.#fail(e);
+        return null;
+      });
+    const buffer = bytes.then((b) => (b ? this.#decode(b) : null));
     this.#ahead = { buffer, resolve: item.resolve, abort };
     void this.#play();
+  }
+  // A bad/empty WAV for one sentence (e.g. an all-OOV sentence, #118) isn't an
+  // engine failure -- skip just that sentence. Getting/creating the AudioContext
+  // itself failing IS an engine failure (no Web Audio support), same as before.
+  #decode(bytes: ArrayBuffer): Promise<AudioBuffer | null> {
+    let ctx: AudioContext;
+    try { ctx = this.#audio(); } catch (e) { this.#fail(e); return Promise.resolve(null); }
+    return ctx.decodeAudioData(bytes).catch((e: unknown) => {
+      console.warn("Kokoro: couldn't decode synthesised audio, skipping sentence", e);
+      return null;
+    });
   }
   async #play(): Promise<void> {
     const ahead = this.#ahead!;

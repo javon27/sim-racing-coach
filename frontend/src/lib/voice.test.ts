@@ -426,3 +426,20 @@ describe("speakMessage (▶)", () => {
     expect(loop.speakingMessage).toBe(null); expect(loop.state).toBe("listening");
   });
 });
+
+// #125: a swap must never orphan the old speaker -- it has to be cancelled so
+// nothing it's still playing/queued is left unreachable from stop/barge-in/▶.
+describe("setSpeaker", () => {
+  it("cancels the speaker it replaces", () => {
+    const { loop, speaker } = make();
+    const next = new FakeSpeaker();
+    loop.setSpeaker(next);
+    expect(speaker.cancels).toBe(1);
+  });
+
+  it("does not cancel when set to the speaker it already has", () => {
+    const { loop, speaker } = make();
+    loop.setSpeaker(speaker);
+    expect(speaker.cancels).toBe(0);
+  });
+});
