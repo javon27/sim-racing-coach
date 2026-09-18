@@ -582,6 +582,7 @@ class CoachContext:
         self._analysis_cache: dict = {}
         self._lap_numbering_cache: tuple[dict, dict] | None = None
         self._current_lap_cache: tuple | None = None
+        self._newest_lap_cache: tuple | None = None
         # #136: this session's races (store.race_windows), loaded once per turn.
         self._race_windows_cache: list[dict] | None = None
         # #38 P1.4: grip envelope, computed once per context (see `_grip_envelope`).
@@ -621,6 +622,48 @@ class CoachContext:
                     found = (None, None)
         self._current_lap_cache = found
         return found
+
+    def _newest_lap_any_kind(self) -> tuple:
+        """(record, lap_id) for the newest stored lap of ANY kind -- out/in/partial
+        included -- for this track/car/session. Issue #128: the cockpit electronics
+        (TC/ABS/brake bias) a driver changes mid-stint are live in the shared-memory
+        channels, but #77's `_current_lap()` only ever sees the latest COMPLETE lap,
+        so a change made on an in-lap or a spin stayed invisible until the next timed
+        lap. `get_setup`'s live dial read uses this instead; every analytical read
+        (corners, grip envelope, wear) keeps `_current_lap()`."""
+        if self._newest_lap_cache is not None:
+            return self._newest_lap_cache
+        found = (None, None)
+        if self.track and self.car:
+            rows = self.store.recent_laps(self.track, self.car, 1,
+                                          session_id=self.session_id, complete_only=False)
+            if rows:
+                lid = rows[0]["lap_id"]
+                try:
+                    found = (self.store.load(lid), lid)
+                except Exception:
+                    found = (None, None)
+        self._newest_lap_cache = found
+        return found
+
+    def _lap_kind_label(self, record, lap_id) -> str:
+        """'practice lap 6 (in-lap)' -- the in-session label (#77 numbering) plus
+        the out/in/partial tag, shared by `_lap_line` and the live-electronics note."""
+        label_by_id, _ = self._lap_numbering()
+        label = label_by_id.get(lap_id) if lap_id is not None else None
+        label = label or ("this lap" if lap_id is None else f"lap id {lap_id}")
+        kind = _PARTIAL_WORD.get(record.partial, "")
+        return f"{label} ({kind})" if kind else label
+
+    def _live_lap_note(self, record, lap_id) -> str:
+        """'Live values from the last sample of practice lap 6 (in-lap), 20:51:16.'
+        -- issue #128: names which stored lap the cockpit dials above came from,
+        so a live read is never mistaken for the latest COMPLETE lap's telemetry."""
+        when = (time.strftime("%H:%M:%S", time.localtime(record.timestamp))
+                if record.timestamp else "")
+        tail = f", {when}" if when else ""
+        return f"Live values from the last sample of {self._lap_kind_label(record, lap_id)}{tail}."
+
     def _race_windows(self) -> list[dict]:
         """This session's races, oldest first (store.race_windows), cached per turn.
         Empty when there is no session or no race lap."""
@@ -1483,14 +1526,30 @@ class CoachContext:
     def get_setup(self):
         if not self.setup:
             return "No setup data available (REST unavailable or open setup)."
-        record, _ = self._current_lap()
+        # #128: the live cockpit dials read from the newest stored lap of ANY kind
+        # (out/in/partial included), not the latest COMPLETE lap (#77) -- a TC/ABS/
+        # brake-bias change made mid-stint must be visible before the next timed lap.
+        record, lap_id = self._newest_lap_any_kind()
         live = live_electronics(record.channels) if record is not None else {}
+        live_note = self._live_lap_note(record, lap_id) if live else ""
+        if record is not None and not live:
+            # This lap's electronics block never populated (Max == 0) -- fall back
+            # to the newest COMPLETE lap rather than silently going quiet or
+            # claiming a live read off a lap that never captured one.
+            fb_record, fb_lap_id = self._current_lap()
+            if fb_record is not None and fb_lap_id != lap_id:
+                fb_live = live_electronics(fb_record.channels)
+                if fb_live:
+                    live = fb_live
+                    live_note = (self._live_lap_note(fb_record, fb_lap_id)
+                                 + f" ({self._lap_kind_label(record, lap_id)} had no "
+                                   "electronics captured.)")
         lines = _setup_lines(self.setup, live)
         if not lines:
             return "No adjustable setup parameters exposed for this car."
         out = "Current setup:\n" + "\n".join(lines)
         if live:
-            out += "\nLive values are from the latest captured lap."
+            out += "\n" + live_note
         if self.allowed_adjustments is not None:
             out += "\nLegal to change this tier: " + ", ".join(self.allowed_adjustments)
         # #108 item 6: electronics map direction -- from the car notes when

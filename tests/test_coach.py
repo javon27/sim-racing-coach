@@ -136,6 +136,16 @@ def test_system_prompts_tell_the_coach_to_flag_not_assert_electronics():
     assert "live on-track" in prompt
 
 
+def test_system_prompt_says_electronics_come_from_the_newest_stored_lap():
+    """Issue #128: the live cockpit dials come from the last sample of the newest
+    stored lap of ANY kind, not "the latest captured lap" (which read, before the
+    fix, as the latest COMPLETE lap and left a mid-stint change invisible)."""
+    from simcoach.coach import AGENTIC_SYSTEM_PROMPT
+    section = AGENTIC_SYSTEM_PROMPT.split("COCKPIT ELECTRONICS:", 1)[1][:300]
+    assert "last sample of the newest stored lap" in section
+    assert "partial laps included" in section
+
+
 def test_live_electronics_reads_last_finite_sample():
     """Issue #33: the coach must read the driver's LIVE on-track dial state from the
     latest lap's telemetry, not the (possibly stale) garage value. Values are chosen

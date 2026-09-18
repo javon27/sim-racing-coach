@@ -962,7 +962,8 @@ def test_get_setup_surfaces_live_electronics_over_garage(tmp_path, synthetic_lap
     assert "Tractioncontrolmap: 3 of 0-11 [live on-track; garage 6]" in out
     assert "step 6" not in out.split("Tractioncontrolmap")[1].split("\n")[0]
     assert "Brake Balance: 50.5:49.5 [live on-track; garage 51.5:48.5]" in out
-    assert "Live values are from the latest captured lap." in out
+    # #128: no session, so no in-session label -- falls back to the bare lap id.
+    assert re.search(r"Live values from the last sample of lap id \d+\.", out)
     assert "Rear Wing: 6.5 deg (step 6 of 0-9)" in out
 
     store = ctx.store
@@ -972,6 +973,91 @@ def test_get_setup_surfaces_live_electronics_over_garage(tmp_path, synthetic_lap
     })
     last = CoachContext(store, track=synthetic_lap.track, car=synthetic_lap.car).get_last_setup()
     assert "live on-track" not in last
+
+
+def _electronics_session(tmp_path, synthetic_lap, laps):
+    """A practice session of stored laps, each `(kind, tc_index, tc_max, ts)` --
+    kind None for a complete lap, else 'out'/'in'/'partial'. tc_max None leaves
+    the TC channel unpopulated (never captured this lap). Returns (store, ids)."""
+    import dataclasses
+
+    import numpy as np
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    n = len(synthetic_lap.channels["lap_distance"])
+    ids = []
+    for i, (kind, tc, tc_max, ts) in enumerate(laps, start=1):
+        ch = {**synthetic_lap.channels,
+              "tc_map": np.full(n, np.nan), "tc_map_max": np.full(n, np.nan)}
+        if tc_max is not None:
+            ch["tc_map"][-1] = tc
+            ch["tc_map_max"][-1] = tc_max
+        lap = dataclasses.replace(synthetic_lap, channels=ch, session_id="s1",
+                                  phase="practice", partial=kind,
+                                  valid=kind is None, lap_time=None if kind else 90.0,
+                                  lap_no=i, timestamp=ts)
+        ids.append(store.save(lap))
+    return store, ids
+
+
+def test_get_setup_live_electronics_from_newest_lap_of_any_kind(tmp_path, synthetic_lap):
+    """Issue #128: a complete lap at TC 5 followed by a later in-lap whose last
+    sample is TC 10 -- get_setup must report 10 (the newest stored lap of any
+    kind), naming the in-lap, not stay pinned to the last complete lap's TC 5."""
+    store, _ids = _electronics_session(tmp_path, synthetic_lap, [
+        (None, 5, 11, 100.0),
+        (None, 5, 11, 200.0),
+        ("in", 10, 11, 20.51 * 3600),  # 20:51:00 local -- distinguishable timestamp
+    ])
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    ctx = CoachContext(store, cmap=cmap, track=synthetic_lap.track, car=synthetic_lap.car,
+                       session_id="s1", on_track=True)
+    ctx.setup = {
+        "VM_TRACTIONCONTROLMAP": {"stringValue": "6", "value": 6, "isFreeSetting": True,
+                                  "minValue": 0, "maxValue": 11},
+    }
+    out = ctx.get_setup()
+    assert "Tractioncontrolmap: 10 of 0-11 [live on-track; garage 6]" in out
+    assert "practice lap 3 (in-lap)" in out
+    assert "Live values from the last sample of practice lap 3 (in-lap)" in out
+
+
+def test_get_setup_live_electronics_unchanged_with_only_a_complete_lap(tmp_path, synthetic_lap):
+    """No in-lap yet -- behaviour matches before #128: the one complete lap's TC 5."""
+    store, _ids = _electronics_session(tmp_path, synthetic_lap, [
+        (None, 5, 11, 100.0),
+    ])
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    ctx = CoachContext(store, cmap=cmap, track=synthetic_lap.track, car=synthetic_lap.car,
+                       session_id="s1", on_track=True)
+    ctx.setup = {
+        "VM_TRACTIONCONTROLMAP": {"stringValue": "6", "value": 6, "isFreeSetting": True,
+                                  "minValue": 0, "maxValue": 11},
+    }
+    out = ctx.get_setup()
+    assert "Tractioncontrolmap: 5 of 0-11 [live on-track; garage 6]" in out
+    assert "practice lap 1" in out
+
+
+def test_get_setup_falls_back_to_complete_lap_when_newest_lap_has_no_electronics(
+        tmp_path, synthetic_lap):
+    """The newest lap (an in-lap) never populated the TC block (Max == 0, i.e.
+    unset here) -- get_setup must fall back to the newest COMPLETE lap rather
+    than go quiet or silently report stale garage values, and say so."""
+    store, _ids = _electronics_session(tmp_path, synthetic_lap, [
+        (None, 5, 11, 100.0),
+        ("in", None, None, 200.0),   # TC channel never populated this lap
+    ])
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    ctx = CoachContext(store, cmap=cmap, track=synthetic_lap.track, car=synthetic_lap.car,
+                       session_id="s1", on_track=True)
+    ctx.setup = {
+        "VM_TRACTIONCONTROLMAP": {"stringValue": "6", "value": 6, "isFreeSetting": True,
+                                  "minValue": 0, "maxValue": 11},
+    }
+    out = ctx.get_setup()
+    assert "Tractioncontrolmap: 5 of 0-11 [live on-track; garage 6]" in out
+    assert "Live values from the last sample of practice lap 1" in out
+    assert "practice lap 2 (in-lap) had no electronics captured." in out
 
 
 def test_get_setup_omits_step_without_ordinal(tmp_path, synthetic_lap):
