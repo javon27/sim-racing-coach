@@ -268,3 +268,23 @@ def test_system_prompt_flags_electronics_direction_as_unknown_by_default():
     from simcoach.coach import AGENTIC_SYSTEM_PROMPT
     assert "ELECTRONICS DIRECTION" in AGENTIC_SYSTEM_PROMPT
     assert "get_setup" in AGENTIC_SYSTEM_PROMPT.split("ELECTRONICS DIRECTION", 1)[1][:200]
+
+
+def test_system_prompt_resolves_that_lap_to_the_fresh_lap():
+    """#131: when a NEW SINCE YOUR LAST ANSWER fact is present, 'that'/'that lap'/
+    'how was that'/'the last one' must resolve to it without a clarifying question."""
+    from simcoach.coach import AGENTIC_SYSTEM_PROMPT
+    assert "REFERENCES:" in AGENTIC_SYSTEM_PROMPT
+    refs = AGENTIC_SYSTEM_PROMPT.split("REFERENCES:", 1)[1][:400]
+    assert "NEW SINCE YOUR LAST ANSWER" in refs
+    assert "that lap" in refs
+    assert "how was that" in refs
+    assert "the last one" in refs
+    assert "do not ask which" in refs
+
+
+def test_system_prompt_never_asks_permission_to_call_a_tool():
+    """#131: 'want me to check X?' wastes a turn when the tool could just answer --
+    the coach must call it and answer instead of asking permission."""
+    from simcoach.coach import AGENTIC_SYSTEM_PROMPT
+    assert "Never ask permission to call a tool" in AGENTIC_SYSTEM_PROMPT

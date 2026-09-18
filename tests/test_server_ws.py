@@ -184,6 +184,66 @@ def test_ws_coach_injects_concise_driver_profile(tmp_path, monkeypatch):
     assert "Locks the rears at Turn 3" not in model.last_system
 
 
+def test_ws_coach_new_since_last_turn_when_a_race_lap_landed_after_it(tmp_path):
+    # #131: a lap stored AFTER the chat's last turn must surface as a "NEW SINCE
+    # YOUR LAST ANSWER" fact so "how was that" resolves without a clarifying
+    # question -- computed from stored timestamps, no LLM guess.
+    import time as time_mod
+
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    now = time_mod.time()
+    old = LapRecord("lmu", "test_track", "test_car", 95.0, True, now - 3600,
+                    {"lap_distance": [0.0]}, phase="race", session_id="s1", lap_no=1)
+    old_id = store.save(old)
+    cid = store.create_chat()
+    store.save_chat(cid, "s1", "test_track", "test_car", old_id, "how was lap 1?",
+                    "Solid, on pace.", ts=now - 200)
+    fresh = LapRecord("lmu", "test_track", "test_car", 91.0, True, now - 14,
+                      {"lap_distance": [0.0]}, phase="race", session_id="s1", lap_no=2)
+    store.save(fresh)
+
+    model = FakeModel(reply="Nice lap.")
+    app = create_app(store, Coach(model))
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "how was that?", "session_id": "s1", "chat_id": cid})
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"): break
+
+    assert "NEW SINCE YOUR LAST ANSWER: race lap 2" in model.last_system
+    assert "1:31.000" in model.last_system
+
+
+def test_ws_coach_no_new_since_last_turn_when_nothing_landed(tmp_path):
+    # Same chat, but no lap since the last turn -- the fact line must be absent.
+    import time as time_mod
+
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    now = time_mod.time()
+    old = LapRecord("lmu", "test_track", "test_car", 95.0, True, now - 3600,
+                    {"lap_distance": [0.0]}, phase="race", session_id="s1", lap_no=1)
+    old_id = store.save(old)
+    cid = store.create_chat()
+    store.save_chat(cid, "s1", "test_track", "test_car", old_id, "how was lap 1?",
+                    "Solid, on pace.", ts=now - 5)   # chat happened AFTER the only lap
+
+    model = FakeModel(reply="Not sure which lap.")
+    app = create_app(store, Coach(model))
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "how was that?", "session_id": "s1", "chat_id": cid})
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"): break
+
+    # The static prompt RULE mentions the phrase; only the injected FACT (with the
+    # colon) proves the line was actually added.
+    assert "NEW SINCE YOUR LAST ANSWER:" not in model.last_system
+
+
 class _DeltaModel:
     """Fake model that yields the answer as multiple text deltas, like the real
     ClaudeModel.run_stream token-streaming — regression test for the worker's

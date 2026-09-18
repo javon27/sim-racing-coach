@@ -183,7 +183,9 @@ AGENTIC_SYSTEM_PROMPT = (
     "get_tire_report; brakes/pressures/wear → get_wheel_report; fuel or energy saving → "
     "get_energy_report. Don't dump a full lap breakdown for a narrow question. If a tool "
     "says no lap/data is captured yet, coach from general knowledge and say you'll have "
-    "specifics once there's a lap.\n\n"
+    "specifics once there's a lap. Never ask permission to call a tool: if a tool would "
+    "answer the question, or the follow-up you're about to offer ('want me to check the "
+    "incident log?'), call it now and answer.\n\n"
     "When saying how far into a race or qualy the driver is, use the CURRENT-PHASE lap "
     "count (get_session_status reports 'this <phase>: N'), never the session total, which "
     "includes other phases.\n\n"
@@ -195,6 +197,10 @@ AGENTIC_SYSTEM_PROMPT = (
     "which lap it came from ('on race lap 3 …'). If a later answer reads a NEWER lap than an "
     "earlier one, say so ('that was lap 3; lap 4 now shows …') instead of contradicting "
     "yourself.\n\n"
+    "REFERENCES: when a NEW SINCE YOUR LAST ANSWER line is present, 'that', 'that lap', "
+    "'how was that', and 'the last one' refer to that lap — call get_lap_summary on it, "
+    "do not ask which. Ask which lap only when no new lap has landed AND the conversation "
+    "names more than one candidate.\n\n"
     "RACECRAFT: for a question about the race or how it went, call get_race_result. When it "
     "returns a result, LEAD with the race story — positions gained or lost, the incidents "
     "and penalties, the recovery arc — and treat lap-time and corner analysis as supporting "
@@ -327,9 +333,13 @@ class Coach:
         self.model = model
 
     @staticmethod
-    def _augment_system(system, allowed_adjustments, driver_profile, input_device):
+    def _augment_system(system, allowed_adjustments, driver_profile, input_device,
+                        new_since_last_turn=None):
         """Shared system-prompt additions (tier constraint, driver profile, input
-        device) used by both agentic paths (`ask_agentic`, `ask_agentic_stream`)."""
+        device, #131 fresh-lap fact) used by both agentic paths (`ask_agentic`,
+        `ask_agentic_stream`)."""
+        if new_since_last_turn:
+            system += f" NEW SINCE YOUR LAST ANSWER: {new_since_last_turn}"
         if allowed_adjustments is not None:
             system += (
                 f" SETUP CONSTRAINT: in this race only these adjustments are legal — "
@@ -361,6 +371,7 @@ class Coach:
         driver_profile: DriverProfile | None = None,
         input_device: str | None = None,
         units: str = "metric",
+        new_since_last_turn: str | None = None,
     ):
         """Answer via the on-demand tool loop: the model fetches exactly the data the
         question needs through `context`'s tools instead of receiving the whole lap.
@@ -371,7 +382,7 @@ class Coach:
         _, _, spd_u, temp_u = unit_fns(units)
         system = self._augment_system(
             AGENTIC_SYSTEM_PROMPT.format(car=car, speed_unit=spd_u, temp_unit=temp_u),
-            context.allowed_adjustments, driver_profile, input_device,
+            context.allowed_adjustments, driver_profile, input_device, new_since_last_turn,
         )
         messages = list(history) if history else []
         messages.append({"role": "user", "content": question})
@@ -387,6 +398,7 @@ class Coach:
         input_device: str | None = None,
         units: str = "metric",
         voice: str | None = None,
+        new_since_last_turn: str | None = None,
     ):
         """Like `ask_agentic`, but yields tool/text events as they occur instead of
         returning a final string. Does not persist or emit done/error — the caller does."""
@@ -394,7 +406,7 @@ class Coach:
         _, _, spd_u, temp_u = unit_fns(units)
         system = self._augment_system(
             AGENTIC_SYSTEM_PROMPT.format(car=car, speed_unit=spd_u, temp_unit=temp_u),
-            context.allowed_adjustments, driver_profile, input_device,
+            context.allowed_adjustments, driver_profile, input_device, new_since_last_turn,
         )
         if voice == "ptt":
             system += " " + SPOKEN_SENTENCE

@@ -35,9 +35,10 @@ from ..analysis import (
 from ..car_lookup import resolve_car
 from ..car_notes import load_car_notes, load_setup_concepts
 from ..coach import _SPOKEN_RE, first_paragraph, split_spoken
-from ..coach_tools import CoachContext, race_result_text, scrub_stored_answer
+from ..coach_tools import CoachContext, _lap_age, race_result_text, scrub_stored_answer
 from ..corners import CornerMap, in_window, validated_sections, validated_sectors
 from ..driver import DriverProfile
+from ..format import format_laptime
 from ..lmu.ingest import ingest_all
 from ..model.base import TokenUsage
 from ..model.factory import CoachUserError, make_model
@@ -2016,6 +2017,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             # instead of treating each question standalone (the system prompt tells it
             # "the messages above are what you and the driver already said").
             history: list[dict] = []
+            last_chat_ts: float | None = None   # #131: this chat's last-turn timestamp
             chat_id_in = req.get("chat_id")
             if chat_id_in:
                 try:
@@ -2045,8 +2047,25 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                                                 "content": scrub_stored_answer(row["answer"],
                                                                                row["ts"],
                                                                                row.get("track"))})
+                        last_chat_ts = messages[-1]["ts"] if messages else None
                     except Exception:
                         history = []
+
+            # #131: "that lap"/"how was that" should resolve to a lap that landed
+            # after this chat's last turn without the coach asking which one. Only
+            # meaningful when there WAS a last turn (last_chat_ts set above) --
+            # compares stored ts, no LLM guess.
+            new_since_last_turn: str | None = None
+            if eff_session_id and last_chat_ts is not None:
+                sess_laps = app.state.store.session_laps(eff_session_id)
+                if sess_laps:
+                    latest = sess_laps[-1]
+                    if latest["ts"] > last_chat_ts:
+                        label_by_id, _ = ctx._lap_numbering()
+                        label = label_by_id.get(latest["id"]) or f"lap {latest['id']}"
+                        new_since_last_turn = (
+                            f"{label} ({format_laptime(latest['lap_time'])}) landed "
+                            f"{_lap_age(latest['ts'])}.")
 
             text = ""
             # What this turn billed. One usage event arrives per model call, so a
@@ -2065,7 +2084,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 for ev in app.state.coach.ask_agentic_stream(
                         ctx, question, car=car, input_device=req.get("input_device"),
                         history=history, units=ctx.units, driver_profile=driver_profile,
-                        voice=voice):
+                        voice=voice, new_since_last_turn=new_since_last_turn):
                     if ev["type"] == "usage":
                         # Keep the per-turn breakdown server-side (noise on the wire);
                         # the client gets one cumulative figure on `done`. The model id
