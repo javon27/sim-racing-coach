@@ -225,8 +225,8 @@
     });
 
     const lines = g.prepared.map((s) => {
-      const dots = s.pts.map((p) => [g.x(p.x), y(p.value)] as const);
-      const path = dots.map((p, i2) => `${i2 ? "L" : "M"}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(" ");
+      const dots = s.pts.map((p) => ({ x: g.x(p.x), y: y(p.value), value: p.value, label: p.label }));
+      const path = dots.map((p, i2) => `${i2 ? "L" : "M"}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ");
       return { name: s.name, color: s.color, path, dots };
     });
 
@@ -250,7 +250,11 @@
           {#each chart.lines as line (line.name)}
             <path d={line.path} fill="none" stroke={line.color} stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" />
             {#each line.dots as d}
-              <circle cx={d[0].toFixed(1)} cy={d[1].toFixed(1)} r="3.5" fill={line.color} class="dot" />
+              <!-- stroke-transparent widens the hit area for hover without changing the
+                   visible dot size or the rendered dot count (existing tests assert it). -->
+              <circle cx={d.x.toFixed(1)} cy={d.y.toFixed(1)} r="3.5" fill={line.color} stroke="transparent" stroke-width="14" class="dot">
+                <title>{formatLap(d.value)} — {d.label} — {line.name}</title>
+              </circle>
             {/each}
           {/each}
           {#each chart.ticks as tk}

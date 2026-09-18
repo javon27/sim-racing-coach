@@ -192,4 +192,57 @@ describe("TrendChart", () => {
 
     expect(getByText(/select a track to see the trend/i)).toBeTruthy();
   });
+
+  it("gives every point a title with the lap time formatted like the axis", () => {
+    const { container } = render(TrendChart, {
+      props: {
+        series: [
+          {
+            name: "Corvette Z06",
+            points: [
+              { x: 1, label: "9/1", value: 216.5 },
+              { x: 2, label: "9/2", value: 55.754 },
+            ],
+          },
+        ],
+      },
+    });
+
+    const titles = [...container.querySelectorAll("circle title")].map((t) => t.textContent ?? "");
+    expect(titles).toHaveLength(2);
+    expect(titles[0]).toContain("3:36.500");
+    expect(titles[1]).toContain("0:55.754");
+  });
+
+  it("includes the date and car in the point title", () => {
+    const { container } = render(TrendChart, {
+      props: {
+        series: [{ name: "Mercedes-AMG LMGT3", points: [{ x: 1, label: "9/17", value: 55.754 }] }],
+      },
+    });
+
+    const title = container.querySelector("circle title")!.textContent ?? "";
+    expect(title).toContain("9/17");
+    expect(title).toContain("Mercedes-AMG LMGT3");
+  });
+
+  it("keeps one title per point at every zoom level", async () => {
+    const series = [
+      {
+        name: "Corvette Z06",
+        points: [
+          { x: 1, label: "9/1", value: 216.5 },
+          { x: 2, label: "9/2", value: 214.0 },
+          { x: 3, label: "9/3", value: 213.2 },
+        ],
+      },
+    ];
+    const { container, rerender } = render(TrendChart, { props: { series, zoom: 1 } });
+    expect(container.querySelectorAll("circle title")).toHaveLength(3);
+
+    await rerender({ series, zoom: 200 });
+    await waitFor(() => {
+      expect(container.querySelectorAll("circle title")).toHaveLength(3);
+    });
+  });
 });
