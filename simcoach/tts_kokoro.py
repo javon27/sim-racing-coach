@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 import logging
 import re
+import string
 import struct
 import sys
 import threading
@@ -31,7 +32,6 @@ MODEL_FILE = "kokoro-v1.0.onnx"
 VOICES_FILE = "voices-v1.0.bin"
 SAMPLE_RATE = 24_000
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
-_CAP_WORD = re.compile(r"\b[A-Z][a-z]+\b")
 log = logging.getLogger(__name__)
 
 
@@ -248,6 +248,7 @@ class KokoroEngine:
         self._kokoro = None
         self._lock = threading.Lock()
         self._error: str | None = None
+        self._word_ok: dict[str, bool] = {}
 
     def available(self) -> bool:
         return (self.model_dir / MODEL_FILE).exists() and (self.model_dir / VOICES_FILE).exists()
@@ -271,32 +272,49 @@ class KokoroEngine:
     def voices(self) -> list[str]:
         return [v for v in self._load().get_voices() if v[:1] in ("a", "b")]   # American/British English
 
+    def _word_probe(self, word: str) -> bool:
+        """Cached: True if `word` phonemizes on its own. misaki without espeak raises a
+        bare TypeError that doesn't name the word, so words are probed individually
+        rather than parsed out of the exception."""
+        if word not in self._word_ok:
+            try:
+                self._g2p(word)
+                self._word_ok[word] = True
+            except Exception:
+                self._word_ok[word] = False
+        return self._word_ok[word]
+
     def _phonemes_for(self, sentence: str) -> str | None:
+        """Never drop a sentence that has at least one phonemizable word: probe each
+        word, spell out only the ones that fail (keeping sentence prosody), and only
+        as a last resort fall back to joining per-word phonemes."""
         try:
             return self._g2p(sentence)
-        except Exception as e:
-            word = str(e).strip("'\" ") or "?"
-            if word in sentence:
-                log.warning("kokoro g2p failed on %r (word %r); retrying spelled out", sentence, word)
-                spelled = re.sub(re.escape(word), " ".join(word), sentence)
-                try:
-                    return self._g2p(spelled)
-                except Exception:
-                    log.debug("kokoro g2p spelled-out retry also failed for %r", spelled)
-            else:
-                # Message doesn't name the failing word (e.g. misaki's bare TypeError on
-                # an unknown token) -- try spelling out each capitalised word in turn.
-                for m in _CAP_WORD.finditer(sentence):
-                    cw = m.group(0)
-                    spelled = sentence[:m.start()] + " ".join(cw) + sentence[m.end():]
-                    log.warning("kokoro g2p failed on %r; retrying with %r spelled out", sentence, cw)
-                    try:
-                        return self._g2p(spelled)
-                    except Exception:
-                        log.debug("kokoro g2p spelled-out retry also failed for %r", spelled)
-                        continue
-            log.warning("kokoro g2p dropped sentence %r", sentence)
-            return None
+        except Exception:
+            pass
+
+        words = [(tok, w) for tok in sentence.split() if (w := tok.strip(string.punctuation))]
+        failing = [w for _tok, w in words if not self._word_probe(w)]
+
+        if failing:
+            unique_failing = list(dict.fromkeys(failing))
+            log.warning("kokoro g2p: spelling out %r in %r", unique_failing, sentence)
+            rebuilt = sentence
+            for w in unique_failing:
+                rebuilt = re.sub(rf"\b{re.escape(w)}\b", lambda m, w=w: " ".join(w), rebuilt)
+            try:
+                return self._g2p(rebuilt)
+            except Exception:
+                pass
+
+        failing_set = set(failing)
+        parts = []
+        for _tok, w in words:
+            try:
+                parts.append(self._g2p(" ".join(w) if w in failing_set else w))
+            except Exception:
+                continue
+        return " ".join(parts) if parts else None
 
     def synthesize(self, text: str, voice: str, speed: float, table: dict[str, str] | None = None) -> bytes:
         kokoro = self._load()

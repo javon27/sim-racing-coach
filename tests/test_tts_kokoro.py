@@ -1,4 +1,6 @@
 import importlib.util
+import logging
+import re
 import struct
 import sys
 import threading
@@ -79,7 +81,7 @@ def test_synthesize_with_fake_backend_returns_16bit_mono_24k_wav(tmp_path):
     assert eng.voices() == ["af_heart", "am_michael"]   # English voices only (a*/b*)
 
 
-def test_synthesize_retries_a_failing_sentence_spelled_out_then_drops_it(tmp_path, caplog):
+def test_synthesize_spells_out_a_failing_word_without_dropping_the_sentence(tmp_path, caplog):
     seen = []
 
     def g2p(text):
@@ -98,16 +100,18 @@ def test_synthesize_retries_a_failing_sentence_spelled_out_then_drops_it(tmp_pat
     eng = KokoroEngine(tmp_path, backend=FakeKokoro, g2p=g2p)
     wav = eng.synthesize("Brake later. Pouhon is fast.", voice="af_heart", speed=1.0)
     assert _wav_header(wav)[1] == 24000
-    assert "P o u h o n is fast." in seen          # spelled-out retry
-    assert any("Pouhon" in r.message for r in caplog.records)
+    assert "P o u h o n is fast." in seen          # spelled-out retry, nothing dropped
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "Pouhon" in warnings[0].getMessage()
 
 
-def test_synthesize_retries_by_spelling_capitalised_words_when_message_has_no_word_match(tmp_path, caplog):
+def test_synthesize_spells_out_every_failing_word_when_message_has_no_word_match(tmp_path, caplog):
     seen = []
 
     def g2p(text):
         seen.append(text)
-        if "Eau Rouge" in text:
+        if "Eau" in text or "Rouge" in text:
             raise TypeError("unsupported operand type(s) for +: 'NoneType' and 'str'")
         return text
 
@@ -121,8 +125,70 @@ def test_synthesize_retries_by_spelling_capitalised_words_when_message_has_no_wo
     eng = KokoroEngine(tmp_path, backend=FakeKokoro, g2p=g2p)
     wav = eng.synthesize("Watch Eau Rouge.", voice="af_heart", speed=1.0)
     assert _wav_header(wav)[1] == 24000
-    assert any(s.startswith(("Watch E a u", "Watch Eau")) for s in seen[1:])
-    assert any("dropped" in r.message or "retrying" in r.message for r in caplog.records)
+    assert any("E a u" in s and "R o u g e" in s for s in seen)   # both OOV words spelled, one rebuild
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+
+
+def test_synthesize_spells_out_two_oov_words_in_one_sentence(tmp_path, caplog):
+    seen = []
+
+    def g2p(text):
+        seen.append(text)
+        if "Mans" in text or "Monza" in text:
+            raise TypeError("unsupported operand type(s) for +: 'NoneType' and 'str'")
+        return text
+
+    class FakeKokoro:
+        def __init__(self, *a): pass
+        def get_voices(self): return ["af_heart"]
+        def create(self, ph, voice, speed=1.0, is_phonemes=False, lang="en-us"):
+            return np.zeros(240, dtype=np.float32), 24000
+
+    _touch_model_files(tmp_path)
+    eng = KokoroEngine(tmp_path, backend=FakeKokoro, g2p=g2p)
+    wav = eng.synthesize("Le Mans Ultimate runs at Monza.", voice="af_heart", speed=1.0)
+    assert _wav_header(wav)[1] == 24000
+    assert any("M a n s" in s and "M o n z a" in s for s in seen)
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "Mans" in warnings[0].getMessage() and "Monza" in warnings[0].getMessage()
+
+
+def test_phonemes_for_spells_out_a_lowercase_oov_word(tmp_path):
+    def g2p(text):
+        if re.search(r"\bkm\b", text):
+            raise TypeError("unsupported operand type(s) for +: 'NoneType' and 'str'")
+        return text
+
+    eng = KokoroEngine(tmp_path, backend=None, g2p=g2p)
+    assert eng._phonemes_for("a seven km lap") == "a seven k m lap"
+
+
+def test_phonemes_for_drops_sentence_only_when_every_word_fails(tmp_path, caplog):
+    def g2p(_text):
+        raise TypeError("unsupported operand type(s) for +: 'NoneType' and 'str'")
+
+    eng = KokoroEngine(tmp_path, backend=None, g2p=g2p)
+    assert eng._phonemes_for("Zzqx Vvbr.") is None
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+
+
+def test_word_probe_result_is_cached_across_sentences(tmp_path):
+    monza_calls = []
+
+    def g2p(text):
+        if text == "Monza":
+            monza_calls.append(text)
+        if "Monza" in text:
+            raise TypeError("unsupported operand type(s) for +: 'NoneType' and 'str'")
+        return text
+
+    eng = KokoroEngine(tmp_path, backend=None, g2p=g2p)
+    eng._phonemes_for("Monza is fast.")
+    eng._phonemes_for("I love Monza today.")
+    assert len(monza_calls) == 1
 
 
 def test_engine_unavailable_when_model_files_missing(tmp_path):
