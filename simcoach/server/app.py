@@ -884,6 +884,18 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     def health():
         return {"status": "ok"}
 
+    def _live_session_id() -> str | None:
+        # The store instance id for the CURRENT live track/car (what the next
+        # captured lap -- or a garage chat started before one -- gets stamped
+        # with), or None if LMU isn't running / no player. Not cached: SMM reads
+        # are cheap and each call site wants a fresh read.
+        try:
+            from ..lmu.smm import read_live_session_id
+            base = read_live_session_id()
+        except Exception:
+            base = None
+        return store.resolve_current_instance(base) if base else None
+
     def _status_view() -> dict:
         # Live track/car from shared memory FIRST, so a track/car change is detected
         # right away. The latest captured lap adds rich context (on_track + session/
@@ -909,6 +921,11 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             session_id, lap_id = record.session_id, latest["lap_id"]
         elif live:
             track, car = live["track"], live["car"]
+            # The live track/car doesn't match the latest stored lap (a track
+            # change): report the id the first lap on the new track will be
+            # stamped with, so the strip and chat pin move right away instead
+            # of waiting on that lap (#127). lap_id stays None -- no lap yet.
+            session_id = _live_session_id()
         else:
             # #137: no live SMM and nothing captured this process (a sidecar
             # restart with LMU in the lobby) -- fall back to the newest stored
@@ -2013,20 +2030,20 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                     cmap, on_track = _map_for(track), False
             # Backfill the current stint id from the latest lap when the client didn't
             # supply one (auto-anchor) — the live path above resolves track/car but not
-            # the session stamp.
+            # the session stamp. Only when that lap still matches the live track/car
+            # (same rule as _status_view's matches_live); on a track change the latest
+            # lap is from the OLD track, so use the live session instead (#127).
             if eff_session_id is None and app.state.latest is not None:
-                eff_session_id = app.state.latest["record"].session_id
+                lr = app.state.latest["record"]
+                if live is None or (lr.track, lr.car) == live:
+                    eff_session_id = lr.session_id
+                else:
+                    eff_session_id = _live_session_id()
             # No lap captured yet (e.g. a question asked in the garage): stamp the
             # chat with the CURRENT live session so it isn't orphaned — the laps that
             # follow join the same instance and the chat stays resumable via Sessions.
             if eff_session_id is None:
-                try:
-                    from ..lmu.smm import read_live_session_id
-                    base = read_live_session_id()
-                    if base:
-                        eff_session_id = store.resolve_current_instance(base)
-                except Exception:
-                    pass
+                eff_session_id = _live_session_id()
             cfg = config.load_config()
             ctx = CoachContext(app.state.store, record=None, lap_id=None, cmap=cmap,
                                units=cfg.get("units", "metric"),

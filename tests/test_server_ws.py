@@ -536,6 +536,38 @@ def test_ws_coach_auto_anchors_to_live_session(tmp_path, synthetic_lap):
     # coach fetches laps on demand via its tools, so a turn isn't tied to one lap.
 
 
+def test_ws_coach_track_change_uses_live_session_not_stale_latest_lap(
+        tmp_path, synthetic_lap, monkeypatch):
+    # #127: live says COTA, app.state.latest is still the stale Spa lap. With no
+    # client-supplied session_id, the chat must be stamped with the COTA live
+    # session -- not backfilled from the mismatched Spa lap.
+    from simcoach.lmu import smm
+    from simcoach.model_types import LapRecord
+
+    monkeypatch.setattr(smm, "read_session_track_car", lambda: ("cota", "gt3"))
+    monkeypatch.setattr(smm, "read_live_session_id",
+                        lambda: smm.session_id_for("cota", "gt3", False))
+
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    spa = LapRecord(**{**synthetic_lap.__dict__, "track": "spa", "car": "gt3",
+                        "session_id": "spa--gt3--offline"})
+    lap_id = store.save(spa)
+    coach = Coach(FakeModel(reply="ok"))
+    app = create_app(store, coach)
+    app.state.latest = {"record": spa, "lap_id": lap_id}
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "what track am I at now?"})
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"):
+                break
+
+    msgs = store.chat_messages(ev["chat_id"])
+    assert msgs[0]["session_id"] == smm.session_id_for("cota", "gt3", False)
+
+
 def test_ws_coach_respects_imperial_units(tmp_path, monkeypatch):
     # Regression: the coach's unit labels + tool data must follow the user's
     # config (imperial), not silently default to metric.

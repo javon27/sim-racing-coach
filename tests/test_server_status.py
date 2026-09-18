@@ -77,6 +77,29 @@ def test_status_on_track_live_with_latest_context(tmp_path, synthetic_lap, monke
     assert b["session_id"] == synthetic_lap.session_id and b["lap_id"] == 1
 
 
+def test_status_track_change_reports_live_session_not_stale_latest(tmp_path, monkeypatch):
+    # #127: live says COTA, the latest stored lap is still Spa (driver just
+    # switched tracks). matches_live is False, so /status must report the id the
+    # COTA out lap will be stamped with -- not null -- so the strip and chat pin
+    # move at the moment the track changes, not after the first lap lands.
+    from simcoach.lmu import smm
+    monkeypatch.setattr(smm, "read_live_status",
+                        lambda: {"track": "cota", "car": "gt3", "state": "track"})
+    monkeypatch.setattr(smm, "read_live_session_id",
+                        lambda: smm.session_id_for("cota", "gt3", False))
+
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    spa = LapRecord("lmu", "spa", "gt3", 90.0, True, 0.0, {},
+                    session_id="spa--gt3--offline")
+    app = create_app(store, Coach(FakeModel()))
+    app.state.latest = {"record": spa, "lap_id": 1}
+
+    b = TestClient(app, base_url="http://127.0.0.1").get("/status").json()
+    assert b["track"] == "cota" and b["car"] == "gt3"
+    assert b["session_id"] == smm.session_id_for("cota", "gt3", False)
+    assert b["lap_id"] is None
+
+
 def test_status_reports_garage_before_any_lap(tmp_path, monkeypatch):
     # The fix: garage/on-track is reported live, with NO captured lap at all.
     from simcoach.lmu import smm
