@@ -105,7 +105,7 @@ export interface VoiceLoopOptions {
 
 const MIC_ERROR = "I can't hear the mic";
 // Barge-in gate (conversation mode): sustained loudness needed to interrupt playback.
-export const BARGE_IN_MS = 400;
+export const BARGE_IN_MS = 300;
 export const BARGE_IN_LEVEL_MULT = 2;
 // Idle seconds before the held-open mic stream is released (OS indicator goes off).
 export const MIC_RELEASE_S = 60;
@@ -161,6 +161,8 @@ export class VoiceLoop {
    *  as the driver's track changes, without holding its own separate reference). */
   get speaker(): Speaker { return this.#o.speaker; }
   #set(state: VoiceState) {
+    // A partial barge-in accumulation must not carry into the next answer.
+    if (this.state === "speaking" && state !== "speaking") this.#bargeMs = 0;
     this.state = state;
     // The recorder holds the mic open between presses so a press starts instantly
     // (and the OS mic indicator stays lit). Give it back after a quiet spell; the
@@ -322,7 +324,10 @@ export class VoiceLoop {
         // the interrupting words are part of the utterance.
         if (this.#bargeMs >= BARGE_IN_MS) { this.#bargeMs = 0; this.#cancelSpeech(); this.#listen("conversation", BARGE_IN_MS + 200); }
       } else {
-        this.#bargeMs = 0;
+        // Leaky, not reset: a dip between syllables costs twice its length, so a
+        // spoken phrase still accumulates to the target, while steady low-level
+        // playback bleed (always below 2x threshold) never creeps up.
+        this.#bargeMs = Math.max(0, this.#bargeMs - 2 * frameMs);
       }
       return;
     }

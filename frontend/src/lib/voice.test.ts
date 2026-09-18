@@ -285,12 +285,61 @@ describe("VoiceLoop conversation", () => {
     for (let i = 0; i < 20; i++) recorder.frame(0.03);
     await flush();
     expect(speaker.cancels).toBe(0); expect(loop.state).toBe("speaking");
-    // 7 loud frames = 350 ms < 400 ms: not yet.
-    for (let i = 0; i < 7; i++) recorder.frame(0.3);
+    // 5 loud frames = 250 ms < 300 ms: not yet.
+    for (let i = 0; i < 5; i++) recorder.frame(0.3);
     await flush();
     expect(loop.state).toBe("speaking");
     recorder.frame(0.3); await flush();
     expect(speaker.cancels).toBe(1); expect(loop.state).toBe("listening");
+  });
+  it("leaky accumulator: alternating loud/quiet bursts (normal speech dips) still barge in", async () => {
+    const { loop, recorder, speaker } = make();
+    loop.toggleConversation(); await flush();
+    recorder.frame(0.2); for (let i = 0; i < 20; i++) recorder.frame(0); await flush(); await flush();
+    loop.onText("Answer."); await flush();
+    expect(loop.state).toBe("speaking");
+    // 4 loud frames (3x threshold) then 1 quiet dip (0.5x threshold), repeated:
+    // a real phrase's syllable dips must still reach the barge-in target within
+    // 600 ms (12 frames @ 50 ms) of wall time. On the old reset-to-0 code this
+    // never fires (each dip wipes the accumulator back to 0).
+    for (let round = 0; round < 2; round++) {
+      for (let i = 0; i < 4; i++) recorder.frame(0.06);
+      recorder.frame(0.01);
+    }
+    await flush();
+    expect(speaker.cancels).toBe(1);
+    expect(loop.state).toBe("listening");
+  });
+  it("steady low-level bleed (1.5x threshold) never barges in", async () => {
+    const { loop, recorder, speaker } = make();
+    loop.toggleConversation(); await flush();
+    recorder.frame(0.2); for (let i = 0; i < 20; i++) recorder.frame(0); await flush(); await flush();
+    loop.onText("Answer."); await flush();
+    expect(loop.state).toBe("speaking");
+    for (let i = 0; i < 40; i++) recorder.frame(0.03); // below the 2x-threshold loud gate
+    await flush();
+    expect(speaker.cancels).toBe(0);
+    expect(loop.state).toBe("speaking");
+  });
+  it("a loud burst then silence drains the accumulator; it doesn't carry into the next burst", async () => {
+    const { loop, recorder, speaker } = make();
+    loop.toggleConversation(); await flush();
+    recorder.frame(0.2); for (let i = 0; i < 20; i++) recorder.frame(0); await flush(); await flush();
+    loop.onText("Answer."); await flush();
+    expect(loop.state).toBe("speaking");
+    // 200 ms loud (under the 300 ms target) at 50 ms/frame, then plenty of silence
+    // to fully drain it.
+    for (let i = 0; i < 4; i++) recorder.frame(0.06);
+    for (let i = 0; i < 20; i++) recorder.frame(0);
+    await flush();
+    expect(speaker.cancels).toBe(0);
+    expect(loop.state).toBe("speaking");
+    // The same short burst again, alone: if the drain were partial this would
+    // now be enough to cross the target -- it must not be.
+    for (let i = 0; i < 4; i++) recorder.frame(0.06);
+    await flush();
+    expect(speaker.cancels).toBe(0);
+    expect(loop.state).toBe("speaking");
   });
   it("tap again → idle with the mic closed; idle timeout → idle", async () => {
     const { loop, recorder, timers } = make({ idle: 30 });
