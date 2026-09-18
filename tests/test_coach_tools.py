@@ -950,6 +950,46 @@ def test_get_personal_best_all_time_and_session_contrast(tmp_path, synthetic_lap
     assert "1:33.000" in out  # this session's best, contrasted
 
 
+def test_get_personal_best_set_this_session_names_lap_and_age(tmp_path, synthetic_lap):
+    # #130: the all-time best IS the lap just driven this session -- say so with
+    # its label and how long ago, not a bare date that reads as history.
+    import time as time_mod
+
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    now = time_mod.time()
+    store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1--online",
+                            "phase": "qualifying", "timestamp": now - 200, "lap_time": 95.0}))
+    store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1--online",
+                            "phase": "qualifying", "timestamp": now - 13, "lap_time": 91.0}))
+    ctx = CoachContext(store, track=synthetic_lap.track, car=synthetic_lap.car,
+                       session_id="s1--online")
+    out = ctx.dispatch("get_personal_best", {})
+    assert "1:31.000" in out
+    assert "this session's qualifying lap 2" in out
+    m = re.search(r"set (\d+) s ago", out)
+    assert m and 5 <= int(m.group(1)) <= 30, out   # ~13s, tolerant of test runtime
+
+
+def test_get_personal_best_older_session_keeps_date_wording(tmp_path, synthetic_lap):
+    # PB was set in a PAST session, not this one -- wording stays unchanged (date,
+    # plus the session-best contrast line), same as before #130.
+    import time as time_mod
+
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1--online",
+                            "timestamp": 1000.0, "lap_time": 91.0}))
+    ctx = CoachContext(store, track=synthetic_lap.track, car=synthetic_lap.car,
+                       session_id="s2--online")   # different session -- no laps in it
+    out = ctx.dispatch("get_personal_best", {})
+    expected_date = time_mod.strftime("%Y-%m-%d", time_mod.localtime(1000.0))
+    assert "1:31.000" in out
+    assert f", set {expected_date}." in out
+    assert "s ago" not in out
+    assert "this session's" not in out
+
+
 def test_get_personal_best_no_laps(tmp_path):
     store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
     ctx = CoachContext(store, track="nowhere", car="nocar")

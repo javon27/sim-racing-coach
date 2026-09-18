@@ -483,6 +483,18 @@ def race_result_text(store, session_id) -> str:
     return "\n".join(lines)
 
 
+def _lap_age(ts: float) -> str:
+    """'13 s ago' / '5 min ago' for a lap set moments ago this session (#130); once
+    it's no longer fresh (>= 2h), falls back to the date, same as the all-time-best
+    wording."""
+    elapsed = time.time() - ts
+    if elapsed < 90:
+        return f"{max(0, round(elapsed))} s ago"
+    if elapsed < 7200:
+        return f"{round(elapsed / 60)} min ago"
+    return time.strftime("%Y-%m-%d", time.localtime(ts))
+
+
 class CoachContext:
     """Live data bound for one question; tools read from it. Rebuilt each turn."""
 
@@ -1338,8 +1350,18 @@ class CoachContext:
         best = self.store.best_lap(track, car)
         if best is None:
             return f"No recorded laps yet for {track} / {car}."
+        prefix = f"All-time personal best at {track} in {car}: {format_laptime(best.lap_time)}"
+        if self.session_id and best.session_id == self.session_id:
+            # #130: the PB *is* the lap just driven -- "set <date>" reads as history
+            # when it's actually this session, so name the lap and say how long ago.
+            label_by_id, _ = self._lap_numbering()
+            lap_id = next((lap["id"] for lap in self.store.session_laps(self.session_id)
+                           if lap["ts"] == best.timestamp), None)
+            label = label_by_id.get(lap_id) if lap_id is not None else None
+            this_lap = f"this session's {label}" if label else "this session"
+            return f"{prefix} — that's {this_lap}, set {_lap_age(best.timestamp)}."
         when = time.strftime("%Y-%m-%d", time.localtime(best.timestamp))
-        out = f"All-time personal best at {track} in {car}: {format_laptime(best.lap_time)}, set {when}."
+        out = f"{prefix}, set {when}."
         if self.session_id:
             session_best = self.store.best_lap(track, car, session_id=self.session_id)
             if session_best is not None and session_best.lap_time != best.lap_time:
