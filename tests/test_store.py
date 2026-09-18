@@ -2427,3 +2427,74 @@ def test_an_untimed_result_lap_dedupes_against_the_live_partial_it_describes(
 
     ids = [r[0] for r in s.conn.execute("SELECT id FROM laps ORDER BY id")]
     assert ids == [live_timed, live_out], "the result copies must both dedupe away"
+
+
+def _race_lap(base, ts, phase="race", lap_no=None, partial=None, sid="s1"):
+    """A stored-lap kwargs dict for the race-window tests (issue #136)."""
+    return {**base.__dict__, "session_id": sid, "phase": phase, "timestamp": ts,
+            "lap_no": lap_no, "partial": partial,
+            **({"lap_time": None, "valid": False} if partial else {})}
+
+
+def test_race_windows_split_on_a_non_race_lap(tmp_path, synthetic_lap):
+    """#136: three races in one evening share one session id (track+car+online only
+    splits after 6 h), so the chat spanning them answered about race 3 with race 1's
+    numbers. A qualifying lap between two race runs is the boundary."""
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "telem"))
+    t0 = 1_700_000_000.0
+    race1 = [s.save(LapRecord(**_race_lap(synthetic_lap, t0 + i * 100))) for i in range(3)]
+    s.save(LapRecord(**_race_lap(synthetic_lap, t0 + 400, phase="qualifying")))
+    race2 = [s.save(LapRecord(**_race_lap(synthetic_lap, t0 + 500 + i * 100))) for i in range(2)]
+
+    windows = s.race_windows("s1")
+    assert [w["index"] for w in windows] == [1, 2]
+    assert windows[0]["lap_ids"] == race1
+    assert windows[1]["lap_ids"] == race2
+    assert windows[0]["start_ts"] == t0 and windows[0]["end_ts"] == t0 + 200
+    assert windows[1]["start_ts"] == t0 + 500
+    assert [w["laps"] for w in windows] == [3, 2]
+
+
+def test_race_windows_split_on_a_long_gap_between_race_laps(tmp_path, synthetic_lap):
+    """Two races back to back with nothing but race laps captured between them: the
+    25 min pause is the only boundary there is."""
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "telem"))
+    t0 = 1_700_000_000.0
+    first = [s.save(LapRecord(**_race_lap(synthetic_lap, t0 + i * 100))) for i in range(2)]
+    second = [s.save(LapRecord(**_race_lap(synthetic_lap, t0 + 1600 + i * 100))) for i in range(2)]
+
+    windows = s.race_windows("s1")
+    assert [w["lap_ids"] for w in windows] == [first, second]
+
+
+def test_race_windows_keep_one_race_whole_across_a_pit_stop_gap(tmp_path, synthetic_lap):
+    """The longest gap measured INSIDE one real race is 924 s (pit stops, incidents,
+    garage time). Splitting there would shred one race into many -- the exact failure
+    unlogged_race_since documents for a 300 s rule."""
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "telem"))
+    t0 = 1_700_000_000.0
+    ids = [s.save(LapRecord(**_race_lap(synthetic_lap, ts)))
+           for ts in (t0, t0 + 100, t0 + 1024, t0 + 1124)]
+
+    windows = s.race_windows("s1")
+    assert len(windows) == 1 and windows[0]["lap_ids"] == ids
+
+
+def test_race_windows_counts_complete_laps_only_and_ignores_practice_sessions(
+        tmp_path, synthetic_lap):
+    """`laps` is the figure shown to the driver, so it counts complete laps like
+    get_session_status does -- while lap_ids still holds the partial row."""
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "telem"))
+    t0 = 1_700_000_000.0
+    a = s.save(LapRecord(**_race_lap(synthetic_lap, t0)))
+    b = s.save(LapRecord(**_race_lap(synthetic_lap, t0 + 100, partial="in")))
+    s.save(LapRecord(**_race_lap(synthetic_lap, t0 + 200, phase="practice", sid="s2")))
+
+    windows = s.race_windows("s1")
+    assert len(windows) == 1
+    assert windows[0]["lap_ids"] == [a, b] and windows[0]["laps"] == 1
+    assert s.race_windows("s2") == []

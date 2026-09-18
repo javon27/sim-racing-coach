@@ -61,6 +61,21 @@ _LAP_TIME_TOL_S = 0.001
 # save_result_session caller that omits the argument (real data is 1399/1399 stamped).
 _RACE_LOG_LAG_S = 600
 
+# How long a session's race laps may pause before the next race lap is treated as a
+# NEW race (see `race_windows`). A session instance deliberately spans 6 h, so one id
+# covers every race of an evening; the boundary is what tells race 3 from race 1.
+#
+# The primary split is a non-race lap (leaving for the garage, a practice or qualy
+# stint in between), which is what really separates two races in the captured data.
+# This gap is only the backstop for two races with nothing but race laps between them.
+#
+# ponytail: a calibrated margin, not a derived bound. The longest gap measured INSIDE a
+# single race is 924 s (pit stops, incidents, garage time -- see unlogged_race_since on
+# why a 300 s rule shreds one race into six), so 1200 s clears real within-race data by
+# ~4.6 min, while a genuine between-races gap in the reports is >= ~40 min. Widen it if
+# a long safety-car or red-flag stint is ever seen splitting one race in two.
+_RACE_WINDOW_GAP_S = 20 * 60
+
 
 def _is_deterministic_sid(sid: str) -> bool:
     return sid.endswith(("--online", "--offline"))
@@ -1266,6 +1281,41 @@ class LapStore:
                 d["pit"] = None if d["pit"] is None else bool(d["pit"])
                 out.append(d)
             return out
+
+    def race_windows(self, session_id: str) -> list[dict]:
+        """The RACES this session instance holds, oldest first (issue #136).
+
+        One session id spans a whole evening (track + car + online|offline, split only
+        after _SESSION_GAP_S = 6 h), so three races in a row share it -- and a chat that
+        spans them had nothing to say which race an earlier turn was about. A race window
+        is a maximal run of phase='race' laps, ended by any non-race lap or by a pause
+        longer than _RACE_WINDOW_GAP_S.
+
+        Derived from `laps` on every call: no schema change, and it stays right for laps
+        imported later from a result log. Each window is
+        {"index" (1-based), "start_ts", "end_ts", "lap_ids" (every stored race lap, ts
+        order), "laps" (COMPLETE laps only)}. `laps` is the figure to show a driver --
+        it matches get_session_status's complete-only per-phase count, so the two can
+        never disagree about how long the race was; `lap_ids` still carries the out/in/
+        partial rows so a window's membership test is complete.
+
+        Empty list for a session with no race laps (practice/qualy only).
+        """
+        windows: list[dict] = []
+        current: dict | None = None
+        for lap in self.session_laps(session_id):
+            if lap.get("phase") != "race":
+                current = None      # any other phase ends the race run
+                continue
+            if current is None or (lap["ts"] - current["end_ts"]) > _RACE_WINDOW_GAP_S:
+                current = {"index": len(windows) + 1, "start_ts": lap["ts"],
+                           "end_ts": lap["ts"], "lap_ids": [], "laps": 0}
+                windows.append(current)
+            current["end_ts"] = lap["ts"]
+            current["lap_ids"].append(lap["id"])
+            if not lap.get("partial"):
+                current["laps"] += 1
+        return windows
 
     def session_position_arc(self, session_id: str, phase: str | None = None,
                              since: float | None = None,
