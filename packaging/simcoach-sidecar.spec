@@ -17,6 +17,13 @@ for _sub in ("tracks", "cars"):
     if os.path.isdir(_dir):
         datas.append((_dir, f"simcoach/{_sub}"))
 
+# The global pronunciation lexicon (#118/#123) -- a single file next to the package,
+# not a directory, so it needs its own entry (a plain `collect_all("simcoach")` isn't
+# done here, so nothing else picks this up).
+_lexicon = os.path.join(ROOT, "simcoach", "lexicon.json")
+if os.path.isfile(_lexicon):
+    datas.append((_lexicon, "simcoach"))
+
 # voice.py's `from faster_whisper import WhisperModel` is function-local (deferred),
 # but PyInstaller's static analysis still finds it via AST scan and pulls in the
 # ctranslate2 native DLL through it -- collect_all is for what that scan misses:
