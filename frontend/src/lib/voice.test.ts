@@ -285,8 +285,8 @@ describe("VoiceLoop conversation", () => {
     for (let i = 0; i < 20; i++) recorder.frame(0.03);
     await flush();
     expect(speaker.cancels).toBe(0); expect(loop.state).toBe("speaking");
-    // 5 loud frames = 250 ms < 300 ms: not yet.
-    for (let i = 0; i < 5; i++) recorder.frame(0.3);
+    // 2 loud frames = 100 ms < 120 ms: not yet.
+    for (let i = 0; i < 2; i++) recorder.frame(0.3);
     await flush();
     expect(loop.state).toBe("speaking");
     recorder.frame(0.3); await flush();
@@ -310,6 +310,17 @@ describe("VoiceLoop conversation", () => {
     expect(speaker.cancels).toBe(1);
     expect(loop.state).toBe("listening");
   });
+  it("one short word barges in (rig 2026-09-20: 'stop' said repeatedly never interrupted)", async () => {
+    const { loop, recorder, speaker } = make();
+    loop.toggleConversation(); await flush();
+    recorder.frame(0.2); for (let i = 0; i < 20; i++) recorder.frame(0); await flush(); await flush();
+    loop.onText("Answer."); await flush();
+    expect(loop.state).toBe("speaking");
+    // "stop": a quiet onset, ~150 ms of voiced sound, then silence. One word must be enough.
+    recorder.frame(0.01); for (let i = 0; i < 3; i++) recorder.frame(0.08); recorder.frame(0);
+    await flush();
+    expect(speaker.cancels).toBe(1); expect(loop.state).toBe("listening");
+  });
   it("steady low-level bleed (1.5x threshold) never barges in", async () => {
     const { loop, recorder, speaker } = make();
     loop.toggleConversation(); await flush();
@@ -327,16 +338,16 @@ describe("VoiceLoop conversation", () => {
     recorder.frame(0.2); for (let i = 0; i < 20; i++) recorder.frame(0); await flush(); await flush();
     loop.onText("Answer."); await flush();
     expect(loop.state).toBe("speaking");
-    // 200 ms loud (under the 300 ms target) at 50 ms/frame, then plenty of silence
+    // 100 ms loud (under the 120 ms target) at 50 ms/frame, then plenty of silence
     // to fully drain it.
-    for (let i = 0; i < 4; i++) recorder.frame(0.06);
+    for (let i = 0; i < 2; i++) recorder.frame(0.06);
     for (let i = 0; i < 20; i++) recorder.frame(0);
     await flush();
     expect(speaker.cancels).toBe(0);
     expect(loop.state).toBe("speaking");
     // The same short burst again, alone: if the drain were partial this would
     // now be enough to cross the target -- it must not be.
-    for (let i = 0; i < 4; i++) recorder.frame(0.06);
+    for (let i = 0; i < 2; i++) recorder.frame(0.06);
     await flush();
     expect(speaker.cancels).toBe(0);
     expect(loop.state).toBe("speaking");

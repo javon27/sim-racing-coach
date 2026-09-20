@@ -104,8 +104,11 @@ export interface VoiceLoopOptions {
 }
 
 const MIC_ERROR = "I can't hear the mic";
-// Barge-in gate (conversation mode): sustained loudness needed to interrupt playback.
-export const BARGE_IN_MS = 300;
+// Barge-in gate (conversation mode): accumulated loudness needed to interrupt playback.
+// 120 ms so ONE short word ("stop", ~150 ms of voiced sound) is enough -- at 300 ms with
+// a double-speed drain, repeated "stop"s could never trigger it (rig 2026-09-20, #129).
+// ponytail: fixed constants; promote to a Settings sensitivity knob if rigs differ.
+export const BARGE_IN_MS = 120;
 export const BARGE_IN_LEVEL_MULT = 2;
 // Idle seconds before the held-open mic stream is released (OS indicator goes off).
 export const MIC_RELEASE_S = 60;
@@ -307,6 +310,21 @@ export class VoiceLoop {
     return this.#o.recorder.stop();
   }
 
+  // Dev-only rig readout (#129): `localStorage.voiceDebug = "1"` in devtools, then the
+  // console shows the mic's peak level against the barge-in gate twice a second while
+  // the coach is speaking -- the numbers a threshold complaint needs.
+  #dbgPeak = 0; #dbgMs = 0;
+  #debugBarge(level: number, frameMs: number): void {
+    this.#dbgPeak = Math.max(this.#dbgPeak, level); this.#dbgMs += frameMs;
+    if (this.#dbgMs < 500) return;
+    try {
+      if (localStorage.getItem("voiceDebug")) {
+        console.debug(`[barge-in] peak ${this.#dbgPeak.toFixed(3)} gate ${(this.#o.vad.threshold * BARGE_IN_LEVEL_MULT).toFixed(3)} acc ${this.#bargeMs.toFixed(0)}/${BARGE_IN_MS} ms`);
+      }
+    } catch { /* storage blocked: no readout */ }
+    this.#dbgPeak = 0; this.#dbgMs = 0;
+  }
+
   #onFrame(frame: Float32Array, sampleRate?: number): void {
     if (this.mode !== "conversation") return;
     const level = rms(frame);
@@ -324,11 +342,12 @@ export class VoiceLoop {
         // the interrupting words are part of the utterance.
         if (this.#bargeMs >= BARGE_IN_MS) { this.#bargeMs = 0; this.#cancelSpeech(); this.#listen("conversation", BARGE_IN_MS + 200); }
       } else {
-        // Leaky, not reset: a dip between syllables costs twice its length, so a
-        // spoken phrase still accumulates to the target, while steady low-level
-        // playback bleed (always below 2x threshold) never creeps up.
-        this.#bargeMs = Math.max(0, this.#bargeMs - 2 * frameMs);
+        // Leaky, not reset: a dip between syllables costs its own length, so a word
+        // or phrase still accumulates to the target, while steady low-level playback
+        // bleed (always below 2x threshold) never creeps up.
+        this.#bargeMs = Math.max(0, this.#bargeMs - frameMs);
       }
+      this.#debugBarge(level, frameMs);
       return;
     }
     if (this.state !== "listening") return;
