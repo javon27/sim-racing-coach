@@ -321,6 +321,29 @@ describe("VoiceLoop conversation", () => {
     await flush();
     expect(speaker.cancels).toBe(1); expect(loop.state).toBe("listening");
   });
+  it("headset: with no playback bleed the gate settles to the listening threshold (rig: 'stop' peaked 0.037 under a fixed 0.040)", async () => {
+    const { loop, recorder, speaker } = make();
+    loop.toggleConversation(); await flush();
+    recorder.frame(0.2); for (let i = 0; i < 20; i++) recorder.frame(0); await flush(); await flush();
+    loop.onText("Answer."); await flush();
+    expect(loop.state).toBe("speaking");
+    for (let i = 0; i < 60; i++) recorder.frame(0.001);      // 3 s of coach speech, nothing in the mic
+    for (let i = 0; i < 3; i++) recorder.frame(0.037);       // one normal-volume "stop"
+    await flush();
+    expect(speaker.cancels).toBe(1); expect(loop.state).toBe("listening");
+  });
+  it("desk mic: loud playback bleed raises the gate above itself, a real word still gets through", async () => {
+    const { loop, recorder, speaker } = make();
+    loop.toggleConversation(); await flush();
+    recorder.frame(0.2); for (let i = 0; i < 20; i++) recorder.frame(0); await flush(); await flush();
+    loop.onText("Answer."); await flush();
+    for (let i = 0; i < 100; i++) recorder.frame(0.035);     // 5 s of bleed just under the seed gate
+    await flush();
+    expect(speaker.cancels).toBe(0); expect(loop.state).toBe("speaking");
+    for (let i = 0; i < 3; i++) recorder.frame(0.3);         // the driver, well above 3x the floor
+    await flush();
+    expect(speaker.cancels).toBe(1);
+  });
   it("steady low-level bleed (1.5x threshold) never barges in", async () => {
     const { loop, recorder, speaker } = make();
     loop.toggleConversation(); await flush();

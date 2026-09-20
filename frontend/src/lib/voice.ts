@@ -110,6 +110,12 @@ const MIC_ERROR = "I can't hear the mic";
 // ponytail: fixed constants; promote to a Settings sensitivity knob if rigs differ.
 export const BARGE_IN_MS = 120;
 export const BARGE_IN_LEVEL_MULT = 2;
+// The level gate adapts to the measured playback bleed: gate = max(listening threshold,
+// BARGE_IN_BLEED_MULT x bleed floor). Seeded so it STARTS at the old fixed 2x threshold
+// (safe for a desk mic next to speakers) and settles within a couple of seconds:
+// rig 2026-09-20, headset: bleed 0.000-0.003, a normal "stop" peaked at 0.037 -- just
+// under the fixed 0.040 gate, so it took several tries.
+export const BARGE_IN_BLEED_MULT = 3;
 // Idle seconds before the held-open mic stream is released (OS indicator goes off).
 export const MIC_RELEASE_S = 60;
 const DIDNT_CATCH = "Didn't catch that";
@@ -313,13 +319,21 @@ export class VoiceLoop {
   // Dev-only rig readout (#129): `localStorage.voiceDebug = "1"` in devtools, then the
   // console shows the mic's peak level against the barge-in gate twice a second while
   // the coach is speaking -- the numbers a threshold complaint needs.
+  // Playback level leaking into the mic while the coach speaks; < 0 = not seeded yet.
+  // Kept across answers (the room doesn't change between them).
+  #bleed = -1;
+  #bargeGate(): number {
+    const base = this.#o.vad.threshold;
+    if (this.#bleed < 0) this.#bleed = (base * BARGE_IN_LEVEL_MULT) / BARGE_IN_BLEED_MULT;
+    return Math.max(base, BARGE_IN_BLEED_MULT * this.#bleed);
+  }
   #dbgPeak = 0; #dbgMs = 0;
   #debugBarge(level: number, frameMs: number): void {
     this.#dbgPeak = Math.max(this.#dbgPeak, level); this.#dbgMs += frameMs;
     if (this.#dbgMs < 500) return;
     try {
       if (localStorage.getItem("voiceDebug")) {
-        console.debug(`[barge-in] peak ${this.#dbgPeak.toFixed(3)} gate ${(this.#o.vad.threshold * BARGE_IN_LEVEL_MULT).toFixed(3)} acc ${this.#bargeMs.toFixed(0)}/${BARGE_IN_MS} ms`);
+        console.debug(`[barge-in] peak ${this.#dbgPeak.toFixed(3)} gate ${this.#bargeGate().toFixed(3)} bleed ${this.#bleed.toFixed(4)} acc ${this.#bargeMs.toFixed(0)}/${BARGE_IN_MS} ms`);
       }
     } catch { /* storage blocked: no readout */ }
     this.#dbgPeak = 0; this.#dbgMs = 0;
@@ -336,7 +350,7 @@ export class VoiceLoop {
       // listening threshold is not speech: require a SUSTAINED burst at twice the
       // threshold before cutting the answer off. ponytail: fixed multiplier and
       // window; an echo-cancelling reference of the TTS output would be the upgrade.
-      if (level >= this.#o.vad.threshold * BARGE_IN_LEVEL_MULT) {
+      if (level >= this.#bargeGate()) {
         this.#bargeMs += frameMs;
         // Keep the burst that triggered the barge-in (plus a little lead-in) so
         // the interrupting words are part of the utterance.
@@ -346,6 +360,9 @@ export class VoiceLoop {
         // or phrase still accumulates to the target, while steady low-level playback
         // bleed (always below 2x threshold) never creeps up.
         this.#bargeMs = Math.max(0, this.#bargeMs - frameMs);
+        // Only sub-gate frames teach the floor (~1 s time constant), so the driver's
+        // own interrupting words can never raise the gate against themselves.
+        this.#bleed += (level - this.#bleed) * Math.min(1, frameMs / 1000);
       }
       this.#debugBarge(level, frameMs);
       return;
