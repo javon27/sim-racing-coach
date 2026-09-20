@@ -2,6 +2,11 @@
 //! voice:release events for the webview, gated to when LMU or this app itself has the
 //! foreground window (`foreground_allows`, #112) -- settable via `PollerState.focus_gate`
 //! for VR, where the desktop foreground may not be the game.
+//! Wheels/sticks are read through raw HID (`HidSource`), not winmm: winmm's
+//! `joyGetPosEx` permanently loses a power-cycled device (reboot required) and can
+//! access-violate when the device changes underneath it (#144, #124's
+//! `STATUS_HEAP_CORRUPTION`). Gamepads stay on XInput, the one path that kept
+//! working through all of that.
 //! Spec: docs/superpowers/specs/2026-09-15-voice-loop-design.md.
 use std::collections::HashSet;
 
@@ -133,7 +138,10 @@ fn releases_for_vanished(pressed: &HashSet<u16>, device: &str, min_usage: u16) -
 }
 
 /// Bind ids are `hid:<vid:04x>:<pid:04x>:<button>`, stable across replug and
-/// power-cycle (unlike a winmm index). Parses one back to its parts.
+/// power-cycle (unlike a winmm index). Parses one back to its parts -- nothing in
+/// production needs this (bind ids are opaque strings everywhere else), but the
+/// round-trip is worth proving against `bind_id`'s encoding.
+#[cfg(test)]
 fn parse_hid_bind(id: &str) -> Option<(u16, u16, u8)> {
     let rest = id.strip_prefix("hid:")?;
     let mut parts = rest.split(':');
@@ -184,43 +192,303 @@ impl ButtonSource for XInputSource {
     }
 }
 
-// ponytail: winmm caps a wheel at 32 buttons / 16 devices; DirectInput8 if a Fanatec
-// bind above button 31 is ever wanted.
+/// A HID device open long enough to read button reports: the handle (owned by its
+/// reader thread, see `try_open_hid_device`), the preparsed data `HidP_GetUsages`
+/// needs (freed on drop), and the button-usage bookkeeping `poll()` diffs against.
+// ponytail: two identical VID/PID wheels would collide on the same bind id; a
+// per-device serial/path suffix if that's ever a real rig, not a hypothetical one.
 #[cfg(windows)]
-pub struct WinmmSource { prev: Vec<u32> }
+struct HidDevice {
+    path: String,
+    vid: u16,
+    pid: u16,
+    usage_page: u16,
+    min_usage: u16,
+    preparsed: windows::Win32::Devices::HumanInterfaceDevice::PHIDP_PREPARSED_DATA,
+    usage_buf: Vec<u16>,
+    pressed: HashSet<u16>,
+    rx: std::sync::mpsc::Receiver<Vec<u8>>,
+}
 #[cfg(windows)]
-impl WinmmSource {
+impl HidDevice {
+    fn device_id(&self) -> String { format!("hid:{:04x}:{:04x}", self.vid, self.pid) }
+}
+#[cfg(windows)]
+impl Drop for HidDevice {
+    fn drop(&mut self) {
+        use windows::Win32::Devices::HumanInterfaceDevice::HidD_FreePreparsedData;
+        unsafe { let _ = HidD_FreePreparsedData(self.preparsed); }
+    }
+}
+
+/// A HID interface opened and qualified as a wheel/stick/pad (usage page 1, usage
+/// 4/5/8) with at least one button capability -- shared by the poller's device open
+/// (which goes on to spawn a reader thread) and `voice_list_devices` (which just
+/// wants the product name). Caller owns `handle` and `preparsed` and must free both.
+#[cfg(windows)]
+struct HidQualified {
+    handle: windows::Win32::Foundation::HANDLE,
+    attrs: windows::Win32::Devices::HumanInterfaceDevice::HIDD_ATTRIBUTES,
+    preparsed: windows::Win32::Devices::HumanInterfaceDevice::PHIDP_PREPARSED_DATA,
+    caps: windows::Win32::Devices::HumanInterfaceDevice::HIDP_CAPS,
+    button_caps: Vec<windows::Win32::Devices::HumanInterfaceDevice::HIDP_BUTTON_CAPS>,
+}
+#[cfg(windows)]
+fn open_and_qualify(path: &str) -> Option<HidQualified> {
+    use windows::Win32::Devices::HumanInterfaceDevice::{
+        HidD_FreePreparsedData, HidD_GetAttributes, HidD_GetPreparsedData, HidP_GetButtonCaps,
+        HidP_GetCaps, HidP_Input, HIDD_ATTRIBUTES, HIDP_BUTTON_CAPS, HIDP_CAPS,
+        PHIDP_PREPARSED_DATA, HIDP_STATUS_SUCCESS,
+    };
+    use windows::Win32::Foundation::{CloseHandle, GENERIC_READ};
+    use windows::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+    use windows::core::PCWSTR;
+
+    let path_w: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+    let handle = unsafe {
+        CreateFileW(
+            PCWSTR(path_w.as_ptr()),
+            GENERIC_READ.0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            None,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            None,
+        )
+    }
+    .ok()?;
+
+    let mut attrs = HIDD_ATTRIBUTES { Size: std::mem::size_of::<HIDD_ATTRIBUTES>() as u32, ..Default::default() };
+    if !unsafe { HidD_GetAttributes(handle, &mut attrs) } {
+        unsafe { let _ = CloseHandle(handle); }
+        return None;
+    }
+
+    let mut preparsed = PHIDP_PREPARSED_DATA::default();
+    if !unsafe { HidD_GetPreparsedData(handle, &mut preparsed) } {
+        unsafe { let _ = CloseHandle(handle); }
+        return None;
+    }
+
+    let mut caps = HIDP_CAPS::default();
+    if unsafe { HidP_GetCaps(preparsed, &mut caps) } != HIDP_STATUS_SUCCESS {
+        unsafe { let _ = HidD_FreePreparsedData(preparsed); let _ = CloseHandle(handle); }
+        return None;
+    }
+
+    // Generic Desktop (0x01): joystick(4), gamepad(5), multi-axis(8). Everything
+    // else on the HID bus (keyboards, mice, vendor telemetry devices...) is skipped.
+    if caps.UsagePage != 0x01 || !matches!(caps.Usage, 4 | 5 | 8) {
+        unsafe { let _ = HidD_FreePreparsedData(preparsed); let _ = CloseHandle(handle); }
+        return None;
+    }
+
+    let mut n_caps = caps.NumberInputButtonCaps;
+    let mut button_caps = vec![HIDP_BUTTON_CAPS::default(); n_caps as usize];
+    if n_caps > 0
+        && unsafe { HidP_GetButtonCaps(HidP_Input, button_caps.as_mut_ptr(), &mut n_caps, preparsed) } != HIDP_STATUS_SUCCESS
+    {
+        unsafe { let _ = HidD_FreePreparsedData(preparsed); let _ = CloseHandle(handle); }
+        return None;
+    }
+    button_caps.truncate(n_caps as usize);
+    if button_caps.is_empty() {
+        // No buttons to bind a PTT to -- a steering-only or pedal-only interface.
+        unsafe { let _ = HidD_FreePreparsedData(preparsed); let _ = CloseHandle(handle); }
+        return None;
+    }
+
+    Some(HidQualified { handle, attrs, preparsed, caps, button_caps })
+}
+
+/// `buttonCaps` is a count of capability *ranges*, not buttons: a range's usages
+/// run `UsageMin..=UsageMax`; a non-range cap is a single usage. The device's
+/// lowest usage across every range becomes button 0 (`normalize_usage`).
+#[cfg(windows)]
+fn min_button_usage(caps: &[windows::Win32::Devices::HumanInterfaceDevice::HIDP_BUTTON_CAPS]) -> u16 {
+    caps.iter()
+        .map(|c| unsafe { if c.IsRange { c.Anonymous.Range.UsageMin } else { c.Anonymous.NotRange.Usage } })
+        .min()
+        .unwrap_or(1)
+}
+
+/// Opens `path`, and if it qualifies as a wheel/stick/pad, spawns its reader thread
+/// and returns a live `HidDevice`. The reader thread owns the handle from here --
+/// it closes it when `ReadFile` finally errors (unplug), which is also what tells
+/// `HidSource::poll()` the device is gone (the channel disconnects).
+#[cfg(windows)]
+fn try_open_hid_device(path: &str) -> Option<HidDevice> {
+    use windows::Win32::Devices::HumanInterfaceDevice::HidP_MaxUsageListLength;
+    use windows::Win32::Storage::FileSystem::ReadFile;
+
+    let q = open_and_qualify(path)?;
+    let usage_page = q.button_caps[0].UsagePage;
+    let min_usage = min_button_usage(&q.button_caps);
+    let max_usages = unsafe { HidP_MaxUsageListLength(windows::Win32::Devices::HumanInterfaceDevice::HidP_Input, Some(usage_page), q.preparsed) };
+    let report_len = q.caps.InputReportByteLength as usize;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    // HANDLE wraps a raw pointer (not Send); it's just a kernel handle value, so
+    // ferrying it across as a plain integer and rebuilding it on the reader thread
+    // is sound -- nothing on this side touches the handle after the thread starts.
+    let handle_bits = q.handle.0 as isize;
+    std::thread::spawn(move || {
+        let handle = windows::Win32::Foundation::HANDLE(handle_bits as *mut core::ffi::c_void);
+        loop {
+            let mut buf = vec![0u8; report_len];
+            // Blocking on purpose -- this thread exists so the 8ms poll loop never
+            // waits on Win32. An unplug fails the read (the driver stack tears down
+            // pending IO), which is exactly the signal `poll()` needs.
+            match unsafe { ReadFile(handle, Some(&mut buf), None, None) } {
+                Ok(()) if tx.send(buf).is_ok() => {}
+                _ => break,
+            }
+        }
+        unsafe { let _ = windows::Win32::Foundation::CloseHandle(handle); }
+    });
+
+    Some(HidDevice {
+        path: path.to_string(),
+        vid: q.attrs.VendorID,
+        pid: q.attrs.ProductID,
+        usage_page,
+        min_usage,
+        preparsed: q.preparsed,
+        usage_buf: vec![0u16; max_usages.max(1) as usize],
+        pressed: HashSet::new(),
+        rx,
+    })
+}
+
+/// Every present HID device interface path -- mirrors the probe in #144: HidD guid
+/// + SetupDi enumeration, not `hidapi` (which hands back raw report bytes with no
+/// descriptor, so the `HidP_*` calls above would be needed either way).
+#[cfg(windows)]
+fn enumerate_hid_paths() -> Vec<String> {
+    use windows::Win32::Devices::DeviceAndDriverInstallation::{
+        SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInterfaces, SetupDiGetClassDevsW,
+        SetupDiGetDeviceInterfaceDetailW, DIGCF_DEVICEINTERFACE, DIGCF_PRESENT,
+        SP_DEVICE_INTERFACE_DATA, SP_DEVICE_INTERFACE_DETAIL_DATA_W,
+    };
+    use windows::Win32::Devices::HumanInterfaceDevice::HidD_GetHidGuid;
+    use windows::core::PCWSTR;
+
+    let mut out = vec![];
+    unsafe {
+        let guid = HidD_GetHidGuid();
+        let Ok(info_set) = SetupDiGetClassDevsW(Some(&guid), PCWSTR::null(), None, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE) else {
+            return out;
+        };
+        let mut index = 0u32;
+        loop {
+            let mut iface = SP_DEVICE_INTERFACE_DATA {
+                cbSize: std::mem::size_of::<SP_DEVICE_INTERFACE_DATA>() as u32,
+                ..Default::default()
+            };
+            if SetupDiEnumDeviceInterfaces(info_set, None, &guid, index, &mut iface).is_err() {
+                break; // no more interfaces
+            }
+            index += 1;
+
+            let mut required = 0u32;
+            let _ = SetupDiGetDeviceInterfaceDetailW(info_set, &iface, None, 0, Some(&mut required), None);
+            if required == 0 {
+                continue;
+            }
+            let mut buf = vec![0u8; required as usize];
+            let detail = buf.as_mut_ptr() as *mut SP_DEVICE_INTERFACE_DETAIL_DATA_W;
+            // Windows quirk: cbSize is the fixed struct size, NOT the variable buffer
+            // size -- the latter goes in the call's size param below.
+            (*detail).cbSize = std::mem::size_of::<SP_DEVICE_INTERFACE_DETAIL_DATA_W>() as u32;
+            if SetupDiGetDeviceInterfaceDetailW(info_set, &iface, Some(detail), required, None, None).is_ok() {
+                let path_ptr = std::ptr::addr_of!((*detail).DevicePath) as *const u16;
+                let len = (0..).take_while(|&i| *path_ptr.add(i) != 0).count();
+                out.push(String::from_utf16_lossy(std::slice::from_raw_parts(path_ptr, len)));
+            }
+        }
+        let _ = SetupDiDestroyDeviceInfoList(info_set);
+    }
+    out
+}
+
+/// Wheels/sticks/pads through raw HID -- winmm's replacement (#144). Re-enumerates
+/// every 2s to adopt a device that just arrived (including one power-cycled back to
+/// life); a device that vanishes is detected immediately in `poll()` via its reader
+/// thread's channel disconnecting, not on the next sweep.
+#[cfg(windows)]
+pub struct HidSource {
+    devices: Vec<HidDevice>,
+    last_enum: std::time::Instant,
+}
+#[cfg(windows)]
+impl HidSource {
     pub fn new() -> Self {
-        use windows::Win32::Media::Multimedia::joyGetNumDevs;
-        let n = unsafe { joyGetNumDevs() };
-        Self { prev: vec![0u32; n as usize] }
+        let mut s = Self { devices: vec![], last_enum: std::time::Instant::now() };
+        s.reenumerate();
+        s
+    }
+
+    fn reenumerate(&mut self) {
+        let known: Vec<String> = self.devices.iter().map(|d| d.path.clone()).collect();
+        let seen = enumerate_hid_paths();
+        let (added, _) = diff_device_paths(&known, &seen);
+        // Removal is left to poll()'s channel-disconnect check -- a device that
+        // vanishes between sweeps must release its held button now, not up to 2s
+        // from now.
+        for path in added {
+            if let Some(dev) = try_open_hid_device(&path) {
+                self.devices.push(dev);
+            }
+        }
     }
 }
 #[cfg(windows)]
-impl ButtonSource for WinmmSource {
+impl ButtonSource for HidSource {
     fn poll(&mut self) -> Vec<Edge> {
-        use windows::Win32::Media::Multimedia::{joyGetPosEx, JOYINFOEX, JOY_RETURNBUTTONS};
+        // Not at 125Hz -- SetupDi enumeration is far too slow for the poll loop.
+        if self.last_enum.elapsed() >= std::time::Duration::from_secs(2) {
+            self.last_enum = std::time::Instant::now();
+            self.reenumerate();
+        }
+
+        use windows::Win32::Devices::HumanInterfaceDevice::{HidP_GetUsages, HidP_Input, HIDP_STATUS_SUCCESS};
         let mut out = vec![];
-        for i in 0..self.prev.len() as u32 {
-            let mut ji = JOYINFOEX {
-                dwSize: std::mem::size_of::<JOYINFOEX>() as u32,
-                dwFlags: JOY_RETURNBUTTONS as u32,
-                ..Default::default()
-            };
-            // A device that errors is skipped silently -- other binds keep working.
-            if unsafe { joyGetPosEx(i, &mut ji) } == 0 {
-                let buttons = ji.dwButtons; // JOYINFOEX is packed: copy to a local before use
-                let prev = self.prev[i as usize];
-                if buttons != prev {
-                    let changed = buttons ^ prev;
-                    for bit in 0..32u8 {
-                        if changed & (1 << bit) != 0 {
-                            out.push(Edge { device: format!("winmm:{i}"), button: bit, pressed: buttons & (1 << bit) != 0 });
+        let mut vanished = vec![];
+        for (i, dev) in self.devices.iter_mut().enumerate() {
+            loop {
+                match dev.rx.try_recv() {
+                    Ok(mut report) => {
+                        let mut len = dev.usage_buf.len() as u32;
+                        let status = unsafe {
+                            HidP_GetUsages(
+                                HidP_Input,
+                                dev.usage_page,
+                                None,
+                                dev.usage_buf.as_mut_ptr(),
+                                &mut len,
+                                dev.preparsed,
+                                report.as_mut_slice(),
+                            )
+                        };
+                        if status == HIDP_STATUS_SUCCESS {
+                            let now: HashSet<u16> = dev.usage_buf[..len as usize].iter().copied().collect();
+                            out.extend(diff_to_edges(&dev.pressed, &now, &dev.device_id(), dev.min_usage));
+                            dev.pressed = now;
                         }
                     }
-                    self.prev[i as usize] = buttons;
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        vanished.push(i);
+                        break;
+                    }
                 }
             }
+        }
+        for i in vanished.into_iter().rev() {
+            let dev = self.devices.remove(i);
+            out.extend(releases_for_vanished(&dev.pressed, &dev.device_id(), dev.min_usage));
         }
         out
     }
@@ -298,10 +566,10 @@ pub fn foreground_allows() -> bool {
 
 #[cfg(windows)]
 fn default_sources() -> Vec<Box<dyn ButtonSource>> {
-    // Both the wheel and the pad were seen through winmm at the rig (XInput printed
-    // nothing for the pad); winmm is the primary source for every device, XInput
-    // stays as a fallback for a pad that only registers via XInput.
-    vec![Box::new(WinmmSource::new()), Box::new(XInputSource::new())]
+    // Raw HID for wheels/sticks (#144: winmm loses a power-cycled device for good and
+    // can access-violate, #124); XInput stays for a pad, the one path that kept
+    // working through all of that.
+    vec![Box::new(HidSource::new()), Box::new(XInputSource::new())]
 }
 #[cfg(not(windows))]
 fn default_sources() -> Vec<Box<dyn ButtonSource>> { vec![] }
@@ -393,10 +661,8 @@ pub fn voice_set_hotkey(
 #[derive(Clone, serde::Serialize)]
 pub struct DeviceInfo { pub device: String, pub name: String }
 
-/// winmm's `szPname` fallback: the real product name unless it's the generic driver
-/// string winmm reports when no OEM name was registered, in which case a numbered
-/// placeholder is more honest than repeating "Microsoft PC-joystick driver" for every
-/// unbranded stick.
+/// The real product name unless the device didn't register one, in which case a
+/// numbered placeholder is more honest than an empty label.
 pub fn oem_name_from(sz_pname: &str, i: u32) -> String {
     let trimmed = sz_pname.trim_end_matches('\0').trim();
     if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("Microsoft PC-joystick driver") {
@@ -406,88 +672,37 @@ pub fn oem_name_from(sz_pname: &str, i: u32) -> String {
     }
 }
 
+/// `HidD_GetProductString` reads the USB product string descriptor directly off the
+/// device -- no registry lookup needed the way winmm's `szPname` did.
 #[cfg(windows)]
-fn reg_get_string(hive: windows::Win32::System::Registry::HKEY, subkey: &str, value: &str) -> Option<String> {
-    use windows::core::PCWSTR;
-    use windows::Win32::System::Registry::{RegGetValueW, RRF_RT_REG_SZ};
-    let subkey_w: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
-    let value_w: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
-    let mut buf = [0u16; 256];
-    let mut size = (buf.len() * 2) as u32;
-    let ok = unsafe {
-        RegGetValueW(
-            hive,
-            PCWSTR(subkey_w.as_ptr()),
-            PCWSTR(value_w.as_ptr()),
-            RRF_RT_REG_SZ,
-            None,
-            Some(buf.as_mut_ptr() as *mut _),
-            Some(&mut size),
-        )
-    };
-    if ok.is_ok() {
-        let chars = (size as usize / 2).min(buf.len());
-        let end = buf[..chars].iter().position(|&c| c == 0).unwrap_or(chars);
-        Some(String::from_utf16_lossy(&buf[..end]))
+fn hid_product_name(handle: windows::Win32::Foundation::HANDLE, index_hint: u32) -> String {
+    use windows::Win32::Devices::HumanInterfaceDevice::HidD_GetProductString;
+    let mut buf = [0u16; 128];
+    let ok = unsafe { HidD_GetProductString(handle, buf.as_mut_ptr() as *mut _, (buf.len() * 2) as u32) };
+    let raw = if ok {
+        let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        String::from_utf16_lossy(&buf[..end])
     } else {
-        None
-    }
+        String::new()
+    };
+    oem_name_from(&raw, index_hint)
 }
 
-/// Windows stores the wheel/pad's driver-registered product name in the registry,
-/// keyed by USB VID/PID, under HKCU (per-user) then HKLM (machine-wide) -- winmm's own
-/// `szPname` is often just "Microsoft PC-joystick driver" for a generic HID device.
-#[cfg(windows)]
-fn registry_oem_name(vid: u16, pid: u16) -> Option<String> {
-    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
-    let subkey = format!(
-        "System\\CurrentControlSet\\Control\\MediaProperties\\PrivateProperties\\Joystick\\OEM\\VID_{vid:04X}&PID_{pid:04X}"
-    );
-    for hive in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
-        if let Some(name) = reg_get_string(hive, &subkey, "OEMName") {
-            if !name.is_empty() {
-                return Some(name);
-            }
-        }
-    }
-    None
-}
-
-#[cfg(windows)]
-fn winmm_device_name(i: u32) -> Option<String> {
-    use windows::Win32::Media::Multimedia::{joyGetDevCapsW, JOYCAPSW};
-    let mut caps = JOYCAPSW::default();
-    let size = std::mem::size_of::<JOYCAPSW>() as u32;
-    if unsafe { joyGetDevCapsW(i as usize, &mut caps, size) } != 0 {
-        return None;
-    }
-    if let Some(name) = registry_oem_name(caps.wMid, caps.wPid) {
-        return Some(name);
-    }
-    let sz_pname = caps.szPname; // JOYCAPSW is packed: copy to a local before use
-    let pname = String::from_utf16_lossy(&sz_pname);
-    Some(oem_name_from(&pname, i))
-}
-
-/// Lists every winmm/XInput slot that currently answers a poll -- unplugged devices are
-/// left out, same as the poller itself skips them silently.
+/// Lists every currently-present HID wheel/stick/pad plus XInput slot -- unplugged
+/// devices are left out, same as the poller itself skips them silently.
 #[tauri::command]
 pub fn voice_list_devices() -> Vec<DeviceInfo> {
     let mut out = vec![];
     #[cfg(windows)]
     {
-        use windows::Win32::Media::Multimedia::{joyGetNumDevs, joyGetPosEx, JOYINFOEX, JOY_RETURNBUTTONS};
+        use windows::Win32::Devices::HumanInterfaceDevice::{HidD_FreePreparsedData};
+        use windows::Win32::Foundation::CloseHandle;
         use windows::Win32::UI::Input::XboxController::{XInputGetState, XINPUT_STATE};
-        let n = unsafe { joyGetNumDevs() };
-        for i in 0..n {
-            let mut ji = JOYINFOEX {
-                dwSize: std::mem::size_of::<JOYINFOEX>() as u32,
-                dwFlags: JOY_RETURNBUTTONS as u32,
-                ..Default::default()
-            };
-            if unsafe { joyGetPosEx(i, &mut ji) } == 0 {
-                let name = winmm_device_name(i).unwrap_or_else(|| format!("Joystick {}", i + 1));
-                out.push(DeviceInfo { device: format!("winmm:{i}"), name });
+        for (i, path) in enumerate_hid_paths().iter().enumerate() {
+            if let Some(q) = open_and_qualify(path) {
+                let name = hid_product_name(q.handle, i as u32);
+                out.push(DeviceInfo { device: format!("hid:{:04x}:{:04x}", q.attrs.VendorID, q.attrs.ProductID), name });
+                unsafe { let _ = HidD_FreePreparsedData(q.preparsed); let _ = CloseHandle(q.handle); }
             }
         }
         for i in 0..4u32 {
