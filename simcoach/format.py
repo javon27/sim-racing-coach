@@ -590,6 +590,35 @@ def format_events(events, cmap, units: str = "metric") -> list[str]:
     return lines
 
 
+def format_damage_line(events: list, state: dict) -> str | None:
+    """One line for a lap that took contact, or None for a clean lap -- and None
+    for a lap with no damage channels (older capture), never implied clean.
+    Impact magnitude and dent severity are raw, unitless numbers (#143: the only
+    anchor is the rig driver's own "more than a tap" at 365 -- no invented
+    tiers); the dent scale is per-panel-unknown, so it is never broken out by
+    panel, only max/total."""
+    if not events:
+        return None
+    heaviest = max(events, key=lambda e: e["magnitude"])
+    n = len(events)
+    line = (f"Contact: {n} impact{'s' if n != 1 else ''}, heaviest "
+            f"{heaviest['magnitude']:.0f} at {heaviest['lap_distance']:,.0f} m "
+            f"({heaviest['label']})")
+    if state:
+        line += (f". Bodywork damage: dent severity max {state['dent_max']:.0f}, "
+                 f"total {state['dent_total']:.0f} (raw 0\N{EN DASH}255 scale, panel unknown)")
+        flags = []
+        if state.get("detached"):
+            flags.append("bodywork detached")
+        if state.get("overheating"):
+            flags.append("overheating")
+        flags.extend(f"{w.upper()} flat" for w in state.get("wheels_flat", []))
+        flags.extend(f"{w.upper()} wheel detached" for w in state.get("wheels_detached", []))
+        if flags:
+            line += "; " + ", ".join(flags)
+    return line + "."
+
+
 def find_corner(analysis, corner) -> object | None:
     """Look up a corner by number (int or numeric string) or name (case-insensitive
     substring), so a tool can fetch just the one the driver asked about."""

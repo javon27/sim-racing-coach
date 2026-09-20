@@ -1855,6 +1855,75 @@ def test_get_stint_events_is_advertised_to_the_model():
     assert "laps" in spec["input_schema"]["properties"]
 
 
+# --- damage / contact (#143) --------------------------------------------------
+
+def _damage_session(tmp_path, synthetic_lap):
+    """3 race laps: lap 1 is pre-#143 (no damage channels at all), lap 2 has
+    damage channels but no impact (clean), lap 3 takes one hit."""
+    import dataclasses
+
+    import numpy as np
+
+    def zeroed(base):
+        ch = dict(base.channels)
+        n = len(np.asarray(ch["lap_distance"], float))
+        for key in ("last_impact_et", "last_impact_mag", "last_impact_x",
+                    "last_impact_z", "dent_max", "dent_total", "overheating",
+                    "detached"):
+            ch[key] = np.zeros(n)
+        for w in ("fl", "fr", "rl", "rr"):
+            ch[f"flat_{w}"] = np.zeros(n)
+            ch[f"wheel_detached_{w}"] = np.zeros(n)
+        return dataclasses.replace(base, channels=ch)
+
+    def hit_at(base, dist=1240.0, et=2178.5, mag=365.47, x=-1.02, z=1.75):
+        clean = zeroed(base)
+        ch = dict(clean.channels)
+        d = np.asarray(ch["lap_distance"], float)
+        idx = int(np.argmin(np.abs(d - dist)))
+        ch["last_impact_et"][idx:] = et
+        ch["last_impact_mag"][idx:] = mag
+        ch["last_impact_x"][idx:] = x
+        ch["last_impact_z"][idx:] = z
+        ch["dent_max"][idx:] = 1.0
+        ch["dent_total"][idx:] = 1.0
+        return dataclasses.replace(clean, channels=ch)
+
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    session_id = "s1--online"
+    laps = [synthetic_lap, zeroed(synthetic_lap), hit_at(synthetic_lap)]
+    ids = [store.save(dataclasses.replace(lap, session_id=session_id, phase="race",
+                                          lap_time=90.0 + i, timestamp=90.0 + i))
+           for i, lap in enumerate(laps)]
+    cur = store.load(ids[-1])
+    ctx = CoachContext(store, cmap=cmap, track=cur.track, car=cur.car,
+                       session_id=session_id, on_track=True)
+    return ctx
+
+
+def test_get_stint_events_prints_contact_for_the_damaged_lap_only(tmp_path, synthetic_lap):
+    ctx = _damage_session(tmp_path, synthetic_lap)
+    out = ctx.dispatch("get_stint_events", {})
+    assert out.count("Contact:") == 1
+    assert "race lap 3" in out.split("Contact:")[0].splitlines()[-3]
+    line = next(line for line in out.splitlines() if "Contact:" in line)
+    assert "1 impact" in line
+    assert "365" in line
+    assert "1,240 m" in line
+    assert "front-left" in line
+    assert "dent severity max 1" in line
+
+
+def test_get_stint_events_is_silent_on_a_clean_or_pre_143_lap(tmp_path, synthetic_lap):
+    ctx = _damage_session(tmp_path, synthetic_lap)
+    out = ctx.dispatch("get_stint_events", {})
+    lap1_block, lap2_block = out.split("Lap: race lap 2")[0], \
+        out.split("Lap: race lap 2")[1].split("Lap: race lap 3")[0]
+    assert "Contact:" not in lap1_block
+    assert "Contact:" not in lap2_block
+
+
 def test_get_lap_summary_leads_with_events_this_lap(tmp_path, synthetic_lap):
     ctx, _ = _events_session(tmp_path, synthetic_lap)
     out = ctx.get_lap_summary("race lap 2")

@@ -17,6 +17,8 @@ from simcoach.analysis import (
     _ENVELOPE_MIN_LAPS,
     analyze_lap,
     corner_tag,
+    damage_events,
+    damage_state,
     geometry_clause,
     grip_envelope,
     lap_events,
@@ -32,6 +34,7 @@ from simcoach.format import (
     find_corner,
     format_consistency,
     format_corner_line,
+    format_damage_line,
     format_events,
     format_lap_facts,
     format_laptime,
@@ -1231,6 +1234,13 @@ class CoachContext:
             lines = self._events_for(record, lap_id, baseline)
             out.append(self._lap_line(record, lap_id))
             out.extend(f"  {line}" for line in (lines or ["none"]))
+            # #143: contact is its own line, not folded into "none" -- a clean lap
+            # (or one captured before #143, with no damage channels at all) says
+            # nothing here rather than a "no damage" line on every lap.
+            damage_line = format_damage_line(damage_events(record.channels),
+                                             damage_state(record.channels))
+            if damage_line:
+                out.append(f"  {damage_line}")
         return "\n".join(out)
 
     def get_consistency(self, phase=None):

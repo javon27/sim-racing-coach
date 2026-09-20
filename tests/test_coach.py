@@ -245,6 +245,16 @@ def test_system_prompt_grounds_car_facts_in_measured_data():
     assert "get_session_status" in AGENTIC_SYSTEM_PROMPT.split("CAR FACTS", 1)[1][:200]
 
 
+def test_system_prompt_never_lets_damage_figures_be_guessed():
+    """#143: damage figures come from a tool call (get_stint_events), never the
+    model's own memory, and the dent scale is never attributed to a named panel."""
+    from simcoach.coach import AGENTIC_SYSTEM_PROMPT
+    section = AGENTIC_SYSTEM_PROMPT.split("CAR FACTS", 1)[1][:450]
+    assert "get_stint_events" in section
+    assert "panel" in section
+    assert "NEVER guess" in section
+
+
 def test_system_prompt_flags_electronics_direction_as_unknown_by_default():
     """#108 item 6: which way a TC/ABS/motor map means MORE intervention is only
     known when get_setup says so from the car notes; otherwise it's unknown."""
