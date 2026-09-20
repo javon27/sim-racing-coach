@@ -114,6 +114,37 @@ importable in the running process. `tests/test_packaging_spec.py` guards the
 spec/extra against re-listing them; `tests/test_server_voice.py` guards the
 status field.
 
+## Pinning what ships (`constraints.txt`)
+
+`build-installer.yml` resolves the sidecar's runtime deps with
+`pip install . --constraint constraints.txt` instead of `pyproject.toml`'s
+floors alone (#53/#50: an unpinned transitive changed a security default
+between two builds of the same commit). `pyproject.toml`'s `dependencies`
+floors stay the supported range; `constraints.txt` pins the exact set CI
+installs.
+
+Regenerate it deliberately, as its own reviewable commit — never implicitly
+as a side effect of another change:
+
+```sh
+python -m venv .venv-check
+.venv-check\Scripts\python.exe -m pip install .
+.venv-check\Scripts\python.exe -m pip freeze > constraints.txt
+rmdir /s /q .venv-check
+```
+
+Then hand-edit the result: restore the header comment (regenerating
+overwrites it) and delete the `simcoach @ file://...` self-line — the file
+pins simcoach's dependencies, not simcoach itself. Confirm every
+`pyproject.toml` floor is still satisfied by what got pinned, and do a
+clean-venv install against the new file before committing (same venv dance,
+`pip install . --constraint constraints.txt` this time) to prove it actually
+resolves. `tests/test_constraints_file.py` guards the file against being
+deleted or losing a pinned floor.
+
+`pyinstaller` is pinned separately, inline in `build-installer.yml`'s install
+step, since it never ships in the app — only used to build it.
+
 ## Release
 
 Push a `vX.Y.Z` tag. CI builds the installers and drafts a GitHub release with them
