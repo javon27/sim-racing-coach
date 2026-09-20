@@ -688,6 +688,22 @@ describe("SettingsScreen", () => {
       );
     });
 
+    it("shows a re-capture notice for a stale winmm: bind, not for a live hid: bind (#144)", async () => {
+      vi.mocked(isTauri).mockReturnValue(true);
+      vi.mocked(getSettings).mockResolvedValue(
+        baseSettings({
+          voice: { ...voiceDefaults, ptt_wheel: "winmm:0:1", ptt_gamepad: "hid:046d:c276:7" },
+        }),
+      );
+      vi.mocked(voiceStatus).mockResolvedValue({ installed: true, installing: false, progress_bytes: 0, total_bytes: null, error: null });
+
+      render(SettingsScreen);
+      await screen.findByText("Wheel button");
+
+      expect(screen.getByText(/wheel bind was saved with an older version/i)).toBeTruthy();
+      expect(screen.queryByText(/gamepad bind was saved with an older version/i)).toBeNull();
+    });
+
     it("Clear resets both the bind and its stored name (#104)", async () => {
       vi.mocked(isTauri).mockReturnValue(true);
       vi.mocked(getSettings).mockResolvedValue(

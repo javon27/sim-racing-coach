@@ -85,6 +85,13 @@ export function describeBind(id: string | null, devices: DeviceInfo[], storedNam
   return `${device} · button ${button + 1}`;
 }
 
+/** A bind saved before #144 (raw HID) as a winmm index, which the shell can never
+ * resolve now -- winmm is gone. There's no vid/pid to migrate it to, so Settings
+ * surfaces it instead of failing silently. */
+export function isStaleBind(id: string | null): boolean {
+  return id?.startsWith("winmm:") ?? false;
+}
+
 /** Arms capture and resolves with the next pressed bind id, or null on timeout. */
 export async function captureNext(shell: ShellApi = tauriShell(), timeoutMs = 10000): Promise<string | null> {
   return new Promise((resolve) => {

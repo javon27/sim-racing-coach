@@ -29,7 +29,7 @@
   } from "./api";
   import { eventFeed } from "./events";
   import InfoTip from "./InfoTip.svelte";
-  import { isTauri as isTauriShell, captureNext, deviceIdOf, describeBind, listDevices, pushBinds, type DeviceInfo } from "./voice-shell";
+  import { isTauri as isTauriShell, captureNext, deviceIdOf, describeBind, isStaleBind, listDevices, pushBinds, type DeviceInfo } from "./voice-shell";
   import { makeSpeaker } from "./audio";
 
   const KOKORO_PREVIEW_SENTENCE = "Brake later into turn four, the fast left after the long straight.";
@@ -770,6 +770,9 @@
             <button type="button" onclick={clearWheel} disabled={!settings.voice.ptt_wheel}>Clear</button>
           </div>
         </div>
+        {#if isStaleBind(settings.voice.ptt_wheel)}
+          <p class="status">This wheel bind was saved with an older version and needs re-capturing.</p>
+        {/if}
         <div class="field">
           <span class="lbl">Gamepad button<InfoTip text="A gamepad button held to talk, in addition to the keyboard key." /></span>
           <div class="control">
@@ -778,6 +781,9 @@
             <button type="button" onclick={clearGamepad} disabled={!settings.voice.ptt_gamepad}>Clear</button>
           </div>
         </div>
+        {#if isStaleBind(settings.voice.ptt_gamepad)}
+          <p class="status">This gamepad bind was saved with an older version and needs re-capturing.</p>
+        {/if}
       {/if}
       <div class="field">
         <span class="lbl">Microphone<InfoTip text="Which input device voice capture records from." /></span>

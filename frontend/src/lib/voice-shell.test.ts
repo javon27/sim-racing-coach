@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { attachShell, captureNext, describeBind, deviceIdOf, pushBinds, type ShellApi } from "./voice-shell";
+import { attachShell, captureNext, describeBind, deviceIdOf, isStaleBind, pushBinds, type ShellApi } from "./voice-shell";
 
 function fakeShell() {
   const handlers = new Map<string, (p: unknown) => void>();
@@ -74,5 +74,12 @@ describe("voice-shell", () => {
     expect(deviceIdOf("xinput:0:4")).toBe("xinput:0");
     expect(deviceIdOf("garbage")).toBe(null);
     expect(deviceIdOf(null)).toBe(null);
+  });
+
+  it("isStaleBind flags a winmm: id (#144 -- can't be migrated to hid:) and nothing else", () => {
+    expect(isStaleBind("winmm:0:7")).toBe(true);
+    expect(isStaleBind("hid:046d:c276:7")).toBe(false);
+    expect(isStaleBind("xinput:0:4")).toBe(false);
+    expect(isStaleBind(null)).toBe(false);
   });
 });
