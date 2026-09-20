@@ -434,4 +434,32 @@ mod tests {
     fn empty_monitor_list() {
         assert!(!is_on_screen(0, 0, 800, 600, &[]));
     }
+
+    // #111: the webview had no CSP (`"csp": null`) while rendering model-generated
+    // markdown through {@html} in ChatPanel.svelte. Cheap regression guard so a
+    // future edit that drops the policy back to null fails a test, not a rig.
+    #[test]
+    fn tauri_conf_ships_a_csp_for_dev_and_prod() {
+        let conf = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tauri.conf.json"))
+            .expect("tauri.conf.json must be readable");
+        let json: serde_json::Value = serde_json::from_str(&conf).expect("tauri.conf.json must be valid JSON");
+        let security = &json["app"]["security"];
+
+        let csp = security["csp"].as_str().expect("app.security.csp must be a non-null string");
+        assert!(!csp.is_empty());
+        for directive in [
+            "default-src 'self'",
+            "connect-src 'self' http://127.0.0.1:8765 ws://127.0.0.1:8765",
+            "style-src 'self' 'unsafe-inline'",
+            "img-src 'self' data:",
+            "media-src 'self' blob:",
+        ] {
+            assert!(csp.contains(directive), "prod csp missing `{directive}`: {csp}");
+        }
+        assert!(!csp.contains("unsafe-eval"), "prod csp must never allow unsafe-eval: {csp}");
+        assert!(!csp.contains("script-src 'unsafe-inline'"), "prod csp must never allow inline scripts: {csp}");
+
+        let dev_csp = security["devCsp"].as_str().expect("app.security.devCsp must be a non-null string");
+        assert!(dev_csp.contains("localhost:5173"), "dev csp must allow the Vite dev server: {dev_csp}");
+    }
 }

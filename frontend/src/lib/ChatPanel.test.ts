@@ -144,6 +144,32 @@ describe("ChatPanel", () => {
     expect(screen.getByText(/Brake later into T3\./)).toBeTruthy();
   });
 
+  it("#111: renderMarkdown escapes raw HTML from the model instead of injecting it", async () => {
+    // The coach's answer is model-generated text that has passed through tool
+    // results -- not trusted input. It reaches the DOM via {@html renderMarkdown(...)}.
+    // A CSP is defence in depth here, not a sanitizer: this proves the actual
+    // injection surface already escapes before any markup is added.
+    vi.mocked(getChatMessages).mockResolvedValue([
+      {
+        ts: 1, session_id: "s1", track: "Spa", car: "Ferrari", lap_id: null,
+        question: "q",
+        answer: "<img src=x onerror=alert(1)> and <script>alert(2)</script> and a bare < in prose",
+        tool_calls: null,
+      },
+    ]);
+    const stream = new FakeStream();
+
+    const { container } = render(ChatPanel, { props: { stream, chatId: "c9" } });
+
+    await screen.findByText(/a bare/);
+    const body = container.querySelector(".body.md")!;
+    expect(body.querySelector("img")).toBeNull();
+    expect(body.querySelector("script")).toBeNull();
+    expect(body.innerHTML).toContain("&lt;img src=x onerror=alert(1)&gt;");
+    expect(body.innerHTML).toContain("&lt;script&gt;alert(2)&lt;/script&gt;");
+    expect(body.innerHTML).toContain("a bare &lt; in prose");
+  });
+
   it("shows the error text when the stream errors", async () => {
     const stream = new FakeStream();
 
