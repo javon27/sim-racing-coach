@@ -263,6 +263,25 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
             left/center/right, NOT inside/center/outside -- for the right-side
             wheels "left" is the outside, so these are named _l/_r, not
             _in/_out. tire_temp_{w} (center, mTemperature[1]) is unchanged.
+      [RIG 2026-09-20] damage (#143), rig-confirmed live+populated at Imola
+        (Garage 59 #10, 1.3 s after a real front-left hit; mDentSeverity
+        [0,0,0,0,0,0,0,1], mLastImpactET 2178.5, mLastImpactMag 365.47,
+        mLastImpactPos x=-1.02 y=0.20 z=1.75):
+          dent_max <- max(mDentSeverity), dent_total <- sum(mDentSeverity).
+            The 8-panel array itself is NOT captured per-element -- which
+            index is which panel is UNVERIFIED, so a per-panel number would
+            be data we cannot interpret. Revisit if that mapping is ever
+            established.
+          last_impact_et <- mLastImpactET, last_impact_mag <-
+            mLastImpactMagnitude, last_impact_x/z <- mLastImpactPos.x/.z
+            (y skipped -- vertical position tells us nothing we interpret).
+            The fields hold the LAST impact indefinitely; a rising edge of
+            last_impact_et, not the magnitude, is what marks a NEW impact --
+            see analysis.damage_events.
+          overheating, detached <- mOverheating/mDetached, 0.0/1.0.
+          flat_{w}, wheel_detached_{w} <- mFlat/mDetached (per wheel), 0.0/1.0
+            -- UNVERIFIED (nothing broke on the rig hit that confirmed the
+            other damage fields).
     """
     wheels = telem.mWheel
     # #33: at frame 1, in the garage, this whole block reads pre-population state --
@@ -350,6 +369,15 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
         "virtual_energy": telem.mVirtualEnergy,
         "soc": telem.mSoC,
         "battery_charge": telem.mBatteryChargeFraction,
+        # #143 [RIG 2026-09-20]: see docstring above.
+        "dent_max": float(max(telem.mDentSeverity)),
+        "dent_total": float(sum(telem.mDentSeverity)),
+        "last_impact_et": telem.mLastImpactET,
+        "last_impact_mag": telem.mLastImpactMagnitude,
+        "last_impact_x": telem.mLastImpactPos.x,
+        "last_impact_z": telem.mLastImpactPos.z,
+        "overheating": 1.0 if telem.mOverheating else 0.0,
+        "detached": 1.0 if telem.mDetached else 0.0,
     }
     for name, i in (("fl", 0), ("fr", 1), ("rl", 2), ("rr", 3)):
         w = wheels[i]
@@ -377,6 +405,9 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
         sample[f"camber_{name}"] = w.mCamber
         sample[f"tire_temp_l_{name}"] = w.mTemperature[0] - 273.15
         sample[f"tire_temp_r_{name}"] = w.mTemperature[2] - 273.15
+        # #143 [RIG 2026-09-20]: UNVERIFIED, see docstring above.
+        sample[f"flat_{name}"] = 1.0 if w.mFlat else 0.0
+        sample[f"wheel_detached_{name}"] = 1.0 if w.mDetached else 0.0
     return sample
 
 

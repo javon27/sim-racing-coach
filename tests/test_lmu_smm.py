@@ -244,6 +244,34 @@ def test_sample_from_telem_maps_driver_aid_index_channels():
     assert s["abs_active"] == 1.0 and s["tc_active"] == 0.0
 
 
+def test_sample_from_telem_maps_damage_channels():
+    """#143, the exact 2026-09-20 rig readout (Imola, Garage 59 #10, 1.3 s after
+    a real front-left hit) -- the fixture the repo's own "tests that encode the
+    bug" lesson demands, not invented numbers."""
+    t = make_telem()
+    t.mDentSeverity = (C.c_ubyte * 8)(0, 0, 0, 0, 0, 0, 0, 1)
+    t.mLastImpactET = 2178.5
+    t.mLastImpactMagnitude = 365.47
+    t.mLastImpactPos.x, t.mLastImpactPos.y, t.mLastImpactPos.z = -1.02, 0.20, 1.75
+    t.mOverheating = False
+    t.mDetached = False
+    t.mWheel[0].mFlat = False
+    t.mWheel[0].mDetached = False
+    t = roundtrip(t)
+    s = sample_from_telem(t, lap_dist=0.0)
+
+    assert s["dent_max"] == 1.0
+    assert s["dent_total"] == 1.0
+    assert s["last_impact_et"] == pytest.approx(2178.5)
+    assert s["last_impact_mag"] == pytest.approx(365.47)
+    assert s["last_impact_x"] == pytest.approx(-1.02)
+    assert s["last_impact_z"] == pytest.approx(1.75)
+    assert s["overheating"] == 0.0
+    assert s["detached"] == 0.0
+    assert s["flat_fl"] == 0.0
+    assert s["wheel_detached_fl"] == 0.0
+
+
 def test_sample_from_telem_maps_rear_brake_bias():
     """mRearBrakeBias is a plain double in the offset-anchored region with
     unambiguous rF2 semantics, unlike the uint8 map indices above -- it is what
