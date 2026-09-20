@@ -28,7 +28,6 @@ export class CoachStream {
   phase: CoachPhase = "idle";
   toolActivity: ToolActivity | null = null;
   answer = "";
-  spoken: string | null = null;
   chatId: string | null = null;
   error: string | null = null;
   // The CHAT cumulative usage + estimated $ the server reports on `done`. Null
@@ -54,7 +53,6 @@ export class CoachStream {
     this.phase = "connecting";
     this.toolActivity = null;
     this.answer = "";
-    this.spoken = null;
     this.chatId = null;
     this.error = null;
     this.usage = null;
@@ -85,16 +83,9 @@ export class CoachStream {
             this.phase = "streaming";
             this.answer += data.text;
             break;
-          case "spoken":
-            // PTT: the [spoken] cue streamed as its own line, ahead of the rest of
-            // the answer -- surfaced immediately so VoiceLoop can start speaking it
-            // without waiting for `done`. Does not end the stream.
-            this.spoken = data.text;
-            break;
           case "done":
             this.phase = "done";
             this.answer = data.answer ?? this.answer;
-            this.spoken = data.spoken ?? null;
             this.chatId = data.chat_id ?? null;
             this.usage = data.usage ?? null;
             this.cost = data.cost ?? null;

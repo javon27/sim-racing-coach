@@ -32,7 +32,6 @@
       phase: CoachPhase;
       toolActivity: ToolActivity | null;
       answer: string;
-      spoken?: string | null;
       chatId: string | null;
       error: string | null;
       usage?: ChatUsage | null;
@@ -47,7 +46,7 @@
     voice?: VoiceLoop | null;
   } = $props();
 
-  type Msg = { role: "you" | "coach"; text: string; spoken?: string | null };
+  type Msg = { role: "you" | "coach"; text: string };
 
   // Minimal markdown -> HTML for coach answers: headings (#/##), "- " lists,
   // **bold**, `code`. No dependency — everything else renders as plain text.
@@ -409,7 +408,7 @@
       const hist: Msg[] = [];
       for (const row of rows) {
         hist.push({ role: "you", text: row.question });
-        hist.push({ role: "coach", text: row.answer, spoken: row.spoken ?? null });
+        hist.push({ role: "coach", text: row.answer });
       }
       messages = hist;
     } catch {
@@ -470,20 +469,18 @@
     window.addEventListener("settings-changed", loadVoice);
     window.addEventListener("keydown", onWindowKeydown);
     window.addEventListener("keyup", onWindowKeyup);
-    let lastSpokenSeen: string | null = null;
     // Conversation mode speaks sentence-by-sentence as the answer streams (#104).
     // Diffed from `answer`'s growth rather than adding a field to CoachStream --
     // ChatPanel already tracks `answer` for rendering, so this is the smaller
     // plumbing than threading a `lastDelta` through the stream/store contract.
     let voicedAnswerLen = 0;
     const unsubscribe = stream.subscribe((s) => {
-      const snap = s as { phase: CoachPhase; toolActivity: ToolActivity | null; answer: string; spoken?: string | null; chatId: string | null; error: string | null; usage?: ChatUsage | null; cost?: number | null; costComplete?: boolean; longChat?: boolean };
+      const snap = s as { phase: CoachPhase; toolActivity: ToolActivity | null; answer: string; chatId: string | null; error: string | null; usage?: ChatUsage | null; cost?: number | null; costComplete?: boolean; longChat?: boolean };
       phase = snap.phase;
       toolActivity = snap.toolActivity;
       answer = snap.answer;
       error = snap.error;
       if (snap.phase === "connecting") {
-        lastSpokenSeen = null; // fresh ask -- forget the last turn's cue
         voicedAnswerLen = 0;
       }
       if (snap.answer.length > voicedAnswerLen) {
@@ -491,17 +488,8 @@
         voicedAnswerLen = snap.answer.length;
         activeVoice?.onText(delta);
       }
-      // The `spoken` cue streams ahead of `done` (#104) -- forward it to the loop
-      // the moment it arrives so PTT starts talking immediately, not just on done.
-      if (snap.spoken && snap.spoken !== lastSpokenSeen) {
-        lastSpokenSeen = snap.spoken;
-        activeVoice?.onSpoken(snap.spoken);
-      }
       if (snap.phase === "done") {
-        // snap.spoken only ever carries a value for a PTT turn (the server only
-        // sets `terminal.spoken` when voice === "ptt"), so no extra mode gating
-        // is needed here -- it's already null for typed/conversation turns.
-        messages = [...messages, { role: "coach", text: snap.answer, spoken: snap.spoken ?? null }];
+        messages = [...messages, { role: "coach", text: snap.answer }];
         waiting = false;
         // Adopt the server's chat id so follow-ups append to this thread.
         if (snap.chatId) currentChatId = snap.chatId;
@@ -512,7 +500,7 @@
           costComplete = snap.costComplete ?? true;
           longChat = snap.longChat === true;
         }
-        activeVoice?.onAnswer(snap.answer, snap.spoken ?? null);
+        activeVoice?.onAnswer(snap.answer);
       } else if (snap.phase === "error") {
         const message = snap.error ?? "Something went wrong.";
         messages = [...messages, { role: "coach", text: message }];
@@ -622,9 +610,6 @@
               </div>
               {#if m.role === "coach"}
                 <div class="body md">{@html renderMarkdown(m.text)}</div>
-                {#if m.spoken}
-                  <div class="spoken" title="What was read aloud">🔈 {m.spoken}</div>
-                {/if}
               {:else}
                 <div class="body">{m.text}</div>
               {/if}

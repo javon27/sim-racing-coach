@@ -53,7 +53,6 @@ class FakeStream {
   phase: CoachPhase = "idle";
   toolActivity: ToolActivity | null = null;
   answer = "";
-  spoken: string | null = null;
   chatId: string | null = null;
   error: string | null = null;
   usage: ChatUsage | null = null;
@@ -189,7 +188,7 @@ describe("ChatPanel", () => {
     expect(screen.queryByText("lemans question")).toBeNull();
   });
 
-  it("history rows carrying a spoken cue show it under the coach bubble; rows without one don't", async () => {
+  it("an old history row's spoken cue is ignored -- the printed answer is the answer (#119)", async () => {
     vi.mocked(getChatMessages).mockResolvedValue([
       { ts: 1, session_id: "s1", track: "Le Mans", car: "Corvette", lap_id: null,
         question: "where do I brake?", answer: "Brake later into T3.", tool_calls: null,
@@ -201,9 +200,10 @@ describe("ChatPanel", () => {
 
     render(ChatPanel, { props: { stream, chatId: "c1" } });
 
-    expect(await screen.findByText(/Brake later into three\./)).toBeTruthy();
+    expect(await screen.findByText("Brake later into T3.")).toBeTruthy();
     expect(await screen.findByText("Typed answer.")).toBeTruthy();
-    expect(document.querySelectorAll(".spoken")).toHaveLength(1);
+    expect(screen.queryByText(/Brake later into three\./)).toBeNull();
+    expect(document.querySelectorAll(".spoken")).toHaveLength(0);
   });
 
   it("chatId=null (session with no chat) shows an empty new chat, not the latest", async () => {
@@ -591,7 +591,7 @@ describe("ChatPanel", () => {
     expect(asked).toEqual([]);
   });
 
-  it("done with spoken hands the answer to the loop", async () => {
+  it("PTT done hands the WHOLE answer to the loop -- no separate spoken cue (#119)", async () => {
     const stream = new FakeStream();
     const { voice, speaker } = fakeVoice();
     render(ChatPanel, { props: { stream, voice } });
@@ -602,31 +602,11 @@ describe("ChatPanel", () => {
     await fireEvent.pointerUp(mic);
 
     await waitFor(() => expect(voice.state).toBe("asking"));
-    stream.emit({ phase: "done", answer: "Full answer.", spoken: "Short cue.", chatId: "c1" });
+    stream.emit({ phase: "done", answer: "Short spoken answer.", chatId: "c1" });
 
-    await waitFor(() => expect(speaker.enqueued).toContain("Short cue."));
-    expect(screen.getByText("Full answer.")).toBeTruthy(); // written chat is the full answer
-    expect(screen.getByText(/Short cue\./)).toBeTruthy();  // shown under the new coach message
-  });
-
-  it("spoken frame reaches the loop before done (#104: speak the cue as soon as it streams)", async () => {
-    const stream = new FakeStream();
-    const { voice, speaker } = fakeVoice();
-    render(ChatPanel, { props: { stream, voice } });
-
-    const mic = screen.getByRole("button", { name: /hold to talk/i });
-    await fireEvent.pointerDown(mic);
-    await new Promise((r) => setTimeout(r, 300));
-    await fireEvent.pointerUp(mic);
-    await waitFor(() => expect(voice.state).toBe("asking"));
-
-    stream.emit({ phase: "streaming", spoken: "Brake later into four." });
-    await waitFor(() => expect(speaker.enqueued).toEqual(["Brake later into four."]));
-    expect(voice.state).toBe("speaking"); // speaking already, well before `done`
-
-    stream.emit({ phase: "done", answer: "Full answer.", spoken: "Brake later into four.", chatId: "c1" });
-    await new Promise((r) => setTimeout(r, 0));
-    expect(speaker.enqueued).toEqual(["Brake later into four."]); // not spoken a second time
+    await waitFor(() => expect(speaker.enqueued).toContain("Short spoken answer."));
+    expect(screen.getByText("Short spoken answer.")).toBeTruthy();
+    expect(document.querySelectorAll(".spoken")).toHaveLength(0);
   });
 
   it("conversation mode: text deltas reach the loop's onText as they stream", async () => {

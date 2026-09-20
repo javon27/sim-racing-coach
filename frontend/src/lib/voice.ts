@@ -226,15 +226,7 @@ export class VoiceLoop {
   }
 
   // ---- coach events ----
-  // PTT only: the [spoken] cue streamed ahead of the rest of the answer (coach.ts
-  // `spoken` event) -- start speaking it right away instead of waiting for `done`.
-  // This moves state off "asking", so onAnswer's own `state !== "asking"` guard
-  // below is what stops it from re-speaking once `done` arrives.
-  onSpoken(text: string): void {
-    if (this.state !== "asking" || this.mode !== "ptt") return;
-    void this.#speakThen(stripForSpeech(text), () => { this.mode = null; this.#set("idle"); });
-  }
-  onAnswer(answer: string, spoken?: string | null): void {
+  onAnswer(answer: string): void {
     if (this.mode === "conversation") {
       // Sentences already streamed in via onText() as enqueue()d utterances; this
       // just flushes whatever's left in the buffer and waits for the queue (not
@@ -252,8 +244,10 @@ export class VoiceLoop {
       });
       return;
     }
+    // PTT: waits for `done` before speaking (the answer is 2-3 sentences now,
+    // not a long text with a separate short cue) -- speaks the WHOLE answer.
     if (this.state !== "asking") return;
-    void this.#speakThen(stripForSpeech(spoken ?? firstParagraph(answer)), () => {
+    void this.#speakThen(stripForSpeech(answer), () => {
       this.mode = null; this.#set("idle");
     });
   }
@@ -437,9 +431,4 @@ export class VoiceLoop {
     this.#idleTimer = this.#setTimeout(() => this.stop(), this.#o.conversationIdleS * 1000);
   }
   #clearIdle(): void { if (this.#idleTimer !== null) { this.#clearTimeout(this.#idleTimer); this.#idleTimer = null; } }
-}
-
-export function firstParagraph(text: string): string {
-  for (const block of text.split(/\n\s*\n/)) if (block.trim()) return block.trim();
-  return "";
 }
