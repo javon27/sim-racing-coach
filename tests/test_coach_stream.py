@@ -85,12 +85,15 @@ def test_stream_no_leading_separator_when_tool_round_comes_first(tmp_path):
     assert texts == ["B"]
 
 
-def test_spoken_sentence_only_for_ptt(tmp_path):
-    from simcoach.coach import SPOKEN_SENTENCE
+def test_voice_mode_selects_the_matching_length_rule(tmp_path):
+    """#119: 'ptt' gets the PTT length rule, 'conversation' gets the
+    conversation rule, and no voice gets neither -- never both."""
+    from simcoach.coach import VOICE_CONVERSATION, VOICE_PTT
     from simcoach.store import LapStore
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    for voice, expected in ((None, False), ("conversation", False), ("ptt", True)):
+    for voice, want_ptt, want_conv in ((None, False, False), ("conversation", False, True), ("ptt", True, False)):
         m = FakeModel(reply="ok")
         ctx = CoachContext(store, track="T", car="C")
         list(Coach(m).ask_agentic_stream(ctx, "q", car="c", voice=voice))
-        assert (SPOKEN_SENTENCE in m.last_system) is expected, voice
+        assert (VOICE_PTT in m.last_system) is want_ptt, voice
+        assert (VOICE_CONVERSATION in m.last_system) is want_conv, voice

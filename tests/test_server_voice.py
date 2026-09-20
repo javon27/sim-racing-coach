@@ -247,22 +247,6 @@ def _ask(c, body):
                 return ev
 
 
-def test_ptt_strips_spoken_line_and_sends_it_on_done(tmp_path, monkeypatch):
-    monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
-    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    model = FakeModel(reply="Brake later.\n\nMore detail.\n\n[spoken] Brake later into four.")
-    c = TestClient(create_app(store, Coach(model)), base_url="http://127.0.0.1")
-    ev = _ask(c, {"question": "where am I losing time", "voice": "ptt"})
-    assert ev["type"] == "done"
-    assert ev["spoken"] == "Brake later into four."
-    assert ev["answer"] == "Brake later.\n\nMore detail."
-    assert "VOICE:" in model.last_system
-    rows = store.chat_messages(ev["chat_id"])
-    assert rows[0]["question"] == "🎤 where am I losing time"
-    assert rows[0]["answer"] == "Brake later.\n\nMore detail."      # never stored with the tag
-    assert rows[0]["spoken"] == "Brake later into four."
-
-
 def _ask_all(c, body):
     """Like _ask, but returns every event up to and including done/error."""
     with c.websocket_connect("/coach", headers={"host": "127.0.0.1",
@@ -276,102 +260,54 @@ def _ask_all(c, body):
                 return events
 
 
-def test_ptt_spoken_streams_before_text_and_is_never_in_text_events(tmp_path, monkeypatch):
+def test_ptt_emits_no_spoken_event_and_answer_verbatim_including_first_line(tmp_path, monkeypatch):
+    # #119: one answer per turn, printed and spoken identically -- no separate
+    # [spoken] cue/event, and the first line is no longer swallowed into a buffer
+    # waiting for a newline.
     monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    model = FakeModel(reply="[spoken] Brake later into four.\n\nFull answer.\n\nMore.")
+    model = FakeModel(reply="Brake later into four.")
     c = TestClient(create_app(store, Coach(model)), base_url="http://127.0.0.1")
-    events = _ask_all(c, {"question": "q", "voice": "ptt"})
-    spoken_idx = next(i for i, e in enumerate(events) if e["type"] == "spoken")
-    text_idxs = [i for i, e in enumerate(events) if e["type"] == "text"]
-    assert all(spoken_idx < i for i in text_idxs)
+    events = _ask_all(c, {"question": "where am I losing time", "voice": "ptt"})
+    assert not any(e["type"] == "spoken" for e in events)
     joined_text = "".join(e["text"] for e in events if e["type"] == "text")
-    assert "[spoken]" not in joined_text
-    assert events[spoken_idx]["text"] == "Brake later into four."
+    assert joined_text == "Brake later into four."
     done = events[-1]
     assert done["type"] == "done"
-    assert done["answer"] == "Full answer.\n\nMore."
+    assert "spoken" not in done
+    assert done["answer"] == "Brake later into four."
+    assert "VOICE" in model.last_system
+    rows = store.chat_messages(done["chat_id"])
+    assert rows[0]["question"] == "🎤 where am I losing time"
+    assert rows[0]["answer"] == "Brake later into four."
+    assert rows[0]["spoken"] is None
 
 
-def test_ptt_spoken_streams_mid_line_after_a_preamble(tmp_path, monkeypatch):
-    # #120: the tag can land mid-line, after a preamble with no newline before it
-    # (no tool round happened to trigger #133's separating blank line, so this is
-    # still all one streamed text block/delta). The preamble is emitted as its own
-    # text event before the spoken event, and the tag never leaks into any text.
+def test_ptt_answer_containing_the_literal_spoken_tag_passes_through_untouched(tmp_path, monkeypatch):
+    # A model that ignores the prompt and writes the literal string is not
+    # stripped or special-cased -- there is no more cue machinery to catch it.
     monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    model = FakeModel(reply="Preamble. [spoken] Cue here.\n\nBody")
-    c = TestClient(create_app(store, Coach(model)), base_url="http://127.0.0.1")
-    events = _ask_all(c, {"question": "q", "voice": "ptt"})
-    spoken_idx = next(i for i, e in enumerate(events) if e["type"] == "spoken")
-    assert events[spoken_idx]["text"] == "Cue here."
-    joined_text = "".join(e["text"] for e in events if e["type"] == "text")
-    assert "[spoken]" not in joined_text
-    assert joined_text == "Preamble. Body"
-    done = events[-1]
-    assert done["type"] == "done"
-    assert done["answer"] == "Preamble.\n\nBody"
-    assert done["spoken"] == "Cue here."
-
-
-def test_ptt_spoken_row_152_preamble_then_tool_then_tag(tmp_path, monkeypatch):
-    # #120's real rig payload (chat row 152, Spa): the model writes a preamble
-    # with no newline, calls a tool, then opens the next block with the tag.
-    # #133 inserts a "\n\n" separator between those two text blocks, so by the
-    # time the full answer is assembled the tag is at a line start and both the
-    # stored answer and spoken cue come out clean.
-    # ponytail: the LIVE per-chunk `spoken` event still doesn't fire early here
-    # (the buffer resolves off #133's separator, one delta before the tag's own
-    # block arrives) -- the tag can flash in a text delta mid-stream before
-    # `done` corrects it. Only the final `done.answer`/`done.spoken` are
-    # guaranteed clean by this interim fix. Fix properly if/when #119 lands.
-    monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
-    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    model = FakeModel(stream_script=[
-        ("text", "I'll pull up what we know about Spa and give you a walkthrough."),
-        ("tool", "get_corner", {"corner": "1"}),
-        ("text", ("[spoken] Welcome to Spa, mind the Eau Rouge exit kerb.\n\n"
-                   "Big picture: strong straights, tricky Eau Rouge.")),
-    ])
+    model = FakeModel(reply="[spoken] Brake later into four.")
     c = TestClient(create_app(store, Coach(model)), base_url="http://127.0.0.1")
     ev = _ask(c, {"question": "q", "voice": "ptt"})
     assert ev["type"] == "done"
-    assert ev["answer"] == ("I'll pull up what we know about Spa and give you a walkthrough.\n\n"
-                             "Big picture: strong straights, tricky Eau Rouge.")
-    assert ev["spoken"] == "Welcome to Spa, mind the Eau Rouge exit kerb."
-    assert "[spoken]" not in ev["answer"]
+    assert "spoken" not in ev
+    assert ev["answer"] == "[spoken] Brake later into four."
 
 
-def test_ptt_no_spoken_event_when_tag_missing(tmp_path, monkeypatch):
-    monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
-    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    model = FakeModel(reply="First para.\n\nSecond.")
-    c = TestClient(create_app(store, Coach(model)), base_url="http://127.0.0.1")
-    events = _ask_all(c, {"question": "q", "voice": "ptt"})
-    assert not any(e["type"] == "spoken" for e in events)
-    joined_text = "".join(e["text"] for e in events if e["type"] == "text")
-    assert joined_text == "First para.\n\nSecond."
-    done = events[-1]
-    assert done["spoken"] == "First para."
-
-
-def test_ptt_falls_back_to_first_paragraph_when_tag_missing(tmp_path, monkeypatch):
-    monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
-    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    c = TestClient(create_app(store, Coach(FakeModel(reply="First para.\n\nSecond."))), base_url="http://127.0.0.1")
-    ev = _ask(c, {"question": "q", "voice": "ptt"})
-    assert ev["spoken"] == "First para." and ev["answer"] == "First para.\n\nSecond."
-
-
-def test_conversation_and_typed_add_nothing(tmp_path, monkeypatch):
+def test_conversation_gets_its_own_voice_rule_and_neither_adds_spoken(tmp_path, monkeypatch):
     monkeypatch.setenv("SIMCOACH_DATA_DIR", str(tmp_path))
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     model = FakeModel(reply="Answer.")
     c = TestClient(create_app(store, Coach(model)), base_url="http://127.0.0.1")
     ev = _ask(c, {"question": "q", "voice": "conversation"})
-    assert "spoken" not in ev and ev["answer"] == "Answer." and "VOICE:" not in model.last_system
+    assert "spoken" not in ev and ev["answer"] == "Answer."
+    from simcoach.coach import VOICE_CONVERSATION
+    assert VOICE_CONVERSATION in model.last_system
     assert store.chat_messages(ev["chat_id"])[0]["question"] == "🎤 q"
     assert store.chat_messages(ev["chat_id"])[0]["spoken"] is None
     ev = _ask(c, {"question": "typed", "voice": "bogus"})
     assert "spoken" not in ev and store.chat_messages(ev["chat_id"])[0]["question"] == "typed"
     assert store.chat_messages(ev["chat_id"])[0]["spoken"] is None
+    assert "VOICE" not in model.last_system

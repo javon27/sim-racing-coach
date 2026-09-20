@@ -194,49 +194,6 @@ def test_setup_lines_with_live_value_drops_the_caveat_and_step():
     assert lines["Rear Wing"] == "- Rear Wing: 6.5 deg (step 6 of 0-9)"
 
 
-from simcoach.coach import first_paragraph, split_spoken
-
-
-def test_split_spoken_extracts_and_strips_the_last_tag_line():
-    text = "Brake **later** into T4.\n\n- point one\n- point two\n\n[spoken] Brake later into T4, you're giving up 2 tenths."
-    answer, spoken = split_spoken(text)
-    assert spoken == "Brake later into T4, you're giving up 2 tenths."
-    assert answer == "Brake **later** into T4.\n\n- point one\n- point two"
-
-
-def test_split_spoken_extracts_when_tag_is_first():
-    text = "[spoken] Brake later into four.\n\nFull answer.\n\nMore."
-    answer, spoken = split_spoken(text)
-    assert spoken == "Brake later into four."
-    assert answer == "Full answer.\n\nMore."
-
-
-def test_split_spoken_tolerates_bold_tag_and_colon():
-    answer, spoken = split_spoken("Full answer.\n**[Spoken]:** Short cue.")
-    assert (answer, spoken) == ("Full answer.", "Short cue.")
-
-
-def test_split_spoken_absent_or_malformed_returns_text_unchanged():
-    assert split_spoken("Just an answer.") == ("Just an answer.", None)
-    assert split_spoken("Answer.\n[spoken]") == ("Answer.\n[spoken]", None)     # empty capture = absent
-    assert split_spoken("[spoken] only a summary") == ("", "only a summary")
-
-
-def test_split_spoken_finds_the_tag_mid_line_after_a_preamble():
-    # #120: the model can write a preamble before the tag with no newline (no tool
-    # round happened to trigger #133's separating blank line). The preamble stays
-    # in the answer; only the tag and the rest of its line become the cue.
-    text = "Preamble. [spoken] Cue here.\n\nBody"
-    answer, spoken = split_spoken(text)
-    assert spoken == "Cue here."
-    assert answer == "Preamble.\n\nBody"   # documented join: preamble + the rest of the text, tag/cue cut out
-
-
-def test_first_paragraph_is_the_fallback():
-    assert first_paragraph("\n\nFirst block\nstill first.\n\nSecond.") == "First block\nstill first."
-    assert first_paragraph("") == ""
-
-
 def test_system_prompt_requires_lap_identity():
     """#108 item 1: the coach must say which lap a per-lap fact came from, and call
     out a later answer reading a newer lap than an earlier one."""
@@ -252,20 +209,26 @@ def test_system_prompt_calls_track_knowledge_the_track_notes():
     assert "wiki" in AGENTIC_SYSTEM_PROMPT
 
 
-def test_spoken_sentence_locates_corners_by_number_first():
-    """#108 item 10: a spoken cue must lead with 'Turn N' -- a corner NAME alone
-    ('Pouhon') isn't followable mid-session; the number is."""
-    from simcoach.coach import SPOKEN_SENTENCE
-    assert "Turn N" in SPOKEN_SENTENCE
-    assert "never the name alone" in SPOKEN_SENTENCE
+def test_voice_ptt_locates_corners_by_number_and_the_locate_it_descriptor():
+    """#119: the PTT voice rule must lead with 'Turn N' -- a corner NAME alone
+    ('Pouhon') isn't followable mid-session; the number is -- and reuse the
+    corner tools' own locator ('Locate it: Turn N, sector 2, the fast left
+    after the long straight'), not a bare number the model has to invent
+    context around."""
+    from simcoach.coach import VOICE_PTT
+    assert "Turn N" in VOICE_PTT
+    assert "Locate it" in VOICE_PTT
+    assert "only if the driver has used it themselves" in VOICE_PTT
 
 
-def test_spoken_sentence_points_to_the_locate_it_descriptor():
-    """#108 item 12: the spoken cue must reuse the corner tools' own locator
-    ('Locate it: Turn N, sector 2, the fast left after the long straight'),
-    not a bare number the model has to invent context around."""
-    from simcoach.coach import SPOKEN_SENTENCE
-    assert "Locate it" in SPOKEN_SENTENCE
+def test_voice_conversation_locates_corners_the_same_way():
+    """#119: the conversation voice rule carries the same corner-locator rule
+    as PTT -- only one of the two is ever appended to a given turn's system
+    block, so each must spell the rule out in full rather than cross-refer."""
+    from simcoach.coach import VOICE_CONVERSATION
+    assert "Turn N" in VOICE_CONVERSATION
+    assert "Locate it" in VOICE_CONVERSATION
+    assert "only if the driver has used it themselves" in VOICE_CONVERSATION
 
 
 def test_prompt_routes_incidents_to_get_stint_events():

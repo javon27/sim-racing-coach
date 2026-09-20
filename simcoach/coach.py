@@ -1,5 +1,3 @@
-import re
-
 import numpy as np
 
 from simcoach.driver import DriverProfile
@@ -302,46 +300,30 @@ AGENTIC_SYSTEM_PROMPT = (
 )
 
 
-SPOKEN_SENTENCE = (
-    "VOICE: the driver asked by voice from the headset and will HEAR only a short summary "
-    "while the full answer is shown on screen. On the VERY FIRST line write `[spoken] ` "
-    "followed by 2-3 plain spoken sentences carrying the single most important cue -- no "
-    "markdown, no lists, no numbers they can't hold in their head mid-session. Leave a "
-    "blank line, then write your normal full answer. Locate a corner the way the corner "
-    "tools do under 'Locate it:' -- 'Turn N' followed by the descriptor ('Turn 10, sector 2, "
-    "the fast left after the long straight'). Add the corner's name only if the driver has "
-    "used it themselves in this chat; never the name alone. One cue, one action; apart from "
-    "the locator's own numbers, at most one figure in the whole spoken part."
+# #119: one answer per turn, printed and spoken identically -- no separate
+# [spoken] cue. The model controls LENGTH from the voice mode instead.
+VOICE_PTT = (
+    "VOICE (push-to-talk): the driver asked by push-to-talk from the headset, mid-session, "
+    "hands on the wheel, and will HEAR this answer in full -- there is no longer text on "
+    "screen. Answer in 2-3 plain spoken sentences: one cue, one action. No markdown, no "
+    "lists, no headings, no numbers they can't hold in their head. Apart from a corner "
+    "locator's own numbers, at most one figure in the whole answer. Locate a corner the way "
+    "the corner tools do under 'Locate it:' -- 'Turn N' plus the descriptor ('Turn 10, "
+    "sector 2, the fast left after the long straight'); add the corner's name only if the "
+    "driver has used it themselves in this chat."
 )
 
-# #120: NOT anchored to a line start (the tag can land mid-line, after a
-# preamble the model wrote before its first newline) -- `search`, not `match`.
-# MULTILINE so `$` bounds the capture to the tag's own line rather than
-# requiring the tag to be on the last line of the text. `[ \t]*`, not `\s*`,
-# around the cue -- `\s` matches `\n` too, which would let the trailing
-# whitespace eat into the blank line that follows the cue.
-_SPOKEN_RE = re.compile(r"(?:\*\*)?\[spoken\](?:\*\*)?:?(?:\*\*)?[ \t]*(.*?)[ \t]*$",
-                        re.IGNORECASE | re.MULTILINE)
-
-
-def split_spoken(text: str) -> tuple[str, str | None]:
-    """Pull the `[spoken] ...` cue out of an answer (tag may be at a line start,
-    mid-line after a preamble, or on the last line -- scans the whole text so a
-    tag-first reply is found immediately as it streams). Whatever text preceded
-    the tag on its line stays in the answer; the rest of that line is the cue.
-    Returns (answer without the tag/cue, spoken) or (text, None) when absent/empty."""
-    m = _SPOKEN_RE.search(text)
-    if not m or not m.group(1):
-        return text, None
-    answer = (text[:m.start()].rstrip() + text[m.end():]).strip()
-    return answer, m.group(1)
-
-
-def first_paragraph(text: str) -> str:
-    for block in text.split("\n\n"):
-        if block.strip():
-            return block.strip()
-    return ""
+VOICE_CONVERSATION = (
+    "VOICE (conversation): the driver asked out loud at the desk and will HEAR the whole "
+    "answer -- it is spoken, not read. Answer in plain spoken prose, a few short paragraphs "
+    "at most; no markdown, no bullet lists, no tables, no headings (they are read aloud as "
+    "punctuation soup). Say numbers as words in sentences ('about three tenths'), not as a "
+    "table. Length follows the question: a quick one gets a couple of sentences, a broad one "
+    "('how's my race going') gets a few short paragraphs. Locate a corner the way the corner "
+    "tools do under 'Locate it:' -- 'Turn N' plus the descriptor ('Turn 10, sector 2, the "
+    "fast left after the long straight'); add the corner's name only if the driver has used "
+    "it themselves in this chat."
+)
 
 
 class Coach:
@@ -424,7 +406,9 @@ class Coach:
             context.allowed_adjustments, driver_profile, input_device,
         )
         if voice == "ptt":
-            system += " " + SPOKEN_SENTENCE
+            system += " " + VOICE_PTT
+        elif voice == "conversation":
+            system += " " + VOICE_CONVERSATION
         messages = list(history) if history else []
         messages.append({"role": "user", "content": question})
         # #133: a text block that starts right after a tool round (rather than

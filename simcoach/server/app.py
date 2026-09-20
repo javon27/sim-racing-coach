@@ -34,7 +34,6 @@ from ..analysis import (
 )
 from ..car_lookup import resolve_car
 from ..car_notes import load_car_notes, load_setup_concepts
-from ..coach import _SPOKEN_RE, first_paragraph, split_spoken
 from ..coach_tools import (
     _PARTIAL_LIST_WORD,
     CoachContext,
@@ -2145,13 +2144,6 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             # makes the ×N tool-loop re-send visible instead of invisible.
             turn_usage = TokenUsage()
             used_model: str | None = None
-            # PTT: the [spoken] cue is the FIRST line (SPOKEN_SENTENCE). Buffer text
-            # deltas until the first newline arrives, so that line can be emitted as
-            # its own `spoken` event (and spoken immediately client-side) instead of
-            # waiting for the whole answer. Not buffered outside PTT.
-            spoken_buf = "" if voice == "ptt" else None
-            spoken_resolved = voice != "ptt"
-            spoken = None   # defined even if the stream raises before it's resolved below
             try:
                 for ev in app.state.coach.ask_agentic_stream(
                         ctx, model_question, car=car, input_device=req.get("input_device"),
@@ -2167,45 +2159,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                         continue
                     if ev["type"] == "text":
                         text += ev["text"]       # accumulate streamed deltas into the full answer
-                        if not spoken_resolved:
-                            spoken_buf += ev["text"]
-                            if "\n" not in spoken_buf:
-                                continue          # first line not complete yet — keep buffering
-                            first_line, rest = spoken_buf.split("\n", 1)
-                            spoken_resolved = True
-                            # #120: search, not match -- the tag may sit mid-line after
-                            # a preamble (no tool round in between to insert #133's
-                            # separating blank line). Text before the tag on that line
-                            # still belongs to the answer.
-                            m = _SPOKEN_RE.search(first_line)
-                            if m and m.group(1):
-                                before = first_line[:m.start()]
-                                if before:
-                                    _emit({"type": "text", "text": before})
-                                _emit({"type": "spoken", "text": m.group(1)})
-                                rest = rest.removeprefix("\n")   # also drop the blank line after the tag
-                                if rest:
-                                    _emit({"type": "text", "text": rest})
-                            elif spoken_buf:
-                                _emit({"type": "text", "text": spoken_buf})
-                            continue
                     _emit(ev)
-                if not spoken_resolved and spoken_buf:
-                    # Stream ended before a newline ever arrived (single-line reply).
-                    m = _SPOKEN_RE.search(spoken_buf)
-                    if m and m.group(1):
-                        before = spoken_buf[:m.start()]
-                        if before:
-                            _emit({"type": "text", "text": before})
-                        _emit({"type": "spoken", "text": m.group(1)})
-                    else:
-                        _emit({"type": "text", "text": spoken_buf})
-                if voice == "ptt":
-                    text, spoken = split_spoken(text)
-                    spoken = spoken or first_paragraph(text)
                 terminal = {"type": "done", "answer": text}
-                if voice == "ptt":
-                    terminal["spoken"] = spoken
             except Exception as e:
                 # Surface our own curated user-facing errors verbatim; hide any
                 # other internal error text (and generic RuntimeError/ValueError)
@@ -2221,8 +2176,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                     stored_question = ("🎤 " + question) if voice else question
                     app.state.store.save_chat(chat_id, ctx.session_id, ctx.track, ctx.car, ctx.lap_id,
                                               stored_question, text, ctx.tool_calls,
-                                              usage=turn_usage.as_dict(), model=used_model,
-                                              spoken=spoken)
+                                              usage=turn_usage.as_dict(), model=used_model)
                     terminal["chat_id"] = chat_id
                     # Report the CHAT cumulative total, read back from the store after
                     # the insert: the number the driver sees is then the persisted
