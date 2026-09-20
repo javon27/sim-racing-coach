@@ -2498,3 +2498,34 @@ def test_race_windows_counts_complete_laps_only_and_ignores_practice_sessions(
     assert len(windows) == 1
     assert windows[0]["lap_ids"] == [a, b] and windows[0]["laps"] == 1
     assert s.race_windows("s2") == []
+
+
+def test_session_laps_race_index_gap_only_boundary(tmp_path, synthetic_lap):
+    """#142: two races separated ONLY by a >20 min pause (no practice/qualy lap
+    between them) -- the case the phase-only UI grouping gets wrong. session_laps
+    must carry race_index 1/2 so the UI can restart numbering per race without
+    reimplementing the boundary rule itself."""
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "telem"))
+    t0 = 1_700_000_000.0
+    first = [s.save(LapRecord(**_race_lap(synthetic_lap, t0 + i * 100))) for i in range(2)]
+    second = [s.save(LapRecord(**_race_lap(synthetic_lap, t0 + 1600 + i * 100))) for i in range(2)]
+
+    rows = s.session_laps("s1")
+    by_id = {r["id"]: r["race_index"] for r in rows}
+    assert [by_id[i] for i in first] == [1, 1]
+    assert [by_id[i] for i in second] == [2, 2]
+
+
+def test_session_laps_race_index_single_race_and_non_race_laps(tmp_path, synthetic_lap):
+    """A single race gives every race lap race_index 1; a non-race lap gets None."""
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "telem"))
+    t0 = 1_700_000_000.0
+    race = [s.save(LapRecord(**_race_lap(synthetic_lap, t0 + i * 100))) for i in range(3)]
+    practice = s.save(LapRecord(**_race_lap(synthetic_lap, t0 - 100, phase="practice")))
+
+    rows = s.session_laps("s1")
+    by_id = {r["id"]: r["race_index"] for r in rows}
+    assert [by_id[i] for i in race] == [1, 1, 1]
+    assert by_id[practice] is None

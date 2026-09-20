@@ -1280,7 +1280,37 @@ class LapStore:
                 d["car_model"] = resolve_car(d["car"]) if d["car"] else None
                 d["pit"] = None if d["pit"] is None else bool(d["pit"])
                 out.append(d)
-            return out
+        # race_index (#142): 1-based, null for a non-race lap. Derived here -- the only
+        # place a race boundary is computed -- so the lap list can restart its numbering
+        # per race without reimplementing _race_windows_from_laps' boundary rule (that's
+        # the note-key bug's shape: the same grammar built twice, and the two drift).
+        win_of_lap = {lid: w["index"] for w in self._race_windows_from_laps(out)
+                      for lid in w["lap_ids"]}
+        for d in out:
+            d["race_index"] = win_of_lap.get(d["id"])
+        return out
+
+    @staticmethod
+    def _race_windows_from_laps(laps: list[dict]) -> list[dict]:
+        """The windowing rule race_windows() applies, over an already-fetched,
+        ts-ordered lap list. Pulled out so session_laps can derive race_index from
+        the same rows it already has, without a second query or a second boundary
+        rule (see race_windows's docstring for the rule itself and the shape)."""
+        windows: list[dict] = []
+        current: dict | None = None
+        for lap in laps:
+            if lap.get("phase") != "race":
+                current = None      # any other phase ends the race run
+                continue
+            if current is None or (lap["ts"] - current["end_ts"]) > _RACE_WINDOW_GAP_S:
+                current = {"index": len(windows) + 1, "start_ts": lap["ts"],
+                           "end_ts": lap["ts"], "lap_ids": [], "laps": 0}
+                windows.append(current)
+            current["end_ts"] = lap["ts"]
+            current["lap_ids"].append(lap["id"])
+            if not lap.get("partial"):
+                current["laps"] += 1
+        return windows
 
     def race_windows(self, session_id: str) -> list[dict]:
         """The RACES this session instance holds, oldest first (issue #136).
@@ -1301,21 +1331,7 @@ class LapStore:
 
         Empty list for a session with no race laps (practice/qualy only).
         """
-        windows: list[dict] = []
-        current: dict | None = None
-        for lap in self.session_laps(session_id):
-            if lap.get("phase") != "race":
-                current = None      # any other phase ends the race run
-                continue
-            if current is None or (lap["ts"] - current["end_ts"]) > _RACE_WINDOW_GAP_S:
-                current = {"index": len(windows) + 1, "start_ts": lap["ts"],
-                           "end_ts": lap["ts"], "lap_ids": [], "laps": 0}
-                windows.append(current)
-            current["end_ts"] = lap["ts"]
-            current["lap_ids"].append(lap["id"])
-            if not lap.get("partial"):
-                current["laps"] += 1
-        return windows
+        return self._race_windows_from_laps(self.session_laps(session_id))
 
     def session_position_arc(self, session_id: str, phase: str | None = None,
                              since: float | None = None,

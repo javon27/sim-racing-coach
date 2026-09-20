@@ -52,6 +52,8 @@ export interface LapRow {
   lap_no?: number | null;
   pit?: boolean | null;
   partial?: PartialKind | null;
+  /** 1-based race number this session, null for a non-race lap (#142). */
+  race_index?: number | null;
 }
 
 export interface CornerMetrics {

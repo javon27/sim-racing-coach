@@ -43,22 +43,32 @@
     return l ? { track: l.track, car: l.car_model ?? l.car } : null;
   });
 
-  // Group consecutive laps by phase (a session spans practice/qualy/race in
-  // chronological blocks) and number laps within each phase. Prefers the game's
-  // own lap number (lap_no -- scoring mTotalLaps at the wrap, issue #77) when
-  // EVERY lap in the group has one, so a garage return or an out-lap in between
-  // shows the game's real gaps (e.g. 2,3,4,8,9); falls back to counting 1..N
-  // otherwise (a legacy session, or any lap in the group still missing it) --
-  // must agree with the backend's CoachContext._lap_numbering.
+  // Group consecutive laps by (phase, race_index) -- a session spans practice/
+  // qualy/race in chronological blocks, and #142: when it holds more than one
+  // RACE (race_index from the server, never re-derived here -- see store.py
+  // _race_windows_from_laps), a race-phase run also splits at a race boundary,
+  // even one with no non-race lap between the two races (a pause-only gap).
+  // Numbering restarts each group: prefers the game's own lap number (lap_no --
+  // scoring mTotalLaps at the wrap, issue #77) when EVERY lap in the group has
+  // one, so a garage return or an out-lap in between shows the game's real gaps
+  // (e.g. 2,3,4,8,9); falls back to counting 1..N otherwise (a legacy session,
+  // or any lap in the group still missing it) -- must agree with the backend's
+  // CoachContext._lap_numbering.
   type NumberedLap = LapRow & { num: number };
-  type LapGroup = { phase: string | null; laps: NumberedLap[] };
+  type LapGroup = { phase: string | null; raceIndex: number | null; laps: NumberedLap[] };
+  // More than one race this session -> each race gets its own divider instead of
+  // one shared "RACE" header (#142). A single race renders unchanged.
+  const multiRace = $derived.by(
+    () => new Set(laps.filter((l) => l.race_index != null).map((l) => l.race_index)).size > 1,
+  );
   const groups = $derived.by<LapGroup[]>(() => {
-    const out: { phase: string | null; laps: LapRow[] }[] = [];
-    let cur: { phase: string | null; laps: LapRow[] } | null = null;
+    const out: { phase: string | null; raceIndex: number | null; laps: LapRow[] }[] = [];
+    let cur: (typeof out)[number] | null = null;
     for (const lap of laps) {
       const p = lap.phase ?? null;
-      if (!cur || cur.phase !== p) {
-        cur = { phase: p, laps: [] };
+      const ri = p === "race" ? (lap.race_index ?? null) : null;
+      if (!cur || cur.phase !== p || cur.raceIndex !== ri) {
+        cur = { phase: p, raceIndex: ri, laps: [] };
         out.push(cur);
       }
       cur.laps.push(lap);
@@ -67,12 +77,21 @@
       const useLapNo = g.laps.every((l) => l.lap_no != null);
       return {
         phase: g.phase,
+        raceIndex: g.raceIndex,
         laps: g.laps.map((l, i) => ({ ...l, num: useLapNo ? l.lap_no! : i + 1 })),
       };
     });
   });
   function phaseLabel(p: string | null): string {
     return (p ?? "laps").toUpperCase();
+  }
+  // "Race 2 — started 00:26" -- wording matches the coach's _lap_numbering label
+  // ("race 2 lap 1"). ts is epoch seconds, same as the backend's time.localtime.
+  function raceHeader(ts: number, raceIndex: number): string {
+    const d = new Date(ts * 1000);
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    return `Race ${raceIndex} — started ${hh}:${mm}`;
   }
 
   // Review state: `sessionId` prop is the review target (a past session deep-linked
@@ -353,7 +372,9 @@
     <p class="empty">No laps yet</p>
   {:else}
     {#each groups as group, gi (gi)}
-      {#if group.phase}
+      {#if group.phase === "race" && multiRace && group.raceIndex != null}
+        <div class="phase-head">{raceHeader(group.laps[0].ts, group.raceIndex)}</div>
+      {:else if group.phase}
         <div class="phase-head">{phaseLabel(group.phase)}</div>
       {/if}
       {#each group.laps as lap (lap.id)}

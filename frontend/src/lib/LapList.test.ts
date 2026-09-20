@@ -528,6 +528,109 @@ describe("LapList", () => {
     expect(document.querySelector(".best-head .t")?.textContent).toBe("1:32.000");
   });
 
+  // --- issue #142: lap numbering restarts per RACE, not just per phase --------
+
+  it("two gap-only race windows: numbering restarts at 1 and a divider names each race", async () => {
+    // No non-race lap between the two races -- only race_index tells them apart
+    // (the case the old phase-only grouping got wrong).
+    pushStatus("S1", 4);
+    vi.mocked(getSessionLaps).mockResolvedValue([
+      { id: 1, lap_time: 95.0, valid: 1, ts: 100, phase: "race", race_index: 1 },
+      { id: 2, lap_time: 94.0, valid: 1, ts: 200, phase: "race", race_index: 1 },
+      { id: 3, lap_time: 93.0, valid: 1, ts: 1600, phase: "race", race_index: 2 },
+      { id: 4, lap_time: 92.5, valid: 1, ts: 1700, phase: "race", race_index: 2 },
+    ]);
+
+    const { container } = render(LapList);
+
+    await screen.findByText(/Race 1 — started/);
+    expect(screen.getByText(/Race 2 — started/)).toBeTruthy();
+    expect(screen.queryByText("RACE")).toBeNull();
+    // Numbering restarts per race: two "Lap 1" rows (one per race).
+    expect(screen.getAllByText("Lap 1")).toHaveLength(2);
+    expect(container.querySelectorAll(".phase-head")).toHaveLength(2);
+  });
+
+  it("a single race renders unchanged: no divider, plain RACE header", async () => {
+    pushStatus("S1", 2);
+    vi.mocked(getSessionLaps).mockResolvedValue([
+      { id: 1, lap_time: 95.0, valid: 1, ts: 100, phase: "race", race_index: 1 },
+      { id: 2, lap_time: 94.0, valid: 1, ts: 200, phase: "race", race_index: 1 },
+    ]);
+
+    render(LapList);
+
+    await screen.findByText("RACE");
+    expect(screen.queryByText(/Race 1 — started/)).toBeNull();
+    expect(screen.getAllByText(/Lap [12]/)).toHaveLength(2);
+  });
+
+  it("mixes practice, qualifying and two races: groups and numbers correctly", async () => {
+    pushStatus("S1", 6);
+    vi.mocked(getSessionLaps).mockResolvedValue([
+      { id: 1, lap_time: 100.0, valid: 1, ts: 100, phase: "practice", race_index: null },
+      { id: 2, lap_time: 99.0, valid: 1, ts: 200, phase: "qualifying", race_index: null },
+      { id: 3, lap_time: 95.0, valid: 1, ts: 300, phase: "race", race_index: 1 },
+      { id: 4, lap_time: 94.0, valid: 1, ts: 400, phase: "race", race_index: 1 },
+      { id: 5, lap_time: 93.0, valid: 1, ts: 1900, phase: "race", race_index: 2 },
+      { id: 6, lap_time: 92.5, valid: 1, ts: 2000, phase: "race", race_index: 2 },
+    ]);
+
+    const { container } = render(LapList);
+
+    await screen.findByText("PRACTICE");
+    expect(screen.getByText("QUALIFYING")).toBeTruthy();
+    expect(screen.getByText(/Race 1 — started/)).toBeTruthy();
+    expect(screen.getByText(/Race 2 — started/)).toBeTruthy();
+    expect(container.querySelectorAll(".phase-head")).toHaveLength(4);
+    // Four groups (practice, qualifying, race 1, race 2), each restarting at Lap 1.
+    expect(screen.getAllByText("Lap 1")).toHaveLength(4); // practice, qualifying, race 1, race 2
+    expect(screen.getAllByText("Lap 2")).toHaveLength(2); // race 1, race 2
+  });
+
+  /** Mirrors LapList's own formatTime, to disambiguate rows by displayed time. */
+  function fmtTime(seconds: number): string {
+    const totalMs = Math.round(seconds * 1000);
+    const m = Math.floor(totalMs / 60000);
+    const s = ((totalMs - m * 60000) / 1000).toFixed(3);
+    return `${m}:${s.padStart(6, "0")}`;
+  }
+
+  // The lap number the UI shows must equal what the backend's _lap_numbering would
+  // produce for the same rows -- a fixture built from the algorithm's own rules
+  // (restart per phase AND per race window; prefer lap_no when the whole run has
+  // one), so the two can't silently drift apart (#142).
+  it("UI lap numbers match the backend's _lap_numbering rules, built from a fixture", async () => {
+    // No lap_no on any race row (legacy capture): numbering falls back to 1..N
+    // WITHIN each run, so this only reads right if the run boundary is per race
+    // window, not per phase -- the case #142's phase-only grouping got wrong.
+    const rows = [
+      { id: 1, lap_time: 100.0, valid: 1, ts: 100, phase: "practice", lap_no: null },
+      { id: 2, lap_time: 95.0, valid: 1, ts: 300, phase: "race", race_index: 1, lap_no: null },
+      { id: 3, lap_time: 94.0, valid: 1, ts: 400, phase: "race", race_index: 1, lap_no: null },
+      { id: 4, lap_time: 93.0, valid: 1, ts: 1900, phase: "race", race_index: 2, lap_no: null },
+      { id: 5, lap_time: 92.5, valid: 1, ts: 2000, phase: "race", race_index: 2, lap_no: null },
+    ];
+    // Expected label per lap id, independently derived from _lap_numbering's rule
+    // (run = consecutive same phase AND same race window; no lap_no on any race
+    // row here, so each run counts 1..N on its own).
+    const expected: Record<number, number> = { 1: 1, 2: 1, 3: 2, 4: 1, 5: 2 };
+
+    pushStatus("S1", 5);
+    vi.mocked(getSessionLaps).mockResolvedValue(rows);
+    render(LapList);
+
+    for (const [id, n] of Object.entries(expected)) {
+      const row = rows.find((r) => r.id === Number(id))!;
+      const els = await screen.findAllByText(`Lap ${n}`);
+      // At least one rendered "Lap n" belongs to a row with this id's lap_time,
+      // since ids aren't shown directly -- disambiguate via the row's time text.
+      const match = els.some((el) => el.closest(".lap")?.querySelector(".t")?.textContent ===
+        fmtTime(row.lap_time));
+      expect(match).toBe(true);
+    }
+  });
+
   it("a partial lap never becomes the sector-delta reference", async () => {
     // A null lap_time compares as 0 in JS, so an unguarded `<` makes the partial the
     // reference and every real lap reads as slower. Give it sectors to be sure it is
