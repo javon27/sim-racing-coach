@@ -11,7 +11,6 @@ Pinned to the versions the spikes ran -- see the version constants.
 from __future__ import annotations
 
 import io
-import logging
 import re
 import string
 import struct
@@ -35,11 +34,20 @@ SAMPLE_RATE = 24_000
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
 _INTRA_WORD_HYPHEN = re.compile(r"(?<=[A-Za-z])-(?=[A-Za-z])")   # letters only: "2-4" stays a range/pause
 _SENTENCE_GAP_S = 0.25
-log = logging.getLogger(__name__)
 
 
 class EngineUnavailable(RuntimeError):
     """The model is not installed or failed to load; callers fall back to Windows voices."""
+
+
+class Unpronounceable(Exception):
+    """One or more words in a sentence have no G2P mapping (#118/#123). Per-request,
+    not per-sentence: the caller (an HTTP handler) falls back to Windows speech for the
+    whole request rather than spelling words out letter by letter."""
+
+    def __init__(self, words: list[str]):
+        self.words = words
+        super().__init__(f"unpronounceable: {words!r}")
 
 
 # ---- GPL/LGPL import stubs -----------------------------------------------------------
@@ -247,25 +255,17 @@ def _wav_bytes(samples: np.ndarray, rate: int) -> bytes:
 
 
 
-def _split_markup(sentence: str, keep_whitespace: bool = False) -> list[tuple[str, bool]]:
-    """(segment, is_markup) pairs: markup spans intact, the text between them either
-    whitespace-split into tokens (default) or kept as raw segments (keep_whitespace)."""
+def _split_markup(sentence: str) -> list[tuple[str, bool]]:
+    """(segment, is_markup) pairs: markup spans intact, the text between them
+    whitespace-split into tokens."""
     out: list[tuple[str, bool]] = []
     pos = 0
     for m in _MARKUP.finditer(sentence):
-        between = sentence[pos:m.start()]
-        out += [(between, False)] if keep_whitespace else [(t, False) for t in between.split()]
+        out += [(t, False) for t in sentence[pos:m.start()].split()]
         out.append((m.group(0), True))
         pos = m.end()
-    tail = sentence[pos:]
-    out += [(tail, False)] if keep_whitespace else [(t, False) for t in tail.split()]
+    out += [(t, False) for t in sentence[pos:].split()]
     return out
-
-
-def _spell_out(segment: str, words: list[str]) -> str:
-    for w in words:
-        segment = re.sub(r"\b" + re.escape(w) + r"\b", lambda m, w=w: " ".join(w), segment)
-    return segment
 
 
 class KokoroEngine:
@@ -315,38 +315,32 @@ class KokoroEngine:
         return self._word_ok[word]
 
     def _phonemes_for(self, sentence: str) -> str | None:
-        """Never drop a sentence that has at least one phonemizable word: probe each
-        word, spell out only the ones that fail (keeping sentence prosody), and only
-        as a last resort fall back to joining per-word phonemes."""
+        """Try the whole sentence; on failure probe each word and raise Unpronounceable
+        naming any that's OOV -- no more spelling it out letter by letter (#118/#123).
+        `[Name](/phonemes/)` spans from the pronunciation table are atomic: never split
+        into words, probed, or rebuilt -- G2P copies them verbatim."""
         try:
             return self._g2p(sentence)
         except Exception:
             pass
 
-        # `[Name](/phonemes/)` spans from the pronunciation table are atomic: never
-        # split into words, probed, spelled out or rebuilt -- G2P copies them verbatim.
         words = [(tok, "" if is_markup else tok.strip(string.punctuation), is_markup)
                  for tok, is_markup in _split_markup(sentence)]
         failing = [w for _tok, w, is_markup in words if w and not is_markup and not self._word_probe(w)]
 
         if failing:
-            unique_failing = list(dict.fromkeys(failing))
-            log.warning("kokoro g2p: spelling out %r in %r", unique_failing, sentence)
-            rebuilt = "".join(
-                seg if is_markup else _spell_out(seg, unique_failing)
-                for seg, is_markup in _split_markup(sentence, keep_whitespace=True))
-            try:
-                return self._g2p(rebuilt)
-            except Exception:
-                pass
+            raise Unpronounceable(list(dict.fromkeys(failing)))
 
-        failing_set = set(failing)
+        # Every word probes clean on its own -- the whole-sentence call failed for some
+        # other reason (e.g. markup punctuation confusing G2P in a larger context).
+        # Nothing is OOV, so no spelling is needed: rebuild by joining each token's own
+        # phonemes instead.
         parts = []
         for tok, w, is_markup in words:
             if not is_markup and not w:
                 continue
             try:
-                parts.append(self._g2p(tok if is_markup else (" ".join(w) if w in failing_set else w)))
+                parts.append(self._g2p(tok if is_markup else w))
             except Exception:
                 continue
         return " ".join(parts) if parts else None

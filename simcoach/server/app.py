@@ -309,7 +309,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     # telemetry dir the store owns; move an install from the first release across.
     from .. import paths as _paths
     from ..tts_cache import TtsCache
-    from ..tts_kokoro import EngineUnavailable, KokoroEngine, gpl_free
+    from ..tts_kokoro import EngineUnavailable, KokoroEngine, Unpronounceable, gpl_free
     from ..voice import (
         KokoroInstaller,
         ModelInstaller,
@@ -2624,7 +2624,10 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 raise ValueError(f"speed must be a number, got {speed_raw!r}") from None
             raw_slug = track_in or _live_track() or ""
             slug = track_slug(raw_slug) if raw_slug else ""
-            table = table_for(_track_file_data(slug)) if slug else {}
+            # table_for always runs, even with no track resolved: the global lexicon
+            # (#118) must still apply -- the coach can talk about a track before a lap
+            # exists (the Imola bug: "Autodromo"/"Enzo"/"Ferrari" spelled out pre-lap).
+            table = table_for(_track_file_data(slug) if slug else {})
             cache_mb = _clamp_tts_cache_mb(cfg)
             if not cache_mb:
                 return eng.synthesize(text, voice, speed, table)
@@ -2643,6 +2646,10 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             wav = await loop.run_in_executor(None, _synthesize)
         except ValueError as e:
             raise HTTPException(422, str(e))
+        except Unpronounceable as e:
+            # Dict detail (vs. the bad-speed 422's plain string above) so the client can
+            # tell the two apart and fall back to Windows speech instead of erroring.
+            raise HTTPException(422, {"error": "unpronounceable", "words": e.words})
         except EngineUnavailable as e:
             raise HTTPException(503, str(e))
         return Response(content=wav, media_type="audio/wav")

@@ -9,7 +9,7 @@ from simcoach.coach import Coach
 from simcoach.model.fake import FakeModel
 from simcoach.server.app import create_app
 from simcoach.store import LapStore
-from simcoach.tts_kokoro import EngineUnavailable
+from simcoach.tts_kokoro import EngineUnavailable, Unpronounceable
 from simcoach.voice import FakeTranscriber, ModelInstaller
 
 
@@ -155,6 +155,29 @@ def test_speak_422_on_non_numeric_speed_not_500(tmp_path, monkeypatch):
     c, _ = _app(tmp_path, monkeypatch, kokoro_engine=FakeEngine())
     r = c.post("/voice/speak", json={"text": "hi", "speed": "fast"})
     assert r.status_code == 422
+    assert isinstance(r.json()["detail"], str)   # plain string -- distinct from the dict below
+
+
+def test_speak_with_no_track_still_gets_the_global_lexicon(tmp_path, monkeypatch):
+    # #118: the coach can talk about a track before a lap exists -- table_for({})
+    # must still apply the global lexicon even with no track_slug/track/live game.
+    from simcoach import pronunciations
+    monkeypatch.setattr(pronunciations, "_global_table", lambda: {"Imola": "ˈiːmoʊlə"})
+    eng = FakeEngine()
+    c, _ = _app(tmp_path, monkeypatch, kokoro_engine=eng)
+    r = c.post("/voice/speak", json={"text": "Imola is next."})
+    assert r.status_code == 200
+    assert eng.calls[0][3] == {"Imola": "ˈiːmoʊlə"}
+
+
+def test_speak_422_unpronounceable_has_dict_detail_and_is_not_cached(tmp_path, monkeypatch):
+    eng = FakeEngine()
+    eng.synthesize = lambda *a, **k: (_ for _ in ()).throw(Unpronounceable(["Kemmel"]))
+    c, _ = _app(tmp_path, monkeypatch, kokoro_engine=eng)
+    r = c.post("/voice/speak", json={"text": "Watch Kemmel."})
+    assert r.status_code == 422
+    assert r.json()["detail"] == {"error": "unpronounceable", "words": ["Kemmel"]}
+    assert c.get("/voice/tts-cache").json() == {"files": 0, "bytes": 0}   # failure never cached
 
 
 def test_speak_second_call_with_same_body_hits_the_disk_cache(tmp_path, monkeypatch):

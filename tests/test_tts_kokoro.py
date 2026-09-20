@@ -1,5 +1,4 @@
 import importlib.util
-import logging
 import re
 import struct
 import sys
@@ -17,6 +16,7 @@ from simcoach.tts_kokoro import (
     VOICES_FILE,
     EngineUnavailable,
     KokoroEngine,
+    Unpronounceable,
     preprocess,
 )
 
@@ -110,11 +110,8 @@ def test_synthesize_with_fake_backend_returns_16bit_mono_24k_wav(tmp_path):
     assert eng.voices() == ["af_heart", "am_michael"]   # English voices only (a*/b*)
 
 
-def test_synthesize_spells_out_a_failing_word_without_dropping_the_sentence(tmp_path, caplog):
-    seen = []
-
+def test_synthesize_raises_unpronounceable_naming_the_failing_word(tmp_path):
     def g2p(text):
-        seen.append(text)
         if "Pouhon" in text:
             raise ValueError("Pouhon")
         return text
@@ -127,19 +124,13 @@ def test_synthesize_spells_out_a_failing_word_without_dropping_the_sentence(tmp_
 
     _touch_model_files(tmp_path)
     eng = KokoroEngine(tmp_path, backend=FakeKokoro, g2p=g2p)
-    wav = eng.synthesize("Brake later. Pouhon is fast.", voice="af_heart", speed=1.0)
-    assert _wav_header(wav)[1] == 24000
-    assert "P o u h o n is fast." in seen          # spelled-out retry, nothing dropped
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert len(warnings) == 1
-    assert "Pouhon" in warnings[0].getMessage()
+    with pytest.raises(Unpronounceable) as exc_info:
+        eng.synthesize("Brake later. Pouhon is fast.", voice="af_heart", speed=1.0)
+    assert exc_info.value.words == ["Pouhon"]
 
 
-def test_synthesize_spells_out_every_failing_word_when_message_has_no_word_match(tmp_path, caplog):
-    seen = []
-
+def test_synthesize_raises_unpronounceable_naming_every_failing_word_in_one_sentence(tmp_path):
     def g2p(text):
-        seen.append(text)
         if "Eau" in text or "Rouge" in text:
             raise TypeError("unsupported operand type(s) for +: 'NoneType' and 'str'")
         return text
@@ -152,56 +143,31 @@ def test_synthesize_spells_out_every_failing_word_when_message_has_no_word_match
 
     _touch_model_files(tmp_path)
     eng = KokoroEngine(tmp_path, backend=FakeKokoro, g2p=g2p)
-    wav = eng.synthesize("Watch Eau Rouge.", voice="af_heart", speed=1.0)
-    assert _wav_header(wav)[1] == 24000
-    assert any("E a u" in s and "R o u g e" in s for s in seen)   # both OOV words spelled, one rebuild
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert len(warnings) == 1
+    with pytest.raises(Unpronounceable) as exc_info:
+        eng.synthesize("Watch Eau Rouge.", voice="af_heart", speed=1.0)
+    assert exc_info.value.words == ["Eau", "Rouge"]
 
 
-def test_synthesize_spells_out_two_oov_words_in_one_sentence(tmp_path, caplog):
-    seen = []
-
-    def g2p(text):
-        seen.append(text)
-        if "Mans" in text or "Monza" in text:
-            raise TypeError("unsupported operand type(s) for +: 'NoneType' and 'str'")
-        return text
-
-    class FakeKokoro:
-        def __init__(self, *a): pass
-        def get_voices(self): return ["af_heart"]
-        def create(self, ph, voice, speed=1.0, is_phonemes=False, lang="en-us"):
-            return np.zeros(240, dtype=np.float32), 24000
-
-    _touch_model_files(tmp_path)
-    eng = KokoroEngine(tmp_path, backend=FakeKokoro, g2p=g2p)
-    wav = eng.synthesize("Le Mans Ultimate runs at Monza.", voice="af_heart", speed=1.0)
-    assert _wav_header(wav)[1] == 24000
-    assert any("M a n s" in s and "M o n z a" in s for s in seen)
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert len(warnings) == 1
-    assert "Mans" in warnings[0].getMessage() and "Monza" in warnings[0].getMessage()
-
-
-def test_phonemes_for_spells_out_a_lowercase_oov_word(tmp_path):
+def test_phonemes_for_raises_unpronounceable_for_a_lowercase_oov_word(tmp_path):
     def g2p(text):
         if re.search(r"\bkm\b", text):
             raise TypeError("unsupported operand type(s) for +: 'NoneType' and 'str'")
         return text
 
     eng = KokoroEngine(tmp_path, backend=None, g2p=g2p)
-    assert eng._phonemes_for("a seven km lap") == "a seven k m lap"
+    with pytest.raises(Unpronounceable) as exc_info:
+        eng._phonemes_for("a seven km lap")
+    assert exc_info.value.words == ["km"]
 
 
-def test_phonemes_for_drops_sentence_only_when_every_word_fails(tmp_path, caplog):
+def test_phonemes_for_raises_unpronounceable_when_every_word_fails(tmp_path):
     def g2p(_text):
         raise TypeError("unsupported operand type(s) for +: 'NoneType' and 'str'")
 
     eng = KokoroEngine(tmp_path, backend=None, g2p=g2p)
-    assert eng._phonemes_for("Zzqx Vvbr.") is None
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert len(warnings) == 1
+    with pytest.raises(Unpronounceable) as exc_info:
+        eng._phonemes_for("Zzqx Vvbr.")
+    assert exc_info.value.words == ["Zzqx", "Vvbr"]
 
 
 def test_word_probe_result_is_cached_across_sentences(tmp_path):
@@ -215,8 +181,10 @@ def test_word_probe_result_is_cached_across_sentences(tmp_path):
         return text
 
     eng = KokoroEngine(tmp_path, backend=None, g2p=g2p)
-    eng._phonemes_for("Monza is fast.")
-    eng._phonemes_for("I love Monza today.")
+    with pytest.raises(Unpronounceable):
+        eng._phonemes_for("Monza is fast.")
+    with pytest.raises(Unpronounceable):
+        eng._phonemes_for("I love Monza today.")
     assert len(monza_calls) == 1
 
 
@@ -261,8 +229,9 @@ def test_misaki_without_spacy_matches_the_spike_reference_phonemes():
 
 def test_phonemes_for_keeps_pronunciation_markup_atomic_next_to_an_oov_word(tmp_path):
     """A `[Name](/phonemes/)` span from the track table must reach G2P verbatim even
-    when ANOTHER word in the sentence is OOV -- never split into words, probed, spelled
-    out or dropped (rig 2026-09-17: 'Pouhon' vanished from speech next to 'Kemmel')."""
+    when ANOTHER word in the sentence is OOV -- never split into words, probed, or
+    rebuilt, and the OOV word is named (not spelled out) so the caller can fall back
+    (rig 2026-09-17: 'Pouhon' vanished from speech next to 'Kemmel')."""
     seen = []
 
     markup = re.compile(r"\[[^\]]*\]\(/[^)]*/\)")
@@ -277,7 +246,23 @@ def test_phonemes_for_keeps_pronunciation_markup_atomic_next_to_an_oov_word(tmp_
         return text
 
     eng = KokoroEngine(tmp_path, backend=None, g2p=g2p)
-    out = eng._phonemes_for("Brake late at [Pouhon](/pˈaʊhɑːn/) after the Kemmel straight.")
-    assert out == "Brake late at [Pouhon](/pˈaʊhɑːn/) after the K e m m e l straight."
+    with pytest.raises(Unpronounceable) as exc_info:
+        eng._phonemes_for("Brake late at [Pouhon](/pˈaʊhɑːn/) after the Kemmel straight.")
+    assert exc_info.value.words == ["Kemmel"]
     assert not any(s.startswith("[Pouhon") and "(/" not in s for s in seen)   # never probed as a bare fragment
     assert not any(s == "Pouhon" or s == "P o u h o n" for s in seen)
+
+
+def test_phonemes_for_succeeds_when_the_only_oov_looking_word_is_inside_markup(tmp_path):
+    """The whole-sentence call can fail for a reason that has nothing to do with any
+    single word (e.g. markup punctuation confusing G2P in a larger context). If every
+    word -- markup included -- probes clean on its own, that's not an OOV word: no
+    Unpronounceable, no spelling, just a rebuild from each token's own phonemes."""
+    def g2p(text):
+        if "[" in text and "after" in text:
+            raise TypeError("unsupported operand type(s) for +: 'NoneType' and 'str'")
+        return text
+
+    eng = KokoroEngine(tmp_path, backend=None, g2p=g2p)
+    out = eng._phonemes_for("Watch [Pouhon](/pˈaʊhɑːn/) after the apex.")
+    assert out == "Watch [Pouhon](/pˈaʊhɑːn/) after the apex"
