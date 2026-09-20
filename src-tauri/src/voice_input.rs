@@ -98,6 +98,61 @@ pub fn hotkey_name(code: &str) -> String {
     code.to_string()
 }
 
+// --- HID (#144): pure logic, kept free of Win32 handles so it's unit-testable. ---
+
+/// Every usage whose pressed state changed between two reports, in a fixed (sorted)
+/// order so the same two sets always produce the same edge order.
+fn diff_pressed_usages(prev: &HashSet<u16>, now: &HashSet<u16>) -> Vec<(u16, bool)> {
+    let mut changed: Vec<(u16, bool)> = prev
+        .symmetric_difference(now)
+        .map(|&u| (u, now.contains(&u)))
+        .collect();
+    changed.sort_by_key(|&(u, _)| u);
+    changed
+}
+
+/// A usage value normalised so the device's lowest button usage is button 0 --
+/// `buttonCaps` is a count of capability *ranges*, not a fixed bit offset, so the
+/// button number is only ever meaningful relative to the device's own minimum usage.
+fn normalize_usage(usage: u16, min_usage: u16) -> u8 {
+    (usage - min_usage) as u8
+}
+
+/// Diffs two pressed-usage sets straight into `Edge`s for one HID device.
+fn diff_to_edges(prev: &HashSet<u16>, now: &HashSet<u16>, device: &str, min_usage: u16) -> Vec<Edge> {
+    diff_pressed_usages(prev, now)
+        .into_iter()
+        .map(|(usage, pressed)| Edge { device: device.to_string(), button: normalize_usage(usage, min_usage), pressed })
+        .collect()
+}
+
+/// A device that vanished mid-hold must not leave `HeldSet` stuck (the same failure
+/// mode #112 fixed for focus loss) -- every usage still pressed becomes a release.
+fn releases_for_vanished(pressed: &HashSet<u16>, device: &str, min_usage: u16) -> Vec<Edge> {
+    diff_to_edges(pressed, &HashSet::new(), device, min_usage)
+}
+
+/// Bind ids are `hid:<vid:04x>:<pid:04x>:<button>`, stable across replug and
+/// power-cycle (unlike a winmm index). Parses one back to its parts.
+fn parse_hid_bind(id: &str) -> Option<(u16, u16, u8)> {
+    let rest = id.strip_prefix("hid:")?;
+    let mut parts = rest.split(':');
+    let vid = u16::from_str_radix(parts.next()?, 16).ok()?;
+    let pid = u16::from_str_radix(parts.next()?, 16).ok()?;
+    let button: u8 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() { return None; }
+    Some((vid, pid, button))
+}
+
+/// Which of `seen`'s paths are newly arrived, and which of `known`'s are gone --
+/// the bookkeeping for a 2s re-enumeration sweep. A path already known is neither
+/// re-added nor removed.
+fn diff_device_paths(known: &[String], seen: &[String]) -> (Vec<String>, Vec<String>) {
+    let added = seen.iter().filter(|p| !known.contains(p)).cloned().collect();
+    let removed = known.iter().filter(|p| !seen.contains(p)).cloned().collect();
+    (added, removed)
+}
+
 #[cfg(windows)]
 pub struct XInputSource { prev: [u16; 4] }
 #[cfg(windows)]
@@ -624,5 +679,76 @@ mod tests {
     #[test]
     fn oem_name_from_replaces_the_generic_driver_name() {
         assert_eq!(oem_name_from("Microsoft PC-joystick driver\0", 2), "Joystick 3");
+    }
+
+    // --- HID (#144): pure logic around the Win32-unavoidable HidSource. ---
+
+    #[test]
+    fn diff_to_edges_tracks_a_pressed_set_across_reports_with_no_duplicate_edges() {
+        let empty: HashSet<u16> = HashSet::new();
+        let mut prev = empty.clone();
+        let mut all = vec![];
+
+        let now: HashSet<u16> = [3].into_iter().collect();
+        all.extend(diff_to_edges(&prev, &now, "hid:046d:c276", 1));
+        prev = now;
+
+        let now: HashSet<u16> = [3, 7].into_iter().collect();
+        all.extend(diff_to_edges(&prev, &now, "hid:046d:c276", 1));
+        prev = now;
+
+        // unchanged report: no duplicate edges
+        all.extend(diff_to_edges(&prev, &prev.clone(), "hid:046d:c276", 1));
+
+        let now: HashSet<u16> = empty;
+        all.extend(diff_to_edges(&prev, &now, "hid:046d:c276", 1));
+
+        let got: Vec<(u8, bool)> = all.iter().map(|e| (e.button, e.pressed)).collect();
+        assert_eq!(got, vec![(2, true), (6, true), (2, false), (6, false)]);
+    }
+
+    #[test]
+    fn normalize_usage_maps_the_lowest_usage_to_button_zero() {
+        assert_eq!(normalize_usage(1, 1), 0);
+        assert_eq!(normalize_usage(4, 1), 3);
+        assert_eq!(normalize_usage(10, 10), 0);
+    }
+
+    #[test]
+    fn hid_bind_id_round_trips_through_bind_id_and_parse_hid_bind() {
+        let edge = Edge { device: "hid:046d:c276".into(), button: 7, pressed: true };
+        let id = bind_id(&edge);
+        assert_eq!(id, "hid:046d:c276:7");
+        assert_eq!(parse_hid_bind(&id), Some((0x046d, 0xc276, 7)));
+    }
+
+    #[test]
+    fn parse_hid_bind_rejects_non_hid_ids() {
+        assert_eq!(parse_hid_bind("xinput:0:4"), None);
+        assert_eq!(parse_hid_bind("hid:046d:c276"), None); // missing button
+        assert_eq!(parse_hid_bind("hid:zz:c276:7"), None); // bad hex
+    }
+
+    #[test]
+    fn releases_for_vanished_turns_every_still_pressed_usage_into_a_release() {
+        let pressed: HashSet<u16> = [1, 4].into_iter().collect();
+        let mut edges = releases_for_vanished(&pressed, "hid:046d:c276", 1);
+        edges.sort_by_key(|e| e.button);
+        let got: Vec<(u8, bool)> = edges.iter().map(|e| (e.button, e.pressed)).collect();
+        assert_eq!(got, vec![(0, false), (3, false)]);
+    }
+
+    #[test]
+    fn diff_device_paths_adds_new_devices_once_and_drops_vanished_ones() {
+        let known = vec!["\\\\?\\hid#a".to_string(), "\\\\?\\hid#b".to_string()];
+        let seen = vec!["\\\\?\\hid#a".to_string(), "\\\\?\\hid#c".to_string()];
+        let (added, removed) = diff_device_paths(&known, &seen);
+        assert_eq!(added, vec!["\\\\?\\hid#c".to_string()]);
+        assert_eq!(removed, vec!["\\\\?\\hid#b".to_string()]);
+
+        // a device already known is not re-added on the next sweep
+        let (added_again, removed_again) = diff_device_paths(&seen, &seen);
+        assert!(added_again.is_empty());
+        assert!(removed_again.is_empty());
     }
 }
