@@ -1,6 +1,6 @@
 {
   "track": "circuit_de_spa_francorchamps",
-  "_config_note": "Spa, LMU/WEC GP numbering (source: lemansultimate.wiki.gg Track Guide: Spa, 20 corners; 18 named, unnamed connectors T16/T20 omitted). Names/numbering owned from that guide; directions from 13 clean laps. Driver-confirmed 2026-09-01: T9 Speaker's Corner is a LEFT (wiki was wrong); T14 Campus is the slow 2nd-gear RIGHT after Les Fagnes; T15 Stavelot is the near-flat RIGHT that follows (earlier build had Campus/Stavelot swapped and mislabeled the Fagnes exit as Campus). Rebuilt from a collapsed 10-corner auto map.",
+  "_config_note": "Spa, LMU/WEC GP numbering (source: lemansultimate.wiki.gg Track Guide: Spa, 20 corners; 18 named, unnamed connectors T16/T20 omitted). Names/numbering owned from that guide; directions from 13 clean laps. Driver-confirmed 2026-09-01: T9 Speaker's Corner is a LEFT (wiki was wrong); T14 Campus is the slow 2nd-gear RIGHT after Les Fagnes; T15 Stavelot is the near-flat RIGHT that follows (earlier build had Campus/Stavelot swapped and mislabeled the Fagnes exit as Campus). Rebuilt from a collapsed 10-corner auto map. 2026-09-20: paired corners that shared one name (T5/T6 Les Combes, T10/T11 Pouhon, T12/T13 Les Fagnes, T18/T19 Bus Stop) are now plain Turn N, with the name carried by a `sections` span instead -- the Monza/Imola pattern, so the coach reads 'T10 (left) [part of Pouhon]'. T4's invented 'Raidillon exit' became Turn 4 inside the Eau Rouge / Raidillon section. Geometry untouched.",
   "_distances_note": "apex from lap-averaged steering peaks + speed minima (13 clean laps, 2026); windows apex +/-45m clamped.",
   "length_m": 7004,
   "corners": [
@@ -30,7 +30,7 @@
     },
     {
       "number": 4,
-      "name": "Raidillon exit",
+      "name": "Turn 4",
       "direction": "left",
       "start_dist": 1119,
       "apex_dist": 1164.0,
@@ -38,7 +38,7 @@
     },
     {
       "number": 5,
-      "name": "Les Combes",
+      "name": "Turn 5",
       "direction": "right",
       "start_dist": 2264,
       "apex_dist": 2309.0,
@@ -46,7 +46,7 @@
     },
     {
       "number": 6,
-      "name": "Les Combes",
+      "name": "Turn 6",
       "direction": "left",
       "start_dist": 2349.5,
       "apex_dist": 2390.0,
@@ -78,7 +78,7 @@
     },
     {
       "number": 10,
-      "name": "Pouhon",
+      "name": "Turn 10",
       "direction": "left",
       "start_dist": 3755,
       "apex_dist": 3800.0,
@@ -86,7 +86,7 @@
     },
     {
       "number": 11,
-      "name": "Pouhon",
+      "name": "Turn 11",
       "direction": "left",
       "start_dist": 3905,
       "apex_dist": 3950.0,
@@ -94,7 +94,7 @@
     },
     {
       "number": 12,
-      "name": "Les Fagnes",
+      "name": "Turn 12",
       "direction": "right",
       "start_dist": 4340,
       "apex_dist": 4385.0,
@@ -102,7 +102,7 @@
     },
     {
       "number": 13,
-      "name": "Les Fagnes",
+      "name": "Turn 13",
       "direction": "left",
       "start_dist": 4515,
       "apex_dist": 4560.0,
@@ -134,7 +134,7 @@
     },
     {
       "number": 18,
-      "name": "Bus Stop",
+      "name": "Turn 18",
       "direction": "left",
       "start_dist": 6622,
       "apex_dist": 6667.0,
@@ -142,7 +142,7 @@
     },
     {
       "number": 19,
-      "name": "Bus Stop",
+      "name": "Turn 19",
       "direction": "right",
       "start_dist": 6813,
       "apex_dist": 6858.0,
@@ -160,8 +160,39 @@
     "Malmedy": "mˈælmədi",
     "Pouhon": "pˈaʊhɑːn",
     "Raidillon": "ɹˈeɪdɪlən",
-    "Raidillon exit": "ɹˈeɪdɪlən ˈɛɡzɪt",
     "Speaker's Corner": "spˈiːkɚz kˈɔːɹnɚ",
     "Stavelot": "stˈeɪvlɑːt"
-  }
+  },
+  "sections": [
+    {
+      "name": "Eau Rouge / Raidillon",
+      "kind": "section",
+      "start_dist": 857.0,
+      "end_dist": 1209.0
+    },
+    {
+      "name": "Les Combes",
+      "kind": "section",
+      "start_dist": 2264.0,
+      "end_dist": 2435.0
+    },
+    {
+      "name": "Pouhon",
+      "kind": "section",
+      "start_dist": 3755.0,
+      "end_dist": 3995.0
+    },
+    {
+      "name": "Les Fagnes",
+      "kind": "section",
+      "start_dist": 4340.0,
+      "end_dist": 4605.0
+    },
+    {
+      "name": "Bus Stop",
+      "kind": "section",
+      "start_dist": 6622.0,
+      "end_dist": 6903.0
+    }
+  ]
 }
