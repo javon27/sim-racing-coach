@@ -752,6 +752,17 @@
       {/if}
       {#if isTauriShell()}
         <div class="field">
+          <span class="lbl">Push-to-talk only when Le Mans Ultimate or the coach is in focus<InfoTip text="Turn off if PTT stops working in VR." /></span>
+          <div class="control">
+            <input
+              type="checkbox"
+              aria-label="Push-to-talk only when Le Mans Ultimate or the coach is in focus"
+              bind:checked={settings.voice.ptt_focus_gate}
+              onchange={saveVoiceConfig}
+            />
+          </div>
+        </div>
+        <div class="field">
           <span class="lbl">Wheel button<InfoTip text="A wheel button held to talk, in addition to the keyboard key." /></span>
           <div class="control">
             <span class="val" title={settings.voice.ptt_wheel ?? undefined}>{describeBind(settings.voice.ptt_wheel, devices, settings.voice.ptt_wheel_name)}</span>

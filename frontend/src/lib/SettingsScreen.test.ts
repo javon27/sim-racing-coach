@@ -83,7 +83,7 @@ function baseSettings(overrides: Partial<SettingsResponse> = {}): SettingsRespon
     driver: { braking_style: null, balance_preference: null, risk_tolerance: null },
     voice: {
       enabled: false, ptt_key: "F9", ptt_wheel: null, ptt_gamepad: null, ptt_wheel_name: null, ptt_gamepad_name: null, tts_voice: null, tts_rate: 1.0,
-      tts_engine: "windows", kokoro_voice: "af_heart",
+      tts_engine: "windows", kokoro_voice: "af_heart", ptt_focus_gate: true,
       vad_threshold: 0.02, vad_silence_ms: 1000, vad_max_s: 20, conversation_idle_s: 30, mic_device_id: null,
     },
     api_key_set: false,
@@ -508,7 +508,7 @@ describe("SettingsScreen", () => {
 
   const voiceDefaults = {
     enabled: false, ptt_key: "F9", ptt_wheel: null, ptt_gamepad: null, ptt_wheel_name: null, ptt_gamepad_name: null, tts_voice: null, tts_rate: 1,
-    tts_engine: "windows" as const, kokoro_voice: "af_heart",
+    tts_engine: "windows" as const, kokoro_voice: "af_heart", ptt_focus_gate: true,
     vad_threshold: 0.02, vad_silence_ms: 1000, vad_max_s: 20, conversation_idle_s: 30, mic_device_id: null,
   };
 

@@ -23,9 +23,20 @@ describe("voice-shell", () => {
   it("pushBinds sends binds + hotkey and surfaces a registration error", async () => {
     const { shell, invoked } = fakeShell();
     expect(await pushBinds({ ptt_key: "F9", ptt_wheel: "winmm:0:7", ptt_gamepad: null }, shell)).toBe(null);
-    expect(invoked).toContainEqual(["voice_set_binds", { binds: { wheel: "winmm:0:7", gamepad: null } }]);
+    expect(invoked).toContainEqual([
+      "voice_set_binds",
+      { binds: { wheel: "winmm:0:7", gamepad: null }, focus_gate: true },
+    ]);
     expect(invoked).toContainEqual(["voice_set_hotkey", { key: "F9" }]);
     expect(await pushBinds({ ptt_key: "BAD", ptt_wheel: null, ptt_gamepad: null }, shell)).toMatch(/no such key/);
+  });
+
+  it("pushBinds forwards focus_gate (true by default, false when the setting is off, #112)", async () => {
+    const { shell, invoked } = fakeShell();
+    await pushBinds({ ptt_key: "F9", ptt_wheel: null, ptt_gamepad: null }, shell);
+    expect(invoked).toContainEqual(["voice_set_binds", { binds: { wheel: null, gamepad: null }, focus_gate: true }]);
+    await pushBinds({ ptt_key: "F9", ptt_wheel: null, ptt_gamepad: null, ptt_focus_gate: false }, shell);
+    expect(invoked).toContainEqual(["voice_set_binds", { binds: { wheel: null, gamepad: null }, focus_gate: false }]);
   });
   it("captureNext arms capture and resolves with the captured id, or null on timeout", async () => {
     const { shell, handlers, invoked } = fakeShell();

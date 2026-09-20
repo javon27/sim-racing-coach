@@ -79,6 +79,18 @@ def test_voice_defaults_and_partial_nested_merge(tmp_path):
     assert v["mic_device_id"] == "abc123" and v["enabled"] is True  # round-trips, keeps prior partials
 
 
+def test_ptt_focus_gate_defaults_true_and_round_trips(tmp_path):
+    """#112 escape hatch: default ON, and a partial save doesn't disturb it."""
+    from simcoach import config
+    p = str(tmp_path / "config.json")
+    assert config.load_config(p)["voice"]["ptt_focus_gate"] is True
+    config.save_config({"voice": {"ptt_focus_gate": False}}, p)
+    assert config.load_config(p)["voice"]["ptt_focus_gate"] is False
+    config.save_config({"voice": {"tts_rate": 1.2}}, p)
+    v = config.load_config(p)["voice"]
+    assert v["ptt_focus_gate"] is False and v["tts_rate"] == 1.2  # kept across an unrelated partial save
+
+
 def test_driver_merge_still_works_after_generalising(tmp_path):
     from simcoach import config
     p = str(tmp_path / "config.json")

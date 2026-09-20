@@ -36,10 +36,13 @@ export async function attachShell(
 
 /** Push binds + hotkey to the shell. Resolves the hotkey error text (or null). */
 export async function pushBinds(
-  v: { ptt_key: string; ptt_wheel: string | null; ptt_gamepad: string | null },
+  v: { ptt_key: string; ptt_wheel: string | null; ptt_gamepad: string | null; ptt_focus_gate?: boolean },
   shell: ShellApi = tauriShell(),
 ): Promise<string | null> {
-  await shell.invoke("voice_set_binds", { binds: { wheel: v.ptt_wheel, gamepad: v.ptt_gamepad } });
+  await shell.invoke("voice_set_binds", {
+    binds: { wheel: v.ptt_wheel, gamepad: v.ptt_gamepad },
+    focus_gate: v.ptt_focus_gate ?? true,
+  });
   try {
     await shell.invoke("voice_set_hotkey", { key: v.ptt_key });
     return null;

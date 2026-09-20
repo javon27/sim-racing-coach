@@ -47,6 +47,15 @@ def test_put_show_cost_round_trips_through_the_whitelist(tmp_path, monkeypatch, 
     assert c.put("/settings", json={"show_cost": True}).json()["show_cost"] is True
 
 
+def test_put_voice_ptt_focus_gate_round_trips_through_the_settings_endpoint(tmp_path, monkeypatch, mem_keyring):
+    """#112 escape hatch: same nested-voice-key round trip as ptt_key's neighbours."""
+    c, _ = _client(tmp_path, monkeypatch, mem_keyring)
+    assert c.get("/settings").json()["voice"]["ptt_focus_gate"] is True       # default on
+    body = c.put("/settings", json={"voice": {"ptt_focus_gate": False}}).json()
+    assert body["voice"]["ptt_focus_gate"] is False
+    assert c.get("/settings").json()["voice"]["ptt_focus_gate"] is False
+
+
 def test_put_settings_rejects_a_nested_injected_key(tmp_path, monkeypatch, mem_keyring):
     # #10: the whitelist only checked TOP-level keys, so {"voice": {...}} passed
     # any nested keys and any nested values straight through save_config's

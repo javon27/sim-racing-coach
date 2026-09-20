@@ -33,6 +33,7 @@ DEFAULTS = {
     "voice": {                    # see docs/superpowers/specs/2026-09-15-voice-loop-design.md
         "enabled": False,
         "ptt_key": "F9",          # keyboard PTT bind (KeyboardEvent.code / global-shortcut name)
+        "ptt_focus_gate": True,   # PTT only fires with LMU/the coach focused (#112); off for VR
         "ptt_wheel": None,        # "<device_id>:<button>" from the shell's capture flow (slice 4)
         "ptt_gamepad": None,
         "ptt_wheel_name": None,   # display name captured with the bind (#104); None = unknown

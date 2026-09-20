@@ -1,5 +1,8 @@
-//! Turns wheel/gamepad button presses into voice:press / voice:release events for
-//! the webview, while LMU has focus. Spec: docs/superpowers/specs/2026-09-15-voice-loop-design.md.
+//! Turns wheel/gamepad button presses and the global PTT hotkey into voice:press /
+//! voice:release events for the webview, gated to when LMU or this app itself has the
+//! foreground window (`foreground_allows`, #112) -- settable via `PollerState.focus_gate`
+//! for VR, where the desktop foreground may not be the game.
+//! Spec: docs/superpowers/specs/2026-09-15-voice-loop-design.md.
 use std::collections::HashSet;
 
 pub struct Edge { pub device: String, pub button: u8, pub pressed: bool }
@@ -26,15 +29,47 @@ impl HeldSet {
     }
 }
 
-#[derive(Default)]
-pub struct PollerState { pub binds: Binds, pub capture_armed: bool }
+pub struct PollerState {
+    pub binds: Binds,
+    pub capture_armed: bool,
+    /// PTT only fires with LMU or this app focused (#112); off for VR, where the
+    /// foreground desktop window may not be the game.
+    pub focus_gate: bool,
+    /// Whether the hotkey's press was actually emitted (i.e. not suppressed by the
+    /// gate), so its release only fires to match -- and so `step`'s focus-loss path
+    /// below can also release a hotkey-held press, the same as a wheel/gamepad one.
+    pub hotkey_down: bool,
+}
+
+impl Default for PollerState {
+    fn default() -> Self {
+        Self { binds: Binds::default(), capture_armed: false, focus_gate: true, hotkey_down: false }
+    }
+}
 
 pub enum Output { None, Transitions(Vec<Transition>), Captured(String) }
 
 /// One poll cycle. Capture mode wins over PTT: the next pressed edge (from any
 /// source) is reported as `Output::Captured` and never reaches `held`, so it
 /// can never leave the PTT looking held.
-pub fn step(sources: &mut [Box<dyn ButtonSource>], held: &mut HeldSet, state: &mut PollerState) -> Output {
+///
+/// `focused` is injected (from `foreground_allows()`) rather than queried here, so
+/// this stays pure and testable without Win32 (#112).
+pub fn step(
+    sources: &mut [Box<dyn ButtonSource>],
+    held: &mut HeldSet,
+    state: &mut PollerState,
+    focused: bool,
+) -> Output {
+    // Losing focus must release whatever's held -- a wheel/gamepad button or the
+    // keyboard hotkey -- or the mic stays open forever; a further unfocused poll
+    // emits nothing since both are already clear (no release storm).
+    if state.focus_gate && !focused {
+        let was_active = !held.held.is_empty() || state.hotkey_down;
+        held.held.clear();
+        state.hotkey_down = false;
+        return if was_active { Output::Transitions(vec![Transition::Release]) } else { Output::None };
+    }
     // No binds and not capturing: nothing this poll could produce would matter, so
     // skip touching winmm/XInput entirely rather than paying 125 Hz for a disabled
     // feature (voice off is the common case on a sim rig).
@@ -136,6 +171,76 @@ impl ButtonSource for WinmmSource {
     }
 }
 
+/// True when the foreground window belongs to LMU or to this app itself (#112).
+/// Cached by HWND: this runs at 125 Hz, so a process query per poll is too much --
+/// only a changed foreground HWND pays for one.
+#[cfg(windows)]
+pub fn foreground_allows() -> bool {
+    use std::cell::Cell;
+    use windows::core::PWSTR;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{
+        GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
+    };
+
+    thread_local! {
+        static CACHE: Cell<(isize, bool)> = Cell::new((0, false));
+    }
+
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.0.is_null() {
+        return false;
+    }
+    let key = hwnd.0 as isize;
+    let (cached_hwnd, cached_allowed) = CACHE.with(|c| c.get());
+    if cached_hwnd == key {
+        return cached_allowed;
+    }
+
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid as *mut u32)) };
+    let allowed = if pid == unsafe { GetCurrentProcessId() } {
+        true // our own window (desk PTT, Settings capture flow) always allowed
+    } else {
+        match unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) } {
+            Ok(handle) => {
+                let mut buf = [0u16; 260];
+                let mut size = buf.len() as u32;
+                let matched = unsafe {
+                    QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut size)
+                }
+                .is_ok()
+                    && std::path::Path::new(&String::from_utf16_lossy(&buf[..size as usize]))
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .is_some_and(|s| s.eq_ignore_ascii_case("Le Mans Ultimate"));
+                unsafe { let _ = CloseHandle(handle); }
+                matched
+            }
+            // EAC may refuse OpenProcess against the game itself; fall back to the
+            // foreground window's title.
+            Err(_) => {
+                let mut buf = [0u16; 512];
+                let len = unsafe { GetWindowTextW(hwnd, &mut buf) }.max(0) as usize;
+                String::from_utf16_lossy(&buf[..len])
+                    .to_ascii_lowercase()
+                    .contains("le mans ultimate")
+            }
+        }
+    };
+
+    CACHE.with(|c| c.set((key, allowed)));
+    allowed
+}
+#[cfg(not(windows))]
+pub fn foreground_allows() -> bool {
+    true
+}
+
 #[cfg(windows)]
 fn default_sources() -> Vec<Box<dyn ButtonSource>> {
     // Both the wheel and the pad were seen through winmm at the rig (XInput printed
@@ -154,9 +259,10 @@ pub fn start_poller(app: tauri::AppHandle, state: std::sync::Arc<std::sync::Mute
         let mut sources = default_sources();
         let mut held = HeldSet::new();
         loop {
+            let focused = foreground_allows();
             let out = {
                 let mut st = state.lock().unwrap();
-                step(&mut sources, &mut held, &mut st)
+                step(&mut sources, &mut held, &mut st, focused)
             };
             match out {
                 Output::None => {}
@@ -176,8 +282,14 @@ pub fn start_poller(app: tauri::AppHandle, state: std::sync::Arc<std::sync::Mute
 }
 
 #[tauri::command]
-pub fn voice_set_binds(binds: Binds, state: tauri::State<std::sync::Arc<std::sync::Mutex<PollerState>>>) {
-    state.lock().unwrap().binds = binds;
+pub fn voice_set_binds(
+    binds: Binds,
+    focus_gate: Option<bool>,
+    state: tauri::State<std::sync::Arc<std::sync::Mutex<PollerState>>>,
+) {
+    let mut st = state.lock().unwrap();
+    st.binds = binds;
+    st.focus_gate = focus_gate.unwrap_or(true);
 }
 
 #[tauri::command]
@@ -186,19 +298,36 @@ pub fn voice_capture_next(state: tauri::State<std::sync::Arc<std::sync::Mutex<Po
 }
 
 #[tauri::command]
-pub fn voice_set_hotkey(app: tauri::AppHandle, key: Option<String>) -> Result<(), String> {
+pub fn voice_set_hotkey(
+    app: tauri::AppHandle,
+    key: Option<String>,
+    state: tauri::State<std::sync::Arc<std::sync::Mutex<PollerState>>>,
+) -> Result<(), String> {
     use tauri::Emitter;
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
     app.global_shortcut().unregister_all().map_err(|e| e.to_string())?;
     if let Some(k) = key {
         let name = hotkey_name(&k);
+        let poller_state = state.inner().clone();
         app.global_shortcut()
             .on_shortcut(name.as_str(), move |app, _sc, ev| {
-                let event_name = match ev.state() {
-                    ShortcutState::Pressed => "voice:press",
-                    ShortcutState::Released => "voice:release",
-                };
-                let _ = app.emit(event_name, ());
+                let mut st = poller_state.lock().unwrap();
+                match ev.state() {
+                    ShortcutState::Pressed => {
+                        // Suppressed by the gate: emit nothing, and don't mark it down
+                        // so the matching key-up doesn't emit a release either.
+                        if !st.focus_gate || foreground_allows() {
+                            st.hotkey_down = true;
+                            let _ = app.emit("voice:press", ());
+                        }
+                    }
+                    ShortcutState::Released => {
+                        if st.hotkey_down {
+                            st.hotkey_down = false;
+                            let _ = app.emit("voice:release", ());
+                        }
+                    }
+                }
             })
             .map_err(|e| e.to_string())?;
     }
@@ -349,10 +478,16 @@ mod tests {
     struct Scripted(Vec<Vec<Edge>>);
     impl ButtonSource for Scripted { fn poll(&mut self) -> Vec<Edge> { if self.0.is_empty() { vec![] } else { self.0.remove(0) } } }
 
-    #[test]
-    fn step_drives_sources_through_the_held_set_across_polls() {
+    fn poller_state(binds: Binds, capture_armed: bool, focus_gate: bool) -> PollerState {
+        PollerState { binds, capture_armed, focus_gate, hotkey_down: false }
+    }
+
+    /// Runs `s:0:1` press/(nothing)/release through `step` across three focused polls.
+    /// Shared by the baseline test and the focus_gate-off test (#112), which must behave
+    /// identically even though `focused` is false throughout.
+    fn press_release_over_three_polls(focus_gate: bool, focused: bool) -> Vec<Transition> {
         let binds = Binds { wheel: Some("s:0:1".into()), gamepad: None };
-        let mut st = PollerState { binds, capture_armed: false };
+        let mut st = poller_state(binds, false, focus_gate);
         let mut src: Vec<Box<dyn ButtonSource>> = vec![Box::new(Scripted(vec![
             vec![Edge { device: "s:0".into(), button: 1, pressed: true }],
             vec![],
@@ -361,24 +496,38 @@ mod tests {
         let mut h = HeldSet::new();
         let mut out = vec![];
         for _ in 0..3 {
-            match step(&mut src, &mut h, &mut st) {
+            match step(&mut src, &mut h, &mut st, focused) {
                 Output::Transitions(ts) => out.extend(ts),
                 Output::None => {}
                 Output::Captured(_) => panic!("not capturing"),
             }
         }
+        out
+    }
+
+    #[test]
+    fn step_drives_sources_through_the_held_set_across_polls() {
+        let out = press_release_over_three_polls(true, true);
+        assert!(matches!(out.as_slice(), [Transition::Press, Transition::Release]));
+    }
+
+    #[test]
+    fn step_focus_gate_off_ignores_unfocused_and_presses_still_flow() {
+        // #112 escape hatch (VR): focus_gate=false must behave exactly as if always
+        // focused, even though `focused` is false on every poll.
+        let out = press_release_over_three_polls(false, false);
         assert!(matches!(out.as_slice(), [Transition::Press, Transition::Release]));
     }
 
     #[test]
     fn capture_mode_swallows_the_next_press_and_reports_its_id() {
         let binds = Binds { wheel: Some("s:0:1".into()), gamepad: None };
-        let mut st = PollerState { binds, capture_armed: true };
+        let mut st = poller_state(binds, true, true);
         let mut h = HeldSet::new();
         let mut src: Vec<Box<dyn ButtonSource>> = vec![Box::new(Scripted(vec![
             vec![Edge { device: "s:0".into(), button: 1, pressed: true }],   // bound, but capture wins
         ]))];
-        let out = step(&mut src, &mut h, &mut st);
+        let out = step(&mut src, &mut h, &mut st, true);
         assert!(matches!(out, Output::Captured(ref id) if id == "s:0:1"));
         assert!(!st.capture_armed);
         assert!(h.held.is_empty(), "a captured press must not leave the PTT held");
@@ -394,17 +543,69 @@ mod tests {
 
     #[test]
     fn step_with_no_binds_and_not_capturing_polls_no_source() {
-        let mut st = PollerState { binds: Binds::default(), capture_armed: false };
+        let mut st = poller_state(Binds::default(), false, true);
         let mut h = HeldSet::new();
         let calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let mut src: Vec<Box<dyn ButtonSource>> = vec![Box::new(CountingSource(calls.clone()))];
-        let out = step(&mut src, &mut h, &mut st);
+        let out = step(&mut src, &mut h, &mut st, true);
         assert!(matches!(out, Output::None));
         assert_eq!(
             calls.load(std::sync::atomic::Ordering::SeqCst),
             0,
             "no binds and not capturing must not touch a source"
         );
+    }
+
+    #[test]
+    fn step_unfocused_polls_no_source_and_returns_none() {
+        // Binds are set (so this isn't the no-binds fast path above), but focus is
+        // denied: the gate must return before ever touching a source (#112).
+        let binds = Binds { wheel: Some("s:0:1".into()), gamepad: None };
+        let mut st = poller_state(binds, false, true);
+        let mut h = HeldSet::new();
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let mut src: Vec<Box<dyn ButtonSource>> = vec![Box::new(CountingSource(calls.clone()))];
+        let out = step(&mut src, &mut h, &mut st, false);
+        assert!(matches!(out, Output::None));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0, "unfocused must not poll a source");
+    }
+
+    #[test]
+    fn step_focus_loss_releases_a_held_press_then_regain_resumes_normally() {
+        let binds = Binds { wheel: Some("s:0:1".into()), gamepad: None };
+        let mut st = poller_state(binds, false, true);
+        let mut h = HeldSet::new();
+        // Only the 3 *focused* polls below ever call `.poll()` -- the unfocused ones
+        // return from the gate before touching a source -- so this list has exactly 3
+        // entries, one per focused poll, not one per poll overall.
+        let mut src: Vec<Box<dyn ButtonSource>> = vec![Box::new(Scripted(vec![
+            vec![Edge { device: "s:0".into(), button: 1, pressed: true }],  // 1: press, focused
+            vec![Edge { device: "s:0".into(), button: 1, pressed: true }],  // 4: press again, refocused
+            vec![Edge { device: "s:0".into(), button: 1, pressed: false }], // 5: release
+        ]))];
+
+        // 1: press while focused.
+        assert!(matches!(
+            step(&mut src, &mut h, &mut st, true),
+            Output::Transitions(ref ts) if matches!(ts.as_slice(), [Transition::Press])
+        ));
+        // 2: focus lost mid-press -- exactly one release, held cleared.
+        assert!(matches!(
+            step(&mut src, &mut h, &mut st, false),
+            Output::Transitions(ref ts) if matches!(ts.as_slice(), [Transition::Release])
+        ));
+        assert!(h.held.is_empty());
+        // 3: a further unfocused poll emits nothing -- no release storm.
+        assert!(matches!(step(&mut src, &mut h, &mut st, false), Output::None));
+        // 4/5: focus regained with nothing held -- normal press/release resumes.
+        assert!(matches!(
+            step(&mut src, &mut h, &mut st, true),
+            Output::Transitions(ref ts) if matches!(ts.as_slice(), [Transition::Press])
+        ));
+        assert!(matches!(
+            step(&mut src, &mut h, &mut st, true),
+            Output::Transitions(ref ts) if matches!(ts.as_slice(), [Transition::Release])
+        ));
     }
 
     #[test]
