@@ -3,7 +3,13 @@ import dataclasses
 import numpy as np
 import pytest
 
-from simcoach.analysis import analyze_lap, lap_events, stint_wear_baseline
+from simcoach.analysis import (
+    analyze_lap,
+    damage_events,
+    damage_state,
+    lap_events,
+    stint_wear_baseline,
+)
 from simcoach.corners import CornerMap
 from simcoach.model_types import LapRecord
 
@@ -1888,6 +1894,90 @@ def test_stint_wear_baseline_skips_wheels_without_the_channel(synthetic_lap):
 def test_stint_wear_baseline_needs_two_laps(synthetic_lap):
     assert stint_wear_baseline([synthetic_lap]) == {}
     assert stint_wear_baseline([]) == {}
+
+
+# --- damage (#143) -----------------------------------------------------------
+
+def test_damage_events_two_impacts_get_two_entries():
+    # et holds each impact's value indefinitely (rig-confirmed behaviour) until
+    # the next one lands -- exactly what a real polled stint looks like.
+    channels = {
+        "last_impact_et": [0.0, 0.0, 2178.5, 2178.5, 2178.5, 2400.0, 2400.0],
+        "last_impact_mag": [0.0, 0.0, 365.47, 365.47, 365.47, 90.0, 90.0],
+        "last_impact_x": [0.0, 0.0, -1.02, -1.02, -1.02, 0.0, 0.0],
+        "last_impact_z": [0.0, 0.0, 1.75, 1.75, 1.75, -1.5, -1.5],
+        "lap_distance": [0.0, 100.0, 1240.0, 1300.0, 1400.0, 2000.0, 2100.0],
+    }
+    events = damage_events(channels)
+    assert len(events) == 2
+    e1, e2 = events
+    assert e1["et"] == pytest.approx(2178.5)
+    assert e1["magnitude"] == pytest.approx(365.47)
+    assert e1["lap_distance"] == pytest.approx(1240.0)
+    assert e1["label"] == "front-left"
+    assert e2["et"] == pytest.approx(2400.0)
+    assert e2["magnitude"] == pytest.approx(90.0)
+    assert e2["label"] == "rear"
+
+
+def test_damage_events_constant_et_is_zero_entries():
+    """The regression that matters: a lap that carries ONE stale impact value on
+    every sample (no rising edge) must report zero hits, not one per sample."""
+    channels = {
+        "last_impact_et": [2178.5] * 300,
+        "last_impact_mag": [365.47] * 300,
+        "last_impact_x": [-1.02] * 300,
+        "last_impact_z": [1.75] * 300,
+        "lap_distance": list(range(300)),
+    }
+    assert damage_events(channels) == []
+
+
+def test_damage_events_missing_channels_is_empty_not_raised():
+    assert damage_events({}) == []
+    assert damage_events({"speed": [1.0, 2.0]}) == []
+
+
+def test_damage_label_centred_hit_has_no_side():
+    channels = {
+        "last_impact_et": [0.0, 5.0],
+        "last_impact_mag": [0.0, 200.0],
+        "last_impact_x": [0.0, 0.0],
+        "last_impact_z": [0.0, -2.0],
+        "lap_distance": [0.0, 500.0],
+    }
+    events = damage_events(channels)
+    assert len(events) == 1
+    assert events[0]["label"] == "rear"   # not "rear-left" / "rear-right"
+
+
+def test_damage_state_reads_flat_wheel():
+    channels = {
+        "dent_max": [0.0, 1.0, 1.0],
+        "dent_total": [0.0, 1.0, 1.0],
+        "detached": [0.0, 0.0, 0.0],
+        "overheating": [0.0, 0.0, 0.0],
+        "flat_fl": [0.0, 0.0, 1.0],
+        "flat_fr": [0.0, 0.0, 0.0],
+        "flat_rl": [0.0, 0.0, 0.0],
+        "flat_rr": [0.0, 0.0, 0.0],
+        "wheel_detached_fl": [0.0, 0.0, 0.0],
+        "wheel_detached_fr": [0.0, 0.0, 0.0],
+        "wheel_detached_rl": [0.0, 0.0, 0.0],
+        "wheel_detached_rr": [0.0, 0.0, 0.0],
+    }
+    state = damage_state(channels)
+    assert state["dent_max"] == 1.0
+    assert state["dent_total"] == 1.0
+    assert state["detached"] is False
+    assert state["overheating"] is False
+    assert state["wheels_flat"] == ["fl"]
+    assert state["wheels_detached"] == []
+
+
+def test_damage_state_empty_without_channels():
+    assert damage_state({}) == {}
+    assert damage_state({"speed": [1.0]}) == {}
 
 
 def test_analyze_lap_on_a_partial_fragment_is_nan_where_the_lap_never_went(synthetic_lap):

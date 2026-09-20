@@ -1644,6 +1644,70 @@ def lap_events(record: LapRecord, cmap: CornerMap, analysis: "LapAnalysis | None
     return events
 
 
+# #143: a hit's side/end label is read off local-vehicle mLastImpactPos, per the
+# 2026-09-20 rig convention (x negative = left, z positive = front). A dead zone
+# near x=0 is what keeps a centred hit reading "front" instead of a coin-flip
+# "front-left" -- not measured, a guessed geometric width, so kept as one knob.
+_DAMAGE_DEAD_ZONE_M = 0.15
+
+
+def _damage_label(x: float, z: float) -> str:
+    end = "front" if z >= 0 else "rear"
+    if abs(x) < _DAMAGE_DEAD_ZONE_M:
+        return end
+    return f"{end}-{'left' if x < 0 else 'right'}"
+
+
+def damage_events(channels: dict) -> list[dict]:
+    """One entry per impact this lap: `{"et", "magnitude", "lap_distance", "label"}`.
+
+    An impact is a RISING EDGE of last_impact_et, not a magnitude threshold -- the
+    field holds the LAST impact indefinitely, so watching magnitude alone would
+    re-report the same hit on every sample. [] for a lap with no damage channels
+    (captured before #143) or with no impacts -- never raised, never fabricated."""
+    et = channels.get("last_impact_et")
+    if et is None:
+        return []
+    et = np.asarray(et, dtype=float)
+    mag = np.asarray(channels.get("last_impact_mag", []), dtype=float)
+    x = np.asarray(channels.get("last_impact_x", []), dtype=float)
+    z = np.asarray(channels.get("last_impact_z", []), dtype=float)
+    dist = np.asarray(channels.get("lap_distance", []), dtype=float)
+    n = min(et.size, mag.size, x.size, z.size, dist.size)
+    events = []
+    prev = et[0] if n else math.nan
+    for i in range(1, n):
+        if math.isfinite(et[i]) and (not math.isfinite(prev) or et[i] > prev):
+            events.append({
+                "et": float(et[i]),
+                "magnitude": float(mag[i]),
+                "lap_distance": float(dist[i]),
+                "label": _damage_label(float(x[i]), float(z[i])),
+            })
+        prev = et[i]
+    return events
+
+
+def damage_state(channels: dict) -> dict:
+    """End-of-lap damage snapshot: dent_max/dent_total (raw 0-255 severity,
+    UNVERIFIED which panel), detached/overheating, and which wheels read flat or
+    detached (also UNVERIFIED -- nothing broke on the rig hit that confirmed the
+    other fields). {} for a lap with no damage channels -- never fabricated as
+    clean."""
+    dent_max = channels.get("dent_max")
+    if dent_max is None or not len(dent_max):
+        return {}
+    return {
+        "dent_max": float(dent_max[-1]),
+        "dent_total": float(channels["dent_total"][-1]),
+        "detached": bool(channels["detached"][-1]),
+        "overheating": bool(channels["overheating"][-1]),
+        "wheels_flat": [w for w in _WHEELS if bool(channels.get(f"flat_{w}", [0])[-1])],
+        "wheels_detached": [w for w in _WHEELS
+                            if bool(channels.get(f"wheel_detached_{w}", [0])[-1])],
+    }
+
+
 def stint_wear_baseline(records: "list[LapRecord]") -> dict[str, float]:
     """{wheel: median per-lap wear (fraction)} over the laps that carry the channel.
 
