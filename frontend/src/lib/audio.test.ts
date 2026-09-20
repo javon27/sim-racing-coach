@@ -1,7 +1,7 @@
 // frontend/src/lib/audio.test.ts
 import { describe, it, expect, vi } from "vitest";
 import { KokoroSpeaker, SynthSpeaker, makeSpeaker } from "./audio";
-import type { VoiceSettings } from "./api";
+import { UnpronounceableError, type VoiceSettings } from "./api";
 
 function voiceSettings(overrides: Partial<VoiceSettings> = {}): VoiceSettings {
   return {
@@ -132,7 +132,10 @@ describe("KokoroSpeaker", () => {
   });
 
   // Regression guard for the real fallback: a genuine fetch failure (non-OK
-  // response / network error) must still demote to Windows voices.
+  // response / network error -- e.g. a 503 or a dropped connection, as opposed to
+  // the per-sentence 422 UnpronounceableError above) must still demote the whole
+  // session to Windows voices via onUnavailable (#118/#123 only special-cases the
+  // unpronounceable 422; everything else keeps the existing wholesale behavior).
   it("a non-abort fetch rejection still reports onUnavailable exactly once", async () => {
     const { ctx } = fakeAudio();
     const fetchWav = vi.fn(() => Promise.reject(new Error("couldn't synthesise speech")));
@@ -141,6 +144,32 @@ describe("KokoroSpeaker", () => {
     await sp.speak("a");
     expect(onUnavailable).toHaveBeenCalledTimes(1);
     expect(onUnavailable).toHaveBeenCalledWith("couldn't synthesise speech");
+  });
+
+  // #118/#123: an unpronounceable sentence must not demote the whole session --
+  // Windows speaks just that one utterance, and Kokoro is tried again next.
+  it("a 422 unpronounceable response speaks via the Windows fallback for that utterance, not onUnavailable, and the next utterance still tries Kokoro", async () => {
+    const { ctx, sources } = fakeAudio();
+    const windowsFallback = { voiceName: null, rate: 1, speak: vi.fn(async () => {}) } as unknown as SynthSpeaker;
+    let call = 0;
+    const fetchWav = vi.fn(() => {
+      call++;
+      return call === 1 ? Promise.reject(new UnpronounceableError(["Kemmel"])) : Promise.resolve(wav(10));
+    });
+    const sp = new KokoroSpeaker({ fetchWav, audio: ctx, windowsFallback });
+    sp.windowsVoiceName = "David";
+    const onUnavailable = vi.fn(); sp.onUnavailable = onUnavailable;
+
+    await sp.speak("Watch Kemmel.");
+    expect(windowsFallback.speak).toHaveBeenCalledWith("Watch Kemmel.");
+    expect(windowsFallback.voiceName).toBe("David");
+    expect(onUnavailable).not.toHaveBeenCalled();
+
+    const second = sp.speak("Turn ten.");
+    await vi.waitFor(() => expect(sources.length).toBe(1));   // Kokoro tried again for the next utterance
+    sources[0].stop();
+    await second;
+    expect(fetchWav).toHaveBeenCalledTimes(2);
   });
 
   it("a decodeAudioData rejection skips that sentence and continues with the next, without calling onUnavailable", async () => {

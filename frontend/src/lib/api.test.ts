@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { getSessions, putSettings, setApiKey, testApiKey, clearData, ingestHistory, getChatUsage,
-         rebuildFromCapture, transcribe } from "./api";
+         rebuildFromCapture, transcribe, speak, UnpronounceableError } from "./api";
 
 const BASE = "http://127.0.0.1:8765";
 const JSON_HEADERS = { "Content-Type": "application/json" };
@@ -209,5 +209,28 @@ describe("api client", () => {
     });
     vi.stubGlobal("fetch", fetchMock2);
     await expect(transcribe(new Uint8Array([1]))).rejects.toThrow(/set up yet/);
+  });
+
+  it("speak throws UnpronounceableError with the words on a 422 dict detail", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: false, status: 422, json: async () => ({ detail: { error: "unpronounceable", words: ["Kemmel", "Pouhon"] } }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const err = await speak("Watch Kemmel.", {}).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnpronounceableError);
+    expect((err as UnpronounceableError).words).toEqual(["Kemmel", "Pouhon"]);
+  });
+
+  it("speak still throws a plain Error for the bad-speed 422's string detail", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: false, status: 422, json: async () => ({ detail: "speed must be a number, got 'fast'" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const err = await speak("hi", { speed: NaN }).catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(UnpronounceableError);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/speed must be a number/);
   });
 });

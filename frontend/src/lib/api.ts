@@ -852,6 +852,18 @@ export function ttsCacheClear(): Promise<{ removed: number }> {
   });
 }
 
+// A 422 whose `detail` is {"error": "unpronounceable", "words": [...]} (#118/#123) --
+// distinct from the plain-string 422 for a bad speed, so KokoroSpeaker can fall back
+// to Windows speech for just this utterance instead of the wholesale onUnavailable path.
+export class UnpronounceableError extends Error {
+  words: string[];
+  constructor(words: string[]) {
+    super("unpronounceable");
+    this.name = "UnpronounceableError";
+    this.words = words;
+  }
+}
+
 // Dedicated fetch (not `request()`): mirrors transcribe() -- the thrown message
 // must be the server's `detail` alone (Speaker surfaces it via onUnavailable).
 export async function speak(
@@ -864,9 +876,14 @@ export async function speak(
     body: JSON.stringify({ text, voice: opts.voice, speed: opts.speed, track_slug: opts.trackSlug }),
   });
   if (!res.ok) {
-    let detail = "couldn't synthesise speech";
-    try { const b = await res.json(); if (typeof b?.detail === "string") detail = b.detail; } catch { /* keep default */ }
-    throw new Error(detail);
+    let detail: unknown = "couldn't synthesise speech";
+    try { const b = await res.json(); if (b?.detail !== undefined) detail = b.detail; } catch { /* keep default */ }
+    if (res.status === 422 && typeof detail === "object" && detail !== null
+      && (detail as { error?: string }).error === "unpronounceable") {
+      const words = (detail as { words?: unknown }).words;
+      throw new UnpronounceableError(Array.isArray(words) ? words.map(String) : []);
+    }
+    throw new Error(typeof detail === "string" ? detail : "couldn't synthesise speech");
   }
   return res.arrayBuffer();
 }

@@ -2,7 +2,7 @@
 // speech synthesis. No browser global is touched at import time -- jsdom (tests) has
 // none of AudioContext/MediaRecorder/speechSynthesis, and voice is always injected
 // as a VoiceLoop prop in tests -- only the real app constructs these.
-import { speak as apiSpeak, transcribe as apiTranscribe, type VoiceSettings } from "./api";
+import { speak as apiSpeak, transcribe as apiTranscribe, UnpronounceableError, type VoiceSettings } from "./api";
 import type { Earcon, Recorder, Speaker, Transcriber } from "./voice";
 
 export class MicRecorder implements Recorder {
@@ -209,8 +209,13 @@ export class KokoroSpeaker implements Speaker {
   rate = 1.0;
   trackSlug: string | null = null;
   onUnavailable: ((reason: string) => void) | null = null;
+  // The Windows voice/rate to fall back to for a single unpronounceable sentence
+  // (#118/#123) -- makeSpeaker wires this from the same VoiceSettings.tts_voice used
+  // when the engine itself is "windows".
+  windowsVoiceName: string | null = null;
   #fetchWav: typeof apiSpeak;
   #ctx: AudioContext | null;
+  #windowsFallback: SynthSpeaker | null = null;
   #queue: { text: string; resolve: () => void }[] = [];
   #ahead: { buffer: Promise<AudioBuffer | null>; resolve: () => void; abort: AbortController } | null = null;
   #playing: AudioBufferSourceNode | null = null;
@@ -228,9 +233,10 @@ export class KokoroSpeaker implements Speaker {
   // sentence to end -- notices and bails instead of playing a cancelled sentence.
   #gen = 0;
 
-  constructor(deps: { fetchWav?: typeof apiSpeak; audio?: AudioContext } = {}) {
+  constructor(deps: { fetchWav?: typeof apiSpeak; audio?: AudioContext; windowsFallback?: SynthSpeaker } = {}) {
     this.#fetchWav = deps.fetchWav ?? apiSpeak;
     this.#ctx = deps.audio ?? null;
+    this.#windowsFallback = deps.windowsFallback ?? null;
   }
   #audio(): AudioContext {
     this.#ctx ??= new AudioContext();
@@ -290,18 +296,31 @@ export class KokoroSpeaker implements Speaker {
         // cancel() aborting this fetch is not an engine failure -- only a non-OK
         // response (api.speak throws) or a network error should fall back to Windows.
         if (isAbortError(e)) return null;
+        if (e instanceof UnpronounceableError) return "unpronounceable" as const;
         this.#fail(e);
         return null;
       });
-    const buffer = bytes.then((b) => (b ? this.#decode(b, key) : null));
+    // An unpronounceable sentence speaks via Windows instead of dropping or demoting
+    // the whole session (#118/#123) -- onUnavailable is never called for it, and the
+    // NEXT utterance still tries Kokoro (#pump() resumes normally once this settles).
+    const buffer = bytes.then((b) => (
+      b === "unpronounceable" ? this.#speakViaWindows(item.text).then(() => null)
+        : b ? this.#decode(b, key) : null
+    ));
     this.#ahead = { buffer, resolve: item.resolve, abort };
     void this.#play();
   }
-  // A bad/empty WAV for one sentence (e.g. an all-OOV sentence, #118) isn't an
-  // engine failure -- skip just that sentence. Getting/creating the AudioContext
-  // itself failing IS an engine failure (no Web Audio support), same as before.
-  // A null/failed decode is never cached -- only a successful decode is worth
-  // replaying, and caching a miss would make a transient failure sticky.
+  #speakViaWindows(text: string): Promise<void> {
+    this.#windowsFallback ??= new SynthSpeaker();
+    this.#windowsFallback.voiceName = this.windowsVoiceName;
+    this.#windowsFallback.rate = this.rate;
+    return this.#windowsFallback.speak(text);
+  }
+  // A decode failure for one sentence isn't an engine failure -- skip just that
+  // sentence. Getting/creating the AudioContext itself failing IS an engine failure
+  // (no Web Audio support), same as before. A null/failed decode is never cached --
+  // only a successful decode is worth replaying, and caching a miss would make a
+  // transient failure sticky.
   #decode(bytes: ArrayBuffer, key: string): Promise<AudioBuffer | null> {
     let ctx: AudioContext;
     try { ctx = this.#audio(); } catch (e) { this.#fail(e); return Promise.resolve(null); }
@@ -355,6 +374,7 @@ export function makeSpeaker(v: VoiceSettings, kokoroInstalled: boolean, onFallba
     const s = new KokoroSpeaker();
     s.voice = v.kokoro_voice;
     s.rate = v.tts_rate;
+    s.windowsVoiceName = v.tts_voice;
     s.onUnavailable = onFallback;
     return s;
   }
