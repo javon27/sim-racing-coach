@@ -8,6 +8,14 @@ phonemes verbatim instead of guessing (or crashing) on a proper noun it doesn't 
 `simcoach/lexicon.json` is the same shape, shipped once for the whole app (LMU/WEC
 vocabulary that isn't tied to one track). `table_for` merges it under the track's own
 block, so a track can still override a global entry.
+
+EVERY shipped track's block is also folded into that global table (#149). The coach
+talks about a track it isn't currently on all the time -- comparing circuits, answering
+before a lap exists, or with LMU closed entirely -- and a name that is only in its own
+track's block is out-of-vocabulary in all of those cases, which sends the sentence to
+Windows speech mid-answer and makes the voice alternate. There are no cross-track
+collisions among the 56 shipped names; `Turn N` entries are skipped (Kokoro says those
+unaided, and they are 133 of the entries).
 """
 from __future__ import annotations
 
@@ -19,6 +27,7 @@ from pathlib import Path
 
 _MARKUP = re.compile(r"\[[^\]]*\]\(/[^)]*/\)")
 _LEXICON_PATH = Path(__file__).parent / "lexicon.json"
+_TURN_N = re.compile(r"Turn \d+", re.IGNORECASE)
 
 
 def validated_pronunciations(value) -> dict[str, str]:
@@ -37,15 +46,38 @@ def validated_pronunciations(value) -> dict[str, str]:
 
 
 @functools.lru_cache(maxsize=1)
+def _shipped_track_names() -> dict[str, str]:
+    """Every shipped track file's `pronunciations`, merged (#149). A bad file is
+    skipped with a warning -- one unparseable track must not cost every other track
+    its names. `Turn N` is skipped: Kokoro says it unaided and it is most of the
+    entries by count."""
+    out: dict[str, str] = {}
+    log = logging.getLogger(__name__)
+    for path in sorted((Path(__file__).parent / "tracks").glob("*.json")):
+        try:
+            block = json.loads(path.read_text(encoding="utf-8")).get("pronunciations")
+            if block is None:
+                continue
+            for name, phonemes in validated_pronunciations(block).items():
+                if not _TURN_N.fullmatch(name):
+                    out.setdefault(name, phonemes)
+        except (OSError, ValueError, TypeError) as e:
+            log.warning("ignoring pronunciations in %s: %s", path.name, e)
+    return out
+
+
+@functools.lru_cache(maxsize=1)
 def _global_table() -> dict[str, str]:
-    """The shipped simcoach/lexicon.json, or {} (missing, or invalid -- logged, never
-    raised -- same contract as table_for)."""
+    """Every shipped track's names, with simcoach/lexicon.json layered on top -- the
+    hand-curated global file wins a name both carry. {} on a missing or invalid
+    lexicon (logged, never raised -- same contract as table_for)."""
+    table = dict(_shipped_track_names())
     try:
         raw = json.loads(_LEXICON_PATH.read_text(encoding="utf-8"))
-        return validated_pronunciations(raw)
+        table.update(validated_pronunciations(raw))
     except (OSError, ValueError, TypeError) as e:
         logging.getLogger(__name__).warning("ignoring lexicon.json: %s", e)
-        return {}
+    return table
 
 
 def table_for(track_data: dict) -> dict[str, str]:

@@ -1,6 +1,7 @@
 import json
 import logging
 import pathlib
+import re
 
 import pytest
 
@@ -16,6 +17,10 @@ def fresh_global_lexicon(monkeypatch, tmp_path):
     the real shipped lexicon.json -- these tests shouldn't couple to its content."""
     path = tmp_path / "lexicon.json"
     monkeypatch.setattr(pronunciations, "_LEXICON_PATH", path)
+    # Also stub out the shipped track names (#149) so these stay tests of the MERGE
+    # SEMANTICS on known input. Real shipped coverage is asserted separately, by the
+    # tests that deliberately do not take this fixture.
+    monkeypatch.setattr(pronunciations, "_shipped_track_names", dict)
     pronunciations._global_table.cache_clear()
     yield path
     pronunciations._global_table.cache_clear()   # next caller reloads the real file
@@ -127,3 +132,26 @@ def test_shipped_lexicon_json_validates_and_fits_the_vocab():
     for name, ph in table.items():
         bad = [c for c in ph if c not in DEFAULT_VOCAB and c != " "]
         assert not bad, f"lexicon.json: {name!r} has chars outside Kokoro's vocab: {bad}"
+
+
+def test_every_shipped_track_name_is_reachable_with_no_track_resolved():
+    """#149: the coach talks about a track it isn't on -- comparing circuits, before
+    the first lap, or with LMU shut. A name reachable only through its own track's
+    block is out-of-vocabulary in all of those, which drops the sentence to Windows
+    speech mid-answer and makes the voice alternate (reported at the rig)."""
+    table = table_for({})
+    for name in ("Pouhon", "Les Combes", "Raidillon", "Blanchimont", "Stavelot",
+                 "Tosa", "Piratella", "Rivazza", "Curva Grande", "Parabolica"):
+        assert name in table, f"{name!r} unreachable with no track resolved"
+
+
+def test_a_tracks_own_block_still_wins_over_the_merged_global_table():
+    """The merge must not outrank the track being driven: same name, track's phonemes."""
+    assert table_for({"pronunciations": {"Pouhon": "zzz"}})["Pouhon"] == "zzz"
+
+
+def test_turn_n_entries_are_not_merged_into_the_global_table():
+    """133 of the shipped entries are `Turn N`. Kokoro says those unaided, so they
+    would only bloat the alternation regex `apply` builds."""
+    table = table_for({})
+    assert not [k for k in table if re.fullmatch(r"Turn \d+", k, re.IGNORECASE)]
