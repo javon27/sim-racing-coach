@@ -204,6 +204,8 @@ export class SynthSpeaker implements Speaker {
 // them via Web Audio, one synthesis in flight ahead of playback so the pipe never
 // stalls waiting on the network between sentences. Falls back to SynthSpeaker (via
 // onUnavailable) the first time a fetch fails -- e.g. the voice isn't installed.
+const UNPRONOUNCEABLE = Symbol("unpronounceable");
+
 export class KokoroSpeaker implements Speaker {
   voice = "af_heart";
   rate = 1.0;
@@ -217,8 +219,16 @@ export class KokoroSpeaker implements Speaker {
   #ctx: AudioContext | null;
   #windowsFallback: SynthSpeaker | null = null;
   #queue: { text: string; resolve: () => void }[] = [];
-  #ahead: { buffer: Promise<AudioBuffer | null>; resolve: () => void; abort: AbortController } | null = null;
+  // `buffer` resolves to the decoded audio, null (skip), or the UNPRONOUNCEABLE marker.
+  // The marker is NOT spoken here -- #pump() runs a sentence AHEAD of playback, so
+  // speaking it at fetch time talked over the sentence still playing (#148). `text` is
+  // carried so #play() can speak it in turn.
+  #ahead: { buffer: Promise<AudioBuffer | null | typeof UNPRONOUNCEABLE>; text: string;
+            resolve: () => void; abort: AbortController } | null = null;
   #playing: AudioBufferSourceNode | null = null;
+  // Set while a fallback sentence is being spoken by Windows, so the next sentence
+  // waits for it (#drainPlaying) instead of starting on top of it.
+  #windowsSpeaking: Promise<void> | null = null;
   #idleWaiters: (() => void)[] = [];
   #failed = false;
   // Decoded-audio cache (#121): replaying the same text -- voice/rate/track
@@ -254,6 +264,10 @@ export class KokoroSpeaker implements Speaker {
     this.#ahead?.abort.abort(); this.#ahead?.resolve(); this.#ahead = null;
     try { this.#playing?.stop(); } catch { /* already stopped */ }
     this.#playing = null;
+    // Stop the Windows fallback too: it is a separate engine, so stopping the Web
+    // Audio node left it talking on after the driver pressed Stop (#148).
+    this.#windowsFallback?.cancel();
+    this.#windowsSpeaking = null;
     for (const q of this.#queue.splice(0)) q.resolve();
     this.#settleIdle();
   }
@@ -296,18 +310,17 @@ export class KokoroSpeaker implements Speaker {
         // cancel() aborting this fetch is not an engine failure -- only a non-OK
         // response (api.speak throws) or a network error should fall back to Windows.
         if (isAbortError(e)) return null;
-        if (e instanceof UnpronounceableError) return "unpronounceable" as const;
+        if (e instanceof UnpronounceableError) return UNPRONOUNCEABLE;
         this.#fail(e);
         return null;
       });
-    // An unpronounceable sentence speaks via Windows instead of dropping or demoting
-    // the whole session (#118/#123) -- onUnavailable is never called for it, and the
-    // NEXT utterance still tries Kokoro (#pump() resumes normally once this settles).
+    // An unpronounceable sentence is MARKED here and spoken by Windows in #play(),
+    // in turn (#118/#123, ordering fixed in #148). onUnavailable is never called for
+    // it, and the next utterance still tries Kokoro.
     const buffer = bytes.then((b) => (
-      b === "unpronounceable" ? this.#speakViaWindows(item.text).then(() => null)
-        : b ? this.#decode(b, key) : null
+      b === UNPRONOUNCEABLE ? UNPRONOUNCEABLE : b ? this.#decode(b, key) : null
     ));
-    this.#ahead = { buffer, resolve: item.resolve, abort };
+    this.#ahead = { buffer, text: item.text, resolve: item.resolve, abort };
     void this.#play();
   }
   #speakViaWindows(text: string): Promise<void> {
@@ -341,6 +354,17 @@ export class KokoroSpeaker implements Speaker {
     if (gen !== this.#gen) { ahead.resolve(); this.#settleIdle(); return; }   // cancelled while waiting to play
     this.#ahead = null;
     this.#pump();                                    // start the NEXT synthesis before this one plays
+    if (buf === UNPRONOUNCEABLE) {
+      // Spoken HERE, in playback order, not when its fetch came back (#148).
+      // #windowsSpeaking makes the next sentence wait for it in #drainPlaying().
+      const speaking = this.#speakViaWindows(ahead.text);
+      this.#windowsSpeaking = speaking;
+      await speaking;
+      if (this.#windowsSpeaking === speaking) this.#windowsSpeaking = null;
+      ahead.resolve();
+      this.#settleIdle();
+      return;
+    }
     if (!buf) { ahead.resolve(); this.#settleIdle(); return; }
     const src = this.#audio().createBufferSource();
     src.buffer = buf; src.connect(this.#audio().destination);
@@ -351,9 +375,16 @@ export class KokoroSpeaker implements Speaker {
     ahead.resolve();
     this.#settleIdle();
   }
+  // Waits for whatever is currently making sound -- the Web Audio node AND a Windows
+  // fallback sentence (#148). Missing the latter is what let the two engines talk
+  // over each other, leapfrogging paragraphs.
   #drainPlaying(): Promise<void> {
     const cur = this.#playing;
-    return cur ? new Promise((r) => { const prev = cur.onended; cur.onended = (e) => { prev?.call(cur, e); r(); }; }) : Promise.resolve();
+    const node: Promise<void> = cur
+      ? new Promise((r) => { const prev = cur.onended; cur.onended = (e) => { prev?.call(cur, e); r(); }; })
+      : Promise.resolve();
+    const windows = this.#windowsSpeaking ?? Promise.resolve();
+    return Promise.all([node, windows]).then(() => undefined);
   }
   #fail(e: unknown): void {
     if (this.#failed) return;

@@ -172,6 +172,54 @@ describe("KokoroSpeaker", () => {
     expect(fetchWav).toHaveBeenCalledTimes(2);
   });
 
+  // #148: the fallback used to speak when its FETCH resolved, but #pump() runs a
+  // sentence ahead of playback -- so Windows started talking over the Kokoro sentence
+  // still playing, and the two engines leapfrogged paragraphs. It must wait its turn.
+  it("an unpronounceable sentence is not spoken by Windows until the sentence before it has finished playing", async () => {
+    const { ctx, sources } = fakeAudio();
+    const windowsFallback = { voiceName: null, rate: 1, speak: vi.fn(async () => {}), cancel: vi.fn() } as unknown as SynthSpeaker;
+    let call = 0;
+    const fetchWav = vi.fn(() => {
+      call++;
+      return call === 1 ? Promise.resolve(wav(10)) : Promise.reject(new UnpronounceableError(["Pouhon"]));
+    });
+    const sp = new KokoroSpeaker({ fetchWav, audio: ctx, windowsFallback });
+
+    sp.enqueue("First sentence, Kokoro.");
+    sp.enqueue("Then Pouhon.");
+    await vi.waitFor(() => expect(sources.length).toBe(1));      // first is playing
+    await vi.waitFor(() => expect(fetchWav).toHaveBeenCalledTimes(2)); // second already fetched (and 422'd)
+
+    expect(windowsFallback.speak).not.toHaveBeenCalled();        // <- the regression
+
+    sources[0].stop();                                           // first finishes
+    await vi.waitFor(() => expect(windowsFallback.speak).toHaveBeenCalledWith("Then Pouhon."));
+    await sp.idle();
+  });
+
+  // #148: Stop killed the Web Audio node but left speechSynthesis talking, because
+  // the fallback is a separate engine the cancel path never touched.
+  it("cancel() also stops a Windows fallback sentence that is mid-utterance", async () => {
+    const { ctx } = fakeAudio();
+    let release: () => void = () => {};
+    const windowsFallback = {
+      voiceName: null, rate: 1,
+      speak: vi.fn(() => new Promise<void>((r) => { release = r; })),
+      cancel: vi.fn(),
+    } as unknown as SynthSpeaker;
+    const fetchWav = vi.fn(() => Promise.reject(new UnpronounceableError(["Raidillon"])));
+    const sp = new KokoroSpeaker({ fetchWav, audio: ctx, windowsFallback });
+
+    const done = sp.speak("Through Raidillon.");
+    await vi.waitFor(() => expect(windowsFallback.speak).toHaveBeenCalled());
+
+    sp.cancel();
+    expect(windowsFallback.cancel).toHaveBeenCalled();           // <- the regression
+
+    release();
+    await done;
+  });
+
   it("a decodeAudioData rejection skips that sentence and continues with the next, without calling onUnavailable", async () => {
     const { ctx, sources } = fakeAudio();
     (ctx.decodeAudioData as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => { throw new Error("bad wav"); });
