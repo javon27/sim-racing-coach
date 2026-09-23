@@ -89,7 +89,8 @@ silently drift as ruff's own default rule set broadens over releases.
   (per-corner feature extraction — entry points that matter: `analyze_lap`,
   `time_loss_buckets`, `stint_consistency`, `stint_tire_trend`, `handling_read`,
   `grip_envelope`, `input_shape`, `_interp_lap_distance`), `coach.py`/
-  `coach_tools.py` (tool-use coach), `model/` (swappable `Model`),
+  `coach_tools.py` (tool-use coach), `race.py` (the PTT race tools' race state +
+  strategy, cached once per lap commit by `RaceTracker`), `model/` (swappable `Model`),
   `trackmap.py`/`mapbuild.py`/`ribbon.py`/`raceline.py` (corner maps +
   point-cloud track reconstruction), `track_lookup.py` (live-name → map/model
   resolution + `resolve_context`), `car_lookup.py` (live-name → car model),

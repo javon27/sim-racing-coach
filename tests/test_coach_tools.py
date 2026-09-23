@@ -2267,3 +2267,35 @@ def test_current_race_fact_only_when_the_session_holds_several_races():
     assert "Earlier turns marked as earlier races are history" in fact
     assert current_race_fact(windows[:1]) == ""
     assert current_race_fact([]) == ""
+
+
+# --- #152: the race tools read the cached snapshot only -----------------------
+
+def _race_snapshot():
+    from simcoach.model_types import RaceSample
+    from simcoach.race import LapFacts, build_snapshot
+    rs = RaceSample(class_position=3, class_ahead="A. Rival (Rival Entry)",
+                    class_gap_ahead=2.5, max_laps=24)
+    stint = [LapFacts(lap_no=n, lap_time=100.0, clean=True, position=7, race=rs,
+                      fuel_used=2.5, fuel_end=e, fuel_capacity=100.0)
+             for n, e in ((11, 27.5), (12, 25.0))]
+    return build_snapshot(stint, "s")
+
+
+def test_race_tools_answer_no_live_race_off_track_or_before_a_race_lap(tmp_path, synthetic_lap):
+    ctx, store, _ = _ctx(tmp_path, synthetic_lap)
+    assert ctx.dispatch("get_race_state", {}).startswith("No live race")   # no snapshot yet
+    off = CoachContext(store, on_track=False, race=_race_snapshot())
+    for tool in ("get_race_state", "get_strategy"):
+        assert off.dispatch(tool, {}).startswith("No live race")
+
+
+def test_race_tools_read_the_cached_snapshot_and_lead_with_its_lap(tmp_path, synthetic_lap):
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    snap = _race_snapshot()
+    ctx.race = snap
+    state = ctx.dispatch("get_race_state", {})
+    strat = ctx.dispatch("get_strategy", {})
+    assert state.startswith("As of lap 12 (race).") and "P3 in class" in state
+    assert strat.startswith("As of lap 12.") and "Fuel: 2.50 L/lap" in strat
+    assert ctx.race is snap and ctx.dispatch("get_race_state", {}) == state

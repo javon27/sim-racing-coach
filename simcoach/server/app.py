@@ -2267,7 +2267,10 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                                car_notes=load_car_notes(
                                    car, user_dir=str(Path(store.data_dir) / "cars")),
                                setup_concepts=load_setup_concepts(),
-                               car_class=car_class)
+                               car_class=car_class,
+                               # #152: only while the game is live -- a snapshot
+                               # outlives the race it describes.
+                               race=app.state.race.snapshot if live else None)
             car = ctx.car or "car"
 
             # Concise always-on profile tier: static prefs from settings + the active

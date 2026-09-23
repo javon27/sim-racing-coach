@@ -317,11 +317,13 @@ def test_system_prompt_never_asks_permission_to_call_a_tool():
 
 def test_system_prompt_notes_position_changes_never_gaps_or_traffic():
     """#134: a race lap call may note a position change when it matters, but must
-    never invent gaps or traffic -- neither is measured."""
+    never invent gaps or traffic. #152: a class gap IS measured now -- stated only as
+    get_race_state reports it; traffic is still never stated."""
     from simcoach.coach import AGENTIC_SYSTEM_PROMPT
     racecraft = AGENTIC_SYSTEM_PROMPT.split("RACECRAFT:", 1)[1][:600]
     assert "position change" in racecraft
-    assert "never state gaps or traffic" in racecraft
+    assert "never state traffic" in racecraft
+    assert "a gap only as get_race_state reports it" in racecraft
 
 
 def test_system_prompt_forbids_reusing_an_earlier_races_numbers():
@@ -332,3 +334,12 @@ def test_system_prompt_forbids_reusing_an_earlier_races_numbers():
     assert "more than one race" in identity
     assert "a tool call in THIS turn" in identity
     assert "marked as an earlier race" in identity
+
+
+def test_agentic_prompt_routes_race_questions_to_one_race_tool():
+    """#152: one routing paragraph; the stamp is said; gaps are no longer 'not measured'."""
+    from simcoach.coach import AGENTIC_SYSTEM_PROMPT as p
+    assert "→ get_race_state" in p and "→ get_strategy" in p
+    assert "ONE call answers the question" in p and "As of lap N" in p
+    assert "never state gaps or traffic" not in p
+    p.format(car="x", speed_unit="km/h", temp_unit="°C")    # no stray braces

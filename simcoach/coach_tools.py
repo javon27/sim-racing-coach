@@ -45,6 +45,7 @@ from simcoach.format import (
     ordinal,
 )
 from simcoach.fuel import fuel_per_lap_from_channel, laps_remaining
+from simcoach.race import format_race_state, format_strategy
 from simcoach.track_lookup import load_track_knowledge, note_key_binds
 
 # ponytail: hard cap on an incident scan. Each lap past the cache costs a telemetry
@@ -261,6 +262,25 @@ TOOLS = [
         "description": "The race outcome + racecraft context for this session — finishing "
                        "position, incidents, penalties. Call this for questions about the "
                        "race/result/how it went overall.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_race_state",
+        "description": "LIVE RACE ONLY. Where the driver stands as of the last completed lap: "
+                       "overall and class position, laps or time remaining (and laps left at "
+                       "the recent clean pace), and the in-class car ahead and behind with the "
+                       "gap TREND (s/lap) and the lap he'd be caught at that rate. Use for "
+                       "position, gap, 'am I catching him', 'how long is left'. One call "
+                       "answers it.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_strategy",
+        "description": "LIVE RACE ONLY. Fuel and virtual energy to the flag (makes it or not, "
+                       "margin in laps, per-lap save target), the pit window (earliest/latest "
+                       "lap and what sets it), and tire life to a named wear threshold, as of "
+                       "the last completed lap. Use for 'will I make it', 'when do I pit', "
+                       "'how long will the tires last'. One call answers it.",
         "input_schema": {"type": "object", "properties": {}},
     },
     {
@@ -560,7 +580,7 @@ class CoachContext:
     def __init__(self, store, units="metric", record=None, lap_id=None, cmap=None,
                  setup=None, track=None, car=None, on_track=None,
                  allowed_adjustments=None, session_id=None,
-                 car_notes=None, setup_concepts=None, car_class=None):
+                 car_notes=None, setup_concepts=None, car_class=None, race=None):
         self.store = store
         self.units = units
         self.record = record
@@ -572,6 +592,9 @@ class CoachContext:
         # #108 item 5: the car's CLASS, from data (REST carClass or the scraped
         # result-log table) -- never asserted from memory. None -> "unknown".
         self.car_class = car_class
+        # #152: the RaceSnapshot as of the last committed race lap, or None. The race
+        # tools only read it -- nothing is computed while the driver waits.
+        self.race = race
         self.on_track = on_track
         self.allowed_adjustments = allowed_adjustments
         # Authored car knowledge (merged shipped+overlay `notes` dict) and the shared
@@ -1533,6 +1556,20 @@ class CoachContext:
         head.append(self._race_line(rr.get("race_ts") if rr else None))
         return "\n".join([h for h in head if h] + [text])
 
+    def _no_live_race(self) -> str | None:
+        """#152 guard for the race tools: a snapshot exists only in a live race, from its
+        first completed lap. Never a guess."""
+        if not self.on_track or self.race is None:
+            return ("No live race: race state, strategy and battle reads exist only during "
+                    "a live race session, from its first completed lap.")
+        return None
+
+    def get_race_state(self):
+        return self._no_live_race() or format_race_state(self.race)
+
+    def get_strategy(self):
+        return self._no_live_race() or format_strategy(self.race)
+
     def get_setup(self):
         if not self.setup:
             return "No setup data available (REST unavailable or open setup)."
@@ -1695,6 +1732,8 @@ class CoachContext:
             "get_car_notes": lambda: self.get_car_notes(),
             "get_energy_report": lambda: self.get_energy_report(),
             "get_race_result": lambda: self.get_race_result(),
+            "get_race_state": lambda: self.get_race_state(),
+            "get_strategy": lambda: self.get_strategy(),
             "get_setup": lambda: self.get_setup(),
             "record_driver_learning": lambda: self.record_driver_learning(
                 args.get("text", ""), args.get("track"), args.get("car"), args.get("replaces")),

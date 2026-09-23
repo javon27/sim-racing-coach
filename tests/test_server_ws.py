@@ -944,3 +944,30 @@ def test_ws_coach_current_race_fact_leads_the_user_turn(tmp_path):
     assert "CURRENT RACE:" not in model.last_system
     # The driver's own words are what gets stored, not the injected facts.
     assert store.chat_messages(cid)[-1]["question"] == "how was that?"
+
+
+def test_ws_coach_race_tool_reads_the_live_race_snapshot(tmp_path, monkeypatch):
+    """#152: the live coach turn hands the race tools the cached snapshot -- and only
+    while the game is live."""
+    from simcoach.lmu import smm
+    from simcoach.model_types import RaceSample
+    from simcoach.race import LapFacts, build_snapshot
+    monkeypatch.setattr(smm, "read_session_track_car", lambda: ("test_track", "test_car"))
+
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    fake = FakeModel(reply="ok", tool_script=[("get_race_state", {})])
+    app = create_app(store, Coach(fake))
+    rs = RaceSample(class_position=3, max_laps=24)
+    app.state.race.snapshot = build_snapshot(
+        [LapFacts(lap_no=n, lap_time=100.0, clean=True, race=rs) for n in (11, 12)], "s")
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "what position am I?"})
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"):
+                break
+
+    assert fake.dispatched and fake.dispatched[0][0] == "get_race_state"
+    assert fake.dispatched[0][2].startswith("As of lap 12 (race).")
