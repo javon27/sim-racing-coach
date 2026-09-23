@@ -580,7 +580,8 @@ class CoachContext:
     def __init__(self, store, units="metric", record=None, lap_id=None, cmap=None,
                  setup=None, track=None, car=None, on_track=None,
                  allowed_adjustments=None, session_id=None,
-                 car_notes=None, setup_concepts=None, car_class=None, race=None):
+                 car_notes=None, setup_concepts=None, car_class=None, race=None,
+                 race_note=None):
         self.store = store
         self.units = units
         self.record = record
@@ -595,6 +596,8 @@ class CoachContext:
         # #152: the RaceSnapshot as of the last committed race lap, or None. The race
         # tools only read it -- nothing is computed while the driver waits.
         self.race = race
+        # What to say instead when a live race has no snapshot for THIS race yet.
+        self.race_note = race_note
         self.on_track = on_track
         self.allowed_adjustments = allowed_adjustments
         # Authored car knowledge (merged shipped+overlay `notes` dict) and the shared
@@ -1559,6 +1562,8 @@ class CoachContext:
     def _no_live_race(self) -> str | None:
         """#152 guard for the race tools: a snapshot exists only in a live race, from its
         first completed lap. Never a guess."""
+        if self.on_track and self.race is None and self.race_note:
+            return self.race_note
         if not self.on_track or self.race is None:
             return ("No live race: race state, strategy and battle reads exist only during "
                     "a live race session, from its first completed lap.")

@@ -2299,3 +2299,12 @@ def test_race_tools_read_the_cached_snapshot_and_lead_with_its_lap(tmp_path, syn
     assert state.startswith("As of lap 12 (race).") and "P3 in class" in state
     assert strat.startswith("As of lap 12.") and "Fuel: 2.50 L/lap" in strat
     assert ctx.race is snap and ctx.dispatch("get_race_state", {}) == state
+
+
+def test_race_tools_say_the_race_note_when_a_live_race_has_no_fresh_snapshot(tmp_path):
+    """#152 red-team: a live race whose snapshot is stale/another race's -> the note."""
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    ctx = CoachContext(store, on_track=True, race=None,
+                       race_note="Not enough laps yet: x")
+    for tool in ("get_race_state", "get_strategy"):
+        assert ctx.dispatch(tool, {}) == "Not enough laps yet: x"

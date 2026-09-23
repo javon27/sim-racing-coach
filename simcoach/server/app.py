@@ -54,7 +54,7 @@ from ..model.factory import CoachUserError, make_model
 from ..model_types import LapRecord
 from ..pricing import estimate_chat_cost
 from ..pronunciations import table_for
-from ..race import RaceTracker
+from ..race import RaceTracker, live_race
 from ..ribbon import multi_signal_direction, reconstruct_surface, ribbon_to_screen
 from ..tiers import adjustable_from_setup, legal_adjustments
 from ..track_lookup import (
@@ -2200,9 +2200,20 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 live = read_session_track_car()          # (track, vehicle) | None
             except Exception:
                 live = None
+            race_snap = race_note = None
             if live:
                 on_track = True
                 track, vehicle = live
+                try:
+                    # #152: only THIS race's snapshot -- never the last race's, from the
+                    # garage or the next race's formation lap.
+                    from ..lmu.live import read_field_snapshot
+                    sess = read_field_snapshot().session
+                    race_snap, race_note = live_race(
+                        app.state.race.snapshot, track=track, car=vehicle,
+                        phase=sess.phase, current_lap=sess.current_lap)
+                except Exception:
+                    race_snap = race_note = None
                 try:
                     from ..track_lookup import resolve_context
                     cmap, car, _, car_class = resolve_context(
@@ -2268,9 +2279,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                                    car, user_dir=str(Path(store.data_dir) / "cars")),
                                setup_concepts=load_setup_concepts(),
                                car_class=car_class,
-                               # #152: only while the game is live -- a snapshot
-                               # outlives the race it describes.
-                               race=app.state.race.snapshot if live else None)
+                               # #152: only the race being driven now (live_race).
+                               race=race_snap, race_note=race_note)
             car = ctx.car or "car"
 
             # Concise always-on profile tier: static prefs from settings + the active

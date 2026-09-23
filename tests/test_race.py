@@ -18,6 +18,7 @@ from simcoach.race import (
     is_clean,
     lap_facts,
     laps_left,
+    live_race,
     pit_window,
     race_sample,
     strategy,
@@ -275,3 +276,24 @@ def test_format_strategy_guard_reads_as_not_enough_laps():
     assert format_strategy(tr.snapshot) == (
         "As of lap 10. No projection: not enough laps yet: needs 2 clean laps in this stint "
         "(out-, in- and partial laps don't count).")
+
+
+def test_live_race_only_serves_the_snapshot_of_the_race_being_driven():
+    """#152 red-team: identity (track, car) + a race phase + the lap in progress being
+    the one right after the snapshot (or one more, while its commit is in flight)."""
+    tr = RaceTracker()
+    for n in (10, 11, 12):
+        tr.commit(_rec(n, 3.0, 30.0, 0.8))
+    snap = tr.snapshot
+    assert (snap.track, snap.car, snap.session_id) == ("Spa", "GT3", "spa--gt3--offline")
+    ok = {"track": "Spa", "car": "GT3", "phase": "race"}
+    assert live_race(snap, current_lap=13, **ok) == (snap, None)
+    assert live_race(snap, current_lap=14, **ok) == (snap, None)
+    for lap in (1, 12, 15):                                   # new race / stale
+        got, note = live_race(snap, current_lap=lap, **ok)
+        assert got is None and note.startswith("Not enough laps yet"), lap
+    assert live_race(snap, track="Monza", car="GT3", phase="race", current_lap=13)[0] is None
+    assert live_race(snap, track="Spa", car="LMP2", phase="race", current_lap=13)[0] is None
+    assert live_race(snap, track="Spa", car="GT3", phase="practice", current_lap=13) == \
+        (None, None)
+    assert live_race(None, current_lap=1, **ok)[1].startswith("Not enough laps yet")

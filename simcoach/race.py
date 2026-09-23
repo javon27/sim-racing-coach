@@ -303,6 +303,10 @@ class RaceSnapshot:
     session_id: str | None
     state: RaceState
     strategy: Strategy
+    # Whose race this is (#152 red-team): a snapshot outlives its race, so the sidecar
+    # only serves it while the live track/car match (see live_race).
+    track: str | None = None
+    car: str | None = None
 
 
 def _gap_read(stint: list[LapFacts], side: str, final_lap: int | None) -> GapRead | None:
@@ -327,7 +331,8 @@ def _gap_read(stint: list[LapFacts], side: str, final_lap: int | None) -> GapRea
     return GapRead(who, gap, slope, caught)
 
 
-def build_snapshot(stint: list[LapFacts], session_id: str | None) -> RaceSnapshot:
+def build_snapshot(stint: list[LapFacts], session_id: str | None,
+                   track: str | None = None, car: str | None = None) -> RaceSnapshot:
     latest = stint[-1]
     r = latest.race or RaceSample()
     clean = [f for f in stint if f.clean]
@@ -338,7 +343,8 @@ def build_snapshot(stint: list[LapFacts], session_id: str | None) -> RaceSnapsho
     final = latest.lap_no + to_go if to_go is not None else None
     state = RaceState(latest.position, r.class_position, r.max_laps, r.time_left, pace, to_go,
                       _gap_read(stint, "ahead", final), _gap_read(stint, "behind", final))
-    return RaceSnapshot(latest.lap_no, session_id, state, strategy(stint, to_go))
+    return RaceSnapshot(latest.lap_no, session_id, state, strategy(stint, to_go),
+                        track, car)
 
 
 class RaceTracker:
@@ -372,8 +378,33 @@ class RaceTracker:
             self._stint = []
         self._key = key
         self._stint.append(facts)
-        self.snapshot = build_snapshot(self._stint, record.session_id)
+        self.snapshot = build_snapshot(self._stint, record.session_id, record.track,
+                                       record.car)
         return self.snapshot
+
+
+NO_RACE_LAP_YET = ("Not enough laps yet: no completed lap of this race has been measured "
+                   "yet -- race state and strategy start from the first completed race lap.")
+
+
+def live_race(snap: RaceSnapshot | None, *, track: str | None, car: str | None,
+              phase: str, current_lap: int | None) -> tuple[RaceSnapshot | None, str | None]:
+    """(the snapshot to answer from, or the note to say instead), for the race being
+    driven NOW. A cached snapshot outlives its race: after a race at Spa it is still
+    there in the garage at Monza, and on the formation lap of the next race at Spa.
+
+    Served only when the live session is a race at the snapshot's track/car and the lap
+    in progress (`current_lap` = completed laps + 1, as live.read_field reports it) is
+    the one right after the snapshot's lap -- or one more, while that lap's commit is
+    still in flight on the race pool. Not a race -> (None, None): "no live race". A race
+    with no matching snapshot (a new race, or stale) -> (None, NO_RACE_LAP_YET)."""
+    if phase != "race":
+        return None, None
+    fresh = (snap is not None and current_lap is not None
+             and (snap.track or "").strip() == (track or "").strip()
+             and (snap.car or "").strip() == (car or "").strip()
+             and current_lap - 1 in (snap.as_of_lap, snap.as_of_lap + 1))
+    return (snap, None) if fresh else (None, NO_RACE_LAP_YET)
 
 
 def _clock(seconds: float) -> str:

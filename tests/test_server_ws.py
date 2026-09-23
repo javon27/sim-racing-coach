@@ -946,20 +946,28 @@ def test_ws_coach_current_race_fact_leads_the_user_turn(tmp_path):
     assert store.chat_messages(cid)[-1]["question"] == "how was that?"
 
 
-def test_ws_coach_race_tool_reads_the_live_race_snapshot(tmp_path, monkeypatch):
-    """#152: the live coach turn hands the race tools the cached snapshot -- and only
-    while the game is live."""
+def _ask_race_state(tmp_path, monkeypatch, live, phase, current_lap):
+    """#152: one live coach turn that calls get_race_state, with a race snapshot cached
+    from lap 12 of a race at test_track/test_car; returns the tool's text."""
+    import dataclasses
+
+    from simcoach.lmu import live as lmu_live
     from simcoach.lmu import smm
     from simcoach.model_types import RaceSample
     from simcoach.race import LapFacts, build_snapshot
-    monkeypatch.setattr(smm, "read_session_track_car", lambda: ("test_track", "test_car"))
+    monkeypatch.setattr(smm, "read_session_track_car", lambda: live)
+    field = lmu_live.empty_snapshot()
+    field = dataclasses.replace(field, session=dataclasses.replace(
+        field.session, live=True, phase=phase, current_lap=current_lap))
+    monkeypatch.setattr(lmu_live, "read_field_snapshot", lambda: field)
 
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     fake = FakeModel(reply="ok", tool_script=[("get_race_state", {})])
     app = create_app(store, Coach(fake))
     rs = RaceSample(class_position=3, max_laps=24)
     app.state.race.snapshot = build_snapshot(
-        [LapFacts(lap_no=n, lap_time=100.0, clean=True, race=rs) for n in (11, 12)], "s")
+        [LapFacts(lap_no=n, lap_time=100.0, clean=True, race=rs) for n in (11, 12)], "s",
+        track="test_track", car="test_car")
 
     client = TestClient(app, base_url="http://127.0.0.1")
     with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
@@ -968,6 +976,29 @@ def test_ws_coach_race_tool_reads_the_live_race_snapshot(tmp_path, monkeypatch):
             ev = ws.receive_json()
             if ev["type"] in ("done", "error"):
                 break
-
     assert fake.dispatched and fake.dispatched[0][0] == "get_race_state"
-    assert fake.dispatched[0][2].startswith("As of lap 12 (race).")
+    return fake.dispatched[0][2]
+
+
+def test_ws_coach_race_tool_reads_the_live_race_snapshot(tmp_path, monkeypatch):
+    """#152: the live coach turn hands the race tools the cached snapshot while that
+    race is the one being driven (lap 13 in progress, or lap 13 done and not yet
+    committed)."""
+    for current_lap in (13, 14):
+        text = _ask_race_state(tmp_path / str(current_lap), monkeypatch,
+                               ("test_track", "test_car"), "race", current_lap)
+        assert text.startswith("As of lap 12 (race)."), current_lap
+
+
+def test_ws_coach_race_tool_never_serves_another_sessions_snapshot(tmp_path, monkeypatch):
+    """#152 red-team: a snapshot outlives its race. In the garage/practice at another
+    track it is "no live race"; in a NEW race at the same track (lap 1) or once it is
+    more than a lap stale it is "not enough laps yet" -- never the old race's figures."""
+    text = _ask_race_state(tmp_path / "a", monkeypatch, ("Monza", "test_car"), "practice", 1)
+    assert text.startswith("No live race")
+    text = _ask_race_state(tmp_path / "b", monkeypatch, ("Monza", "test_car"), "race", 13)
+    assert text.startswith("Not enough laps yet")
+    for lap in (1, 15):
+        text = _ask_race_state(tmp_path / f"c{lap}", monkeypatch,
+                               ("test_track", "test_car"), "race", lap)
+        assert text.startswith("Not enough laps yet"), lap
