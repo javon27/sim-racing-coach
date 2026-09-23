@@ -1532,10 +1532,14 @@ class CoachContext:
         if f.fuel_end is not None:
             if f.fuel_used is not None:
                 lines.append(f"Fuel: {f.fuel_used:.2f} L used this lap; {f.fuel_end:.1f} L in "
-                             f"tank (~{laps_remaining(f.fuel_end, f.fuel_used):.1f} laps left).")
+                             f"tank at the end of that lap "
+                             f"(~{laps_remaining(f.fuel_end, f.fuel_used):.1f} laps left).")
             else:
-                lines.append(f"Fuel: {f.fuel_end:.1f} L in tank ({no_rate}).")
-        if f.energy_end is not None:
+                lines.append(f"Fuel: {f.fuel_end:.1f} L in tank at the end of that lap ({no_rate}).")
+        ve = record.channels.get("virtual_energy")
+        dead_ve = ve is not None and len(ve) > 0 and not bool((ve != 0).any())
+        # A car with no virtual energy captures a flat 0 -- a dead channel, not "0% left".
+        if f.energy_end is not None and not dead_ve:
             if f.energy_used is not None:
                 lines.append(f"Virtual energy: {f.energy_used * 100:.1f}% used this lap; "
                              f"{f.energy_end * 100:.0f}% remaining "

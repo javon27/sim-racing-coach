@@ -2359,5 +2359,16 @@ def test_energy_report_gives_no_burn_for_a_lap_picked_up_mid_lap(tmp_path, synth
     ctx = _energy_session(tmp_path, synthetic_lap, [(None, {}, slice(500, None))])
     rep = ctx.dispatch("get_energy_report", {})
     assert "used this lap" not in rep and "laps left" not in rep
-    assert "Fuel: 77.4 L in tank (burn not measured on a full lap" in rep
+    assert "Fuel: 77.4 L in tank at the end of that lap (burn not measured on a full lap" in rep
     assert "Virtual energy: 85% remaining (burn not measured on a full lap" in rep
+
+
+def test_energy_report_skips_a_dead_virtual_energy_channel(tmp_path, synthetic_lap):
+    # A car with no virtual energy captures a flat 0 -- a dead channel, never "0% remaining".
+    import numpy as np
+    n = len(synthetic_lap.channels["lap_distance"])
+    ctx = _energy_session(tmp_path, synthetic_lap,
+                          [(None, {"virtual_energy": np.zeros(n)}, slice(None))])
+    rep = ctx.dispatch("get_energy_report", {})
+    assert "Virtual energy" not in rep
+    assert "Fuel: 2.60 L used this lap; 77.4 L in tank at the end of that lap" in rep
