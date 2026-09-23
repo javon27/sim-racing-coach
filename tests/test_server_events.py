@@ -7,6 +7,7 @@ from simcoach.coach import Coach
 from simcoach.model.fake import FakeModel
 from simcoach.model_types import LapRecord
 from simcoach.server import app as app_module
+from simcoach.server import maps as maps_mod
 from simcoach.server.app import create_app
 from simcoach.store import LapStore
 
@@ -161,7 +162,7 @@ def test_events_topic_failure_does_not_stop_status_frames(tmp_path, monkeypatch)
     app = create_app(store, Coach(FakeModel(reply="ok")))
     client = TestClient(app, base_url="http://127.0.0.1")
 
-    monkeypatch.setattr(app_module, "average_racing_line",
+    monkeypatch.setattr(maps_mod, "average_racing_line",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
 
     with client.websocket_connect("/events", headers={"host": "127.0.0.1"}) as ws:

@@ -1023,7 +1023,7 @@ def test_tracks_cloud_check_cache_skips_unchanged_files(tmp_path, monkeypatch):
         calls.append(str(path))
         return real_load(path, *a, **kw)
 
-    monkeypatch.setattr("simcoach.server.app.np.load", counting_load)
+    monkeypatch.setattr("simcoach.server.maps.np.load", counting_load)
 
     r1 = client.get("/tracks")
     assert r1.status_code == 200
@@ -1179,7 +1179,7 @@ def test_one_bad_lap_file_neither_blanks_tracks_nor_fails_rebuild(tmp_path, capl
     with pytest.raises(expect), np.load(str(bad)) as z:   # the file really IS that shape
         z["pos_x"]
 
-    with caplog.at_level(logging.WARNING, logger="simcoach.server.app"):
+    with caplog.at_level(logging.WARNING, logger="simcoach.server.maps"):
         row = _row(client)
     assert row["live_laps"] == 3
     assert row["captures"] == 2                       # the bad lap is skipped, not fatal
