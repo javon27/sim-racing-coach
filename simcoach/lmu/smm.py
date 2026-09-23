@@ -90,6 +90,8 @@ def _lmu_process_running() -> bool:
     try:
         entry = _PROCESSENTRY32W(dwSize=C.sizeof(_PROCESSENTRY32W))
         ok = _kernel32.Process32FirstW(snap, C.byref(entry))
+        if not ok:  # the walk itself failed (e.g. a rejected dwSize): can't tell, fail open
+            return True
         while ok:
             if entry.szExeFile.lower() == _LMU_EXE:
                 return True

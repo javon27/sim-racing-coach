@@ -146,3 +146,15 @@ def test_process_check_is_cached_and_recovers(monkeypatch):
     clock[0] += smm._LMU_ALIVE_TTL_S
     assert _real_lmu_alive() is True
     assert len(calls) == 2
+
+
+def test_the_real_process_check_finds_a_running_exe_and_not_a_missing_one(monkeypatch):
+    """The Toolhelp walk itself, unfaked: a wrong struct layout or name compare would
+    otherwise pass every other test here while the guard reads LMU as never running."""
+    import os
+    import sys
+
+    monkeypatch.setattr(smm, "_LMU_EXE", os.path.basename(sys.executable).lower())
+    assert smm._lmu_process_running() is True
+    monkeypatch.setattr(smm, "_LMU_EXE", uuid.uuid4().hex + ".exe")
+    assert smm._lmu_process_running() is False
