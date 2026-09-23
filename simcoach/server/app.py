@@ -14,6 +14,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from dataclasses import asdict
 from pathlib import Path
 
@@ -305,6 +306,18 @@ def _pending_laps(data_dir, slug: str) -> list[tuple[Path, dict]]:
     return [(p, ch) for p in files for ch in _load_cloud(p)]
 
 
+def _one_track(buffer) -> list:
+    # Snapshot (#16) of the mapping buffer, kept to ONE track -- the newest lap's, where
+    # the driver is now. If the sim changed track mid-capture, the other track's laps
+    # must neither be mixed into this cloud nor dropped as "promoted" (#150); they stay
+    # pending for that track's next Generate map layout.
+    buf = list(buffer)
+    if not buf:
+        return buf
+    slug = track_slug(buf[-1].track)
+    return [r for r in buf if track_slug(r.track) == slug]
+
+
 def _drop_pending(files) -> int:
     # Remove these pending lap files -- after a Save promoted them, or on an explicit
     # discard -- and ONLY these: a lap driven after Build is not in the saved capture.
@@ -314,7 +327,9 @@ def _drop_pending(files) -> int:
     # it could race the capture thread's next append. Returns how many were removed.
     n = 0
     for f in files:
-        tomb = f.with_suffix(".dropped")
+        # Unique per drop: a locked tombstone from an earlier drop of the same index
+        # must not make this rename fail and resurrect the lap.
+        tomb = f.with_name(f"{f.stem}.{uuid.uuid4().hex}.dropped")
         try:
             os.replace(f, tomb)
         except FileNotFoundError:
@@ -1819,14 +1834,18 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # designation. Body {} (Body(...) still required for the CSRF preflight).
         # Snapshot once (#16): app.state.map_buffer is mutated by the capture
         # thread; a bare reference here would see appends/dels mid-iteration.
-        buf = list(app.state.map_buffer)
+        buf = _one_track(app.state.map_buffer)
         if len(buf) < 2:
             raise HTTPException(422, "need at least 2 passes across the width")
         ribbon = reconstruct_surface([r.channels for r in buf])
         if not ribbon:
             raise HTTPException(422, "mapping laps lack position telemetry")
         track = buf[0].track
-        corners = _place_corners(ribbon, buf[0].channels)
+        # Resumed laps carry position channels only; direction's steering/lat_g votes
+        # need a fresh lap, so take the first one that has them.
+        corners = _place_corners(ribbon, next((r.channels for r in buf
+                                               if "steering" in r.channels),
+                                              buf[0].channels))
         extras = _track_file_data(track)
         sectors = extras.get("sectors") or []
         sections = extras.get("sections") or []
@@ -1903,6 +1922,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             app.state.mapping = False
             built = rib.get("buffered") or []
             _drop_pending(_pending_files(built))
+            rib.pop("buffered", None)   # a second Save must not drop a newer lap
             app.state.map_buffer = [r for r in app.state.map_buffer
                                     if not any(r is b for b in built)]
         _invalidate_canon(track)
@@ -1917,7 +1937,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # its geometry. See docs/superpowers/specs/2026-09-08-per-corner-
         # geometry-metrics-design.md.
         # Snapshot once (#16): see mapcapture_build's comment above.
-        buf = list(app.state.map_buffer)
+        buf = _one_track(app.state.map_buffer)
         if len(buf) < 2:
             raise HTTPException(422, "need at least 2 passes across the width")
         track = buf[0].track

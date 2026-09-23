@@ -298,3 +298,51 @@ def test_discard_covers_every_track_in_the_buffer(tmp_path):
     r = _tc(app).post("/mapcapture/cancel", json={"discard": True})
     assert r.json()["discarded"] == 2
     assert not _pending(tmp_path) and not list(other_dir.glob("*.npz"))
+
+
+def _on(track, zsign):
+    lap = _edge(zsign)
+    return LapRecord("lmu", track, lap.car, lap.lap_time, lap.valid, lap.timestamp,
+                     lap.channels)
+
+
+def test_a_mixed_track_buffer_saves_and_drops_only_the_current_track(tmp_path):
+    # Red-team 2 #3: the sim changed track mid-capture. Save-cloud must neither mix
+    # OtherTrack's laps into this cloud nor drop them as "promoted".
+    app, store = _app(tmp_path)
+    app.state.mapping = True
+    _capture_loop(_Src([_on("OtherTrack", 1), _on("OtherTrack", -1),
+                        _on("MapTrack", 1), _on("MapTrack", -1)]), store, app.state)
+    other = tmp_path / "data" / "captures" / "pending" / "othertrack"
+    assert len(list(other.glob("*.npz"))) == 2
+    assert _tc(app).post("/mapcapture/save-cloud", json={}).status_code == 200
+    with np.load(str(tmp_path.joinpath(*SAVED))) as z:
+        assert len({k.split("_", 1)[0] for k in z.files}) == 2   # MapTrack's only
+    assert len(list(other.glob("*.npz"))) == 2                   # OtherTrack kept
+
+
+def test_a_second_save_never_drops_a_newer_lap(tmp_path):
+    # Red-team 2 #2: Save left last_ribbon["buffered"] set, so a second Save with the
+    # same ribbon dropped a lap that landed in the reused index after the first.
+    app, store = _app(tmp_path)
+    _drive(app, store, 2)
+    c = _tc(app)
+    assert c.post("/mapcapture/build", json={}).status_code == 200
+    assert c.post("/mapcapture/save", json={}).status_code == 200
+    _drive(app, store, 1)                                   # lands as the reused 00000
+    assert [f.name for f in _pending(tmp_path)] == ["00000.npz"]
+    c.post("/mapcapture/save", json={})
+    assert [f.name for f in _pending(tmp_path)] == ["00000.npz"]
+
+
+def test_a_locked_old_tombstone_does_not_resurrect_a_promoted_lap(tmp_path):
+    # Red-team 2 #1b: tombstones were <n>.dropped, so an undeletable one from an earlier
+    # drop of the same index made the next rename fail and the lap came back.
+    from simcoach.server.app import _drop_pending
+    d = tmp_path.joinpath(*PENDING)
+    d.mkdir(parents=True)
+    (d / "00000.dropped").write_bytes(b"locked leftover")
+    (d / "00000.npz").write_bytes(b"x")
+    with open(d / "00000.dropped", "rb"):          # held open: Windows won't replace it
+        assert _drop_pending([d / "00000.npz"]) == 1
+    assert _pending(tmp_path) == []
