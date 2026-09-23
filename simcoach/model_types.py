@@ -47,3 +47,6 @@ class LapRecord:
     # This lap's same-class field trace (#152 get_battle) -- TRANSIENT: handed from
     # capture to the race tracker, never written to the store or the .npz.
     field_trace: dict | None = None
+    # Captured while mapping mode was on (#154): a capture detail, NOT a session type --
+    # the lap keeps its real phase, and bests/references/stint reads skip it (laps.mapping).
+    mapping: bool = False

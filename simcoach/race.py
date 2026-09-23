@@ -431,7 +431,7 @@ class RaceTracker:
     def commit(self, record: LapRecord,
                cmap: CornerMap | None = None) -> RaceSnapshot | None:
         if record.phase != "race" or record.lap_no is None:
-            # Practice, qualy, a mapping lap: there is no live race to answer about.
+            # Practice, qualy: there is no live race to answer about.
             self._stint, self._key, self.snapshot = [], None, None
             return None
         facts = lap_facts(record)

@@ -1218,7 +1218,10 @@ class CoachContext:
             phase = cur_rec.phase if cur_rec is not None else None
         analyses, lap_times = [], []
         for row in self.store.session_laps(self.session_id):
-            if not row["valid"] or (phase is not None and row.get("phase") != phase):
+            # Mapping laps (#154) are boundary weaves, not driving: out of the stint, as
+            # they were when capture stamped them phase='mapping'.
+            if (not row["valid"] or row.get("mapping")
+                    or (phase is not None and row.get("phase") != phase)):
                 continue
             try:
                 record = self.store.load(row["id"])

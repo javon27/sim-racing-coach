@@ -117,7 +117,7 @@ def test_session_laps(tmp_path, synthetic_lap):
                      "s1": None, "s2": None, "s3": None, "phase": None,
                      "track": synthetic_lap.track, "car": synthetic_lap.car,
                      "car_model": synthetic_lap.car,  # unknown entry -> raw name
-                     "lap_no": None, "pit": None, "partial": None, "position": None,
+                     "lap_no": None, "pit": None, "partial": None, "position": None, "mapping": False,
                      "race_index": None}]  # #142: non-race lap (phase None) -> null
 
 
@@ -816,7 +816,8 @@ def test_mapcapture_start_buffers_and_persists_laps(tmp_path):
     _capture_loop(Src(), store, app.state)  # the daemon body, mapping ON
     ids = store.list_lap_ids("MapTrack", "GT3")
     assert len(ids) == 2                                   # persisted (editable laps)
-    assert all(store.load(i).phase == "mapping" for i in ids)  # tagged
+    assert all(store.load(i).mapping for i in ids)          # flagged (#154)
+    assert all(store.load(i).phase is None for i in ids)    # real phase kept
     assert len(app.state.map_buffer) == 2                 # AND buffered for the ribbon
 
     st = c.get("/mapcapture/status").json()
@@ -1249,7 +1250,7 @@ def test_mapping_laps_persisted_tagged_and_excluded_from_best(tmp_path):
     _capture_loop(Src(), store, app_state)
     ids = store.list_lap_ids("MapTrack", "GT3")
     assert ids and app_state.map_buffer           # persisted AND buffered
-    assert store.load(ids[0]).phase == "mapping"  # tagged
+    assert store.load(ids[0]).mapping is True     # flagged, real phase kept (#154)
     assert app_state.latest is not None           # /status + lap list see it live
 
     # A SLOWER real lap (95) is the reference best -- the FASTER mapping lap (90)

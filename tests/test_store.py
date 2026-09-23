@@ -2586,7 +2586,7 @@ def test_v21_schema_migrates_to_v22_with_the_battle_table(tmp_path):
     s.conn.commit(); s.conn.close()
 
     s2 = LapStore(db, str(tmp_path / "telem"))
-    assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 22
+    assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION >= 22
     assert s2.battle_laps(1) == []
 
 

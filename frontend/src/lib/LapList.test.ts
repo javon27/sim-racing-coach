@@ -230,6 +230,21 @@ describe("LapList", () => {
     expect(container.querySelectorAll(".phase-head")).toHaveLength(2);
   });
 
+  it("a mapping lap stays in its real phase group and is tagged, not a MAPPING group (#154)", async () => {
+    pushStatus("S1", 3);
+    vi.mocked(getSessionLaps).mockResolvedValue([
+      { id: 1, lap_time: 95.0, valid: 1, ts: 100, s1: null, s2: null, s3: null, phase: "race" },
+      { id: 2, lap_time: 99.0, valid: 1, ts: 200, s1: null, s2: null, s3: null, phase: "race", mapping: true },
+    ]);
+
+    const { container } = render(LapList);
+
+    await screen.findByText("RACE");
+    expect(container.querySelectorAll(".phase-head")).toHaveLength(1); // one race group
+    expect(screen.getByText("Lap 2")).toBeTruthy();                     // numbered in it
+    expect(container.querySelectorAll(".maptag")).toHaveLength(1);      // only lap 2
+  });
+
   it("shows the game's own lap number when every lap in the session has one", async () => {
     // Issue #77: a session with a garage return (or an out-lap) shows the game's
     // real numbers/gaps, not a plain 1..N re-count.

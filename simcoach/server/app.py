@@ -76,8 +76,10 @@ def _capture_loop(source, store, app_state) -> None:
     after a drop."""
     for lap in source.laps():
         # Mapping mode: buffer the lap for ribbon reconstruction AND persist it,
-        # tagged phase="mapping" so it gives an immediately-editable lap + shows in
-        # the session/lap list, but best_lap excludes it from coaching signals.
+        # flagged mapping=True so it gives an immediately-editable lap + shows in the
+        # session/lap list, but best_lap excludes it from coaching signals. The lap
+        # KEEPS its real phase (#154): overwriting it with "mapping" is how a stuck
+        # mapping mode erased a whole qualifying + race.
         if getattr(app_state, "mapping", False):
             # A partial lap (#77) is still persisted and still numbered, but never
             # buffered for ribbon reconstruction -- mapping wants full boundary passes.
@@ -95,7 +97,7 @@ def _capture_loop(source, store, app_state) -> None:
                     logging.getLogger(__name__).warning(
                         "couldn't write mapping lap to the pending capture", exc_info=True)
                 app_state.map_buffer.append(lap)
-            lap.phase = "mapping"
+            lap.mapping = True
         lap_id = store.save(lap)
         app_state.latest = {"record": lap, "lap_id": lap_id}
         if getattr(app_state, "race", None) is not None:

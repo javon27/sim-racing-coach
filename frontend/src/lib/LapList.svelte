@@ -396,7 +396,7 @@
                 onclick={() => select(lap.id)}
               >
                 <span class="n">
-                  Lap {lap.num}
+                  Lap {lap.num} {#if lap.mapping}<span class="flag maptag" title="Captured while mapping: kept out of bests">map</span>{/if}
                   <span class="lapsec">
                     {#each sectors as s}
                       <i class={s.cls} title="{s.label} {s.delta}"></i>
@@ -426,7 +426,7 @@
                 aria-pressed={lap.id === selectedLapId}
                 onclick={() => select(lap.id)}
               >
-                <span class="n">Lap {lap.num}</span>
+                <span class="n">Lap {lap.num} {#if lap.mapping}<span class="flag maptag" title="Captured while mapping: kept out of bests">map</span>{/if}</span>
                 <span class="t">{timeText(lap)}</span>
                 <span class="flag">{lap.valid || lap.partial ? "" : "✗ inv"}</span>
               </button>

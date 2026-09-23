@@ -54,6 +54,8 @@ export interface LapRow {
   partial?: PartialKind | null;
   /** 1-based race number this session, null for a non-race lap (#142). */
   race_index?: number | null;
+  /** Captured in mapping mode (#154): a flag, the lap keeps its real phase. */
+  mapping?: boolean;
 }
 
 export interface CornerMetrics {

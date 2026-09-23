@@ -92,7 +92,7 @@ def _session_base(sid: str) -> str:
     """The (track, car, mode) base of a session id, dropping any ~<instance> suffix."""
     return sid.split(_SESSION_SEP, 1)[0]
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
@@ -214,7 +214,8 @@ CREATE TABLE IF NOT EXISTS laps (
     class_behind TEXT,
     class_gap_behind REAL,
     time_left REAL,
-    max_laps INTEGER
+    max_laps INTEGER,
+    mapping INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS ingested_files (
     path TEXT PRIMARY KEY,
@@ -696,6 +697,18 @@ class LapStore:
                 # v21 -> v22: per-lap battle rows for get_battle (#152). A new table, so
                 # nothing to backfill: laps stored before it have no battle rows.
                 self.conn.executescript(_BATTLE_SCHEMA)
+            if current_version < 23:
+                # v22 -> v23: mapping is a FLAG, not a phase (#154). Capture used to stamp
+                # phase='mapping' over a lap's real phase, so a stuck mapping mode erased a
+                # whole qualifying + race. Old rows' real phase is unknown, so they KEEP
+                # phase='mapping' (honest: "a mapping lap, phase not recorded", and the
+                # selector scripts/repair_mapping_phase.py recovers known ones by) and gain
+                # the flag, which is what every exclusion now reads. Guarded like v18-v21.
+                cols = [r[1] for r in self.conn.execute("PRAGMA table_info(laps)")]
+                if cols:
+                    if "mapping" not in cols:
+                        _add_column(self.conn, "laps", "mapping INTEGER DEFAULT 0")
+                    self.conn.execute("UPDATE laps SET mapping = 1 WHERE phase = 'mapping'")
         if current_version != stamp:
             self.conn.execute(f"PRAGMA user_version = {stamp}")
         self.conn.commit()
@@ -799,12 +812,13 @@ class LapStore:
                 cur = self.conn.execute(
                     "INSERT INTO laps (ts, sim, track, car, lap_time, valid, telemetry_path, "
                     "phase, session_id, s1, s2, s3, position, sector_bounds, lap_no, pit, "
-                    "partial, " + ", ".join(c for c, _ in _RACE_COLUMNS) + ") "
-                    "VALUES (" + ", ".join(["?"] * (17 + len(_RACE_COLUMNS))) + ")",
+                    "partial, mapping, " + ", ".join(c for c, _ in _RACE_COLUMNS) + ") "
+                    "VALUES (" + ", ".join(["?"] * (18 + len(_RACE_COLUMNS))) + ")",
                     (record.timestamp, record.sim, record.track, record.car,
                      record.lap_time, int(record.valid), None,
                      record.phase, sid, _sec(0), _sec(1), _sec(2),
-                     record.position, bounds, record.lap_no, pit, record.partial, *race),
+                     record.position, bounds, record.lap_no, pit, record.partial,
+                     int(record.mapping), *race),
                 )
                 lap_id = cur.lastrowid
                 telemetry_path = os.path.join(self.data_dir, f"{lap_id}.npz")
@@ -897,33 +911,34 @@ class LapStore:
         with self._lock:
             row = self.conn.execute(
                 "SELECT ts, sim, track, car, lap_time, valid, telemetry_path, phase, session_id, "
-                "lap_no, pit, partial FROM laps WHERE id = ?",
+                "lap_no, pit, partial, mapping FROM laps WHERE id = ?",
                 (lap_id,),
             ).fetchone()
             if row is None:
                 raise KeyError(f"no lap with id {lap_id}")
             (ts, sim, track, car, lap_time, valid, telemetry_path, phase, session_id,
-             lap_no, pit, partial) = row
+             lap_no, pit, partial, mapping) = row
             if telemetry_path is None:
                 raise FileNotFoundError(f"lap {lap_id} has no telemetry (imported from a result log)")
             with np.load(telemetry_path) as npz:
                 channels = {k: npz[k] for k in npz.files}
             return LapRecord(sim, track, car, lap_time, bool(valid), ts, channels, phase, session_id,
                               lap_no=lap_no, pit=(None if pit is None else bool(pit)),
-                              partial=partial)
+                              partial=partial, mapping=bool(mapping))
 
     def best_lap(self, track: str, car: str, exclude_lap_id: int | None = None,
                  phase: str | None = None, session_id: str | None = None) -> LapRecord | None:
         with self._lock:
             # Exclude mapping-capture laps (slow weave/boundary laps) so a fresh
-            # track with only mapping laps doesn't pick one as the reference best.
+            # track with only mapping laps doesn't pick one as the reference best. The
+            # flag, not the phase (#154): a mapping lap keeps its real phase.
             # session_id alone scopes the stint; when given, don't also match on car
             # (the caller may pass a resolved display model while laps store the raw
             # entry name — see recent_laps).
             if session_id is not None:
                 query = ("SELECT id FROM laps WHERE session_id = ? AND valid = 1 "
                          "AND telemetry_path IS NOT NULL "
-                         "AND (phase IS NULL OR phase != 'mapping')")
+                         "AND NOT COALESCE(mapping, 0)")
                 params: list = [session_id]
             else:
                 # `car` may be a resolved display model while laps store the raw entry
@@ -934,7 +949,7 @@ class LapStore:
                 query = (f"SELECT id FROM laps WHERE track = ? "
                          f"AND car IN ({','.join('?' * len(teams))}) AND valid = 1 "
                          "AND telemetry_path IS NOT NULL "
-                         "AND (phase IS NULL OR phase != 'mapping')")
+                         "AND NOT COALESCE(mapping, 0)")
                 params = [track, *teams]
             if exclude_lap_id is not None:
                 query += " AND id != ?"
@@ -1349,16 +1364,17 @@ class LapStore:
         with self._lock:
             rows = self.conn.execute(
                 "SELECT id, lap_time, valid, ts, s1, s2, s3, phase, track, car, lap_no, pit, "
-                "partial, position FROM laps WHERE session_id = ? ORDER BY ts",
+                "partial, position, mapping FROM laps WHERE session_id = ? ORDER BY ts",
                 (session_id,),
             ).fetchall()
             keys = ("id", "lap_time", "valid", "ts", "s1", "s2", "s3", "phase", "track", "car",
-                    "lap_no", "pit", "partial", "position")
+                    "lap_no", "pit", "partial", "position", "mapping")
             out = []
             for r in rows:
                 d = dict(zip(keys, r))
                 d["car_model"] = resolve_car(d["car"]) if d["car"] else None
                 d["pit"] = None if d["pit"] is None else bool(d["pit"])
+                d["mapping"] = bool(d["mapping"])
                 out.append(d)
         # race_index (#142): 1-based, null for a non-race lap. Derived here -- the only
         # place a race boundary is computed -- so the lap list can restart its numbering
