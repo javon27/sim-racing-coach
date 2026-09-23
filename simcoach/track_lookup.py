@@ -173,6 +173,16 @@ def resolve_track_map(track_name: str, tracks_dir: str = "simcoach/tracks") -> P
     return p if p.exists() else None
 
 
+def dump_track_json(data: dict) -> bytes:
+    """THE on-disk format of a track JSON, for every writer (#145): 2-space JSON, real
+    UTF-8 (IPA pronunciations, accented names), CRLF, no trailing newline. Returns bytes
+    so the caller writes them in binary mode -- text mode would re-translate newlines
+    per platform. Two writers with two `json.dumps` calls is how an app save came to
+    rewrite a shipped map as \\uXXXX escapes. Raises ValueError on NaN/Infinity."""
+    return json.dumps(data, indent=2, ensure_ascii=False,
+                      allow_nan=False).replace("\n", "\r\n").encode("utf-8")
+
+
 def _read_map_json(p: Path) -> dict:
     try:
         d = json.loads(p.read_text(encoding="utf-8"))

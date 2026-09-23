@@ -206,7 +206,10 @@ def test_save_track_map_by_slug_persists(tmp_path):
 
 
 def _written(tracks_dir):
-    return json.loads((tracks_dir / "algarve_international_circuit.json").read_text())
+    # UTF-8 explicitly: the writer emits raw UTF-8 (#145), and a bare read_text() is cp1252
+    # on Windows.
+    return json.loads((tracks_dir / "algarve_international_circuit.json").read_text(
+        encoding="utf-8"))
 
 
 def _rev(client):
@@ -853,14 +856,28 @@ def test_put_notes_refuses_an_oversized_notes_document(tmp_path):
     assert r.status_code == 422, r.text
     assert _written(tracks_dir)["notes"] == keep       # authored notes untouched
 
-    # The cap counts the ESCAPED bytes _write_track_json writes, not code points: an
-    # astral char escapes to 12 bytes ("😀"), so 31 all-emoji notes measured
-    # 62,367 code points, passed a code-point cap, and wrote 744,367 bytes to disk.
+    # The cap counts the UTF-8 bytes _write_track_json writes, not code points: an astral
+    # char is 4 bytes, so 31 all-emoji notes (62,000 code points, under a code-point cap)
+    # are 248,000+ bytes on disk. (Before #145 the writer escaped it to 12 bytes and wrote
+    # 744,367.)
     emoji = {str(n): "\U0001f600" * 2000 for n in range(1, 32)}
     assert all(len(v) <= 2000 for v in emoji.values())   # every field within its own cap
     r = _put_notes(client, emoji)
     assert r.status_code == 422, r.text
     assert _written(tracks_dir)["notes"] == keep
+
+    # ...and it counts the RAW UTF-8 the writer now emits, not the \uXXXX escapes it used
+    # to (#145): 1000 x "é" is 2000 bytes on disk, so these 30 notes are byte-for-byte the
+    # size of the ASCII ceiling below and fit. Measured escaped (6 bytes each) they would
+    # be refused at ~184 KB -- a cap bounding bytes that are never written.
+    accented = {str(n): "é" * 1000 for n in range(1, 31)}
+    r = client.put("/tracks/algarve_international_circuit/notes", json={
+        "track": "Algarve International Circuit", "rev": _rev(client),
+        "notes": {"overview": "o" * 2000, "corners": accented,
+                  "reference_times": {}, "source": "s" * 2000}})
+    assert r.status_code == 200, r.text
+    raw = (tracks_dir / "algarve_international_circuit.json").read_bytes()
+    assert ("é" * 1000).encode("utf-8") in raw and b"\\u00e9" not in raw
 
     # And the ceiling the constant is derived from is genuinely accepted: 30 notes at the
     # full per-note cap plus overview and source at theirs. A round 64,000 would refuse it.
@@ -1562,3 +1579,30 @@ def test_in_rejects_a_slug_containing_a_separator(tmp_path):
     # A plain slug still resolves as a direct child of base.
     p = _in(base, "circuit_de_spa_francorchamps")
     assert p == (base / "circuit_de_spa_francorchamps.json").resolve()
+
+
+def test_an_unchanged_editor_save_of_every_shipped_map_is_a_byte_identical_no_op(tmp_path):
+    # #145: the server's writer drifted from scripts/promote_map.py -- every save from the
+    # Tracks screen re-encoded all IPA/accents as \uXXXX and moved `pronunciations` ahead
+    # of `notes`, dirtying a shipped map with a diff that changed no data. The dict-level
+    # self-save test above could not see it (json.loads of both compare equal); this is the
+    # server-side twin of test_promote_map's byte-identity test. Temp copies only.
+    shipped = Path(simcoach.__file__).parent / "tracks"
+    maps = [p for p in sorted(shipped.glob("*.json"))
+            if (d := json.loads(p.read_text(encoding="utf-8"))).get("length") and d.get("path")]
+    assert len(maps) >= 11, "expected the shipped corner maps"
+    for src in maps:
+        before = json.loads(src.read_text(encoding="utf-8"))
+        tracks_dir = tmp_path / src.stem
+        tracks_dir.mkdir()
+        shutil.copy(src, tracks_dir / src.name)
+        store = LapStore(str(tracks_dir / "c.sqlite"), str(tracks_dir / "data"))
+        client = TestClient(create_app(store, Coach(FakeModel("{}")),
+                                       tracks_dir=str(tracks_dir)),
+                            base_url="http://127.0.0.1")
+        r = client.put(f"/tracks/{src.stem}/map", json={
+            "corners": before["corners"], "sectors": before.get("sectors") or [],
+            "sections": before.get("sections") or [], "name": before.get("name")})
+        assert r.status_code == 200, (src.name, r.text)
+        assert (tracks_dir / src.name).read_bytes() == src.read_bytes(), \
+            f"{src.name}: an unchanged editor save rewrote the file"

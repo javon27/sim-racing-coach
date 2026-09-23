@@ -47,7 +47,12 @@ from simcoach.corners import (
     validated_sections,
     validated_sectors,
 )
-from simcoach.track_lookup import fill_blank_labels, guard_corner_notes, track_slug
+from simcoach.track_lookup import (
+    dump_track_json,
+    fill_blank_labels,
+    guard_corner_notes,
+    track_slug,
+)
 from simcoach.trackmap import direction_from_path
 
 TRACKS_DIR = Path("simcoach/tracks")
@@ -59,10 +64,8 @@ class PromoteError(Exception):
 
 
 def _serialize(data: dict) -> bytes:
-    """The shipped on-disk format: 2-space JSON, real UTF-8 (two shipped maps carry
-    accented names), CRLF, no trailing newline. Written explicitly rather than left
-    to the platform's text-mode newline translation, so the bytes are the same
-    wherever this runs.
+    """The shipped on-disk format, from `dump_track_json` -- the one serializer the
+    app's save path uses too (#145), so the two writers cannot drift.
 
     `allow_nan=False` is the last line against a non-finite slipping into a shipped
     map: json.loads ACCEPTS the bare `NaN`/`Infinity` literals, and only `length` and
@@ -70,8 +73,7 @@ def _serialize(data: dict) -> bytes:
     here. Its bare ValueError becomes a PromoteError so the curator gets the tool's
     `refused:` line rather than a traceback."""
     try:
-        return json.dumps(data, indent=2, ensure_ascii=False,
-                          allow_nan=False).replace("\n", "\r\n").encode("utf-8")
+        return dump_track_json(data)
     except ValueError as e:
         raise PromoteError(f"map is not serializable ({e}); NaN/Infinity cannot "
                            f"be shipped") from None

@@ -55,6 +55,7 @@ from ..ribbon import multi_signal_direction, reconstruct_surface, ribbon_to_scre
 from ..tiers import adjustable_from_setup, legal_adjustments
 from ..track_lookup import (
     corner_apex_key,
+    dump_track_json,
     fill_blank_labels,
     guard_corner_notes,
     load_map_data,
@@ -84,13 +85,18 @@ _MAX_NOTE_CHARS = 2000
 # later map save re-read and re-wrote it. The per-field caps stay: they name the offending
 # field, which one document cap cannot.
 #
-# BYTES of `json.dumps(notes)` -- the same serializer, with the same ensure_ascii=True,
-# that _write_track_json uses, so the quantity enforced here is the quantity that lands on
-# disk. Measuring the unescaped string instead would bound CODE POINTS, and an astral char
-# escapes to 12 bytes: an all-emoji payload measured 62,367 code points, passed, and wrote
-# 744,367 bytes. Escaped JSON is pure ASCII, so one char is one byte and the cap holds
-# whatever the encoding -- at the limit the notes block on disk is ~64.5 KB of ASCII prose
-# and ~64.2 KB of emoji (the extra over the cap is indent=2 whitespace).
+# UTF-8 BYTES of `json.dumps(notes, ensure_ascii=False)` -- the encoding _write_track_json
+# writes (dump_track_json, #145), so the quantity enforced here is the quantity that lands
+# on disk (less the indent=2/CRLF whitespace, which is not counted: the derivation below
+# is of the compact form). Measuring code points instead would not bound bytes: an
+# all-emoji payload measured 62,367 code points, passed, and wrote 744,367 bytes (each
+# astral char was then a 12-byte escape; it is now 4 raw UTF-8 bytes).
+#   Before #145 the writer escaped non-ASCII and this measured the escaped form. The
+# NUMBER did not move and still bounds the same thing, bytes of notes on disk; ASCII
+# prose (all the shipped notes) measures identically. What moved is how much non-ASCII
+# text fits under it: an accented Latin char costs 2 bytes, not a 6-byte escape, and an
+# emoji 4, not 12 -- so up to 3x the non-ASCII characters are now accepted, with the
+# on-disk size bounded exactly as before.
 #
 # The number is the intended ceiling MEASURED, not rounded: the largest shipped map has 30
 # corners, so 30 notes at the full 2000-char per-note cap plus overview and source at
@@ -99,7 +105,7 @@ _MAX_NOTE_CHARS = 2000
 # Stating 64,000 would have refused the very document the derivation is built from.)
 # For scale, the biggest `notes` block in simcoach/tracks/*.json today is 4,412 bytes
 # (longest single note 289, longest overview 706, most corner keys 24; shipped notes are
-# pure ASCII, so escaping does not move that number), making this ~14.6x the real worst
+# pure ASCII, so the encoding does not move that number), making this ~14.6x the real worst
 # case. The per-FIELD caps still count code points, which is what the editor shows the
 # author -- on astral text the UI's UTF-16 count and those caps disagree, accepted, and
 # this cap is what bounds the consequence.
@@ -397,7 +403,10 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # partial file. Dev (running from source) curates the shipped maps in the repo
         # tracks dir; an installed build writes to app-data — its bundled dir is
         # read-only/ephemeral (a PyInstaller onefile extracts it to a temp dir wiped on
-        # exit, so a write there would silently vanish). allow_nan=False hard-fails.
+        # exit, so a write there would silently vanish). Bytes come from dump_track_json,
+        # the serializer scripts/promote_map.py uses too (#145), so an app save of a
+        # shipped map is byte-identical to its committed file; its ValueError on
+        # NaN/Infinity hard-fails the write.
         slug = track_slug(track)
         if not slug:
             raise HTTPException(400, "invalid track")
@@ -406,10 +415,10 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         user_dir, bundled = _map_dirs()
         target = _in(bundled if _curating() else user_dir, slug)
         target.parent.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps(out, indent=2, allow_nan=False)
+        payload = dump_track_json(out)
         fd, tmp = tempfile.mkstemp(dir=str(target.parent), suffix=".json.tmp")
         try:
-            with os.fdopen(fd, "w") as f:
+            with os.fdopen(fd, "wb") as f:
                 f.write(payload)
             os.replace(tmp, target)
         except BaseException:
@@ -557,7 +566,13 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                                        existing.get("corners"), out.get("corners"), dropped)
             if notes:
                 out["notes"] = notes
-        return out
+        # Keep the existing file's top-level key order (#145): the notes guard above
+        # re-adds `notes` at the END (after `pronunciations`), and /mapcapture/save builds
+        # its dict from scratch, so without this an unchanged save reorders the file.
+        # Keys the file never had follow, in the writer's order.
+        ordered = {k: out[k] for k in existing if k in out}
+        ordered.update(out)
+        return ordered
 
     def _clean_corner_geometry(slug: str, corner: dict) -> dict:
         # Strip a baked per-corner metric that isn't a finite number of the right sign.
@@ -1285,6 +1300,9 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                     v = geo.get(str(i), {}).get(k)
                 if v is not None:
                     c[k] = v
+            # The matched corner's key order too (#145): Laguna's bake lists elev_delta_m
+            # before width_m, and an unchanged save must not rewrite the file to reorder it.
+            corners[i] = {**{k: c[k] for k in baked if k in c}, **c}
 
         # Start from the existing file, not a fixed key set (#87): any top-level key this
         # function doesn't know about (Spa's `_config_note`/`_distances_note`/`length_m`,
@@ -1436,10 +1454,10 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                  "corners": _text_map(raw.get("corners"), "corner notes"),
                  "reference_times": _text_map(raw.get("reference_times"), "reference times"),
                  "source": _text(raw.get("source", ""), "source")}
-        # Serialised exactly as _write_track_json will serialise it, so this measures the
-        # bytes that land on disk. Checked after the per-field caps so an over-limit field
-        # still gets its own named error.
-        if len(json.dumps(notes)) > _MAX_NOTES_DOC_BYTES:
+        # Encoded as _write_track_json encodes it (raw UTF-8, see _MAX_NOTES_DOC_BYTES),
+        # so this measures the bytes that land on disk. Checked after the per-field caps
+        # so an over-limit field still gets its own named error.
+        if len(json.dumps(notes, ensure_ascii=False).encode("utf-8")) > _MAX_NOTES_DOC_BYTES:
             raise HTTPException(
                 422, f"notes document exceeds {_MAX_NOTES_DOC_BYTES} bytes")
         data = dict(_track_file_data(track))       # merged shipped+overlay
