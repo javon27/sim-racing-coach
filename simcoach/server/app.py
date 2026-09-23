@@ -10,6 +10,7 @@ import json
 import logging
 import math
 import os
+import shutil
 import sys
 import tempfile
 import threading
@@ -49,6 +50,7 @@ from ..format import format_laptime
 from ..lmu.ingest import ingest_all
 from ..model.base import TokenUsage
 from ..model.factory import CoachUserError, make_model
+from ..model_types import LapRecord
 from ..pricing import estimate_chat_cost
 from ..pronunciations import table_for
 from ..ribbon import multi_signal_direction, reconstruct_surface, ribbon_to_screen
@@ -141,7 +143,6 @@ def _usage_view(agg: dict) -> dict:
         complete = False
     return {"usage": usage, "cost": cost, "cost_complete": complete}
 _CLEAN_LAP_RATIO = 1.07  # keep laps within +7% of the track/car best (drop in/out/off laps)
-_MAP_BUFFER_MAX = 8      # cap mapping-mode buffer (need only 2 edges; keep last N)
 
 # Host-header allowlist (port stripped before compare) -- AND an input to
 # ALLOWED_ORIGINS below, which is a cross product of these hostnames with our two
@@ -270,6 +271,50 @@ def _load_cloud(path) -> list[dict]:
         return []
 
 
+def _pending_dir(data_dir, slug: str) -> Path:
+    # #150: the mapping capture being DRIVEN, one file per lap, before Save promotes it
+    # to captures/<slug>.npz. A subdirectory, so _newest_capture's captures/*.npz glob
+    # never sees it.
+    return Path(data_dir) / "captures" / "pending" / slug
+
+
+def _append_pending_lap(data_dir, lap) -> None:
+    """Put one completed mapping lap on disk NOW (#150), not when Save is remembered.
+
+    One new file per lap (<n>.npz, same format as a saved capture via _save_cloud, so
+    tmp + os.replace): appending never rewrites an earlier lap, so a crash can only lose
+    the lap mid-write, and nothing reads a file while it is being replaced (#91). Called
+    synchronously on the capture thread, which already writes the lap's full-rate .npz
+    in store.save -- this is the 4 position channels next to that."""
+    slug = track_slug(lap.track)
+    if not slug:
+        return
+    d = _pending_dir(data_dir, slug)
+    d.mkdir(parents=True, exist_ok=True)
+    # Only the capture thread writes here and laps are never removed one at a time,
+    # so the count is the next free index.
+    _save_cloud(d / f"{len(list(d.glob('*.npz'))):05d}.npz", [lap.channels])
+
+
+def _pending_laps(data_dir, slug: str) -> list[dict]:
+    # Every lap of the track's pending capture, in driven order. An unreadable lap
+    # file is skipped (_load_cloud -> []), never the whole capture.
+    d = _pending_dir(data_dir, slug)
+    files = sorted(d.glob("*.npz")) if slug and d.is_dir() else []
+    return [ch for p in files for ch in _load_cloud(p)]
+
+
+def _drop_pending(data_dir, slug: str) -> None:
+    # After a Save has written captures/<slug>.npz from these laps.
+    try:
+        shutil.rmtree(_pending_dir(data_dir, slug))
+    except FileNotFoundError:
+        pass
+    except OSError:
+        logging.getLogger(__name__).warning("couldn't remove pending capture %s", slug,
+                                            exc_info=True)
+
+
 def _in(base: Path, slug: str) -> Path:
     # <base>/<slug>.json, rejecting any path that escapes base (defense in depth:
     # track_slug already sanitizes to [a-z0-9_], but this guards owned data).
@@ -308,9 +353,17 @@ def _capture_loop(source, store, app_state) -> None:
         if getattr(app_state, "mapping", False):
             # A partial lap (#77) is still persisted and still numbered, but never
             # buffered for ribbon reconstruction -- mapping wants full boundary passes.
+            # Uncapped (#150): the old 8-lap cap silently dropped driven passes.
+            # ponytail: RAM grows ~2 MB/lap (full channels, _place_corners reads them);
+            # trim to _POS_CHANNELS past lap 0 if marathon mapping sessions matter.
             if lap.partial is None:
                 app_state.map_buffer.append(lap)
-                del app_state.map_buffer[:-_MAP_BUFFER_MAX]
+                try:
+                    _append_pending_lap(store.data_dir, lap)
+                except Exception:
+                    # Never kill capture over it: the lap is still in RAM and the store.
+                    logging.getLogger(__name__).warning(
+                        "couldn't write mapping lap to the pending capture", exc_info=True)
             lap.phase = "mapping"
         lap_id = store.save(lap)
         app_state.latest = {"record": lap, "lap_id": lap_id}
@@ -506,6 +559,13 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         path = _capture_path(track)
         if capture and path.exists():
             return [ch for ch in _load_cloud(path) if _usable_cloud(ch)], True
+        # No saved capture: a PENDING one (#150 -- driven, never saved, e.g. the app
+        # died first) is still a mapping capture and wins the same way. Only when it
+        # yields laps: an unusable pending capture falls through, it isn't a saved file.
+        if capture:
+            pending = [ch for ch in _pending_laps(store.data_dir, slug) if _usable_cloud(ch)]
+            if pending:
+                return pending, True
         laps = []
         for lap_slug, _name, p in (_live_lap_paths() if rows is None else rows):
             if lap_slug != slug:
@@ -1678,13 +1738,21 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     # absent content-type IS CORS-simple, so the guard silently does nothing.
     @app.post("/mapcapture/start")
     def mapcapture_start(body: dict = Body(...)):
-        app.state.map_buffer = []
+        # Resume the live track's pending capture (#150): laps an interrupted or
+        # cancelled session already put on disk are back in the buffer, so status shows
+        # them and Build / Save cloud use them. Those laps carry position channels only.
+        track = _live_track()
+        slug = track_slug(track) if track else ""
+        app.state.map_buffer = [LapRecord("lmu", track, "", None, False, 0.0, ch)
+                                for ch in _pending_laps(store.data_dir, slug)]
         app.state.last_ribbon = None
         app.state.mapping = True
         return {"active": True}
 
     @app.post("/mapcapture/cancel")
     def mapcapture_cancel(body: dict = Body(...)):
+        # Leaves the pending capture on disk (#150): the editor calls this on unmount
+        # too, so a cancel must not be a way to lose driven laps. Next start resumes it.
         app.state.mapping = False
         app.state.map_buffer = []
         app.state.last_ribbon = None
@@ -1773,11 +1841,22 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # yield zero solver corners and this route still has a job to do (it exists to
         # persist the reconstructed SURFACE -- see test_mapcapture_save_writes_track_json),
         # and zero new corners cannot rebind a note to the wrong corner.
-        dropped = _write_track_json(track, out)
         # Persist the raw point cloud (app-data, not the repo tracks dir) so the
-        # ribbon can be rebuilt after algorithm changes with no re-drive.
+        # ribbon can be rebuilt after algorithm changes with no re-drive. BEFORE the map
+        # (#150): a capture-built map must never land without its cloud, or "Rebuild
+        # from saved capture" later fails for a track the driver is sure they recorded.
         if rib.get("laps"):
             _save_cloud(_capture_path(track), rib["laps"])
+        elif rib.get("built_from") == "capture" and not _capture_path(track).exists():
+            raise HTTPException(422, "the capture this map was built from is gone; "
+                                     "use Generate map layout to record one")
+        dropped = _write_track_json(track, out)
+        if rib.get("laps"):
+            # Promoted: the pending laps are in captures/<slug>.npz now. End the
+            # session too, or laps driven after Save start a new pending capture.
+            _drop_pending(store.data_dir, track_slug(track))
+            app.state.mapping = False
+            app.state.map_buffer = []
         _invalidate_canon(track)
         return {"saved": True, "slug": track_slug(track), "dropped_notes": dropped}
 
@@ -1798,6 +1877,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         if not any(all(c in lap for c in _POS_CHANNELS) for lap in raw):
             raise HTTPException(422, "mapping laps lack position telemetry")
         _save_cloud(_capture_path(track), raw)
+        _drop_pending(store.data_dir, track_slug(track))   # promoted (#150)
         app.state.mapping = False
         app.state.map_buffer = []
         app.state.last_ribbon = None
@@ -1884,8 +1964,11 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # cloud is already on disk: the capture it read, or the live laps themselves.
         # Freezing live laps into a capture made the capture WIN every later rebuild, so
         # laps driven afterwards never reached the map while the badge counted them.
+        # Except a PENDING capture (#150): Save promotes it to captures/<slug>.npz.
+        from_pending = from_capture and not _capture_path(track).exists()
         app.state.last_ribbon = {"world": ribbon, "corners": corners, "sectors": sectors,
-                                 "sections": sections, "track": track, "laps": None,
+                                 "sections": sections, "track": track,
+                                 "laps": laps if from_pending else None,
                                  "built_from": "capture" if from_capture else "live_laps"}
         res = _clean(ribbon_to_screen(ribbon, corners, sectors,
                                       rotation=_track_rotation(track), sections=sections))

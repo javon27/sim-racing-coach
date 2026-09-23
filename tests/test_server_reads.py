@@ -828,18 +828,20 @@ def test_mapcapture_start_buffers_and_persists_laps(tmp_path):
     assert app.state.mapping is False and app.state.map_buffer == []
 
 
-def test_mapcapture_buffer_is_capped(tmp_path):
-    from simcoach.server.app import _MAP_BUFFER_MAX, _capture_loop
+def test_mapcapture_buffer_keeps_every_lap(tmp_path):
+    # #150: the old 8-lap cap silently dropped the oldest passes. Every lap is kept,
+    # in RAM (what Build uses) and on disk (tests/test_mapcapture_durable.py).
+    from simcoach.server.app import _capture_loop
     app, store = _map_app(tmp_path)
     app.state.mapping = True
-    laps = [_edge("MapTrack", 1, 100.0) for _ in range(_MAP_BUFFER_MAX + 5)]
+    laps = [_edge("MapTrack", 1, 100.0) for _ in range(13)]
 
     class Src:
         def laps(self):
             return iter(laps)
 
     _capture_loop(Src(), store, app.state)
-    assert len(app.state.map_buffer) == _MAP_BUFFER_MAX  # bounded, keeps last N
+    assert app.state.map_buffer == laps
 
 
 def test_mapcapture_build_empty_buffer_is_422(tmp_path):
