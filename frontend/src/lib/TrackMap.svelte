@@ -7,11 +7,11 @@
   let { lapId = null, cars = [], mapData, fill = false }: {
     lapId?: number | null;
     cars?: { id: number; lapDist: number; cls: string; isPlayer: boolean; pos?: number }[];
-    // Pit Wall passes the current-track map directly (no lap to route through);
-    // when set (incl. null), it drives the pane and the lapId fetch is bypassed.
+    // The live rail map passes the current-track map directly (no lap to route
+    // through); when set (incl. null), it drives the pane and the lapId fetch is bypassed.
     mapData?: TrackMap | null;
-    // fill: the SVG fills the container's full height (Pit Wall) instead of sizing
-    // to its aspect ratio (the Coach rail, where it flows in a column).
+    // fill: the SVG fits the container's full box (the expanded Coach rail, #151)
+    // instead of sizing to its aspect ratio (the normal rail, where it flows in a column).
     fill?: boolean;
   } = $props();
 

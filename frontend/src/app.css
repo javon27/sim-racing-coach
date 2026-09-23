@@ -173,6 +173,15 @@ body {
   min-height: 0;
   position: relative; /* anchor the narrow-width rail drawer + tab */
 }
+/* #151: the expanded rail map WIDENS the rail column; the chat (1fr) gets narrower
+   but is never covered. Wide screens only — at <=820px the rail is the laps drawer
+   and the map pane is hidden, and this 2-class selector would otherwise beat the
+   narrow layout's single-column .main. */
+@media (min-width: 821px) {
+  .main.rail-wide {
+    grid-template-columns: min(640px, 50vw) 1fr auto;
+  }
+}
 /* Pull tab + scrim are wide-screen no-ops; the media query below turns them on. */
 .rail-tab {
   display: none;

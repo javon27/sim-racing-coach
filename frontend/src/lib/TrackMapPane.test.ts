@@ -167,16 +167,6 @@ describe("TrackMapPane", () => {
     expect(getCurrentMap).not.toHaveBeenCalled();
   });
 
-  it("opens the map strictly read-only from the magnifier", async () => {
-    render(TrackMapPane, { props: { sessionId: "s1" } });
-    await fireEvent.click(await screen.findByLabelText("Enlarge track map"));
-    const dialog = await screen.findByRole("dialog");
-    expect(dialog).toBeTruthy();
-    // Read-only: no pencil to reveal edit tools, no Save. Editing lives in Track view.
-    expect(screen.queryByLabelText("Edit map")).toBeNull();
-    expect(screen.queryByText("Save")).toBeNull();
-  });
-
   it("#151: on track the rail map is live — the live map, ONLY the player's car, and the next corner", async () => {
     eventFeed.push("status", liveStatus);
     eventFeed.push("map", { ...mapFixture, track_name: "Live Track" });
@@ -223,5 +213,22 @@ describe("TrackMapPane", () => {
     const { container } = render(TrackMapPane, { props: { sessionId: undefined } });
     await waitFor(() => expect(container.querySelector("circle.car-dot")).not.toBeNull());
     expect(screen.queryByText(/^Next:/)).toBeNull();
+  });
+
+  it("#151: the expand button asks the owner to widen the rail — no overlay dialog", async () => {
+    const onexpand = vi.fn();
+    render(TrackMapPane, { props: { sessionId: "s1", expanded: false, onexpand } });
+    await screen.findByText("T1");
+    expect(screen.queryByLabelText("Enlarge track map")).toBeNull(); // the 🔍 overlay is gone
+    await fireEvent.click(screen.getByLabelText("Expand track map"));
+    expect(onexpand).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("#151: expanded, the button reads Collapse and the map fits its box", async () => {
+    const { container } = render(TrackMapPane, { props: { sessionId: "s1", expanded: true, onexpand: () => {} } });
+    await screen.findByText("T1");
+    expect(screen.getByLabelText("Collapse track map").getAttribute("aria-pressed")).toBe("true");
+    expect(container.querySelector(".panel.fill")).not.toBeNull();
   });
 });

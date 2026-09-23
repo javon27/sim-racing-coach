@@ -3,13 +3,16 @@
   import { eventFeed } from "./events";
   import { liveField } from "./live";
   import TrackMap from "./TrackMap.svelte";
-  import TrackMapEditor from "./TrackMapEditor.svelte";
 
-  let { sessionId }: { sessionId: string | undefined } = $props();
+  let { sessionId, expanded = false, onexpand }: {
+    sessionId: string | undefined;
+    // #151: App owns the rail width; this pane only asks for it to change.
+    expanded?: boolean;
+    onexpand?: () => void;
+  } = $props();
 
   let lapId: number | null = $state(null);
   let trackName: string | null = $state(null);
-  let viewing = $state(false); // 🔍 opens the map enlarged, read-only (editing lives in Track view)
 
   // A selected/past session: the map is canonical per-track; any lap of it resolves it.
   $effect(() => {
@@ -76,27 +79,32 @@
       {#if displayTrack}<span class="tname">{displayTrack}</span>{/if}
     </div>
     <div class="acts">
-      {#if lapId !== null}
-        <!-- Magnifier: opens the map enlarged, read-only. Editing lives in Track view. -->
-        <button type="button" class="icon" aria-label="Enlarge track map" title="View map"
-                onclick={() => (viewing = true)}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-        </button>
-      {/if}
+      <!-- #151: expand WIDENS the rail (pushing the chat narrower) — replaces the
+           🔍 overlay, which covered the chat. -->
+      <button type="button" class="icon" aria-pressed={expanded}
+              aria-label={expanded ? "Collapse track map" : "Expand track map"}
+              title={expanded ? "Collapse map" : "Expand map"}
+              onclick={() => onexpand?.()}>
+        {#if expanded}
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></svg>
+        {:else}
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+        {/if}
+      </button>
     </div>
   </header>
   <div class="map-body">
     {#if onTrack}
       <!-- #151: live — the live track's canonical map with only the player's car. -->
-      <TrackMap mapData={liveMap} cars={liveCars} />
+      <TrackMap mapData={liveMap} cars={liveCars} fill={expanded} />
     {:else if lapId !== null}
-      <TrackMap {lapId} />
+      <TrackMap {lapId} fill={expanded} />
     {:else if !sessionId && liveTrack}
       <!-- Live session, no completed lap yet: the track is detected, so draw its
            canonical map directly (mapData bypasses the lapId fetch) instead of
            waiting on a lap. TrackMap's own "none" phase (mapData === null) covers
            "track detected, no map built yet" with its own build-me hint. -->
-      <TrackMap mapData={liveMap} />
+      <TrackMap mapData={liveMap} fill={expanded} />
     {:else}
       <p class="empty">No map yet — build one in Track view (Tracks → Edit).</p>
     {/if}
@@ -104,13 +112,6 @@
   {#if nextCorner}
     <p class="next-corner">Next: T{nextCorner.label}{nextCorner.name ? ` ${nextCorner.name}` : ""} ({DIR[nextCorner.direction] ?? nextCorner.direction})</p>
   {/if}
-  <TrackMapEditor
-    {lapId}
-    open={viewing}
-    startMode="view"
-    canEdit={false}
-    onClose={() => (viewing = false)}
-  />
 </section>
 
 <style>

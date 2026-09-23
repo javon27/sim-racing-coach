@@ -91,6 +91,7 @@ describe("App shell", () => {
 
 describe("Coach screen assembly", () => {
   beforeEach(() => {
+    localStorage.removeItem("coachRail.expanded");
     // The screens read live state off the /events feed (#106), not getStatus.
     // Seeding the frame before render means every subscriber gets it on replay.
     eventFeed.push("status", LIVE_STATUS);
@@ -297,5 +298,58 @@ describe("Coach screen assembly", () => {
     // chat composer is back to an empty new chat (not still showing s1's thread).
     expect(vi.mocked(getSessionChats)).not.toHaveBeenCalledWith("s1");
     expect(await screen.findByText(/new chat/i)).toBeTruthy();
+  });
+
+  it("#151: expanding the rail map widens the rail, never overlays the chat, and is remembered", async () => {
+    const { container } = render(App);
+    await screen.findByRole("navigation"); // shell mounts past the splash
+    const main = container.querySelector(".main") as HTMLElement;
+    const rail = container.querySelector("aside.rail") as HTMLElement;
+    expect(main.classList.contains("rail-wide")).toBe(false);
+    expect(rail.style.getPropertyValue("--map-h")).toBe("200px");
+
+    await fireEvent.click(await screen.findByLabelText("Expand track map"));
+    expect(main.classList.contains("rail-wide")).toBe(true);
+    expect(rail.style.getPropertyValue("--map-h")).toBe(`${Math.round(window.innerHeight * 0.5)}px`);
+    // The chat column is still the rail's grid sibling (pushed narrower by CSS), and
+    // nothing is layered over it: no dialog, no overlay.
+    const chatCol = container.querySelector(".coach-main") as HTMLElement;
+    expect(chatCol.parentElement).toBe(main);
+    expect(within(chatCol).getByPlaceholderText(/ask your engineer/i)).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(localStorage.getItem("coachRail.expanded")).toBe("true");
+
+    await fireEvent.click(screen.getByLabelText("Collapse track map"));
+    expect(main.classList.contains("rail-wide")).toBe(false);
+    expect(rail.style.getPropertyValue("--map-h")).toBe("200px");
+    expect(localStorage.getItem("coachRail.expanded")).toBe("false");
+  });
+
+  it("#151: the expanded rail is restored for this viewer", async () => {
+    localStorage.setItem("coachRail.expanded", "true");
+    const { container } = render(App);
+    await screen.findByRole("navigation");
+    expect((container.querySelector(".main") as HTMLElement).classList.contains("rail-wide")).toBe(true);
+    expect(await screen.findByLabelText("Collapse track map")).toBeTruthy();
+  });
+
+  it("#151: with storage blocked the rail still renders and expands (just not remembered)", async () => {
+    const get = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    const set = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    try {
+      const { container } = render(App);
+      await screen.findByRole("navigation");
+      const main = container.querySelector(".main") as HTMLElement;
+      expect(main.classList.contains("rail-wide")).toBe(false);
+      await fireEvent.click(await screen.findByLabelText("Expand track map"));
+      expect(main.classList.contains("rail-wide")).toBe(true);
+    } finally {
+      get.mockRestore();
+      set.mockRestore();
+    }
   });
 });

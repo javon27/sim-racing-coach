@@ -113,7 +113,39 @@
 
   // Draggable divider above the track-map pane (mirrors the laps handle). The
   // handle sits above the map, so dragging DOWN shrinks it.
-  let mapH = $state(200); // px; drives --map-h on the rail
+  // #151: the rail map's expand control WIDENS the rail (.main.rail-wide in app.css),
+  // pushing the chat column narrower — never over it. Remembered per viewer; a
+  // blocked storage just means it isn't remembered. Expanding also gives the map
+  // height (widening alone can't grow a height-capped map); collapsing restores it.
+  const RAIL_WIDE_KEY = "coachRail.expanded";
+  function loadRailWide(): boolean {
+    try {
+      return localStorage.getItem(RAIL_WIDE_KEY) === "true";
+    } catch {
+      return false;
+    }
+  }
+  function wideMapH(h: number): number {
+    return Math.max(h, Math.round((typeof window !== "undefined" ? window.innerHeight : 800) * 0.5));
+  }
+  const startWide = loadRailWide();
+  let railWide = $state(startWide);
+  let mapH = $state(startWide ? wideMapH(200) : 200); // px; drives --map-h on the rail
+  let mapHNormal = 200;
+  function toggleRailWide() {
+    railWide = !railWide;
+    if (railWide) {
+      mapHNormal = mapH;
+      mapH = wideMapH(mapH);
+    } else {
+      mapH = mapHNormal;
+    }
+    try {
+      localStorage.setItem(RAIL_WIDE_KEY, String(railWide));
+    } catch {
+      /* private mode / storage disabled — the choice just won't persist */
+    }
+  }
   let mapStartY = 0;
   let mapStartH = 0;
   let draggingMap = $state(false);
@@ -231,7 +263,7 @@
     <div class="screens">
     <section class="screen" class:on={screen === "coach"}>
       <div class="app">
-        <div class="main" class:rail-open={railOpen}>
+        <div class="main" class:rail-open={railOpen} class:rail-wide={railWide}>
           <!-- Narrow-width only: the rail is hidden by default; this tab slides
                it in as an overlay drawer, dismissed by the scrim. -->
           <button
@@ -276,7 +308,7 @@
               onpointermove={mapResizeMove}
               onpointerup={mapResizeUp}
             ></div>
-            <TrackMapPane sessionId={selectedSessionId} />
+            <TrackMapPane sessionId={selectedSessionId} expanded={railWide} onexpand={toggleRailWide} />
           </aside>
           <div class="coach-main">
             <InputsPanel lapId={selectedLapId ?? null} height={inputsH} />
