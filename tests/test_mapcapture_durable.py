@@ -161,3 +161,31 @@ def test_failing_disk_write_never_stops_capture(tmp_path, monkeypatch, caplog):
     assert len(store.list_lap_ids("MapTrack", "GT3")) == 3   # every lap still stored
     assert len(app.state.map_buffer) == 3
     assert "pending capture" in caplog.text                  # and the failure is logged
+
+
+def test_discard_drops_the_pending_capture(tmp_path):
+    # The explicit "Discard capture": bad laps must not resurrect on every start, nor
+    # win _rebuild_clouds over the track's live laps.
+    app, store = _app(tmp_path)
+    app.state.latest = {"record": _edge(1), "lap_id": 0}
+    c = _tc(app)
+    c.post("/mapcapture/start", json={})
+    _drive(app, store, 2)
+    assert c.post("/mapcapture/cancel", json={"discard": True}).json() == {"active": False}
+    assert not list(tmp_path.joinpath(*PENDING).glob("*.npz"))
+    c.post("/mapcapture/start", json={})
+    assert c.get("/mapcapture/status").json()["laps"] == []     # nothing resurrected
+    c.post("/mapcapture/cancel", json={})
+    # Rebuild falls back to the track's live laps (the 2 stored mapping laps' .npz).
+    r = c.post("/mapcapture/rebuild", json={"slug": "maptrack"})
+    assert r.status_code == 200, r.text
+    assert app.state.last_ribbon["built_from"] == "live_laps"
+
+
+def test_discard_after_restart_uses_the_live_track(tmp_path):
+    app, store = _app(tmp_path)
+    _drive(app, store, 2)
+    app2, _ = _app(tmp_path)                                    # empty buffer
+    app2.state.latest = {"record": _edge(1), "lap_id": 0}
+    _tc(app2).post("/mapcapture/cancel", json={"discard": True})
+    assert not list(tmp_path.joinpath(*PENDING).glob("*.npz"))

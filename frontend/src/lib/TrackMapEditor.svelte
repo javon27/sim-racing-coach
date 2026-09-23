@@ -297,8 +297,13 @@
     if (f && genPhase === "capturing") capLaps = f.laps;
   }));
 
+  // True once THIS editor started a capture (vs. a rebuild preview): only then does
+  // the footer button discard the laps it put on disk (#150).
+  let captured = $state(false);
+
   function resetGen() {
     genPhase = "off";
+    captured = false;
     capLaps = [];
     ribbon = null;
     genErr = null;
@@ -314,6 +319,7 @@
     }
     capLaps = [];
     ribbon = null;
+    captured = true;
     genPhase = "capturing";
   }
 
@@ -385,9 +391,11 @@
     }
   }
 
-  async function cancelGen() {
+  // discard=true only from the footer's "Discard capture" button: closing / unmounting
+  // keeps the driven laps on disk for the next Generate map layout (#150).
+  async function cancelGen(discard = false) {
     try {
-      await cancelMapCapture();
+      await cancelMapCapture(discard);
     } catch {
       /* best-effort — server drops the buffer on its own too */
     }
@@ -1098,7 +1106,9 @@
 
       <footer>
         {#if genPhase !== "off"}
-          <button type="button" onclick={cancelGen}>Cancel capture</button>
+          <button type="button" onclick={() => cancelGen(captured)}>
+            {captured ? "Discard capture" : "Cancel"}
+          </button>
           {#if genPhase === "preview"}
             {#if provenance}
               <!-- Say what backs the geometry before it is committed: a map off 1-3

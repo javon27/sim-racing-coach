@@ -449,15 +449,16 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("cancelling the capture calls cancelMapCapture and returns to the editor", async () => {
+  it("Discard capture calls cancelMapCapture(true) and returns to the editor", async () => {
     render(TrackMapEditor, { props: { lapId: 7, open: true } });
     await screen.findByText("First");
 
     await fireEvent.click(screen.getByText("Generate map layout"));
     await screen.findByText(/three full laps/i);
 
-    await fireEvent.click(screen.getByText("Cancel capture"));
-    expect(cancelMapCapture).toHaveBeenCalled();
+    // #150: the explicit button is the ONE path that deletes the laps on disk.
+    await fireEvent.click(screen.getByText("Discard capture"));
+    expect(cancelMapCapture).toHaveBeenCalledWith(true);
     expect(await screen.findByText("First")).toBeTruthy(); // back in the normal editor
   });
 
@@ -469,6 +470,8 @@ describe("TrackMapEditor — (re)generate map layout", () => {
 
     unmount();
     expect(cancelMapCapture).toHaveBeenCalled();
+    // #150: unmount leaves mapping mode but KEEPS the driven laps on disk.
+    expect(cancelMapCapture).not.toHaveBeenCalledWith(true);
   });
 
   it("cancels mapping mode when open flips false while capturing", async () => {
@@ -479,6 +482,7 @@ describe("TrackMapEditor — (re)generate map layout", () => {
 
     await rerender({ lapId: 7, open: false });
     await waitFor(() => expect(cancelMapCapture).toHaveBeenCalled());
+    expect(cancelMapCapture).not.toHaveBeenCalledWith(true); // closing keeps the laps (#150)
   });
 
   it("Rebuild from saved capture: calls rebuildFromCapture and previews the result", async () => {

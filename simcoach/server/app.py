@@ -1753,6 +1753,13 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     def mapcapture_cancel(body: dict = Body(...)):
         # Leaves the pending capture on disk (#150): the editor calls this on unmount
         # too, so a cancel must not be a way to lose driven laps. Next start resumes it.
+        # {"discard": true} (the editor's explicit "Discard capture") deletes it: the
+        # buffer's track, else the live one.
+        if body.get("discard") is True:
+            buf = list(app.state.map_buffer)
+            track = buf[0].track if buf else _live_track()
+            if track and track_slug(track):
+                _drop_pending(store.data_dir, track_slug(track))
         app.state.mapping = False
         app.state.map_buffer = []
         app.state.last_ribbon = None
