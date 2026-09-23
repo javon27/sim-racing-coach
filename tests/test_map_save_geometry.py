@@ -71,6 +71,8 @@ BAKED_MAPS = [
     "bahrain_outer_circuit",
     "bahrain_paddock_circuit",
     "circuit_de_la_sarthe",
+    "fuji_speedway",
+    "michelin_raceway_road_atlanta",
     "monza_curva_grande_circuit",
     "weathertech_raceway_laguna_seca",
 ]
