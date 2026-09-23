@@ -211,12 +211,17 @@ def _burn(ch: dict, key: str) -> tuple[float | None, float | None]:
 PARTIAL_START_M = 200.0
 
 
+def picked_up_mid_lap(record: LapRecord) -> bool:
+    """True when the lap's channels start past PARTIAL_START_M (see above)."""
+    dist = record.channels.get("lap_distance")
+    return dist is not None and len(dist) > 0 and float(dist[0]) > PARTIAL_START_M
+
+
 def lap_facts(record: LapRecord) -> LapFacts:
     ch = record.channels
     fuel_used, fuel_end = _burn(ch, "fuel")
     energy_used, energy_end = _burn(ch, "virtual_energy")
-    dist = ch.get("lap_distance")
-    if dist is not None and len(dist) and float(dist[0]) > PARTIAL_START_M:
+    if picked_up_mid_lap(record):
         # Half a lap's burn read as a full lap's would say "makes the flag" for a car
         # laps short. The amounts AT the line are still right; only the rates go.
         fuel_used = energy_used = None

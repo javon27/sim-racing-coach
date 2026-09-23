@@ -2308,3 +2308,56 @@ def test_race_tools_say_the_race_note_when_a_live_race_has_no_fresh_snapshot(tmp
                        race_note="Not enough laps yet: x")
     for tool in ("get_race_state", "get_strategy"):
         assert ctx.dispatch(tool, {}) == "Not enough laps yet: x"
+
+
+# --- issue #153: the energy report reads the session's latest complete lap -------
+
+def _energy_session(tmp_path, synthetic_lap, laps):
+    """Store `laps` [(partial kind, channel overrides, slice)] for session s1 and build
+    the context EXACTLY as the server does (app.py: record=None, lap_id=None)."""
+    import numpy as np
+
+    from simcoach.model_types import LapRecord
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    n = len(synthetic_lap.channels["lap_distance"])
+    for i, (kind, over, sl) in enumerate(laps, start=1):
+        ch = {**synthetic_lap.channels, **over,
+              "virtual_energy": over.get("virtual_energy", np.linspace(0.90, 0.85, n))}
+        ch = {k: np.asarray(v)[sl] for k, v in ch.items()}
+        store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1",
+                                "phase": "practice", "channels": ch,
+                                "lap_time": None if kind else 92.5, "valid": kind is None,
+                                "partial": kind, "lap_no": i, "timestamp": 10.0 * i}))
+    return CoachContext(store, record=None, lap_id=None,
+                        cmap=CornerMap.load("simcoach/tracks/test_track.json"),
+                        track=synthetic_lap.track, car=synthetic_lap.car,
+                        session_id="s1", on_track=True)
+
+
+def test_energy_report_built_like_the_server_reads_the_stored_lap(tmp_path, synthetic_lap):
+    ctx = _energy_session(tmp_path, synthetic_lap, [(None, {}, slice(None))])
+    rep = ctx.dispatch("get_energy_report", {})
+    assert "No lap captured" not in rep
+    assert "Fuel: 2.60 L used this lap; 77.4 L in tank" in rep
+    assert "Virtual energy: 5.0% used this lap; 85% remaining (~17.0 laps left)" in rep
+
+
+def test_energy_report_never_reads_a_newer_in_lap(tmp_path, synthetic_lap):
+    import numpy as np
+    n = len(synthetic_lap.channels["lap_distance"])
+    in_lap = {"fuel": np.linspace(77.4, 76.0, n),
+              "virtual_energy": np.linspace(0.85, 0.83, n)}
+    ctx = _energy_session(tmp_path, synthetic_lap,
+                          [(None, {}, slice(None)), ("in", in_lap, slice(None))])
+    rep = ctx.dispatch("get_energy_report", {})
+    assert "practice lap 1" in rep
+    assert "77.4 L in tank" in rep and "76.0" not in rep and "83%" not in rep
+
+
+def test_energy_report_gives_no_burn_for_a_lap_picked_up_mid_lap(tmp_path, synthetic_lap):
+    # Capture joined at ~1500 m: the fuel it saw burn is half a lap's, not a lap's.
+    ctx = _energy_session(tmp_path, synthetic_lap, [(None, {}, slice(500, None))])
+    rep = ctx.dispatch("get_energy_report", {})
+    assert "used this lap" not in rep and "laps left" not in rep
+    assert "Fuel: 77.4 L in tank (burn not measured on a full lap" in rep
+    assert "Virtual energy: 85% remaining (burn not measured on a full lap" in rep

@@ -44,8 +44,8 @@ from simcoach.format import (
     format_wheel_report,
     ordinal,
 )
-from simcoach.fuel import fuel_per_lap_from_channel, laps_remaining
-from simcoach.race import format_race_state, format_strategy
+from simcoach.fuel import laps_remaining
+from simcoach.race import format_race_state, format_strategy, lap_facts, picked_up_mid_lap
 from simcoach.track_lookup import load_track_knowledge, note_key_binds
 
 # ponytail: hard cap on an incident scan. Each lap past the cache costs a telemetry
@@ -1517,29 +1517,36 @@ class CoachContext:
                 + ("\n" + "\n".join(steps) if steps else ""))
 
     def get_energy_report(self):
-        if self.record is None:
+        # #153: the session's latest COMPLETE lap (#77), the same "latest" every other
+        # lap tool reads -- the app never pins `self.record`, so reading it directly
+        # always said "no lap captured".
+        record, lap_id = self._current_lap()
+        if record is None:
             return "No lap captured yet — no fuel/energy usage to report."
-        ch = self.record.channels
+        f = lap_facts(record)
+        # A lap picked up mid-lap burned over only part of it: the amounts at the line
+        # still stand, a per-lap rate does not.
+        no_rate = ("burn not measured on a full lap -- capture joined mid-lap"
+                   if picked_up_mid_lap(record) else "no clear per-lap burn this lap")
         lines = []
-        if "fuel" in ch:
-            remaining = float(ch["fuel"][-1])
-            try:
-                fpl = fuel_per_lap_from_channel(ch["fuel"])
-                lines.append(f"Fuel: {fpl:.2f} L used this lap; {remaining:.1f} L in tank "
-                             f"(~{laps_remaining(remaining, fpl):.1f} laps left).")
-            except ValueError:
-                lines.append(f"Fuel: {remaining:.1f} L in tank (no clear per-lap burn this lap).")
-        if "virtual_energy" in ch:
-            ve = ch["virtual_energy"]
-            used, cur = float(ve[0] - ve[-1]), float(ve[-1])
-            if used > 0:
-                lines.append(f"Virtual energy: {used * 100:.1f}% used this lap; {cur * 100:.0f}% "
-                             f"remaining (~{cur / used:.1f} laps left).")
+        if f.fuel_end is not None:
+            if f.fuel_used is not None:
+                lines.append(f"Fuel: {f.fuel_used:.2f} L used this lap; {f.fuel_end:.1f} L in "
+                             f"tank (~{laps_remaining(f.fuel_end, f.fuel_used):.1f} laps left).")
             else:
-                lines.append(f"Virtual energy: {cur * 100:.0f}% remaining.")
+                lines.append(f"Fuel: {f.fuel_end:.1f} L in tank ({no_rate}).")
+        if f.energy_end is not None:
+            if f.energy_used is not None:
+                lines.append(f"Virtual energy: {f.energy_used * 100:.1f}% used this lap; "
+                             f"{f.energy_end * 100:.0f}% remaining "
+                             f"(~{f.energy_end / f.energy_used:.1f} laps left).")
+            else:
+                lines.append(f"Virtual energy: {f.energy_end * 100:.0f}% remaining ({no_rate}).")
+        ch = record.channels
         if "soc" in ch:
             lines.append(f"Battery state of charge: {float(ch['soc'][-1]) * 100:.0f}%.")
-        return "\n".join(lines) if lines else "No fuel/energy data captured for this lap."
+        return (self._lap_line(record, lap_id) + "\n"
+                + ("\n".join(lines) if lines else "No fuel/energy data captured for this lap."))
 
     def get_race_result(self):
         # Name the track of the session these figures DESCRIBE, taken from that session's
