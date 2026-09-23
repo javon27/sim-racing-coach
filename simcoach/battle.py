@@ -10,7 +10,9 @@ tenths of a second apart: BATTLE_NOISE_FLOOR_S hides anything smaller than that 
 from __future__ import annotations
 
 import bisect
+import math
 import re
+import statistics
 from dataclasses import dataclass, field
 
 from simcoach.corners import Corner
@@ -192,8 +194,7 @@ def car_laps(trace: dict, corners: list[Corner], lap_no: int) -> list[CarLap]:
             if apx is not None:
                 s_apex = k * length + c.apex_dist
                 lap.apex_kph[n] = min(pts, key=lambda p, s=s_apex: abs(p[1] - s))[2]
-        if lap.entry:
-            out.append(lap)
+        out.append(lap)     # untimed too: "not timed on lap N", never "no such car"
     return out
 
 
@@ -267,18 +268,31 @@ def nearest_rivals(me: CarLap, others: list[CarLap]) -> list[CarLap]:
     return [by_id[c] for c in picks]
 
 
-def match_rival(others: list[CarLap], query: str) -> CarLap | None:
-    """The rival the driver named: 'P4' is a CLASS position (the field here is one
-    class); anything else matches part of a driver, entry or car-model name."""
+def _gap(me: CarLap, o: CarLap) -> float:
+    """How far `o` was from the driver on the lap: the median entry-time gap over the
+    corners both were timed at (inf when none)."""
+    gaps = [abs(o.entry[n] - t) for n, t in me.entry.items() if n in o.entry]
+    return statistics.median(gaps) if gaps else math.inf
+
+
+def rival_matches(others: list[CarLap], query: str,
+                  me: CarLap | None = None) -> list[CarLap]:
+    """Every car the driver's words name, the one nearest the driver on the lap first
+    (then class order): 'P4' is a CLASS position (the field here is one class); anything
+    else matches part of a driver, entry or car-model name."""
     q = re.sub(r"^(the|that)\s+", "", query.strip().lower())
     pos = re.fullmatch(r"p\s*(\d+)", q)
-    for o in sorted(others, key=lambda o: o.class_position):
-        if pos:
-            if o.class_position == int(pos[1]):
-                return o
-        elif q and any(q in name.lower() for name in (o.driver, o.car, o.model)):
-            return o
-    return None
+    hits = [o for o in others
+            if (o.class_position == int(pos[1]) if pos else
+                bool(q) and any(q in name.lower() for name in (o.driver, o.car, o.model)))]
+    return sorted(hits, key=lambda o: (_gap(me, o) if me else 0.0, o.class_position))
+
+
+def match_rival(others: list[CarLap], query: str, me: CarLap | None = None) -> CarLap | None:
+    """The rival the driver named; among several matches ("the Ferrari"), the one the
+    driver was nearest on the lap -- the car being fought, not the first in class order."""
+    hits = rival_matches(others, query, me)
+    return hits[0] if hits else None
 
 
 @dataclass
@@ -304,13 +318,23 @@ def format_battle(b: Battle | None, as_of_lap: int, units: str = "metric",
     me = next(c for c in b.laps if c.is_player)
     others = [c for c in b.laps if not c.is_player]
     if rival:
-        hit = match_rival(others, rival)
-        if hit is None:
+        hits = rival_matches(others, rival, me)
+        if not hits and rival_matches([me], rival):
+            return f"{head} {rival} is you, not a rival."
+        if not hits:
             field_txt = "; ".join(f"P{o.class_position} {o.driver} ({o.model or o.car})"
                                   for o in sorted(others, key=lambda o: o.class_position))
             return (f"{head} No car in your class matches {rival!r}. In your class: "
-                    f"{field_txt or 'nobody else was timed'}.")
-        picks, why = [hit], "the car you named"
+                    f"{field_txt or 'nobody else was recorded'}.")
+        hit = hits[0]
+        if not hit.entry:
+            return (f"{head} {hit.driver} ({hit.model or hit.car}), P{hit.class_position} "
+                    f"in class, was not timed on lap {as_of_lap}: its trace does not cover "
+                    "your lap's corners.")
+        why = ("the car you named" if len(hits) == 1 else
+               f"{len(hits)} cars in your class match {rival!r}; this is the one nearest "
+               f"you on lap {as_of_lap}")
+        picks = [hit]
     else:
         picks, why = b.rivals, f"nearest to you for most of lap {as_of_lap}"
         if not picks:

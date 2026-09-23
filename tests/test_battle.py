@@ -302,3 +302,41 @@ def test_a_named_car_that_never_came_near_is_not_compared():
     assert "B. Leader (Ferrari 499P), P1 in class, wasn't near you on lap 12" in text
     assert "no corner-by-corner comparison" in text
     assert " by " not in text
+
+
+# --- #152 red-team: a named rival is the one being fought; yourself; untimed cars ----
+
+BOB = CarLap(5, "Bob", "Ferrari 499P #50", 1, False, entry={1: 129.0, 2: 137.0},
+             exit={1: 131.0, 2: 139.0}, model="Ferrari 499P")        # 25 s up the road
+CARL = CarLap(6, "Carl", "Ferrari 499P #51", 4, False, entry={1: 105.5, 2: 113.5},
+              exit={1: 107.8, 2: 115.4}, model="Ferrari 499P")       # 1.5 s behind
+
+
+def test_an_ambiguous_name_picks_the_matching_car_nearest_the_driver():
+    """"the Ferrari" with two Ferraris in class is the one being fought (P4, 1.5 s
+    behind), not the first in class order (P1, 25 s up the road) -- and it says so."""
+    assert match_rival([BOB, CARL], "the Ferrari", ME).car_id == 6
+    assert match_rival([BOB, CARL], "#50", ME).car_id == 5         # unambiguous: as named
+    text = format_battle(build_battle([ME, BOB, CARL], [T1, T2]), 12, rival="the Ferrari")
+    assert "Carl (Ferrari 499P), P4 in class" in text
+    assert "2 cars in your class match 'the Ferrari'" in text
+    assert "the one nearest you on lap 12" in text
+    assert "Bob" not in text
+
+
+def test_naming_yourself_says_so():
+    b = build_battle([ME, RIVAL], [T1, T2])
+    assert format_battle(b, 12, rival="P3") == "As of lap 12. P3 is you, not a rival."
+    assert format_battle(b, 12, rival="E1") == "As of lap 12. E1 is you, not a rival."
+
+
+def test_a_car_in_the_class_that_was_not_timed_is_not_called_missing():
+    """A same-class car in the trace whose trace does not cover the lap's corners is
+    kept -- "not timed on lap N", never "no car in your class matches"."""
+    trace = _trace({2: {"driver": "A. Rival", "car": "E2", "class_position": 2,
+                        "pts": _pts(60.0, -950.0, 50.0, n=5)}})
+    laps = car_laps(trace, [T1, T2], lap_no=2)
+    assert {c.car_id: c.entry for c in laps}[2] == {}
+    text = format_battle(build_battle(laps, [T1, T2]), 12, rival="P2")
+    assert "A. Rival (E2), P2 in class, was not timed on lap 12" in text
+    assert "No car in your class matches" not in text
