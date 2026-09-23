@@ -19,7 +19,7 @@ Three pieces, shipped in this order (1 lands before 2 so the one used feature is
 
 1. Live map panel on the Coach screen.
 2. Retire the Pit Wall screen.
-3. Two strategy tools for the coach.
+3. Three race tools for the coach: race state, strategy, and battle (opponent comparison).
 
 Out of scope: proactive/unprompted spoken callouts (decided: **PTT only**), spotter functions,
 instantaneous gap or tactical calls, multi-driver/team strategy.
@@ -71,7 +71,7 @@ Anything true only "right now" is stale on arrival. Therefore:
   Completed laps only — never a half-lap.
 - **One tool call per strategy question.** The system prompt gets one routing line: race-position /
   gap / remaining questions → `get_race_state`; fuel / energy / pit / tire-life questions →
-  `get_strategy`. PTT keeps the existing 2–3-sentence spoken length.
+  `get_strategy`; "where is he faster than me" / passing questions → `get_battle`. PTT keeps the existing 2–3-sentence spoken length.
 
 ### `get_race_state`
 
@@ -94,7 +94,31 @@ Anything true only "right now" is stale on arrival. Therefore:
   wear rate. The floor is a **named constant** and the coach states it ("to 30% remaining") — it is
   a judgement, never presented as a measurement.
 
-### Guards (both tools)
+### `get_battle` — where an opponent is faster or slower than me
+
+Answers "the car I've been fighting all lap — where is he quicker?", about the **last completed
+lap**, so it is still true when heard.
+
+- **Every car in the player's class is recorded, every lap.** Who the opponent is can change several
+  times in one lap, so we never pre-pick "ahead/behind". During the lap, capture records, for each
+  same-class car, the time it crosses each corner's entry and exit (by lap distance, from the
+  scoring feed) and its speed nearest the apex. Other classes are not recorded.
+- At lap commit, code turns that into **per-corner and per-section time deltas** between the player
+  and each same-class car that was within a battle range of the player during that lap.
+- **Who "the opponent" is**, resolved in code, not by the model: by default the same-class car(s) the
+  player was nearest to for most of the last lap (it may name two when the fight changed hands); the
+  driver can also name a position or a driver ("P4", "the Ferrari", a driver name) and the tool
+  matches it against the class field.
+- Output: where the opponent gains and loses (corners/sections ranked by delta), and the player's
+  strongest zones against that car (e.g. "you carry 8 km/h more into T10") — the passing-chance
+  read, narrated by the model from code-ranked facts.
+- **Honesty**: scoring updates at a few Hz, so a single corner's delta has an error of roughly
+  0.05–0.1 s (measured at the rig before shipping the threshold). Only corners/sections whose delta
+  exceeds that noise floor are reported; nothing is stated at false precision.
+- Storage: one row per (lap, same-class car) with the per-corner crossing times and apex speeds —
+  cross-session data, so SQLite, keyed to the player's lap.
+
+### Guards (all three tools)
 
 - Every rate/projection needs ≥ 2 clean laps in the current stint; otherwise "not enough laps yet".
 - Out-laps, in-laps and partial laps are excluded from every rate.
@@ -110,7 +134,10 @@ changes on lap commit.
 ### Rig check (rig-verify)
 
 A real timed race and a lap-count race: `end_time` semantics, class gaps in multiclass, the
-as-of-lap stamp, and one spoken answer each for fuel, pit window, tire life and gap trend.
+as-of-lap stamp, and one spoken answer each for fuel, pit window, tire life and gap trend. For
+`get_battle`: measure the scoring feed's real update rate and the per-corner timing error against
+the player's own full-rate lap before fixing the noise floor; one spoken battle answer after a
+lap-long fight where the opponent changed.
 
 ## Invariants honoured
 
