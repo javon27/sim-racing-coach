@@ -457,7 +457,7 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     await screen.findByText(/three full laps/i);
 
     // #150: the explicit button is the ONE path that deletes the laps on disk.
-    await fireEvent.click(screen.getByText("Discard capture"));
+    await fireEvent.click(screen.getByText("Discard capture (0 laps)"));
     expect(cancelMapCapture).toHaveBeenCalledWith(true);
     expect(await screen.findByText("First")).toBeTruthy(); // back in the normal editor
   });
@@ -483,6 +483,46 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     await rerender({ lapId: 7, open: false });
     await waitFor(() => expect(cancelMapCapture).toHaveBeenCalled());
     expect(cancelMapCapture).not.toHaveBeenCalledWith(true); // closing keeps the laps (#150)
+  });
+
+  it("Discard capture says how many laps it deletes", async () => {
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+    await fireEvent.click(screen.getByText("Generate map layout"));
+    await screen.findByText(/three full laps/i);
+
+    pushCapture([{ idx: 0, samples: 500, length: 5000 }]);
+    expect(await screen.findByText("Discard capture (1 lap)")).toBeTruthy();
+    pushCapture([
+      { idx: 0, samples: 500, length: 5000 },
+      { idx: 1, samples: 480, length: 4800 },
+    ]);
+    expect(await screen.findByText("Discard capture (2 laps)")).toBeTruthy();
+  });
+
+  it("a failed discard says so instead of pretending the laps are gone", async () => {
+    vi.mocked(cancelMapCapture).mockRejectedValue(
+      new Error("API request failed: POST /mapcapture/cancel -> 409: no track to discard"));
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+    await fireEvent.click(screen.getByText("Generate map layout"));
+    await screen.findByText(/three full laps/i);
+
+    await fireEvent.click(screen.getByText("Discard capture (0 laps)"));
+    expect(await screen.findByText(/Couldn't discard the capture — no track to discard/))
+      .toBeTruthy();
+  });
+
+  it("a rebuild preview's Cancel discards nothing", async () => {
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+    await fireEvent.click(screen.getByText("Rebuild from saved capture"));
+    await screen.findByText("Save ribbon");
+
+    expect(screen.queryByText(/Discard capture/)).toBeNull();
+    await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(cancelMapCapture).toHaveBeenCalled();
+    expect(cancelMapCapture).not.toHaveBeenCalledWith(true);
   });
 
   it("Rebuild from saved capture: calls rebuildFromCapture and previews the result", async () => {

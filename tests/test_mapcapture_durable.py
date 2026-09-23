@@ -55,6 +55,10 @@ PENDING = ("data", "captures", "pending", "maptrack")
 SAVED = ("data", "captures", "maptrack.npz")
 
 
+def _pending(tmp_path):
+    return sorted(tmp_path.joinpath(*PENDING).glob("*.npz"))
+
+
 def test_lap_is_on_disk_before_any_save(tmp_path):
     app, store = _app(tmp_path)
     _drive(app, store, 2)
@@ -87,22 +91,102 @@ def test_restart_resumes_the_capture_and_save_promotes_it(tmp_path):
     saved = tmp_path.joinpath(*SAVED)
     with np.load(str(saved)) as z:
         assert {k.split("_", 1)[0] for k in z.files} == {"lap0", "lap1", "lap2"}
-    assert not tmp_path.joinpath(*PENDING).exists()   # promoted, not duplicated
+    assert not _pending(tmp_path)                     # promoted, not duplicated
     assert app2.state.mapping is False and app2.state.map_buffer == []
 
 
-def test_restart_rebuild_sees_pending_capture_and_save_promotes_it(tmp_path):
+def test_pending_capture_never_outvotes_live_laps_on_rebuild(tmp_path):
+    # F2: one abandoned mapping lap must not replace 10 live laps as the rebuild source
+    # (and the /tracks count), which a winning pending capture did.
     app, store = _app(tmp_path)
-    _drive(app, store, 2)
-    app2, _ = _app(tmp_path)
-    c = _tc(app2)
+    _capture_loop(_Src([_edge(1 if i % 2 else -1) for i in range(10)]), store, app.state)
+    c = _tc(app)
+
+    def row():
+        return next(t for t in c.get("/tracks").json() if t["slug"] == "maptrack")
+    before = row()["captures"]
+    app.state.latest = {"record": _edge(1), "lap_id": 0}
+    c.post("/mapcapture/start", json={})
+    _drive(app, store, 1)
+    c.post("/mapcapture/cancel", json={})
+    assert len(_pending(tmp_path)) == 1                        # precondition
+    assert row()["captures"] == before + 1                     # +1 live lap, not "1"
     r = c.post("/mapcapture/rebuild", json={"slug": "maptrack"})
     assert r.status_code == 200, r.text
-    assert r.json()["lap_count"] == 2
+    assert r.json()["lap_count"] == 11
+    assert app.state.last_ribbon["built_from"] == "live_laps"
+
+
+def test_pending_capture_does_not_bypass_the_curated_map_guard(tmp_path):
+    # F3: a pending capture counted as from_capture and so skipped the curated-map
+    # refusal -- Save then replaced a curated map's corners with "Turn N".
+    import json
+    tracks = tmp_path / "tracks"
+    tracks.mkdir()
+    curated = {"track": "maptrack", "name": "MapTrack",
+               "corners": [{"number": 1, "label": "La Source", "name": "La Source",
+                            "direction": "right", "start_dist": 10, "apex_dist": 20,
+                            "end_dist": 30}]}
+    (tracks / "maptrack.json").write_text(json.dumps(curated))
+    app, store = _app(tmp_path)
+    _drive(app, store, 2)
+    assert len(_pending(tmp_path)) == 2                        # precondition
+    c = _tc(app)
+    assert c.post("/mapcapture/rebuild", json={"slug": "maptrack"}).status_code == 422
+    names = [x["name"] for x in json.loads((tracks / "maptrack.json").read_text())["corners"]]
+    assert names == ["La Source"]
+
+
+def test_save_keeps_laps_driven_after_build(tmp_path):
+    # F1: Save used to rmtree ALL pending and clear the buffer, deleting durable laps
+    # driven while the preview was up.
+    app, store = _app(tmp_path)
+    _drive(app, store, 3)
+    c = _tc(app)
+    assert c.post("/mapcapture/build", json={}).status_code == 200
+    _drive(app, store, 1)                                      # 4th lap, after Build
+    assert len(_pending(tmp_path)) == 4
     assert c.post("/mapcapture/save", json={}).status_code == 200
-    assert tmp_path.joinpath(*SAVED).exists()
-    assert tmp_path.joinpath("tracks", "maptrack.json").exists()
-    assert not tmp_path.joinpath(*PENDING).exists()
+    with np.load(str(tmp_path.joinpath(*SAVED))) as z:
+        assert len({k.split("_", 1)[0] for k in z.files}) == 3
+    assert [f.name for f in _pending(tmp_path)] == ["00003.npz"]  # the 4th stays pending
+    assert len(app.state.map_buffer) == 1                      # and buffered
+    assert app.state.mapping is False
+
+
+def test_next_index_never_overwrites_after_a_gap(tmp_path):
+    # M1: index = file count overwrote the newest lap once a lower one was gone.
+    from simcoach.server.app import _append_pending_lap
+    data = tmp_path / "data"
+    for z in (1, 2, 3):
+        _append_pending_lap(data, _edge(z))
+    _pending(tmp_path)[0].unlink()
+    _append_pending_lap(data, _edge(9))
+    files = _pending(tmp_path)
+    assert [f.name for f in files] == ["00001.npz", "00002.npz", "00003.npz"]
+    with np.load(str(files[1])) as z:
+        assert z["lap0_pos_z"][0] == 3 * 5.0                  # lap 3 survived
+
+
+def test_a_failed_delete_never_resurrects_a_promoted_lap(tmp_path, monkeypatch):
+    # M2: a promoted lap whose delete fails (Windows AV / indexer lock) must not come
+    # back as a pending lap in the next session.
+    from pathlib import Path
+    app, store = _app(tmp_path)
+    app.state.latest = {"record": _edge(1), "lap_id": 0}
+    _drive(app, store, 2)
+    c = _tc(app)
+    c.post("/mapcapture/build", json={})
+
+    def locked(self, *a, **k):
+        raise PermissionError(13, "Access is denied", str(self))
+    with monkeypatch.context() as m:
+        m.setattr(Path, "unlink", locked)
+        assert c.post("/mapcapture/save", json={}).status_code == 200
+    assert len(list(tmp_path.joinpath(*PENDING).glob("*.dropped"))) == 2  # delete DID fail
+    assert not _pending(tmp_path)
+    c.post("/mapcapture/start", json={})
+    assert app.state.map_buffer == []
 
 
 def test_save_cloud_after_restart_promotes_pending(tmp_path):
@@ -114,7 +198,7 @@ def test_save_cloud_after_restart_promotes_pending(tmp_path):
     c.post("/mapcapture/start", json={})
     assert c.post("/mapcapture/save-cloud", json={}).status_code == 200
     assert tmp_path.joinpath(*SAVED).exists()
-    assert not tmp_path.joinpath(*PENDING).exists()
+    assert not _pending(tmp_path)
 
 
 def test_cancel_keeps_the_laps_on_disk(tmp_path):
@@ -164,19 +248,19 @@ def test_failing_disk_write_never_stops_capture(tmp_path, monkeypatch, caplog):
 
 
 def test_discard_drops_the_pending_capture(tmp_path):
-    # The explicit "Discard capture": bad laps must not resurrect on every start, nor
-    # win _rebuild_clouds over the track's live laps.
+    # The explicit "Discard capture": bad laps must not resurrect on every start.
     app, store = _app(tmp_path)
     app.state.latest = {"record": _edge(1), "lap_id": 0}
     c = _tc(app)
     c.post("/mapcapture/start", json={})
     _drive(app, store, 2)
-    assert c.post("/mapcapture/cancel", json={"discard": True}).json() == {"active": False}
-    assert not list(tmp_path.joinpath(*PENDING).glob("*.npz"))
+    assert len(_pending(tmp_path)) == 2                        # precondition
+    r = c.post("/mapcapture/cancel", json={"discard": True})
+    assert r.json() == {"active": False, "discarded": 2}
+    assert not _pending(tmp_path)
     c.post("/mapcapture/start", json={})
     assert c.get("/mapcapture/status").json()["laps"] == []     # nothing resurrected
     c.post("/mapcapture/cancel", json={})
-    # Rebuild falls back to the track's live laps (the 2 stored mapping laps' .npz).
     r = c.post("/mapcapture/rebuild", json={"slug": "maptrack"})
     assert r.status_code == 200, r.text
     assert app.state.last_ribbon["built_from"] == "live_laps"
@@ -185,7 +269,32 @@ def test_discard_drops_the_pending_capture(tmp_path):
 def test_discard_after_restart_uses_the_live_track(tmp_path):
     app, store = _app(tmp_path)
     _drive(app, store, 2)
+    assert len(_pending(tmp_path)) == 2                        # precondition
     app2, _ = _app(tmp_path)                                    # empty buffer
     app2.state.latest = {"record": _edge(1), "lap_id": 0}
-    _tc(app2).post("/mapcapture/cancel", json={"discard": True})
-    assert not list(tmp_path.joinpath(*PENDING).glob("*.npz"))
+    r = _tc(app2).post("/mapcapture/cancel", json={"discard": True})
+    assert r.json()["discarded"] == 2
+    assert not _pending(tmp_path)
+
+
+def test_discard_with_no_track_is_an_error_not_a_silent_noop(tmp_path):
+    app, store = _app(tmp_path)
+    _drive(app, store, 2)
+    app2, _ = _app(tmp_path)                                    # no buffer, no live track
+    assert _tc(app2).post("/mapcapture/cancel", json={"discard": True}).status_code == 409
+    assert len(_pending(tmp_path)) == 2
+
+
+def test_discard_covers_every_track_in_the_buffer(tmp_path):
+    # The sim changed track mid-session: both tracks' pending laps go.
+    app, store = _app(tmp_path)
+    other = _edge(1)
+    other.track = "OtherTrack"
+    _drive(app, store, 1)
+    app.state.mapping = True
+    _capture_loop(_Src([other]), store, app.state)
+    other_dir = tmp_path / "data" / "captures" / "pending" / "othertrack"
+    assert _pending(tmp_path) and list(other_dir.glob("*.npz"))  # precondition
+    r = _tc(app).post("/mapcapture/cancel", json={"discard": True})
+    assert r.json()["discarded"] == 2
+    assert not _pending(tmp_path) and not list(other_dir.glob("*.npz"))

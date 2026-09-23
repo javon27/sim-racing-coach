@@ -396,8 +396,15 @@
   async function cancelGen(discard = false) {
     try {
       await cancelMapCapture(discard);
-    } catch {
-      /* best-effort — server drops the buffer on its own too */
+    } catch (e) {
+      // A plain cancel is best-effort. A failed DISCARD left the laps on disk, and the
+      // driver must hear that rather than believe they are gone (#150).
+      resetGen();
+      if (discard) {
+        const detail = /-> \d+: (.+)/.exec(String(e))?.[1];
+        genErr = `Couldn't discard the capture${detail ? ` — ${detail}` : "."}`;
+      }
+      return;
     }
     resetGen();
   }
@@ -1107,7 +1114,9 @@
       <footer>
         {#if genPhase !== "off"}
           <button type="button" onclick={() => cancelGen(captured)}>
-            {captured ? "Discard capture" : "Cancel"}
+            {captured
+              ? `Discard capture (${capLaps.length} lap${capLaps.length === 1 ? "" : "s"})`
+              : "Cancel"}
           </button>
           {#if genPhase === "preview"}
             {#if provenance}
