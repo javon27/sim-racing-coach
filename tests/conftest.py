@@ -193,6 +193,9 @@ def _no_live_game(monkeypatch):
     for name in ("read_live_status", "read_session_track_car", "read_live_session_id"):
         if hasattr(smm, name):
             monkeypatch.setattr(smm, name, lambda: None)
+    # The suite's own test-named mappings have a live writer (the test itself), so
+    # the #147 "is the LMU process running" guard must not depend on the dev box.
+    monkeypatch.setattr(smm, "_lmu_alive", lambda: True, raising=False)
 
 
 @pytest.fixture

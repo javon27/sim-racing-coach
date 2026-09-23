@@ -59,6 +59,57 @@ _PARTIAL_MIN_SAMPLES = 200
 _PARTIAL_MIN_SPAN_M = 200.0
 
 
+class _PROCESSENTRY32W(C.Structure):
+    _fields_ = [
+        ("dwSize", C.c_uint32), ("cntUsage", C.c_uint32), ("th32ProcessID", C.c_uint32),
+        ("th32DefaultHeapID", C.c_size_t), ("th32ModuleID", C.c_uint32),
+        ("cntThreads", C.c_uint32), ("th32ParentProcessID", C.c_uint32),
+        ("pcPriClassBase", C.c_long), ("dwFlags", C.c_uint32), ("szExeFile", C.c_wchar * 260),
+    ]
+
+
+_kernel32.CreateToolhelp32Snapshot.restype = C.c_void_p
+_kernel32.Process32FirstW.argtypes = [C.c_void_p, C.POINTER(_PROCESSENTRY32W)]
+_kernel32.Process32NextW.argtypes = [C.c_void_p, C.POINTER(_PROCESSENTRY32W)]
+_INVALID_HANDLE = C.c_void_p(-1).value
+# Same exe the Tauri shell's foreground check matches (voice_input.rs, #112).
+_LMU_EXE = "le mans ultimate.exe"
+# A 50 Hz reader must not enumerate processes per sample: one snapshot per second.
+# ponytail: a flat 1 s TTL; a game that exits is seen as gone at most 1 s late.
+_LMU_ALIVE_TTL_S = 1.0
+_lmu_alive_cache: tuple[float, bool] = (-_LMU_ALIVE_TTL_S, True)
+
+
+def _lmu_process_running() -> bool:
+    """True if the LMU game process exists. Names only, via a Toolhelp snapshot --
+    never OpenProcess on the game (ANTI-CHEAT, module docstring). Fails OPEN: if the
+    snapshot itself fails we cannot tell, so keep reading the buffer as before."""
+    snap = _kernel32.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
+    if not snap or snap == _INVALID_HANDLE:
+        return True
+    try:
+        entry = _PROCESSENTRY32W(dwSize=C.sizeof(_PROCESSENTRY32W))
+        ok = _kernel32.Process32FirstW(snap, C.byref(entry))
+        while ok:
+            if entry.szExeFile.lower() == _LMU_EXE:
+                return True
+            ok = _kernel32.Process32NextW(snap, C.byref(entry))
+        return False
+    finally:
+        _kernel32.CloseHandle(C.c_void_p(snap))
+
+
+def _lmu_alive() -> bool:
+    """_lmu_process_running(), cached for _LMU_ALIVE_TTL_S."""
+    global _lmu_alive_cache
+    now = time.monotonic()
+    stamp, alive = _lmu_alive_cache
+    if now - stamp >= _LMU_ALIVE_TTL_S:
+        alive = _lmu_process_running()
+        _lmu_alive_cache = (now, alive)
+    return alive
+
+
 def open_mmap(name: str, size: int) -> mmap.mmap:
     """Open an EXISTING named shared-memory mapping for read.
 
@@ -67,7 +118,16 @@ def open_mmap(name: str, size: int) -> mmap.mmap:
     CreateFileMapping semantics) -- that would make "LMU isn't running"
     undetectable instead of raising. OpenFileMappingW only succeeds if the
     mapping already exists, so check with that first.
+
+    A mapping that exists is still DEAD if LMU is gone (#147): it outlives the game
+    while any other process holds a handle, frozen on the last frame. The writer's
+    process is the exact signal -- a paused game (ESC, replay, monitor) is still a
+    running process, so a pause can never read as offline, where a "clock stopped
+    advancing" timeout could. Every MMF read routes through here, so this is the
+    one guard for all of them.
     """
+    if not _lmu_alive():
+        raise OSError(f"shared memory mapping '{name}' is stale: LMU is not running")
     handle = _kernel32.OpenFileMappingW(_FILE_MAP_READ, False, name)
     if not handle:
         raise OSError(f"shared memory mapping '{name}' does not exist (is LMU running?)")
