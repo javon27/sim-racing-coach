@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, waitFor } from "@testing-library/svelte";
-import { getLapMap } from "./api";
+import { getLapMap, type TrackMap as TrackMapData } from "./api";
 import TrackMap from "./TrackMap.svelte";
 
 vi.mock("./api", async () => {
@@ -84,5 +84,23 @@ describe("TrackMap", () => {
     await waitFor(() => expect(container.querySelectorAll(".car-dot").length).toBe(3));
     const player = container.querySelector(".car-dot.player");
     expect(player).not.toBeNull();
+  });
+
+  it("#151: draws a tick at each sector boundary from the map's sectors, none when absent", async () => {
+    const withSectors = { ...mapFixture, sectors: [50] } as unknown as TrackMapData;
+    const { container } = render(TrackMap, { props: { mapData: withSectors } });
+    await waitFor(() => expect(container.querySelectorAll("rect.sector-tick").length).toBe(1));
+    const tick = container.querySelector("rect.sector-tick") as SVGRectElement;
+    // Sector at lap distance 50 sits on path point [10, 20].
+    const cx = Number(tick.getAttribute("x")) + Number(tick.getAttribute("width")) / 2;
+    const cy = Number(tick.getAttribute("y")) + Number(tick.getAttribute("height")) / 2;
+    expect(cx).toBeCloseTo(10);
+    expect(cy).toBeCloseTo(20);
+    cleanup();
+
+    const none = { ...mapFixture, sectors: [] } as unknown as TrackMapData;
+    const { container: c2 } = render(TrackMap, { props: { mapData: none } });
+    await waitFor(() => expect(c2.querySelector("polyline")).not.toBeNull());
+    expect(c2.querySelectorAll("rect.sector-tick").length).toBe(0);
   });
 });

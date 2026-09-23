@@ -186,6 +186,14 @@
           </text>
         {/if}
       {/each}
+      <!-- #151: sector boundaries from the map's own `sectors` (none drawn when absent). -->
+      {#each map.sectors ?? [] as s, i (i)}
+        {@const p = map.path[nearestDistIndex(map.dist, s)]}
+        <rect class="sector-tick" x={p[0] - su * 0.014} y={p[1] - su * 0.014}
+              width={su * 0.028} height={su * 0.028} fill="var(--text)">
+          <title>Sector {i + 1} boundary</title>
+        </rect>
+      {/each}
       {#each map.corners as c, i (c.number)}
         {#each c.apexes ?? [c.apex_dist] as ad, ai}
           {@const p = ai === 0 ? [c.x, c.y] : map.path[nearestDistIndex(map.dist, ad)]}
