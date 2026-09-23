@@ -4,6 +4,19 @@ import numpy as np
 
 
 @dataclass
+class RaceSample:
+    """The race situation at a lap's commit (#152), read from the same scoring frame
+    that committed the lap. Every field is None when the game did not report it."""
+    class_position: int | None = None
+    class_ahead: str | None = None        # "driver (entry)" one place up in class
+    class_gap_ahead: float | None = None  # s; None = a lap or more, or no car ahead
+    class_behind: str | None = None
+    class_gap_behind: float | None = None
+    time_left: float | None = None        # s to the session clock's end; None = no clock
+    max_laps: int | None = None           # a lap-count race's length; None = not one
+
+
+@dataclass
 class LapRecord:
     sim: str
     track: str
@@ -29,3 +42,5 @@ class LapRecord:
     # A partial always carries lap_time None and valid False, so every consumer
     # that already filters on `valid = 1` ignores it with no change.
     partial: str | None = None
+    # The race situation at this lap's commit (#152); stored on the lap row (v21).
+    race: RaceSample | None = None
