@@ -26,6 +26,11 @@ instantaneous gap or tactical calls, multi-driver/team strategy.
 
 ## 1. Live map panel (Coach screen)
 
+> **OPEN QUESTION for the driver (found while planning):** the Coach screen's lap rail already has
+> a `TrackMapPane` (the selected session's map). The lighter build is to make THAT map go live
+> while on track (car dot, sectors, next-corner callout) instead of adding a second map panel.
+> Plan A waits on this answer.
+
 - New collapsible `LiveMapPanel` on the Coach screen beside the inputs panel. **Open by default when
   the badge is On track**; the driver's collapse choice is remembered per viewer (localStorage,
   wrapped in try/catch, render correctly without it). Hidden when LMU is offline or the track has no
@@ -45,8 +50,9 @@ instantaneous gap or tactical calls, multi-driver/team strategy.
 ## 2. Retire the Pit Wall
 
 - Remove the `pitwall` screen and nav tab from `App.svelte`, and delete `PitWall.svelte`,
-  `LiveTower.svelte`, `RaceStrip.svelte`, `SectorDeltas.svelte` and their tests (nothing else imports
-  them).
+  `LiveTower.svelte`, `SectorDeltas.svelte` and their tests (nothing else imports them).
+  **Correction (2026-09-22, post-approval):** `RaceStrip.svelte` is NOT Pit Wall-only — it is the
+  post-race result strip in the Coach screen's lap rail, and it stays.
 - Keep `TrackMap`/`TrackMapPane` (used by §1) and the `/live` feed, trimmed to what the panel needs
   (player position + next corner).
 - Keep `simcoach/lmu/live.py` `read_field_snapshot()` — it becomes the input to `get_race_state`.
