@@ -29,3 +29,9 @@ def test_voice_extra_pins_kokoro_and_never_lists_gpl_packages():
         assert pin in extra
     for bad in ("spacy", "phonemizer", "espeakng", "num2words"):
         assert bad not in extra
+
+
+def test_spec_bundles_the_vendored_cmudict_and_its_licence():
+    # #148: tts_kokoro reads simcoach/cmudict/cmudict.dict at runtime; LICENSE must ship with it.
+    assert '"simcoach", "cmudict"' in SPEC and '"simcoach/cmudict"' in SPEC
+    assert (Path(__file__).parent.parent / "simcoach" / "cmudict" / "LICENSE").is_file()

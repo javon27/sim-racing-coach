@@ -200,12 +200,56 @@ def _tokenize_nospacy(self, text, tokens, features):
 _g2p = None
 _g2p_lock = threading.Lock()
 
+# ---- CMUdict fallback for English words misaki doesn't know (#148) -------------------
+# Vendored data only (simcoach/cmudict/README.md) -- never the GPL PyPI `cmudict` package.
+_CMUDICT_PATH = Path(__file__).parent / "cmudict" / "cmudict.dict"
+_ARPABET = {  # ARPAbet -> misaki US phonemes (misaki writes diphthongs as one capital)
+    "AA": "ɑ", "AE": "æ", "AO": "ɔ", "AW": "W", "AY": "I", "EH": "ɛ", "EY": "A", "IH": "ɪ",
+    "IY": "i", "OW": "O", "OY": "Y", "UH": "ʊ", "UW": "u",
+    "B": "b", "CH": "ʧ", "D": "d", "DH": "ð", "F": "f", "G": "ɡ", "HH": "h", "JH": "ʤ",
+    "K": "k", "L": "l", "M": "m", "N": "n", "NG": "ŋ", "P": "p", "R": "ɹ", "S": "s",
+    "SH": "ʃ", "T": "t", "TH": "θ", "V": "v", "W": "w", "Y": "j", "Z": "z", "ZH": "ʒ",
+}
+_STRESS = {"1": "ˈ", "2": "ˌ"}
+_cmudict: dict[str, str] | None = None
+
+
+def _arpabet_to_misaki(arpabet: str) -> str:
+    out = []
+    for p in arpabet.split():
+        base, stress = p.rstrip("012"), p[len(p.rstrip("012")):]
+        if base == "AH":     # stressed AH is the strut vowel, unstressed the schwa
+            sym = "ʌ" if stress in _STRESS else "ə"
+        elif base == "ER":
+            sym = "ɜɹ" if stress in _STRESS else "əɹ"
+        else:
+            sym = _ARPABET[base]
+        out.append(_STRESS.get(stress, "") + sym)
+    return "".join(out)
+
+
+def _cmudict_fallback(token):
+    """misaki's G2P.fallback contract: token -> (phonemes, rating). (None, None) keeps
+    today's OOV path (Unpronounceable). Only ever called from inside G2P, i.e. under
+    _g2p_lock, so the one-time lazy load needs no lock of its own."""
+    global _cmudict
+    if _cmudict is None:
+        d: dict[str, str] = {}
+        for line in _CMUDICT_PATH.read_text(encoding="utf-8").splitlines():
+            head, _, rest = line.split("#", 1)[0].partition(" ")
+            if head and "(" not in head:        # "word(2)" is an alternate reading; keep the first
+                d[head] = rest.strip()
+        _cmudict = d
+    arpabet = _cmudict.get(token.text.replace("’", "'").lower())
+    return (_arpabet_to_misaki(arpabet), 3) if arpabet else (None, None)
+
 
 def _patch_misaki():
     from misaki import en
 
     def _init(self, trf=False, british=False, fallback=None, unk="❓"):
-        self.british, self.nlp, self.lexicon, self.fallback, self.unk = british, None, en.Lexicon(british), None, unk
+        self.british, self.nlp, self.lexicon, self.unk = british, None, en.Lexicon(british), unk
+        self.fallback = _cmudict_fallback
 
     en.G2P.__init__ = _init
     en.G2P.tokenize = _tokenize_nospacy
@@ -213,7 +257,8 @@ def _patch_misaki():
 
 
 def phonemize(text: str) -> str:
-    """misaki English G2P, no spaCy, no espeak fallback. Raises on a token it can't resolve."""
+    """misaki English G2P, no spaCy, no espeak; CMUdict fills in English words misaki
+    lacks (#148). Raises on a token neither knows."""
     global _g2p
     install_stubs()
     with _g2p_lock:

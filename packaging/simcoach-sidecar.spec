@@ -24,6 +24,10 @@ _lexicon = os.path.join(ROOT, "simcoach", "lexicon.json")
 if os.path.isfile(_lexicon):
     datas.append((_lexicon, "simcoach"))
 
+# Vendored CMUdict data + its BSD licence (#148): Kokoro's fallback for English words
+# misaki lacks. Unconditional -- it's committed, and a build without it should fail.
+datas.append((os.path.join(ROOT, "simcoach", "cmudict"), "simcoach/cmudict"))
+
 # voice.py's `from faster_whisper import WhisperModel` is function-local (deferred),
 # but PyInstaller's static analysis still finds it via AST scan and pulls in the
 # ctranslate2 native DLL through it -- collect_all is for what that scan misses:

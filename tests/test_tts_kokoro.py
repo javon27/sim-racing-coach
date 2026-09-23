@@ -4,6 +4,7 @@ import struct
 import sys
 import threading
 import time
+import types
 
 import numpy as np
 import pytest
@@ -266,3 +267,43 @@ def test_phonemes_for_succeeds_when_the_only_oov_looking_word_is_inside_markup(t
     eng = KokoroEngine(tmp_path, backend=None, g2p=g2p)
     out = eng._phonemes_for("Watch [Pouhon](/pˈaʊhɑːn/) after the apex.")
     assert out == "Watch [Pouhon](/pˈaʊhɑːn/) after the apex"
+
+
+# ---- #148: CMUdict fallback ---------------------------------------------------------
+@pytest.mark.skipif(not HAVE_KOKORO, reason="voice extra not installed")
+def test_cmudict_fallback_speaks_an_english_word_misaki_lacks():
+    # "Glickenhaus" / "Kowalczyk" are OOV for misaki 0.7.4 (raised on main) but in CMUdict.
+    from simcoach.tts_kokoro import phonemize
+    assert phonemize("Glickenhaus") == "ɡlˈɪkənhˌWs"
+    assert phonemize("Kowalczyk passed the Glickenhaus.") == "kˈWəlʧɪk pˈæst ðə ɡlˈɪkənhˌWs."
+
+
+@pytest.mark.skipif(not HAVE_KOKORO, reason="voice extra not installed")
+def test_a_word_in_neither_misaki_nor_cmudict_is_still_unpronounceable(tmp_path):
+    eng = KokoroEngine(tmp_path, backend=None)
+    with pytest.raises(Unpronounceable) as exc_info:
+        eng._phonemes_for("Verstappen in the Glickenhaus.")
+    assert exc_info.value.words == ["Verstappen"]
+
+
+@pytest.mark.skipif(not HAVE_KOKORO, reason="voice extra not installed")
+def test_lexicon_still_overrides_cmudict():
+    # "de" is in CMUdict as English "dee" (D IY1) and in lexicon.json as French "də".
+    from simcoach.pronunciations import _global_table
+    from simcoach.tts_kokoro import phonemize
+    assert tts_kokoro._cmudict_fallback(types.SimpleNamespace(text="de"))[0] == "dˈi"
+    out = phonemize(preprocess("Circuit de Spa", _global_table()))
+    assert "də" in out and "dˈi" not in out
+
+
+@pytest.mark.skipif(not HAVE_KOKORO, reason="voice extra not installed")
+def test_every_arpabet_mapping_is_in_kokoros_vocab():
+    tts_kokoro.install_stubs()
+    from kokoro_onnx.config import DEFAULT_VOCAB
+    arpabet = [f"{p}{s}" for p in tts_kokoro._ARPABET for s in ("", "0", "1", "2")] + [
+        f"{p}{s}" for p in ("AH", "ER") for s in ("0", "1", "2")]
+    bad = {p: c for p in arpabet for c in tts_kokoro._arpabet_to_misaki(p) if c not in DEFAULT_VOCAB}
+    assert not bad
+    # and the whole shipped dictionary converts (no ARPAbet symbol missing from the table)
+    tts_kokoro._cmudict_fallback(types.SimpleNamespace(text="a"))
+    assert all(tts_kokoro._arpabet_to_misaki(a) for a in tts_kokoro._cmudict.values())
