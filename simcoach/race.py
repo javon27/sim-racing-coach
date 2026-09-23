@@ -205,10 +205,21 @@ def _burn(ch: dict, key: str) -> tuple[float | None, float | None]:
         return None, end
 
 
+# A lap whose channels start further round than this was picked up mid-lap (the app or
+# capture started, or shared memory reconnected, during it): its lap time is the game's
+# own and still true, but its fuel/energy burn covers only part of the lap.
+PARTIAL_START_M = 200.0
+
+
 def lap_facts(record: LapRecord) -> LapFacts:
     ch = record.channels
     fuel_used, fuel_end = _burn(ch, "fuel")
     energy_used, energy_end = _burn(ch, "virtual_energy")
+    dist = ch.get("lap_distance")
+    if dist is not None and len(dist) and float(dist[0]) > PARTIAL_START_M:
+        # Half a lap's burn read as a full lap's would say "makes the flag" for a car
+        # laps short. The amounts AT the line are still right; only the rates go.
+        fuel_used = energy_used = None
     cap = float(ch["fuel_capacity"][-1]) if len(ch.get("fuel_capacity", ())) else 0.0
     if not (math.isfinite(cap) and 0 < cap <= MAX_FUEL_CAPACITY_L):
         cap = 0.0
@@ -265,8 +276,9 @@ def strategy(stint: list[LapFacts], laps_to_go: int | None) -> Strategy:
         if len(rates) < MIN_STINT_LAPS or end is None:
             continue
         per = sum(rates) / len(rates)
+        # cap >= end, with a sliver of slack: a reading a hair over the tank is rounding.
         full = (cap is not None and math.isfinite(cap) and per < cap <= most
-                and cap >= end)
+                and cap >= end - 0.05 * cap)
         resources.append(Resource(name, per, end, laps_remaining(end, per),
                                   cap / per if full else None))
     advice = save = None
@@ -423,7 +435,8 @@ class RaceTracker:
 
 
 NO_RACE_LAP_YET = ("Not enough laps yet: no completed lap of this race has been measured "
-                   "yet -- race state and strategy start from the first completed race lap.")
+                   "since the app started -- race state and strategy start from the next "
+                   "completed race lap.")
 
 
 def live_race(snap: RaceSnapshot | None, *, track: str | None, car: str | None,

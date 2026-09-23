@@ -449,3 +449,16 @@ def test_prompt_wear_floor_comes_from_the_constant():
     import simcoach.coach as coach_mod
     assert f"'to {WEAR_FLOOR_PCT:.0f}% tread'" in coach_mod.AGENTIC_SYSTEM_PROMPT
     assert "'to 30% tread'" not in inspect.getsource(coach_mod)
+
+
+def test_a_lap_picked_up_mid_lap_keeps_its_line_amounts_but_not_its_burn(synthetic_lap):
+    # Red-team 2: the first lap after the app starts mid-race holds only part of the lap's
+    # fuel channel; its half-lap burn read as a full lap's said "makes the flag" for a car
+    # 4 laps short. The level AT the line is still true.
+    ch = dict(synthetic_lap.channels)
+    n = len(ch["lap_distance"])
+    ch["lap_distance"] = np.linspace(2000.0, 4000.0, n)
+    f = lap_facts(dataclasses.replace(synthetic_lap, channels=ch))
+    assert f.fuel_used is None and f.energy_used is None
+    assert f.fuel_end == pytest.approx(float(ch["fuel"][-1]))
+    assert f.wear_end is not None
