@@ -3,6 +3,7 @@ import numpy as np
 from simcoach.driver import DriverProfile
 from simcoach.format import unit_fns
 from simcoach.model.base import Model
+from simcoach.race import WEAR_FLOOR_PCT
 
 # Setup params worth putting in front of the coach — a full LMU setup is ~170 keys,
 # many cryptic/indexed (CHASSIS_ADJ_NN); these substrings keep the human-meaningful,
@@ -215,7 +216,7 @@ AGENTIC_SYSTEM_PROMPT = (
     "starts 'As of lap N' — say that stamp ('as of lap 12, ...'). Give only what the tool "
     "gives — lap numbers, per-lap targets, multi-lap trends — never an instantaneous gap or "
     "an immediate tactical call. The tire wear floor is a chosen threshold: say it as one "
-    "('to 30% tread'), never as a measured limit.\n\n"
+    f"('to {WEAR_FLOOR_PCT:.0f}% tread'), never as a measured limit.\n\n"
     "Corner identity (number, name, direction) in tool results is authoritative ground "
     "truth from the saved corner map — never guess or change it; refer to each corner by "
     "BOTH number and name, e.g. 'Turn 1 (Copse)', so the driver can place it — when the "

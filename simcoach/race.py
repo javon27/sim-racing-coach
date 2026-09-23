@@ -72,14 +72,18 @@ def race_sample(snap: FieldSnapshot) -> RaceSample | None:
     player = next((c for c in snap.cars if c.is_player), None)
     if player is None:
         return None
-    ahead, gap_a, behind, gap_b = class_neighbours(snap.cars)
     s = snap.session
+    # mEndET <= 0 = no session clock. PENDING RIG: mEndET semantics in a timed race.
+    clock = (s.end_time - s.elapsed) if s.end_time > 0 else None
+    if player.place <= 0:
+        # Unplaced (formation, a reset): no class order to read -- the clock only.
+        return RaceSample(time_left=clock, max_laps=s.max_laps)
+    ahead, gap_a, behind, gap_b = class_neighbours(snap.cars)
     return RaceSample(
         class_position=player.class_position,
         class_ahead=_who(ahead) if ahead else None, class_gap_ahead=gap_a,
         class_behind=_who(behind) if behind else None, class_gap_behind=gap_b,
-        # mEndET <= 0 = no session clock. PENDING RIG: mEndET semantics in a timed race.
-        time_left=(s.end_time - s.elapsed) if s.end_time > 0 else None,
+        time_left=clock,
         max_laps=s.max_laps,
     )
 
@@ -96,7 +100,7 @@ def gap_slope(points: list[tuple[int, float]]) -> float | None:
 def catch_lap(lap_no: int, gap: float, slope: float, final_lap: int | None) -> int | None:
     """The lap a shrinking gap reaches zero at `slope` (s/lap, negative = shrinking),
     or None: not shrinking faster than the steady band, or not before the flag."""
-    if slope > -GAP_STEADY_S_PER_LAP:
+    if slope > -GAP_STEADY_S_PER_LAP or gap <= 0:
         return None
     lap = lap_no + math.ceil(gap / -slope)
     return lap if final_lap is None or lap <= final_lap else None
@@ -125,6 +129,9 @@ def laps_left(lap_no: int, max_laps: int | None, time_left: float | None,
 WEAR_FLOOR_PCT = 30.0
 # Burn and wear rates average at most this many latest clean laps.
 RATE_LAPS = 5
+# A save target above this fraction of the per-lap burn is not a plan: the driver is
+# told a stop is needed instead. A judgement (lift-and-coast buys a few percent).
+MAX_SAVE_FRACTION = 0.15
 # The largest believable fuel tank, L. mFuelCapacity's offset is unverified (PENDING
 # RIG): a reading that is not finite, not above one lap's burn, below the fuel on board
 # or above this is treated as "tank size not reported", never stated.
@@ -268,7 +275,7 @@ def strategy(stint: list[LapFacts], laps_to_go: int | None) -> Strategy:
         inf = float("inf")
         advice = stint_save_advice(by["fuel"].laps if "fuel" in by else inf,
                                    by["energy"].laps if "energy" in by else inf, laps_to_go)
-        if not advice.make_it:
+        if not advice.make_it and advice.save_per_lap_fraction <= MAX_SAVE_FRACTION:
             save = advice.save_per_lap_fraction * by[advice.binding_resource].per_lap
     wheel = rem = rate = tire_laps = None
     worn = [f for f in clean if f.wear_end]
@@ -313,6 +320,7 @@ class RaceState:
     laps_to_go: int | None
     ahead: GapRead | None
     behind: GapRead | None
+    sampled: bool = True        # False: the race sample was missing on the latest lap
 
 
 @dataclass
@@ -366,7 +374,8 @@ def build_snapshot(stint: list[LapFacts], session_id: str | None,
     to_go = laps_left(latest.lap_no, r.max_laps, r.time_left, pace)
     final = latest.lap_no + to_go if to_go is not None else None
     state = RaceState(latest.position, r.class_position, r.max_laps, r.time_left, pace, to_go,
-                      _gap_read(stint, "ahead", final), _gap_read(stint, "behind", final))
+                      _gap_read(stint, "ahead", final), _gap_read(stint, "behind", final),
+                      latest.race is not None)
     try:
         strat = strategy(stint, to_go)
     except Exception:
@@ -442,7 +451,9 @@ def _clock(seconds: float) -> str:
     return f"{s // 60}:{s % 60:02d}"
 
 
-def _gap_line(label: str, g: GapRead | None, side: str) -> str:
+def _gap_line(label: str, g: GapRead | None, side: str, placed: bool) -> str:
+    if not placed:
+        return f"{label}: not sampled this lap."
     if g is None:
         return f"{label}: none" + (" — you lead your class." if side == "ahead" else ".")
     if g.gap is None:
@@ -472,22 +483,29 @@ def format_race_state(snap: RaceSnapshot) -> str:
     pos = f"P{st.position}" if st.position else "unknown"
     cls = f"P{st.class_position}" if st.class_position else "unknown"
     lines = [f"As of lap {snap.as_of_lap} (race).", f"Position: {pos} overall, {cls} in class."]
+    if not st.sampled:
+        lines.append("Remaining: not sampled this lap.")
     if st.max_laps:
         lines.append(f"Remaining: {max(st.max_laps - snap.as_of_lap, 0)} of {st.max_laps} laps.")
     if st.time_left is not None:
+        clock_laps = max(1, math.ceil(st.time_left / st.pace)) if st.pace else None
         if st.time_left <= 0:
             lines.append("Remaining: the clock has run out — this is the last lap.")
+        elif st.pace and st.max_laps and max(st.max_laps - snap.as_of_lap, 0) < clock_laps:
+            lines.append(f"Remaining: {_clock(st.time_left)} on the clock (the lap count "
+                         "ends the race first).")
         elif st.pace:
             lines.append(f"Remaining: {_clock(st.time_left)} on the clock, about "
-                         f"{st.laps_to_go} laps at your recent clean pace "
+                         f"{clock_laps} laps at your recent clean pace "
                          f"({format_laptime(st.pace)}/lap).")
         else:
             lines.append(f"Remaining: {_clock(st.time_left)} on the clock; laps left need "
                          f"{MIN_STINT_LAPS} clean laps in this stint for a pace.")
-    if not st.max_laps and st.time_left is None:
+    if st.sampled and not st.max_laps and st.time_left is None:
         lines.append("Remaining: the game reports no lap count or clock for this race.")
-    lines.append(_gap_line("Car ahead in class", st.ahead, "ahead"))
-    lines.append(_gap_line("Car behind in class", st.behind, "behind"))
+    placed = st.sampled and st.class_position is not None
+    lines.append(_gap_line("Car ahead in class", st.ahead, "ahead", placed))
+    lines.append(_gap_line("Car behind in class", st.behind, "behind", placed))
     return "\n".join(lines)
 
 
@@ -509,15 +527,26 @@ def format_strategy(snap: RaceSnapshot) -> str:
             save = (f"save {s.save_per_lap * 100:.1f}% energy/lap"
                     if s.save_per_lap is not None else "")
         margin = r.laps - s.laps_to_go
-        if margin >= 0:
+        if margin >= 0.05:
             txt += f": makes the flag with {margin:.1f} laps spare."
+        elif margin >= 0:
+            txt += ": right on the limit — no measurable margin to the flag."
+        elif r.name != binding:
+            txt += f": short by {-margin:.1f} laps."
+        elif save:
+            txt += f": short by {-margin:.1f} laps; {save} to finish without stopping."
         else:
-            txt += f": short by {-margin:.1f} laps"
-            txt += f"; {save} to finish without stopping." if r.name == binding else "."
+            txt += (f": short by {-margin:.1f} laps; a stop is needed (saving that much — "
+                    f"over {MAX_SAVE_FRACTION:.0%} a lap — is not realistic).")
         lines.append(txt)
     if not s.resources:
         lines.append("Fuel/energy: no clear per-lap burn measured in this stint.")
-    if s.tire_laps is not None:
+    if s.tire_laps is not None and s.tire_laps <= 0:
+        lines.append(f"Tires: worst is the {_WHEEL_NAME[s.tire_wheel]} at "
+                     f"{s.tire_remaining_pct:.0f}% tread, wearing {s.tire_rate_pct:.1f}%/lap: "
+                     f"already at or below the {WEAR_FLOOR_PCT:.0f}% threshold (a chosen "
+                     "threshold, not a measured limit).")
+    elif s.tire_laps is not None:
         lines.append(f"Tires: worst is the {_WHEEL_NAME[s.tire_wheel]} at "
                      f"{s.tire_remaining_pct:.0f}% tread, wearing {s.tire_rate_pct:.1f}%/lap: "
                      f"about {max(s.tire_laps, 0):.0f} laps to the {WEAR_FLOOR_PCT:.0f}% "

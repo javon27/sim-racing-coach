@@ -7,6 +7,7 @@ import pytest
 from simcoach.lmu.live import FieldSnapshot, VehicleState, empty_snapshot
 from simcoach.model_types import LapRecord, RaceSample
 from simcoach.race import (
+    WEAR_FLOOR_PCT,
     LapFacts,
     PitWindow,
     RaceTracker,
@@ -156,7 +157,9 @@ def test_strategy_fuel_short_save_target_tire_life_and_window():
     assert fuel.name == "fuel" and fuel.laps == pytest.approx(10.0)
     assert fuel.per_fill == pytest.approx(40.0)
     assert not s.advice.make_it and s.advice.binding_resource == "fuel"
-    assert s.save_per_lap == pytest.approx(2.5 / 6)            # stretch 10 laps over 12
+    # Stretching 10 laps over 12 is a 1/6 cut: over MAX_SAVE_FRACTION -> a stop, no target.
+    assert s.advice.save_per_lap_fraction == pytest.approx(1 / 6) and s.save_per_lap is None
+    assert strategy(STINT, laps_to_go=11).save_per_lap == pytest.approx(2.5 / 11)
     assert s.tire_wheel == "fl" and s.tire_rate_pct == pytest.approx(2.0)
     assert s.tire_remaining_pct == pytest.approx(76.0)
     assert s.tire_laps == pytest.approx(23.0)                  # (76 - 30) / 2
@@ -180,7 +183,8 @@ def test_energy_binds_when_it_runs_out_first():
              for f, e in zip(STINT, (0.9, 0.8, 0.75))]     # 7.5 laps of energy vs 10 of fuel
     s = strategy(stint, laps_to_go=12)
     assert s.advice.binding_resource == "energy"
-    assert s.save_per_lap == pytest.approx(0.1 * (1 - 7.5 / 12))
+    assert s.advice.save_per_lap_fraction == pytest.approx(1 - 7.5 / 12)
+    assert s.save_per_lap is None                               # a 37.5% cut: stop instead
     assert s.window.binding == "energy" and s.window.latest == 19
 
 
@@ -265,7 +269,7 @@ def test_format_strategy_states_margin_save_target_threshold_and_window():
     text = format_strategy(_tracker_at_lap_12().snapshot)
     assert text.startswith("As of lap 12.")
     assert ("Fuel: 2.50 L/lap, 25.0 L on board = 10.0 laps: short by 2.0 laps; "
-            "save 0.42 L/lap") in text
+            "a stop is needed") in text
     assert "about 23 laps to the 30% threshold (a chosen threshold, not a measured limit)" in text
     assert "Pit window: laps 13 to 22 (latest set by fuel;" in text
 
@@ -378,3 +382,70 @@ def test_a_rivals_pit_stop_starts_a_new_gap_trend():
     assert tr.snapshot.state.ahead.slope is None
     tr.commit(_rec(13, 62.5, 25.0, 0.8))
     assert tr.snapshot.state.ahead.slope == pytest.approx(-0.3)
+
+
+# --- #152 red-team minors ---------------------------------------------------------
+
+def test_an_unsampled_lap_says_not_sampled_not_class_leader_or_no_clock():
+    tr = _tracker_at_lap_12()
+    tr.commit(dataclasses.replace(_rec(13, 2.2, 25.0, 0.74), race=None))
+    text = format_race_state(tr.snapshot)
+    assert "Car ahead in class: not sampled this lap." in text
+    assert "Car behind in class: not sampled this lap." in text
+    assert "Remaining: not sampled this lap." in text
+    assert "you lead your class" not in text and "reports no lap count" not in text
+
+
+def test_an_unplaced_player_is_not_sampled_but_keeps_the_clock():
+    field = [dataclasses.replace(c, place=0) if c.is_player else c for c in FIELD]
+    rs = race_sample(_snap(field, elapsed=1200.0, end_time=3600.0, max_laps=24))
+    assert rs.class_position is None and rs.class_ahead is None and rs.class_behind is None
+    assert rs.time_left == pytest.approx(2400.0) and rs.max_laps == 24
+    tr = _tracker_at_lap_12()
+    tr.commit(dataclasses.replace(_rec(13, 2.2, 25.0, 0.74), race=rs))
+    text = format_race_state(tr.snapshot)
+    assert "Car ahead in class: not sampled this lap." in text
+    assert "you lead your class" not in text
+
+
+def _race_with_clock(time_left):
+    tr = RaceTracker()
+    for n in (10, 11, 12):
+        r = _rec(n, 3.0, 30.0, 0.8)
+        tr.commit(dataclasses.replace(r, race=dataclasses.replace(r.race, time_left=time_left)))
+    return format_race_state(tr.snapshot)
+
+
+def test_the_clock_line_claims_your_pace_only_when_the_clock_ends_the_race():
+    text = _race_with_clock(5000.0)                     # 50 laps of clock, 12 of lap count
+    assert "Remaining: 12 of 24 laps." in text
+    assert "at your recent clean pace" not in text
+    assert "83:20 on the clock (the lap count ends the race first)." in text
+    text = _race_with_clock(500.0)                      # the clock ends it: 5 laps
+    assert "about 5 laps at your recent clean pace" in text
+
+
+def test_a_zero_margin_is_not_worded_as_making_the_flag_with_laps_spare():
+    text = _fmt_strategy(STINT, 10)                     # 10.0 laps of fuel, 10 to go
+    assert "0.0 laps spare" not in text
+    assert "right on the limit" in text
+
+
+def test_a_tire_already_below_the_floor_says_so():
+    worn = [_clean(10, 30.0, 0.31), _clean(11, 27.5, 0.30), _clean(12, 25.0, 0.29)]
+    text = _fmt_strategy(worn, 5)
+    assert "already at or below the 30% threshold" in text
+    assert "about 0 laps" not in text
+
+
+def test_catch_lap_needs_a_positive_gap():
+    assert catch_lap(12, 0.0, -0.3, 24) is None
+    assert catch_lap(12, -0.5, -0.3, 24) is None
+
+
+def test_prompt_wear_floor_comes_from_the_constant():
+    import inspect
+
+    import simcoach.coach as coach_mod
+    assert f"'to {WEAR_FLOOR_PCT:.0f}% tread'" in coach_mod.AGENTIC_SYSTEM_PROMPT
+    assert "'to 30% tread'" not in inspect.getsource(coach_mod)
