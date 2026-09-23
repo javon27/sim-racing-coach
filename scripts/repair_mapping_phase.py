@@ -16,7 +16,9 @@ row since the v23 migration) becomes 0 for a qualifying or race lap -- mapping i
 Tracks-screen practice activity, so those were stamped only by the stuck mode and must
 count in bests and stint stats again -- and stays 1 for a practice lap, which may have
 been a real mapping pass. Then the result-log duplicates the wrong phase let ingest
-store (source='result' copies of the live laps) are dropped by the store's own cleanup.
+store (source='result' copies of the live laps) are dropped by the store's own cleanup,
+plus -- script-only -- the copies of recovered laps its never-empty safeguard keeps in
+a non-race session (see _drop_recovered_twins).
 
 Dry run by default: it prints the per-lap changes and the duplicate count, from the same
 writes run on an in-memory copy. --apply writes, in one transaction, after backing the
@@ -36,8 +38,10 @@ from pathlib import Path
 from simcoach import paths
 from simcoach.store import (
     _RACE_LOG_LAG_S,
+    _SESSION_GAP_S,
     _drop_duplicate_result_laps,
     _duplicate_result_lap_pairs,
+    _pair_laps,
 )
 
 
@@ -66,9 +70,10 @@ def plan(conn: sqlite3.Connection) -> list[tuple[int, float, str | None, str | N
     return out
 
 
-def _repair(conn: sqlite3.Connection, fixed: list) -> int:
+def _repair(conn: sqlite3.Connection, fixed: list) -> tuple[int, int]:
     """Write the recovered phases, then drop the result-log duplicates they expose.
-    Returns how many duplicate result laps were dropped. The caller owns the
+    Returns (dropped by the store's cleanup, dropped by _drop_recovered_twins). The
+    caller owns the
     transaction (and, for a dry run, hands in a throwaway in-memory copy).
 
     Result ingest dedupes against live laps of the SAME phase, so a log ingested while
@@ -86,6 +91,47 @@ def _repair(conn: sqlite3.Connection, fixed: list) -> int:
                      "WHERE id = ? AND phase = 'mapping'",
                      [(phase, _flag(phase), lap_id) for lap_id, _ts, phase, _why in fixed])
     pairs = _duplicate_result_lap_pairs(conn)
+    _drop_duplicate_result_laps(conn, pairs)
+    return len(pairs), _drop_recovered_twins(conn, fixed, {p[1] for p in pairs})
+
+
+def _drop_recovered_twins(conn: sqlite3.Connection, fixed: list, claimed: set) -> int:
+    """Result rows that duplicate a lap THIS run recovered, left by the store's cleanup
+    because dropping them empties a non-race result session (qualifying, practice).
+    Driver decision on #154: those copies exist only because the live twin said
+    'mapping' when the log was ingested, so they go too. Scoped to recovered laps --
+    the store's never-empty safeguard stays for everything else. Same pairing
+    (_pair_laps: lap time within _LAP_TIME_TOL_S, one twin each, laps the cleanup
+    already claimed excluded) and the same drop as the store (_drop_duplicate_result_laps:
+    sectors offered to the twin, then the lap row deleted -- nothing else). race_sessions
+    is never touched, so every session's result stays."""
+    ids = [lap_id for lap_id, _ts, _phase, _why in fixed]
+    if not ids:
+        return 0
+    marks = ",".join("?" * len(ids))
+    pairs: list[tuple] = []
+    groups = conn.execute(
+        "SELECT session_id, track, car, phase, ts FROM laps WHERE source = 'result' "
+        "GROUP BY session_id, track, car, phase, ts ORDER BY ts").fetchall()
+    for sid, track, car, phase, ts in groups:
+        query = (f"SELECT id, lap_time FROM laps WHERE id IN ({marks}) "
+                 "AND track IS ? AND car IS ? AND phase IS ?")
+        params: list = [*ids, track, car, phase]
+        if ts is not None:
+            query += " AND ts BETWEEN ? AND ?"
+            params += [ts - _SESSION_GAP_S, ts + _SESSION_GAP_S]
+        live = [r for r in conn.execute(query + " ORDER BY id", params).fetchall()
+                if r[0] not in claimed]
+        rows = conn.execute(
+            "SELECT id, lap_time, s1, s2, s3 FROM laps WHERE source = 'result' "
+            "AND session_id IS ? AND track IS ? AND car IS ? AND phase IS ? AND ts IS ? "
+            "AND telemetry_path IS NULL ORDER BY id",
+            (sid, track, car, phase, ts)).fetchall()
+        found = [(r[0], twin, r[2], r[3], r[4])
+                 for r, twin in zip(rows, _pair_laps(live, [r[1] for r in rows]))
+                 if twin is not None]
+        claimed.update(p[1] for p in found)
+        pairs.extend(found)
     _drop_duplicate_result_laps(conn, pairs)
     return len(pairs)
 
@@ -123,8 +169,9 @@ def main(argv: list[str] | None = None) -> int:
             with closing(sqlite3.connect(":memory:", isolation_level=None)) as mem:
                 conn.backup(mem)
                 mem.execute("BEGIN")
-                dropped = _repair(mem, fixed)
+                dropped, twins = _repair(mem, fixed)
             print(f"duplicate result laps: would drop {dropped}")
+            print(f"duplicates of recovered laps in non-race sessions: would drop {twins}")
             print("Dry run: nothing written. Re-run with --apply to write.")
             return 0
         if not fixed:
@@ -146,12 +193,13 @@ def main(argv: list[str] | None = None) -> int:
             raise
         print(f"Backed up to {bak}")
         try:
-            dropped = _repair(conn, fixed)
+            dropped, twins = _repair(conn, fixed)
             conn.execute("COMMIT")
         except BaseException:
             conn.execute("ROLLBACK")
             raise
-        print(f"Repaired {len(fixed)} laps; dropped {dropped} duplicate result laps.")
+        print(f"Repaired {len(fixed)} laps; dropped {dropped} duplicate result laps "
+              f"and {twins} duplicates of recovered laps in non-race sessions.")
     return 0
 
 

@@ -171,14 +171,31 @@ def test_incident_repair_drops_the_duplicate_result_laps(tmp_path, capsys):
     out = capsys.readouterr().out
     assert _count(db, dup) == 10                                   # dry run: untouched
     assert "duplicate result laps: would drop 10" in out, out
+    # Qualifying's 3 are twins of laps THIS run recovered: dropped even though that
+    # empties the non-race Q1 session (the store's general safeguard would keep them).
+    assert "duplicates of recovered laps in non-race sessions: would drop 3" in out, out
     repair.main(["--db", db, "--apply"])
-    assert _count(db, dup) == 0                                    # race: live laps only
+    assert _count(db, dup) == 0
+    assert _count(db, "SELECT COUNT(*) FROM laps WHERE source = 'result'") == 0
     assert _count(db, "SELECT COUNT(*) FROM laps WHERE phase = 'race'") == 10
-    # Qualifying's 3 result rows are KEPT: the cleanup never empties a result session
-    # whose outcome is not a race row (_duplicate_result_lap_pairs' safeguard), so the
-    # qualifying laps stay listed twice (3 live + 3 result).
-    assert _count(db, "SELECT COUNT(*) FROM laps WHERE phase = 'qualifying'") == 6
-    assert _count(db, "SELECT COUNT(*) FROM laps WHERE source = 'result'") == 3
+    assert _count(db, "SELECT COUNT(*) FROM laps WHERE phase = 'qualifying'") == 3
+    assert _count(db, "SELECT COUNT(*) FROM laps WHERE phase = 'practice'") == 3
+    assert _count(db, "SELECT COUNT(*) FROM race_sessions") == 3  # results all stay
+
+
+def test_a_non_race_result_twin_of_a_lap_not_recovered_is_kept(tmp_path):
+    # Scope: only twins of laps this run recovered. A qualifying result row whose live
+    # twin was ALWAYS 'qualifying' stays under the store's safeguard.
+    db = _incident(tmp_path)
+    with sqlite3.connect(db) as c:
+        c.execute("INSERT INTO laps (ts, track, car, lap_time, valid, phase, session_id, "
+                  "source) VALUES (?, ?, ?, 69.0, 1, 'qualifying', 'Q9', 'result')",
+                  (T0 + 1250, TRACK, CAR))
+        c.execute("INSERT INTO laps (ts, track, car, lap_time, valid, phase, session_id, "
+                  "source) VALUES (?, ?, ?, 69.0, 1, 'qualifying', 'live-q', 'live')",
+                  (T0 + 1250, TRACK, CAR))
+    repair.main(["--db", db, "--apply"])
+    assert _count(db, "SELECT COUNT(*) FROM laps WHERE session_id = 'Q9'") == 1
 
 
 def test_apply_refuses_a_busy_db_and_writes_nothing(tmp_path, capsys):
