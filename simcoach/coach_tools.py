@@ -27,6 +27,7 @@ from simcoach.analysis import (
     stint_wear_baseline,
     time_loss_buckets,
 )
+from simcoach.battle import format_battle
 from simcoach.coach import _setup_lines, live_electronics
 from simcoach.corners import CornerMap
 from simcoach.format import (
@@ -282,6 +283,24 @@ TOOLS = [
                        "the last completed lap. Use for 'will I make it', 'when do I pit', "
                        "'how long will the tires last'. One call answers it.",
         "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_battle",
+        "description": "LIVE RACE ONLY. Where a same-class rival was faster or slower than "
+                       "the driver on the LAST COMPLETED lap: corners and sections ranked by "
+                       "time gained or lost, plus apex-speed differences (the passing-chance "
+                       "read). By default the rival is the car the driver was nearest for most "
+                       "of that lap (it may name two). Use for 'where is he quicker', 'where "
+                       "can I pass him'. One call answers it.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "rival": {"type": "string",
+                          "description": "Optional: a rival the driver named: 'P4' (CLASS "
+                                         "position), a driver name, or a car/team name "
+                                         "('the Ferrari')."},
+            },
+        },
     },
     {
         "name": "record_driver_learning",
@@ -1586,6 +1605,10 @@ class CoachContext:
     def get_strategy(self):
         return self._no_live_race() or format_strategy(self.race)
 
+    def get_battle(self, rival=None):
+        return self._no_live_race() or format_battle(self.race.battle, self.race.as_of_lap,
+                                                     self.units, rival)
+
     def get_setup(self):
         if not self.setup:
             return "No setup data available (REST unavailable or open setup)."
@@ -1750,6 +1773,7 @@ class CoachContext:
             "get_race_result": lambda: self.get_race_result(),
             "get_race_state": lambda: self.get_race_state(),
             "get_strategy": lambda: self.get_strategy(),
+            "get_battle": lambda: self.get_battle(args.get("rival")),
             "get_setup": lambda: self.get_setup(),
             "record_driver_learning": lambda: self.record_driver_learning(
                 args.get("text", ""), args.get("track"), args.get("car"), args.get("replaces")),

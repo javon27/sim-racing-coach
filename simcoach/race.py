@@ -15,6 +15,9 @@ from dataclasses import dataclass
 import numpy as np
 
 from simcoach.analysis import _MIN_TIRE_TREND_LAPS, _WHEELS
+from simcoach.battle import Battle, build_battle, car_laps
+from simcoach.car_lookup import resolve_car
+from simcoach.corners import CornerMap
 from simcoach.format import format_laptime
 from simcoach.fuel import SaveAdvice, laps_remaining, stint_save_advice, use_per_lap_from_channel
 from simcoach.lmu.live import FieldSnapshot, VehicleState
@@ -351,6 +354,7 @@ class RaceSnapshot:
     # only serves it while the live track/car match (see live_race).
     track: str | None = None
     car: str | None = None
+    battle: Battle | None = None   # #152 get_battle: the lap's same-class timing, or None
 
 
 def _gap_read(stint: list[LapFacts], side: str, final_lap: int | None) -> GapRead | None:
@@ -381,7 +385,8 @@ def _gap_read(stint: list[LapFacts], side: str, final_lap: int | None) -> GapRea
 
 
 def build_snapshot(stint: list[LapFacts], session_id: str | None,
-                   track: str | None = None, car: str | None = None) -> RaceSnapshot:
+                   track: str | None = None, car: str | None = None,
+                   battle: Battle | None = None) -> RaceSnapshot:
     latest = stint[-1]
     r = latest.race or RaceSample()
     clean = [f for f in stint if f.clean]
@@ -400,7 +405,7 @@ def build_snapshot(stint: list[LapFacts], session_id: str | None,
         logging.getLogger(__name__).warning("race strategy not computed", exc_info=True)
         strat = Strategy("strategy unavailable this lap (a calculation failed)", to_go, [],
                          None, None, None, None, None, None, None)
-    return RaceSnapshot(latest.lap_no, session_id, state, strat, track, car)
+    return RaceSnapshot(latest.lap_no, session_id, state, strat, track, car, battle)
 
 
 class RaceTracker:
@@ -420,7 +425,8 @@ class RaceTracker:
         self._key: tuple | None = None
         self.snapshot: RaceSnapshot | None = None
 
-    def commit(self, record: LapRecord) -> RaceSnapshot | None:
+    def commit(self, record: LapRecord,
+               cmap: CornerMap | None = None) -> RaceSnapshot | None:
         if record.phase != "race" or record.lap_no is None:
             # Practice, qualy, a mapping lap: there is no live race to answer about.
             self._stint, self._key, self.snapshot = [], None, None
@@ -434,8 +440,17 @@ class RaceTracker:
             self._stint = []
         self._key = key
         self._stint.append(facts)
+        battle = None
+        # One lap of driving is compared: never an out-/in-/partial lap or a stop (an
+        # invalidated lap still counts -- the fight was real).
+        if (record.field_trace and cmap is not None and cmap.corners
+                and record.partial is None and not record.pit):
+            laps = car_laps(record.field_trace, cmap.corners, facts.lap_no)
+            for c in laps:
+                c.model = resolve_car(c.car)   # off the capture thread: this can scan logs
+            battle = build_battle(laps, cmap.corners)
         self.snapshot = build_snapshot(self._stint, record.session_id, record.track,
-                                       record.car)
+                                       record.car, battle)
         return self.snapshot
 
 

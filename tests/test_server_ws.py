@@ -946,9 +946,10 @@ def test_ws_coach_current_race_fact_leads_the_user_turn(tmp_path):
     assert store.chat_messages(cid)[-1]["question"] == "how was that?"
 
 
-def _ask_race_state(tmp_path, monkeypatch, live, phase, current_lap):
-    """#152: one live coach turn that calls get_race_state, with a race snapshot cached
-    from lap 12 of a race at test_track/test_car; returns the tool's text."""
+def _ask_race_state(tmp_path, monkeypatch, live, phase, current_lap, tool="get_race_state"):
+    """#152: one live coach turn that calls a race tool (get_race_state by default),
+    with a race snapshot cached from lap 12 of a race at test_track/test_car; returns the
+    tool's text."""
     import dataclasses
 
     from simcoach.lmu import live as lmu_live
@@ -962,7 +963,7 @@ def _ask_race_state(tmp_path, monkeypatch, live, phase, current_lap):
     monkeypatch.setattr(lmu_live, "read_field_snapshot", lambda: field)
 
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    fake = FakeModel(reply="ok", tool_script=[("get_race_state", {})])
+    fake = FakeModel(reply="ok", tool_script=[(tool, {})])
     app = create_app(store, Coach(fake))
     rs = RaceSample(class_position=3, max_laps=24)
     app.state.race.snapshot = build_snapshot(
@@ -976,7 +977,7 @@ def _ask_race_state(tmp_path, monkeypatch, live, phase, current_lap):
             ev = ws.receive_json()
             if ev["type"] in ("done", "error"):
                 break
-    assert fake.dispatched and fake.dispatched[0][0] == "get_race_state"
+    assert fake.dispatched and fake.dispatched[0][0] == tool
     return fake.dispatched[0][2]
 
 
@@ -1002,3 +1003,16 @@ def test_ws_coach_race_tool_never_serves_another_sessions_snapshot(tmp_path, mon
         text = _ask_race_state(tmp_path / f"c{lap}", monkeypatch,
                                ("test_track", "test_car"), "race", lap)
         assert text.startswith("Not enough laps yet"), lap
+
+
+def test_ws_get_battle_is_gated_to_the_live_race_like_the_other_race_tools(tmp_path,
+                                                                           monkeypatch):
+    """#152: get_battle reads the same live_race-gated snapshot: the race being driven
+    gets "As of lap 12", anything else gets the same notes, never another race's read."""
+    def ask(sub, live, phase, lap):
+        return _ask_race_state(tmp_path / sub, monkeypatch, live, phase, lap,
+                               tool="get_battle")
+    assert ask("ok", ("test_track", "test_car"), "race", 13).startswith("As of lap 12.")
+    assert ask("a", ("Monza", "test_car"), "practice", 1).startswith("No live race")
+    assert ask("b", ("Monza", "test_car"), "race", 13).startswith("Not enough laps yet")
+    assert ask("c", ("test_track", "test_car"), "race", 15).startswith("Not enough laps yet")

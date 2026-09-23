@@ -2286,7 +2286,7 @@ def test_race_tools_answer_no_live_race_off_track_or_before_a_race_lap(tmp_path,
     ctx, store, _ = _ctx(tmp_path, synthetic_lap)
     assert ctx.dispatch("get_race_state", {}).startswith("No live race")   # no snapshot yet
     off = CoachContext(store, on_track=False, race=_race_snapshot())
-    for tool in ("get_race_state", "get_strategy"):
+    for tool in ("get_race_state", "get_strategy", "get_battle"):
         assert off.dispatch(tool, {}).startswith("No live race")
 
 
@@ -2306,7 +2306,7 @@ def test_race_tools_say_the_race_note_when_a_live_race_has_no_fresh_snapshot(tmp
     store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
     ctx = CoachContext(store, on_track=True, race=None,
                        race_note="Not enough laps yet: x")
-    for tool in ("get_race_state", "get_strategy"):
+    for tool in ("get_race_state", "get_strategy", "get_battle"):
         assert ctx.dispatch(tool, {}) == "Not enough laps yet: x"
 
 
@@ -2372,3 +2372,24 @@ def test_energy_report_skips_a_dead_virtual_energy_channel(tmp_path, synthetic_l
     rep = ctx.dispatch("get_energy_report", {})
     assert "Virtual energy" not in rep
     assert "Fuel: 2.60 L used this lap; 77.4 L in tank at the end of that lap" in rep
+
+
+def test_get_battle_reads_the_cached_battle_and_takes_a_named_rival(tmp_path, synthetic_lap):
+    from simcoach.battle import CarLap, build_battle
+    from simcoach.corners import Corner
+    from simcoach.race import LapFacts, build_snapshot
+    t1 = Corner(1, "La Source", "right", 200.0, 250.0, 300.0, label="1")
+    me = CarLap(1, "You", "E1", 3, True, entry={1: 104.0}, exit={1: 106.0})
+    rival = CarLap(2, "A. Rival", "E2", 2, False, entry={1: 103.0}, exit={1: 105.3},
+                   model="Ferrari 296 GT3")
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    assert ctx.dispatch("get_battle", {}).startswith("No live race")
+    ctx.race = build_snapshot([LapFacts(lap_no=12, lap_time=100.0, clean=True)], "s",
+                              battle=build_battle([me, rival], [t1]))
+    out = ctx.dispatch("get_battle", {})
+    assert out.startswith("As of lap 12.")
+    assert "You are quicker: Turn 1 (La Source) by 0.30 s." in out
+    named = ctx.dispatch("get_battle", {"rival": "P2"})
+    assert "Rival (the car you named): A. Rival (Ferrari 296 GT3)" in named
+    ctx.race = build_snapshot([LapFacts(lap_no=12, lap_time=100.0, clean=True)], "s")
+    assert ctx.dispatch("get_battle", {}).startswith("As of lap 12. No battle read")

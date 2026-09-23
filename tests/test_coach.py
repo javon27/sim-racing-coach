@@ -342,4 +342,5 @@ def test_agentic_prompt_routes_race_questions_to_one_race_tool():
     assert "→ get_race_state" in p and "→ get_strategy" in p
     assert "ONE call answers the question" in p and "As of lap N" in p
     assert "never state gaps or traffic" not in p
+    assert "→ get_battle" in p
     p.format(car="x", speed_unit="km/h", temp_unit="°C")    # no stray braces

@@ -74,3 +74,31 @@ def test_capture_keeps_saving_laps_after_the_race_pool_is_shut_down(tmp_path, sy
                                 session_id="spa--gt3--offline") for n in (1, 2)]
     _capture_loop(_ListSource(laps), store, app.state)
     assert [l["lap_no"] for l in store.session_laps("spa--gt3--offline")] == [1, 2]
+
+
+def test_capture_loop_stores_battle_rows_for_a_race_lap(tmp_path, monkeypatch):
+    """#152: the race worker resolves the lap's corner map, builds the battle and stores
+    one battle row per same-class car -- the driver included."""
+    import numpy as np
+
+    from simcoach.corners import Corner, CornerMap
+    from simcoach.model_types import LapRecord
+    monkeypatch.setattr("simcoach.race.resolve_car", lambda name, *a: name)
+
+    def pts(s0):   # 5 Hz at 50 m/s
+        return [(95.0 + i / 5, s0 + 10.0 * i, 180.0) for i in range(140)]
+
+    trace = {"player_id": 1, "track_len": 1000.0, "cars": {
+        1: {"driver": "You", "car": "E1", "class_position": 3, "pts": pts(750.0)},
+        2: {"driver": "A. Rival", "car": "E2", "class_position": 2, "pts": pts(800.0)}}}
+    t1 = Corner(1, "La Source", "right", 200.0, 250.0, 300.0, label="1")
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    app = create_app(store, Coach(FakeModel()), cmap=CornerMap([t1]))
+    lap = LapRecord("lmu", "Spa", "GT3", 100.0, True, 1.0,
+                    {"lap_distance": np.linspace(0.0, 1000.0, 10)}, phase="race",
+                    session_id="s", lap_no=2, field_trace=trace)
+    _capture_loop(_ListSource([lap]), store, app.state)
+    app.state.race_pool.shutdown(wait=True)
+    rows = store.battle_laps(app.state.latest["lap_id"])
+    assert [r.driver for r in rows] == ["You", "A. Rival"]
+    assert app.state.race.snapshot.battle.rivals[0].driver == "A. Rival"

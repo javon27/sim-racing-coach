@@ -13,8 +13,10 @@ from simcoach.battle import (
     nearest_rivals,
     zone_deltas,
 )
-from simcoach.corners import Corner
+from simcoach.corners import Corner, CornerMap
 from simcoach.lmu.live import FieldSnapshot, VehicleState, empty_snapshot
+from simcoach.model_types import LapRecord
+from simcoach.race import RaceTracker
 
 L = 1000.0
 T1 = Corner(1, "La Source", "right", 200.0, 250.0, 300.0, label="1")
@@ -217,3 +219,38 @@ def test_format_battle_units_named_rival_and_the_no_read_cases():
     assert format_battle(None, 12).startswith("As of lap 12. No battle read")
     lonely = build_battle([ME, _lap(4, {1: 60.0, 2: 70.0})], [T1, T2])
     assert "Nobody in your class was within 2 s of you on lap 12" in format_battle(lonely, 12)
+
+
+def _race_record(lap_no, trace, **over):
+    return LapRecord("lmu", "Spa", "GT3", 100.0, over.pop("valid", True), 0.0, {}, phase="race",
+                     session_id="s", lap_no=lap_no, field_trace=trace, **over)
+
+
+def test_tracker_builds_the_battle_for_a_race_lap(monkeypatch):
+    monkeypatch.setattr("simcoach.race.resolve_car", lambda name, *a: f"model of {name}")
+    snap = RaceTracker().commit(_race_record(2, _trace(_rival(800.0))), CornerMap([T1, T2]))
+    assert [r.driver for r in snap.battle.rivals] == ["A. Rival"]
+    assert snap.battle.rivals[0].model == "model of E2"
+
+
+@pytest.mark.parametrize("over", [{"partial": "out"}, {"partial": "in"},
+                                  {"partial": "partial"}, {"pit": True}])
+def test_no_battle_for_an_out_in_partial_or_pit_lap(monkeypatch, over):
+    monkeypatch.setattr("simcoach.race.resolve_car", lambda name, *a: name)
+    snap = RaceTracker().commit(_race_record(2, _trace(_rival(800.0)), **over),
+                                CornerMap([T1]))
+    assert snap.battle is None
+
+
+def test_no_battle_without_a_corner_map_but_an_invalidated_lap_still_counts(monkeypatch):
+    monkeypatch.setattr("simcoach.race.resolve_car", lambda name, *a: name)
+    tr = RaceTracker()
+    assert tr.commit(_race_record(2, _trace(_rival(800.0))), None).battle is None
+    # Lap 3, invalidated (track limits): the fight was real, so it is still read.
+    lap3 = {**_trace(_rival(1800.0)), "cars": {
+        1: {"driver": "You", "car": "E1", "class_position": 3,
+            "pts": _pts(95.0, 1750.0, 50.0)},
+        2: {"driver": "A. Rival", "car": "E2", "class_position": 2,
+            "pts": _pts(95.0, 1800.0, 50.0)}}}
+    snap = tr.commit(_race_record(3, lap3, valid=False), CornerMap([T1]))
+    assert [r.driver for r in snap.battle.rivals] == ["A. Rival"]

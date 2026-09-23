@@ -378,12 +378,15 @@ def _clamp_tts_cache_mb(voice_cfg: dict) -> int:
     return max(0, min(mb, 5000))
 
 
-def _race_commit(app_state, lap) -> None:
-    """Refresh the race tools' cached snapshot for a stored lap (#152). A failure costs
-    the race tools one lap of freshness, never a lap of capture -- logged, not raised
-    (an exception inside a pool future would otherwise vanish silently)."""
+def _race_commit(app_state, store, lap, lap_id) -> None:
+    """Refresh the race tools' cached snapshot for a stored lap and keep its battle rows
+    (#152). A failure costs the race tools one lap of freshness, never a lap of capture
+    -- logged, not raised (an exception inside a pool future would vanish silently)."""
     try:
-        app_state.race.commit(lap)
+        map_for = getattr(app_state, "map_for", None)
+        snap = app_state.race.commit(lap, map_for(lap.track) if map_for else None)
+        if snap is not None and snap.battle is not None:
+            store.save_battle(lap_id, snap.battle.laps)
     except Exception:
         logging.getLogger(__name__).warning("race snapshot not refreshed", exc_info=True)
 
@@ -422,7 +425,7 @@ def _capture_loop(source, store, app_state) -> None:
             # #152: refresh the race tools' snapshot OFF this thread -- source.laps() is
             # suspended while this body runs, so work here would delay the next poll.
             try:
-                app_state.race_pool.submit(_race_commit, app_state, lap)
+                app_state.race_pool.submit(_race_commit, app_state, store, lap, lap_id)
             except RuntimeError:
                 # The pool is shut down (app/interpreter exit): skip the snapshot,
                 # never stop capture over it.
@@ -497,6 +500,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 app.state.cmaps[track] = m
             return m
         return app.state.cmap
+    app.state.map_for = _map_for   # #152: the race worker resolves a lap's corner map
 
     def _curating() -> bool:
         # True when running from source (dev): map edits go to the repo tracks dir to
