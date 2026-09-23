@@ -32,7 +32,7 @@ import sys
 from pathlib import Path
 
 from simcoach.server.__main__ import db_path
-from simcoach.track_lookup import track_slug
+from simcoach.track_lookup import dump_track_json, track_slug
 
 # Repo-relative, never cwd-relative: run from the wrong directory and a cwd-relative
 # glob matches nothing, so the script would exit 0 having silently baked nothing --
@@ -170,7 +170,7 @@ def backfill(slugs=None) -> int:
         # guarantees no .tmp is left behind on either path.
         tmp = f.with_suffix(".json.tmp")
         try:
-            tmp.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding="utf-8")
+            tmp.write_bytes(dump_track_json(d))
             os.replace(tmp, f)
         finally:
             tmp.unlink(missing_ok=True)

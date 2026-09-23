@@ -112,6 +112,17 @@ _MAX_NOTE_CHARS = 2000
 _MAX_NOTES_DOC_BYTES = 64_357
 
 
+def _utf8(s: str, field: str) -> str:
+    # A client string bound for a track file must be encodable: JSON carries a lone
+    # surrogate ("\ud800") fine, but the file is raw UTF-8 (#145) and encoding it
+    # raises -- a 500 where the input is simply invalid.
+    try:
+        s.encode("utf-8")
+    except UnicodeEncodeError:
+        raise HTTPException(422, f"{field} is not valid Unicode text") from None
+    return s
+
+
 def _usage_view(agg: dict) -> dict:
     """Shape a LapStore.chat_usage() aggregate for the wire: the four buckets +
     total + message count, the estimated $, and whether that $ is the whole story.
@@ -415,7 +426,13 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         user_dir, bundled = _map_dirs()
         target = _in(bundled if _curating() else user_dir, slug)
         target.parent.mkdir(parents=True, exist_ok=True)
-        payload = dump_track_json(out)
+        try:
+            payload = dump_track_json(out)
+        except UnicodeEncodeError:
+            # Backstop for any client string the routes don't check (section names...):
+            # a lone surrogate is bad input, not a server fault. Caught before its
+            # ValueError base, so NaN still hard-fails.
+            raise HTTPException(422, "track data is not valid Unicode text") from None
         fd, tmp = tempfile.mkstemp(dir=str(target.parent), suffix=".json.tmp")
         try:
             with os.fdopen(fd, "wb") as f:
@@ -1169,8 +1186,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 apex = float(c["apex_dist"])
             except (KeyError, TypeError, ValueError):
                 raise HTTPException(422, "corner requires integer number and numeric apex_dist")
-            name = str(c.get("name") or f"Turn {number}")[:80]  # cap: owned data + coach prompt
-            label = str(c.get("label") or "")[:8]  # displayed designation ("8A"); blank filled below
+            name = _utf8(str(c.get("name") or f"Turn {number}")[:80], "corner name")  # cap: owned data + coach prompt
+            label = _utf8(str(c.get("label") or "")[:8], "corner label")  # displayed designation ("8A"); blank filled below
             if not math.isfinite(apex) or not (0.0 <= apex <= length):
                 raise HTTPException(422, f"corner {number}: apex_dist out of range")
             if number in seen_numbers:
@@ -1221,7 +1238,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         # end-user's app-data copy can't rename a shipped track (its read still takes
         # the bundled name); a dev/user-map edit lands in the map itself.
         new_name = body.get("name")
-        name = (new_name.strip()[:80] if isinstance(new_name, str) and new_name.strip()
+        name = (_utf8(new_name.strip()[:80], "name")
+                if isinstance(new_name, str) and new_name.strip()
                 else _track_file_data(track).get("name"))
 
         # Per-corner geometry is OWNED, BAKED data (scripts/backfill_corner_geometry.py),
@@ -1428,7 +1446,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             s = str(value)
             if len(s) > _MAX_NOTE_CHARS:
                 raise HTTPException(422, f"{field} exceeds {_MAX_NOTE_CHARS} characters")
-            return s
+            return _utf8(s, field)
 
         def _text_map(value: object, field: str) -> dict[str, str]:
             # A non-dict REFUSES, never coerces to empty: this write REPLACES the notes
@@ -1447,7 +1465,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
                 if len(k) > _MAX_NOTE_KEY_CHARS:
                     raise HTTPException(
                         422, f"{field} key exceeds {_MAX_NOTE_KEY_CHARS} characters")
-                out[k] = _text(v, f"{field} note")
+                out[_utf8(k, f"{field} key")] = _text(v, f"{field} note")
             return out
 
         notes = {"overview": _text(raw.get("overview", ""), "overview"),
@@ -1474,7 +1492,16 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         if rev != _notes_rev(track):
             raise HTTPException(409, "these notes changed since they were loaded (a map save "
                                      "can move or drop notes); reload them before saving")
-        data["notes"] = notes
+        # An unchanged save must not rewrite the file (#145): GET /notes pads to all four
+        # fields, so an EMPTY field the file never had is dropped, not written as "" / {}.
+        # A field the file DID have is written even when empty -- that is the author
+        # clearing it. Then the file's own field order, and no notes block at all if there
+        # was none and nothing was typed.
+        prior = data.get("notes") if isinstance(data.get("notes"), dict) else {}
+        notes = {k: v for k, v in notes.items() if v or k in prior}
+        notes = {**{k: notes[k] for k in prior if k in notes}, **notes}
+        if notes or "notes" in data:
+            data["notes"] = notes
         dropped = _write_track_json(track, data)    # always {}: the caller's notes are kept
         _invalidate_canon(track)                    # same cache-clear as PUT /laps/{id}/map
         return {"ok": True, "rev": _notes_rev(track), "dropped_notes": dropped}

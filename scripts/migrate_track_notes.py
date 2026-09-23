@@ -9,6 +9,8 @@ import json
 import re
 from pathlib import Path
 
+from simcoach.track_lookup import dump_track_json
+
 _CORNER_HEAD_RE = re.compile(r"^\s*-\s*\*\*(T[0-9][^:]*):\*\*\s*(.+)$")
 _LABEL_RE = re.compile(r"T([0-9]+(?:-[0-9]+)?[A-Za-z]?)\b")
 _SOURCE_RE = re.compile(r"^Source:\s*(.+)$", re.MULTILINE)
@@ -60,7 +62,7 @@ def migrate(knowledge_dir: Path, tracks_dir: Path) -> None:
             unmatched.append(md.name); continue
         data = json.loads(tj.read_text(encoding="utf-8"))
         data["notes"] = notes
-        tj.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        tj.write_bytes(dump_track_json(data))
         print(f"migrated {md.name} -> {tj.name} ({len(notes['corners'])} corners)")
     if unmatched:
         print("HAND-FINISH (did not fit the pattern):", ", ".join(unmatched))

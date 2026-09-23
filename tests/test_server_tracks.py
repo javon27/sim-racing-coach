@@ -19,7 +19,7 @@ from simcoach.model.fake import FakeModel
 from simcoach.model_types import LapRecord
 from simcoach.server.app import create_app
 from simcoach.store import LapStore
-from simcoach.track_lookup import note_key_binds
+from simcoach.track_lookup import dump_track_json, note_key_binds
 
 
 def _seed_track(tracks_dir: Path, slug: str = "algarve_international_circuit") -> None:
@@ -1606,3 +1606,79 @@ def test_an_unchanged_editor_save_of_every_shipped_map_is_a_byte_identical_no_op
         assert r.status_code == 200, (src.name, r.text)
         assert (tracks_dir / src.name).read_bytes() == src.read_bytes(), \
             f"{src.name}: an unchanged editor save rewrote the file"
+
+
+def test_an_unchanged_notes_save_of_every_shipped_map_is_a_byte_identical_no_op(tmp_path):
+    # #145 red-team: the Tracks screen GETs notes padded to all four fields and PUTs them
+    # back, which added `"reference_times": {}` to six shipped maps and a whole empty
+    # notes block to Spa -- a dirty file from a save that changed nothing.
+    shipped = Path(simcoach.__file__).parent / "tracks"
+    # Every map already in the shipped format -- all but test_track.json, a compact-JSON
+    # fixture that ANY writer reformats (the promote twin leaves it out too).
+    maps = [p for p in sorted(shipped.glob("*.json"))
+            if dump_track_json(json.loads(p.read_text(encoding="utf-8"))) == p.read_bytes()]
+    assert len(maps) >= 12, "expected the shipped corner maps"
+    for src in maps:
+        tracks_dir = tmp_path / src.stem
+        tracks_dir.mkdir()
+        shutil.copy(src, tracks_dir / src.name)
+        store = LapStore(str(tracks_dir / "c.sqlite"), str(tracks_dir / "data"))
+        client = TestClient(create_app(store, Coach(FakeModel("{}")),
+                                       tracks_dir=str(tracks_dir)),
+                            base_url="http://127.0.0.1")
+        got = client.get(f"/tracks/{src.stem}/notes").json()
+        rev = got.pop("rev")
+        r = client.put(f"/tracks/{src.stem}/notes",
+                       json={"track": src.stem, "rev": rev, "notes": got})
+        assert r.status_code == 200, (src.name, r.text)
+        assert (tracks_dir / src.name).read_bytes() == src.read_bytes(), \
+            f"{src.name}: an unchanged notes save rewrote the file"
+
+
+def test_a_notes_save_that_clears_a_field_writes_it_empty(tmp_path):
+    # The other half of the no-op rule: a field the file HAS is written even when the
+    # author empties it -- dropping only fields the file never had must not make a
+    # deliberate clear a no-op that leaves the old text on disk.
+    client, tracks_dir = _client_with_frozen_path(tmp_path)
+    assert _put_notes(client, {"1": "brake late"}).status_code == 200
+    r = client.put("/tracks/algarve_international_circuit/notes", json={
+        "track": "Algarve International Circuit", "rev": _rev(client),
+        "notes": {"overview": "", "corners": {}, "reference_times": {}, "source": ""}})
+    assert r.status_code == 200, r.text
+    assert _written(tracks_dir)["notes"] == {
+        "overview": "", "corners": {}, "reference_times": {}, "source": ""}
+
+
+def test_a_lone_surrogate_is_refused_with_422_not_a_500(tmp_path):
+    # JSON carries "\ud800" fine, but the file is raw UTF-8 now (#145) and encoding it
+    # raised UnicodeEncodeError -> 500. Invalid input, so 422, and nothing written.
+    client, tracks_dir = _client_with_frozen_path(tmp_path)
+    assert _put_notes(client, {"1": "brake late"}).status_code == 200
+    f = tracks_dir / "algarve_international_circuit.json"
+    before = f.read_bytes()
+    lone = "\ud800"
+
+    def put(route, body):
+        # Sent as the \ud800 ESCAPE, the way a browser's JSON.stringify sends it: httpx's
+        # json= encodes raw UTF-8 and cannot carry a lone surrogate at all.
+        r = client.put(f"/tracks/algarve_international_circuit/{route}",
+                       content=json.dumps(body), headers={"content-type": "application/json"})
+        assert r.status_code == 422, (route, body, r.text)
+
+    def notes(**over):
+        return {"track": "Algarve International Circuit", "rev": _rev(client),
+                "notes": {"overview": "o", "corners": {}, "reference_times": {},
+                          "source": "", **over}}
+
+    put("notes", notes(overview=lone))
+    put("notes", notes(corners={"1": lone}))
+    put("notes", notes(corners={lone: "key"}))
+    put("notes", notes(reference_times={"GT3": lone}))
+    for corner in ({"name": lone}, {"label": lone}):
+        put("map", {"corners": [
+            {"number": 1, "label": "1", "name": "Turn 1", "apex_dist": 50.0, **corner}]})
+    put("map", {"name": lone, "corners": [{"number": 1, "label": "1", "apex_dist": 50.0}]})
+    # The backstop in _write_track_json: a section name no route checks.
+    put("map", {"corners": [{"number": 1, "label": "1", "apex_dist": 50.0}],
+                "sections": [{"name": lone, "start_dist": 10.0, "end_dist": 90.0}]})
+    assert f.read_bytes() == before

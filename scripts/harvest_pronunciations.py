@@ -54,7 +54,7 @@ def main():
         data["pronunciations"] = dict(sorted(merged.items()))
         # Preserve the file's existing indent (2), line endings, and trailing-newline
         # state; only the new "pronunciations" key is added, at the end of the object.
-        out = json.dumps(data, ensure_ascii=False, indent=2)
+        out = json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False)
         if raw_bytes.endswith(b"\n"):
             out += "\n"
         if b"\r\n" in raw_bytes:

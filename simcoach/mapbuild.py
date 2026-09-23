@@ -13,7 +13,6 @@ CLI:  python -m simcoach.mapbuild <lap.npz> [--slug SLUG] [--length METRES]
 from __future__ import annotations
 
 import argparse
-import json
 import math
 from pathlib import Path
 
@@ -125,7 +124,8 @@ def _main():
     obj = build_map(slug, channels, args.length)
 
     out = Path(args.out_dir) / f"{slug}.json"
-    out.write_text(json.dumps(obj, indent=2))
+    from simcoach.track_lookup import dump_track_json  # local: track_lookup imports this module
+    out.write_bytes(dump_track_json(obj))
     print(f"wrote {out} — {len(obj['corners'])} corners, {obj['length_m']:.0f}m")
     # self-verify: load + check directions against the same lap
     from types import SimpleNamespace

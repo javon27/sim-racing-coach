@@ -343,6 +343,18 @@ def test_a_non_finite_refuses_instead_of_raising(tmp_path, field):
                  "--tracks-dir", str(tracks)]) == 1   # `refused:`, not a traceback
 
 
+def test_a_lone_surrogate_refuses_as_unicode_not_as_nan(tmp_path):
+    """json.loads accepts a lone surrogate escape, and the raw-UTF-8 encode then raises
+    UnicodeEncodeError -- a ValueError subclass, which _serialize used to report as
+    "NaN/Infinity cannot be shipped". The curator must be told what is actually wrong."""
+    src = _src(tmp_path, _map(name="Circuit " + chr(0xD800)))   # _src escapes it on disk
+    tracks = _tracks(tmp_path)
+    with pytest.raises(PromoteError, match="Unicode") as e:
+        promote(src, tracks)
+    assert "NaN" not in str(e.value)
+    assert list(tracks.iterdir()) == []                              # nothing written
+
+
 def test_an_interrupted_write_leaves_the_shipped_map_intact(tmp_path, monkeypatch):
     """write_bytes truncates before it writes, so an abort mid-write left a SHIPPED map
     empty -- the worst outcome here. The write goes to a sibling tmp and renames, so a

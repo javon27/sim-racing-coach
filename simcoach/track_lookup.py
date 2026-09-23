@@ -265,7 +265,7 @@ def resolve_context(rest, tracks_dir, track_name: str, vehicle: str, channels=No
     data = load_map_data(track_name, str(tracks_dir), user_dir=user_dir)
     if not data.get("corners") and channels is not None:
         data = build_map(slug, channels)
-        (Path(tracks_dir) / f"{slug}.json").write_text(json.dumps(data, indent=2))
+        (Path(tracks_dir) / f"{slug}.json").write_bytes(dump_track_json(data))
     if not data.get("corners"):
         return None, car, slug, car_class
     return CornerMap.from_data(data), car, slug, car_class

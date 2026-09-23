@@ -71,9 +71,14 @@ def _serialize(data: dict) -> bytes:
     map: json.loads ACCEPTS the bare `NaN`/`Infinity` literals, and only `length` and
     the corner windows are range-checked, so a NaN in `path` or `rotation` reaches
     here. Its bare ValueError becomes a PromoteError so the curator gets the tool's
-    `refused:` line rather than a traceback."""
+    `refused:` line rather than a traceback. A lone surrogate (json.loads accepts
+    "\\ud800") fails the UTF-8 encode with a ValueError SUBCLASS, so it is caught first
+    and named for what it is."""
     try:
         return dump_track_json(data)
+    except UnicodeEncodeError as e:
+        raise PromoteError(f"map is not valid Unicode text ({e}); a lone surrogate "
+                           f"cannot be written as UTF-8") from None
     except ValueError as e:
         raise PromoteError(f"map is not serializable ({e}); NaN/Infinity cannot "
                            f"be shipped") from None

@@ -35,7 +35,7 @@ from simcoach.ribbon import reconstruct_surface
 from simcoach.server.__main__ import db_path, telemetry_dir
 from simcoach.server.app import _load_cloud
 from simcoach.store import LapStore
-from simcoach.track_lookup import track_slug
+from simcoach.track_lookup import dump_track_json, track_slug
 
 TRACKS_DIR = Path("simcoach/tracks")
 # This script is the ONLY writer allowed to change these -- the editor's save path
@@ -177,7 +177,7 @@ def backfill(slugs=None, keys=_METRIC_KEYS):
                     c[k] = m[k]
                 else:
                     c.pop(k, None)  # don't leave a stale metric if its source vanished
-        f.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding="utf-8")
+        f.write_bytes(dump_track_json(d))
         got = sorted({k for c in corners for k in keys if k in c})
         src = "capture" if (cap_dir / f"{slug}.npz").exists() else ("laps" if samples else "none")
         print(f"{slug}: baked {len(corners)} corners | metrics={got} | elev_src={src}")
