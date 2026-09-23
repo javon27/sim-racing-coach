@@ -1315,12 +1315,12 @@ def test_analysis_unanalyzable_is_422(tmp_path, synthetic_lap, monkeypatch):
     cmap = CornerMap.load("simcoach/tracks/test_track.json")
     app, lap_id, _cid = _app(tmp_path, synthetic_lap, cmap=cmap)
 
-    from simcoach.server import app as app_module
+    from simcoach.server import reads as reads_mod
 
     def _boom(*args, **kwargs):
         raise ValueError("bad telemetry")
 
-    monkeypatch.setattr(app_module, "analyze_lap", _boom)
+    monkeypatch.setattr(reads_mod, "analyze_lap", _boom)
     r = _tc(app).get(f"/laps/{lap_id}/analysis")
     assert r.status_code == 422
 
