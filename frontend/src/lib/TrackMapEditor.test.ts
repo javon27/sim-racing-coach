@@ -558,6 +558,40 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     expect(await screen.findByText(/Nothing discarded — no track to discard/)).toBeTruthy();
   });
 
+  it("leaves capture mode when the server ends mapping mid-capture (#154)", async () => {
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+    await fireEvent.click(screen.getByText("Generate map layout"));
+    await screen.findByText(/three full laps/i);
+    pushCapture([{ idx: 0, samples: 500, length: 5000 }]);
+    eventFeed.push("mapcapture", { active: false, live_track: "Monza", laps: [] });
+    expect(await screen.findByText(/Mapping ended: the session changed/)).toBeTruthy();
+    expect(screen.queryByText(/three full laps/i)).toBeNull();
+  });
+
+  it("a replayed stale active:false frame does not end a fresh capture", async () => {
+    // The feed replays its last value on subscribe: a previous capture's closing frame.
+    eventFeed.push("mapcapture", { active: false, live_track: "Monza", laps: [] });
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+    await fireEvent.click(screen.getByText("Generate map layout"));
+    await screen.findByText(/three full laps/i);
+    expect(screen.queryByText(/Mapping ended/)).toBeNull();
+  });
+
+  it("unmounting while start is in flight still ends mapping (#154)", async () => {
+    let resolveStart!: (v: { active: boolean }) => void;
+    vi.mocked(startMapCapture).mockReturnValue(new Promise((r) => { resolveStart = r; }));
+    const { unmount } = render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+    await fireEvent.click(screen.getByText("Generate map layout"));
+    unmount();
+    vi.mocked(cancelMapCapture).mockClear();
+    resolveStart({ active: true });    // the start lands AFTER the close's cancel
+    await waitFor(() => expect(cancelMapCapture).toHaveBeenCalled());
+    expect(cancelMapCapture).not.toHaveBeenCalledWith(true);
+  });
+
   it("a rebuild preview's Cancel discards nothing", async () => {
     render(TrackMapEditor, { props: { lapId: 7, open: true } });
     await screen.findByText("First");

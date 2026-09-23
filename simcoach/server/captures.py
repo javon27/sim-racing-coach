@@ -69,12 +69,9 @@ def _load_cloud(path) -> list[dict]:
 
 def _session_key(lap) -> tuple:
     """The live session a lap was driven in, for ending mapping on a change (#154):
-    track, car, phase and the session's (track, car, mode) base -- never its `~<date>`
-    instance, which the store resolves after the fact and so differs between the
-    committed `latest` record and a lap that has not been saved yet."""
-    from ..store import _session_base
-    sid = lap.session_id
-    return (lap.track, lap.car, lap.phase, _session_base(sid) if sid else None)
+    track, car and phase. NOT the session id: its online/offline mode flips when a
+    human joins the server, which is the same session."""
+    return (lap.track, lap.car, lap.phase)
 
 
 def _pending_dir(data_dir, slug: str) -> Path:

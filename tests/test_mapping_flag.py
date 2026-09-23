@@ -149,7 +149,6 @@ def test_mapping_started_before_any_lap_ends_on_the_next_change(tmp_path, monkey
 @pytest.mark.parametrize("field,value", [
     ("track", "OtherTrack"),
     ("car", "LMP2"),
-    ("session_id", "maptrack--gt3--offline"),
 ])
 def test_mapping_ends_on_a_track_car_or_session_change(tmp_path, monkeypatch, field, value):
     app, store, c = _app(tmp_path, monkeypatch)
@@ -160,11 +159,35 @@ def test_mapping_ends_on_a_track_car_or_session_change(tmp_path, monkeypatch, fi
     assert store.load(app.state.latest["lap_id"]).mapping is False
 
 
-def test_a_new_session_instance_of_the_same_base_does_not_end_mapping(tmp_path, monkeypatch):
-    # The store resolves `base` to `base~<date>` instances; that is the same live session.
+def _at(track, phase, ts, mode="offline"):
+    lap = _lap(phase, ts=ts)
+    lap.track, lap.session_id = track, f"{track.lower()}--gt3--{mode}"
+    return lap
+
+
+def test_generate_on_a_new_track_is_not_ended_by_the_last_track_driven(tmp_path, monkeypatch):
+    # Red-team #154: start pinned the session from `latest` -- Spa, driven earlier this
+    # sidecar run -- so the driver's first Fuji mapping lap ended mapping at once.
     app, store, c = _app(tmp_path, monkeypatch)
-    _capture_loop(_Src([_lap("practice", ts=1.0)]), store, app.state)
-    app.state.latest["record"].session_id = SID + "~20260923T1300"
+    _capture_loop(_Src([_at("Spa", "race", 1.0)]), store, app.state)
+    assert c.post("/mapcapture/start", json={}).status_code == 200
+    _capture_loop(_Src([_at("Fuji", "practice", 5000.0), _at("Fuji", "practice", 5100.0)]),
+                  store, app.state)
+    assert app.state.mapping is True and len(app.state.map_buffer) == 2
+
+
+def test_generate_in_a_new_practice_after_a_race_is_not_ended(tmp_path, monkeypatch):
+    app, store, c = _app(tmp_path, monkeypatch)
+    _capture_loop(_Src([_at("Fuji", "race", 1.0)]), store, app.state)
     c.post("/mapcapture/start", json={})
-    _capture_loop(_Src([_lap("practice", ts=2.0)]), store, app.state)
+    _capture_loop(_Src([_at("Fuji", "practice", 5000.0)]), store, app.state)
+    assert app.state.mapping is True and len(app.state.map_buffer) == 1
+
+
+def test_online_offline_flip_does_not_end_mapping(tmp_path, monkeypatch):
+    # _is_online flips when a human joins the server: same session, mapping stays on.
+    app, store, c = _app(tmp_path, monkeypatch)
+    c.post("/mapcapture/start", json={})
+    _capture_loop(_Src([_at("Fuji", "practice", 1.0, "offline"),
+                        _at("Fuji", "practice", 100.0, "online")]), store, app.state)
     assert app.state.mapping is True

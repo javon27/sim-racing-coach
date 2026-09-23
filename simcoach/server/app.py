@@ -79,7 +79,7 @@ def _capture_loop(source, store, app_state) -> None:
         if getattr(app_state, "mapping", False):
             # #154 safety net: mapping belongs to the session it was started in. A phase
             # (practice -> qualifying -> race), track, car or session change ends it, and
-            # this lap is an ordinary lap. Unpinned (no lap yet this sidecar run) -> the
+            # this lap is an ordinary lap. /mapcapture/start leaves it unpinned: the
             # first mapping lap pins it.
             key = _session_key(lap)
             pinned = getattr(app_state, "mapping_key", None)

@@ -293,8 +293,21 @@
   // #106: capture progress was a mapCaptureStatus() poll on `pollMs`; the sidecar
   // now streams it, and only while a capture is running. Frames outside the
   // capturing phase are ignored (e.g. the closing active:false frame after Build).
+  // #154: the server can end mapping by itself (the live session changed). React only
+  // to a true -> false TRANSITION seen while capturing: the feed replays its last frame
+  // on subscribe, which may be a previous capture's closing active:false.
+  let sawActive = false;
   $effect(() => eventFeed.mapcapture.subscribe((f) => {
-    if (f && genPhase === "capturing") capLaps = f.laps;
+    if (!f || genPhase !== "capturing") return;
+    if (f.active) {
+      sawActive = true;
+      capLaps = f.laps;
+    } else if (sawActive) {
+      sawActive = false;
+      serverMapping = false;
+      resetGen();
+      genErr = "Mapping ended: the session changed. Start Generate map layout again to keep capturing.";
+    }
   }));
 
   // True once THIS editor started a capture (vs. a rebuild preview): only then does
@@ -305,6 +318,7 @@
   // close paths gated on genPhase alone then never told the server -- mapping stayed on
   // for 40 min. Plain (not $state): only the teardown paths read it.
   let serverMapping = false;
+  let destroyed = false;
 
   function resetGen() {
     genPhase = "off";
@@ -316,13 +330,21 @@
 
   async function startGen() {
     genErr = null;
+    // Before the await (#154): a close/unmount while the start is in flight must still
+    // send a cancel. A cancel for a start that then failed is a harmless no-op.
+    serverMapping = true;
+    sawActive = false;
     try {
       await startMapCapture();
     } catch {
       genErr = "Couldn't start mapping capture — is the sim running?";
       return;
     }
-    serverMapping = true;
+    if (destroyed) {
+      // Unmounted mid-start: onDestroy's cancel may have reached the server first.
+      cancelMapCapture().catch(() => {});
+      return;
+    }
     capLaps = [];
     ribbon = null;
     captured = true;
@@ -420,6 +442,7 @@
   }
 
   onDestroy(() => {
+    destroyed = true;
     // Unmount mid-capture -> tell the server to leave mapping mode, else real
     // laps keep buffering unsaved.
     if (genPhase !== "off" || serverMapping) cancelMapCapture().catch(() => {});

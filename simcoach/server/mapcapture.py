@@ -14,7 +14,6 @@ from .captures import (
     _pending_files,
     _pending_laps,
     _save_cloud,
-    _session_key,
 )
 from .core import export
 from .serialize import _clean
@@ -102,10 +101,11 @@ def register(app, deps) -> None:
             buf.append(r)
         app.state.map_buffer = buf
         app.state.last_ribbon = None
-        # The session mapping belongs to (#154): the lap just driven, else the first
-        # mapping lap pins it. _capture_loop ends mapping when a lap's key differs.
-        latest = app.state.latest
-        app.state.mapping_key = _session_key(latest["record"]) if latest else None
+        # Unpinned (#154): the first lap committed after start pins the session mapping
+        # belongs to, and _capture_loop ends mapping when a later lap's differs. Never
+        # `latest`: it is the last lap driven, possibly another track or an earlier
+        # race, and pinning it ended a fresh Generate on its first lap.
+        app.state.mapping_key = None
         app.state.mapping = True
         return {"active": True}
 
