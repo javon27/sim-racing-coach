@@ -117,3 +117,80 @@ def test_apply_on_a_v22_db_without_the_flag_column(tmp_path):
     assert rows[ids["pm"]] == ("practice", 1)
     assert rows[ids["stray"]] == ("mapping", 1)
     assert rows[ids["p1"]] == ("practice", 0)
+
+
+# --- the 2026-09-23 incident: result-log ingest could not dedupe against 'mapping' laps
+
+def _incident(tmp_path):
+    """Live practice laps, then qualifying + race live laps stamped 'mapping'; the
+    result logs were ingested while they were, so ingest's same-phase dedupe found no
+    twins and stored every qualifying/race lap a second time (source='result')."""
+    import types
+    db = str(tmp_path / "simcoach.sqlite")
+    store = LapStore(db, str(tmp_path / "telem"))
+    q_times, r_times = [70.5, 70.6, 70.7], [71.0 + i / 100 for i in range(1, 11)]
+    for i, t in enumerate([72.0, 73.0, 74.0]):
+        store.save(_lap(100 + 90 * i, "practice"))
+        store.conn.execute("UPDATE laps SET lap_time = ? WHERE id = last_insert_rowid()", (t,))
+    for i, t in enumerate(q_times):
+        store.save(LapRecord("lmu", TRACK, CAR, t, True, T0 + 1300 + 70 * i,
+                             {"lap_distance": np.array([0.0, 1.0])}, phase="mapping",
+                             session_id="road-atlanta--tf--online"))
+    for i, t in enumerate(r_times):
+        store.save(LapRecord("lmu", TRACK, CAR, t, True, T0 + 2500 + 71 * i,
+                             {"lap_distance": np.array([0.0, 1.0])}, phase="mapping",
+                             session_id="road-atlanta--tf--online"))
+    store.conn.execute("UPDATE laps SET mapping = 1 WHERE phase = 'mapping'")
+    store.conn.commit()
+
+    def rs(stype, start, times):
+        return types.SimpleNamespace(
+            track=TRACK, car=CAR, session_type=stype, date_ts=T0 + start, sim="lmu",
+            laps=[types.SimpleNamespace(lap_time=x, valid=True, sectors=None, lap_no=i + 1)
+                  for i, x in enumerate(times)],
+            position=21, class_position=21, finish_status="Finished", incidents=[],
+            penalties=[], grid_position=47, class_grid_position=47, online=True)
+    store.save_result_session(rs("practice", 0, [72.0, 73.0, 74.0]), "P1",
+                              logged_ts=T0 + 900)
+    store.save_result_session(rs("qualifying", 1200, q_times), "Q1", logged_ts=T0 + 2000)
+    store.save_result_session(rs("race", 2400, r_times), "R1", logged_ts=T0 + 4200)
+    store.conn.close()
+    return db
+
+
+def _count(db, sql):
+    with sqlite3.connect(db) as c:
+        return c.execute(sql).fetchone()[0]
+
+
+def test_incident_repair_drops_the_duplicate_result_laps(tmp_path, capsys):
+    db = _incident(tmp_path)
+    dup = "SELECT COUNT(*) FROM laps WHERE source = 'result' AND session_id = 'R1'"
+    assert _count(db, dup) == 10                                   # the duplicates
+    repair.main(["--db", db])
+    out = capsys.readouterr().out
+    assert _count(db, dup) == 10                                   # dry run: untouched
+    assert "duplicate result laps: would drop 10" in out, out
+    repair.main(["--db", db, "--apply"])
+    assert _count(db, dup) == 0                                    # race: live laps only
+    assert _count(db, "SELECT COUNT(*) FROM laps WHERE phase = 'race'") == 10
+    # Qualifying's 3 result rows are KEPT: the cleanup never empties a result session
+    # whose outcome is not a race row (_duplicate_result_lap_pairs' safeguard), so the
+    # qualifying laps stay listed twice (3 live + 3 result).
+    assert _count(db, "SELECT COUNT(*) FROM laps WHERE phase = 'qualifying'") == 6
+    assert _count(db, "SELECT COUNT(*) FROM laps WHERE source = 'result'") == 3
+
+
+def test_apply_refuses_a_busy_db_and_writes_nothing(tmp_path, capsys):
+    db, _ids = _db(tmp_path)
+    before = _rows(db)
+    holder = sqlite3.connect(db, isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")                              # SimCoach writing
+    try:
+        assert repair.main(["--db", db, "--apply"]) != 0
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+    assert "busy" in capsys.readouterr().out.lower()
+    assert _rows(db) == before
+    assert not list(tmp_path.glob("*.pre-repair-*.bak"))

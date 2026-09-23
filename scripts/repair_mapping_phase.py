@@ -15,8 +15,12 @@ Each recovered lap gets phase=<recovered>. Its mapping flag (1 on every phase='m
 row since the v23 migration) becomes 0 for a qualifying or race lap -- mapping is a
 Tracks-screen practice activity, so those were stamped only by the stuck mode and must
 count in bests and stint stats again -- and stays 1 for a practice lap, which may have
-been a real mapping pass. Dry run by default; --apply
-writes, after backing the db up to <db>.pre-repair-<timestamp>.bak.
+been a real mapping pass. Then the result-log duplicates the wrong phase let ingest
+store (source='result' copies of the live laps) are dropped by the store's own cleanup.
+
+Dry run by default: it prints the per-lap changes and the duplicate count, from the same
+writes run on an in-memory copy. --apply writes, in one transaction, after backing the
+db up to <db>.pre-repair-<timestamp>.bak; it refuses a busy db (the app running).
 
     python scripts/repair_mapping_phase.py [--db PATH] [--apply]
 """
@@ -30,7 +34,11 @@ from contextlib import closing
 from pathlib import Path
 
 from simcoach import paths
-from simcoach.store import _RACE_LOG_LAG_S
+from simcoach.store import (
+    _RACE_LOG_LAG_S,
+    _drop_duplicate_result_laps,
+    _duplicate_result_lap_pairs,
+)
 
 
 def _flag(phase: str) -> int:
@@ -58,6 +66,34 @@ def plan(conn: sqlite3.Connection) -> list[tuple[int, float, str | None, str | N
     return out
 
 
+def _repair(conn: sqlite3.Connection, fixed: list) -> int:
+    """Write the recovered phases, then drop the result-log duplicates they expose.
+    Returns how many duplicate result laps were dropped. The caller owns the
+    transaction (and, for a dry run, hands in a throwaway in-memory copy).
+
+    Result ingest dedupes against live laps of the SAME phase, so a log ingested while
+    its live laps said 'mapping' found no twins and stored every lap again as
+    source='result'. Once the phases are right, the store's own cleanup
+    (_duplicate_result_lap_pairs, with its sibling-session and never-empty-a-race
+    safeguards) finds them -- the same code the v16 migration runs."""
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(laps)")]
+    if "mapping" not in cols:
+        # A v22 db (not yet opened by a v23 app): the v23 migration step is guarded,
+        # so adding the column here is what it would do anyway.
+        conn.execute("ALTER TABLE laps ADD COLUMN mapping INTEGER DEFAULT 0")
+        conn.execute("UPDATE laps SET mapping = 1 WHERE phase = 'mapping'")
+    conn.executemany("UPDATE laps SET phase = ?, mapping = ? "
+                     "WHERE id = ? AND phase = 'mapping'",
+                     [(phase, _flag(phase), lap_id) for lap_id, _ts, phase, _why in fixed])
+    pairs = _duplicate_result_lap_pairs(conn)
+    _drop_duplicate_result_laps(conn, pairs)
+    return len(pairs)
+
+
+_BUSY = ("The database is busy (is SimCoach running?). Close the app and re-run; "
+         "nothing was written.")
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--db", default=str(paths.db_path()), help="lap store (default: app data)")
@@ -65,9 +101,16 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     # Read-only unless applying: a dry run must not even create or migrate the file.
+    # Autocommit (isolation_level=None): this script owns every transaction explicitly.
     uri = f"{Path(args.db).resolve().as_uri()}?mode={'rw' if args.apply else 'ro'}"
-    with closing(sqlite3.connect(uri, uri=True)) as conn:
-        rows = plan(conn)
+    with closing(sqlite3.connect(uri, uri=True, timeout=2, isolation_level=None)) as conn:
+        try:
+            rows = plan(conn)
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e) or "busy" in str(e):
+                print(_BUSY)
+                return 2
+            raise
         fixed = [r for r in rows if r[2] is not None]
         for lap_id, ts, phase, why in rows:
             when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)) if ts else "?"
@@ -76,26 +119,39 @@ def main(argv: list[str] | None = None) -> int:
                   else f"lap {lap_id} {when}: untouched ({why})")
         print(f"{len(fixed)} of {len(rows)} phase='mapping' laps recoverable.")
         if not args.apply:
+            # The same writes on an in-memory copy, so the count is the real one.
+            with closing(sqlite3.connect(":memory:", isolation_level=None)) as mem:
+                conn.backup(mem)
+                mem.execute("BEGIN")
+                dropped = _repair(mem, fixed)
+            print(f"duplicate result laps: would drop {dropped}")
             print("Dry run: nothing written. Re-run with --apply to write.")
             return 0
         if not fixed:
             return 0
-        bak = f"{args.db}.pre-repair-{time.strftime('%Y%m%dT%H%M%S')}.bak"
-        with closing(sqlite3.connect(bak)) as dst:
-            conn.backup(dst)
+        # Refuse a busy db up front (#154 red-team): the app holding a write lock would
+        # otherwise fail the backup or the writes part-way. Probe, back up, then take
+        # the write lock for real -- backup() cannot run under our own write transaction.
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("ROLLBACK")
+            bak = f"{args.db}.pre-repair-{time.strftime('%Y%m%dT%H%M%S')}.bak"
+            with closing(sqlite3.connect(bak)) as dst:
+                conn.backup(dst)
+            conn.execute("BEGIN IMMEDIATE")
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e) or "busy" in str(e):
+                print(_BUSY)
+                return 2
+            raise
         print(f"Backed up to {bak}")
-        with conn:
-            cols = [r[1] for r in conn.execute("PRAGMA table_info(laps)")]
-            if "mapping" not in cols:
-                # A v22 db (not yet opened by a v23 app): the v23 migration step is
-                # guarded, so adding the column here is what it would do anyway.
-                conn.execute("ALTER TABLE laps ADD COLUMN mapping INTEGER DEFAULT 0")
-                conn.execute("UPDATE laps SET mapping = 1 WHERE phase = 'mapping'")
-            conn.executemany("UPDATE laps SET phase = ?, mapping = ? "
-                             "WHERE id = ? AND phase = 'mapping'",
-                             [(phase, _flag(phase), lap_id)
-                              for lap_id, _ts, phase, _why in fixed])
-        print(f"Repaired {len(fixed)} laps.")
+        try:
+            dropped = _repair(conn, fixed)
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+        print(f"Repaired {len(fixed)} laps; dropped {dropped} duplicate result laps.")
     return 0
 
 
