@@ -16,6 +16,7 @@ const snap: FieldSnapshot = {
     end_time: 0, cur_s1: null, cur_s2: null, best_s1: null, best_s2: null,
     last_lap: null, best_lap: null },
   cars: [],
+  next_corner: null,
 };
 
 beforeEach(() => { vi.stubGlobal("WebSocket", FakeWS as unknown as typeof WebSocket); });

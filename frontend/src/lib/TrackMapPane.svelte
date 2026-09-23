@@ -1,6 +1,7 @@
 <script lang="ts">
   import { withRetry, getSessionLaps, type TrackMap as TrackMapData } from "./api";
   import { eventFeed } from "./events";
+  import { liveField } from "./live";
   import TrackMap from "./TrackMap.svelte";
   import TrackMapEditor from "./TrackMapEditor.svelte";
 
@@ -45,14 +46,27 @@
   $effect(() => eventFeed.status.subscribe((v) => (feedStatus = v)));
   $effect(() => eventFeed.map.subscribe((v) => (feedMap = v)));
 
-  const liveTrack = $derived(sessionId ? null : (feedStatus?.track ?? null));
+  // #151: on track the rail map is LIVE. The shared /live feed is started once in
+  // App; we only subscribe. Its `live` flag gates the mode because the same frame
+  // carries the player position and the server-resolved next corner.
+  let live = $state(liveField.snapshot);
+  $effect(() => liveField.subscribe((v) => { live = v.snapshot; }));
+  const onTrack = $derived(live?.session.live === true);
+  const player = $derived(onTrack ? (live?.cars.find((c) => c.is_player) ?? null) : null);
+  // ONLY the player's car: the field is the game HUD's job, not the rail's.
+  const liveCars = $derived(
+    player ? [{ id: player.id, lapDist: player.lap_dist, cls: player.cls, isPlayer: true }] : [],
+  );
+  const nextCorner = $derived(onTrack ? (live?.next_corner ?? null) : null);
+  const DIR: Record<string, string> = { left: "L", right: "R" };
+
+  const liveTrack = $derived(feedStatus?.track ?? null);
   const liveMap = $derived.by<TrackMapData | null>(() => {
-    if (sessionId) return null;
     const m = feedMap;
     return m && "path" in m && m.path.length > 0 ? m : null;
   });
 
-  const displayTrack = $derived(sessionId ? trackName : liveTrack);
+  const displayTrack = $derived(onTrack || !sessionId ? liveTrack : trackName);
 </script>
 
 <section class="map-pane">
@@ -72,7 +86,10 @@
     </div>
   </header>
   <div class="map-body">
-    {#if lapId !== null}
+    {#if onTrack}
+      <!-- #151: live — the live track's canonical map with only the player's car. -->
+      <TrackMap mapData={liveMap} cars={liveCars} />
+    {:else if lapId !== null}
       <TrackMap {lapId} />
     {:else if !sessionId && liveTrack}
       <!-- Live session, no completed lap yet: the track is detected, so draw its
@@ -84,6 +101,9 @@
       <p class="empty">No map yet — build one in Track view (Tracks → Edit).</p>
     {/if}
   </div>
+  {#if nextCorner}
+    <p class="next-corner">Next: T{nextCorner.label}{nextCorner.name ? ` ${nextCorner.name}` : ""} ({DIR[nextCorner.direction] ?? nextCorner.direction})</p>
+  {/if}
   <TrackMapEditor
     {lapId}
     open={viewing}
@@ -169,6 +189,14 @@
   }
   .icon:hover {
     color: var(--text);
+  }
+  .next-corner {
+    margin: 0;
+    padding: 6px 12px 10px;
+    font-family: var(--mono, monospace);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--accent);
   }
   .empty {
     color: var(--faint);

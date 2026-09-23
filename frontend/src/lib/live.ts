@@ -36,7 +36,11 @@ export interface SessionState {
   last_lap: number | null; best_lap: number | null;
 }
 
-export interface FieldSnapshot { session: SessionState; cars: VehicleState[]; }
+/** #151: the corner the server resolved from the live track's corner map. The UI
+    only formats it — corner identity is owned data, never derived here. */
+export interface NextCorner { label: string; name: string; direction: string; }
+
+export interface FieldSnapshot { session: SessionState; cars: VehicleState[]; next_corner: NextCorner | null; }
 
 export class LiveField {
   snapshot: FieldSnapshot | null = null;
