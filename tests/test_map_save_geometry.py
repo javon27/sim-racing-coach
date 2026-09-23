@@ -17,7 +17,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 import simcoach
-import simcoach.server.app as app_module
 import simcoach.server.core as core_mod
 from simcoach import analysis
 from simcoach.analysis import (
@@ -542,9 +541,11 @@ def test_the_signed_metrics_are_classified_beside_the_key_list():
     local copy is the rule, and the server must use the same function object.
     """
     assert SIGNED_GEOMETRY_KEYS <= set(CORNER_GEOMETRY_KEYS)
-    assert app_module.measurable_geometry is analysis.measurable_geometry   # not a local copy
-    assert not hasattr(app_module, "_measurable")
-    assert not hasattr(app_module, "SIGNED_GEOMETRY_KEYS")
+    from simcoach.server import trackfile, tracks
+    for mod in (trackfile, tracks):   # every server module that applies the rule (#65)
+        assert mod.measurable_geometry is analysis.measurable_geometry   # not a local copy
+        assert not hasattr(mod, "_measurable")
+        assert not hasattr(mod, "SIGNED_GEOMETRY_KEYS")
 
 
 def test_the_positivity_rule_matches_what_the_shipped_maps_actually_hold():
