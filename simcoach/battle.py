@@ -130,6 +130,19 @@ def _time_at(pts: list, s: float) -> float | None:
     return t0 + (t1 - t0) * (s - s0) / (s1 - s0)
 
 
+def _speed_at(pts: list, s: float) -> float | None:
+    """Speed (km/h) at unwrapped distance `s`, interpolated between the samples either
+    side -- never the nearest raw sample, which at a 5 Hz feed can sit metres from a
+    V-shaped apex and read a speed neither car had there."""
+    i = bisect.bisect_left(pts, s, key=lambda p: p[1])
+    if i < len(pts) and pts[i][1] == s:
+        return pts[i][2]
+    if i == 0 or i == len(pts):
+        return None
+    (_, s0, v0), (_, s1, v1) = pts[i - 1][:3], pts[i][:3]
+    return v0 + (v1 - v0) * (s - s0) / (s1 - s0)
+
+
 def _crossing_lap(pts: list, dist: float, length: float, t_ref: float) -> int | None:
     """Which of this car's laps (unwrapped lap index) crossed lap distance `dist`
     NEAREST IN TIME to `t_ref` -- the driver's own crossing of the same spot. That, not
@@ -200,8 +213,9 @@ def car_laps(trace: dict, corners: list[Corner], lap_no: int) -> list[CarLap]:
                 continue
             lap.entry[n], lap.exit[n], lap.lap[n] = ent, ext, k
             if apx is not None:
-                s_apex = k * length + c.apex_dist
-                lap.apex_kph[n] = min(pts, key=lambda p, s=s_apex: abs(p[1] - s))[2]
+                kph = _speed_at(pts, k * length + c.apex_dist)
+                if kph is not None:
+                    lap.apex_kph[n] = kph
         out.append(lap)     # untimed too: "not timed on lap N", never "no such car"
     return out
 

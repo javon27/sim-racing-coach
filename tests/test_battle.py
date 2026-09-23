@@ -393,3 +393,26 @@ def test_no_battle_read_says_why(monkeypatch, over, cmap, why):
     assert snap.battle is None
     assert format_battle(None, 2, note=snap.battle_note) == (
         f"As of lap 2. No battle read for lap 2: {why}.")
+
+
+def test_a_section_never_pairs_a_rivals_crossings_from_two_different_laps():
+    # Red-team 2 (#152): a faster rival about half a lap back can have T1's exit paired on
+    # one lap and T2's entry on the next -- "Turn 1 exit to Turn 2" by +14.6 s -- unless
+    # the section requires both crossings on the same lap.
+    T1 = Corner(1, "La Source", "right", 200.0, 250.0, 300.0, label="1")
+    T2 = Corner(2, "Eau Rouge", "left", 600.0, 650.0, 700.0, label="2")
+    tr = {"player_id": 1, "track_len": L, "cars": {
+        1: {"driver": "You", "car": "E1", "class_position": 3, "pts": _pts(95.0, 750.0, 50.0, 126)},
+        2: {"driver": "R", "car": "E2", "class_position": 2, "pts": _pts(95.0, 130.0, 63.0, 126)}}}
+    by = {c.car_id: c for c in car_laps(tr, [T1, T2], lap_no=2)}
+    zones = zone_deltas(by[1], by[2], [T1, T2])
+    assert all(abs(z.delta) < 3 for z in zones), zones
+
+
+def test_apex_speed_is_interpolated_not_the_nearest_sample():
+    # A V-shaped apex: braking to 20 m/s at exactly the apex, then accelerating. Two cars
+    # with identical profiles sampled at different phases must not differ at the apex.
+    from simcoach.battle import _speed_at
+    pts = [(i * 0.2, 240.0 + i * 5.0, 3.6 * (20 + abs(240.0 + i * 5.0 - 250.0))) for i in range(5)]
+    assert _speed_at(pts, 250.0) == pytest.approx(3.6 * 20)
+    assert _speed_at(pts, 252.5) == pytest.approx(3.6 * 22.5)
