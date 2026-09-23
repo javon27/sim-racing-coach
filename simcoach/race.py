@@ -355,6 +355,7 @@ class RaceSnapshot:
     track: str | None = None
     car: str | None = None
     battle: Battle | None = None   # #152 get_battle: the lap's same-class timing, or None
+    battle_note: str | None = None  # why there is no battle, said instead of one
 
 
 def _gap_read(stint: list[LapFacts], side: str, final_lap: int | None) -> GapRead | None:
@@ -386,7 +387,8 @@ def _gap_read(stint: list[LapFacts], side: str, final_lap: int | None) -> GapRea
 
 def build_snapshot(stint: list[LapFacts], session_id: str | None,
                    track: str | None = None, car: str | None = None,
-                   battle: Battle | None = None) -> RaceSnapshot:
+                   battle: Battle | None = None,
+                   battle_note: str | None = None) -> RaceSnapshot:
     latest = stint[-1]
     r = latest.race or RaceSample()
     clean = [f for f in stint if f.clean]
@@ -405,7 +407,8 @@ def build_snapshot(stint: list[LapFacts], session_id: str | None,
         logging.getLogger(__name__).warning("race strategy not computed", exc_info=True)
         strat = Strategy("strategy unavailable this lap (a calculation failed)", to_go, [],
                          None, None, None, None, None, None, None)
-    return RaceSnapshot(latest.lap_no, session_id, state, strat, track, car, battle)
+    return RaceSnapshot(latest.lap_no, session_id, state, strat, track, car, battle,
+                        battle_note)
 
 
 class RaceTracker:
@@ -440,18 +443,37 @@ class RaceTracker:
             self._stint = []
         self._key = key
         self._stint.append(facts)
-        battle = None
-        # One lap of driving is compared: never an out-/in-/partial lap or a stop (an
-        # invalidated lap still counts -- the fight was real).
-        if (record.field_trace and cmap is not None and cmap.corners
-                and record.partial is None and not record.pit):
-            laps = car_laps(record.field_trace, cmap.corners, facts.lap_no)
+        battle, note = self._battle(record, cmap, facts.lap_no)
+        self.snapshot = build_snapshot(self._stint, record.session_id, record.track,
+                                       record.car, battle, note)
+        return self.snapshot
+
+    @staticmethod
+    def _battle(record: LapRecord, cmap: CornerMap | None,
+                n: int) -> tuple[Battle | None, str | None]:
+        """(the lap's battle, or None and the reason said instead). One lap of driving
+        is compared: never an out-/in-/partial lap or a stop (an invalidated lap still
+        counts -- the fight was real). A failure costs the battle, never the snapshot."""
+        if cmap is None or not cmap.corners:
+            return None, "there is no corner map for this track"
+        kind = {"out": f"lap {n} was an out-lap", "in": f"lap {n} was an in-lap"}
+        if record.partial is not None:
+            return None, kind.get(record.partial, f"lap {n} was only partly captured")
+        if record.pit:
+            return None, f"lap {n} included a pit stop"
+        if not record.field_trace:
+            return None, f"the field of cars was not recorded on lap {n}"
+        try:
+            laps = car_laps(record.field_trace, cmap.corners, n)
             for c in laps:
                 c.model = resolve_car(c.car)   # off the capture thread: this can scan logs
             battle = build_battle(laps, cmap.corners)
-        self.snapshot = build_snapshot(self._stint, record.session_id, record.track,
-                                       record.car, battle)
-        return self.snapshot
+        except Exception:
+            logging.getLogger(__name__).warning("battle read not built", exc_info=True)
+            return None, f"the battle read failed on lap {n}"
+        if battle is None:
+            return None, f"none of lap {n}'s corners were timed from the scoring feed"
+        return battle, None
 
 
 NO_RACE_LAP_YET = ("Not enough laps yet: no completed lap of this race has been measured "

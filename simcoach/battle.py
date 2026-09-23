@@ -33,6 +33,10 @@ APEX_SPEED_FLOOR_KPH = 5.0
 # How much trace a new lap inherits from the last one, so a rival who crossed an early
 # corner just before the driver crossed the line is still found.
 TRACE_TAIL_S = 5.0
+# The most trace any car keeps while the driver never crosses the line (in the garage,
+# monitoring): long enough for the slowest lap behind a safety car, bounded for a
+# sitting that goes on for hours.
+TRACE_MAX_S = 900.0
 # No car covers more than this between two scoring frames (540 km/h). A frame implying
 # more is the lap count and lap distance disagreeing at S/F (see FieldTrace.feed).
 MAX_PLAUSIBLE_SPEED_MS = 150.0
@@ -66,8 +70,9 @@ class FieldTrace:
             if c.cls != player.cls:
                 continue    # other classes are not recorded (spec)
             s = c.laps * self._track_len + c.lap_dist
-            e = self._cars.setdefault(c.id, {"driver": c.driver, "car": c.car, "pts": []})
-            e["class_position"] = c.class_position
+            e = self._cars.setdefault(c.id, {"pts": []})
+            # Every frame: a driver swap or a reused slot id must not keep a stale name.
+            e["driver"], e["car"], e["class_position"] = c.driver, c.car, c.class_position
             # At S/F the lap count and lap distance may not update in the same frame,
             # in either order: distance reset first reads a lap backwards, the count
             # ticking first reads a lap ahead. Either frame is dropped, not repaired.
@@ -77,7 +82,10 @@ class FieldTrace:
                 t0, s0 = e["pts"][-1][:2]
                 if s < s0 or s - s0 > MAX_PLAUSIBLE_SPEED_MS * (t - t0):
                     continue
-            e["pts"].append((t, s, c.speed * 3.6, bool(c.in_pits)))
+            pts = e["pts"]
+            pts.append((t, s, c.speed * 3.6, bool(c.in_pits)))
+            if pts[0][0] < t - TRACE_MAX_S:
+                del pts[:bisect.bisect_left(pts, t - TRACE_MAX_S, key=lambda p: p[0])]
 
     def take(self) -> dict:
         """Hand over the trace so far; keep the last TRACE_TAIL_S seconds for the next
@@ -304,17 +312,18 @@ class Battle:
 
 def build_battle(laps: list[CarLap], corners: list[Corner]) -> Battle | None:
     me = next((c for c in laps if c.is_player), None)
-    if me is None:
+    if me is None or not me.entry:
         return None
     return Battle(laps, corners, nearest_rivals(me, [c for c in laps if not c.is_player]))
 
 
 def format_battle(b: Battle | None, as_of_lap: int, units: str = "metric",
-                  rival: str | None = None) -> str:
+                  rival: str | None = None, note: str | None = None) -> str:
+    """The battle text; `note` is why there is no battle (RaceSnapshot.battle_note)."""
     head = f"As of lap {as_of_lap}."
     if b is None:
-        return (f"{head} No battle read for that lap: it needs a corner map for this track "
-                "and a lap that was not an out-, in- or partial lap or a pit stop.")
+        return (f"{head} No battle read for lap {as_of_lap}: "
+                f"{note or 'none was computed for that lap'}.")
     me = next(c for c in b.laps if c.is_player)
     others = [c for c in b.laps if not c.is_player]
     if rival:
@@ -336,7 +345,7 @@ def format_battle(b: Battle | None, as_of_lap: int, units: str = "metric",
                f"you on lap {as_of_lap}")
         picks = [hit]
     else:
-        picks, why = b.rivals, f"nearest to you for most of lap {as_of_lap}"
+        picks, why = b.rivals, f"nearest to you on lap {as_of_lap}"
         if not picks:
             return (f"{head} Nobody in your class was within {BATTLE_RANGE_S:.0f} s of you "
                     f"on lap {as_of_lap}; no battle to compare.")
@@ -368,8 +377,9 @@ def format_battle(b: Battle | None, as_of_lap: int, units: str = "metric",
         zones = [z for z in all_zones if round(abs(z.delta), 2) > BATTLE_NOISE_FLOOR_S]
         his = sorted((z for z in zones if z.delta < 0), key=lambda z: z.delta)
         mine = sorted((z for z in zones if z.delta > 0), key=lambda z: -z.delta)
-        lines.append("He is quicker: " + ("; ".join(map(_zone, his))
-                                          or "nowhere by more than the timing noise") + ".")
+        lines.append("That car is quicker: " + ("; ".join(map(_zone, his))
+                                                or "nowhere by more than the timing noise")
+                     + ".")
         lines.append("You are quicker: " + ("; ".join(map(_zone, mine))
                                             or "nowhere by more than the timing noise") + ".")
     lines.append(f"Differences of {BATTLE_NOISE_FLOOR_S:.2f} s or less are within the timing "

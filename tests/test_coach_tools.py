@@ -2393,3 +2393,7 @@ def test_get_battle_reads_the_cached_battle_and_takes_a_named_rival(tmp_path, sy
     assert "Rival (the car you named): A. Rival (Ferrari 296 GT3)" in named
     ctx.race = build_snapshot([LapFacts(lap_no=12, lap_time=100.0, clean=True)], "s")
     assert ctx.dispatch("get_battle", {}).startswith("As of lap 12. No battle read")
+    ctx.race = build_snapshot([LapFacts(lap_no=12, lap_time=100.0, clean=True)], "s",
+                              battle_note="there is no corner map for this track")
+    assert ctx.dispatch("get_battle", {}) == (
+        "As of lap 12. No battle read for lap 12: there is no corner map for this track.")

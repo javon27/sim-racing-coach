@@ -1607,7 +1607,8 @@ class CoachContext:
 
     def get_battle(self, rival=None):
         return self._no_live_race() or format_battle(self.race.battle, self.race.as_of_lap,
-                                                     self.units, rival)
+                                                     self.units, rival,
+                                                     note=self.race.battle_note)
 
     def get_setup(self):
         if not self.setup:

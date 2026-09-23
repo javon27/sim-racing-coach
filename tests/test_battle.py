@@ -174,9 +174,9 @@ def test_match_rival_by_class_position_driver_entry_or_model():
 def test_format_battle_ranks_zones_above_the_noise_floor_only():
     text = format_battle(build_battle([ME, RIVAL], [T1, T2]), 12)
     assert text.startswith("As of lap 12.")
-    assert ("Rival (nearest to you for most of lap 12): A. Rival (Ferrari 296 GT3), "
+    assert ("Rival (nearest to you on lap 12): A. Rival (Ferrari 296 GT3), "
             "P2 in class.") in text
-    assert "He is quicker: Turn 2 (Eau Rouge) by 0.30 s." in text
+    assert "That car is quicker: Turn 2 (Eau Rouge) by 0.30 s." in text
     assert ("You are quicker: Turn 1 (La Source) by 0.30 s, you carry 8 km/h more at the "
             "apex; Turn 1 (La Source) exit to Turn 2 (Eau Rouge) by 0.20 s.") in text
     assert "0.10 s or less are within the timing noise" in text
@@ -185,7 +185,7 @@ def test_format_battle_ranks_zones_above_the_noise_floor_only():
 def test_a_difference_inside_the_noise_floor_is_never_stated():
     close = CarLap(2, "A. Rival", "E2", 2, False, entry={1: 103.0}, exit={1: 105.08})
     text = format_battle(build_battle([ME, close], [T1, T2]), 12)
-    assert "He is quicker: nowhere by more than the timing noise." in text
+    assert "That car is quicker: nowhere by more than the timing noise." in text
     assert "You are quicker: nowhere by more than the timing noise." in text
     assert "0.08" not in text
 
@@ -340,3 +340,56 @@ def test_a_car_in_the_class_that_was_not_timed_is_not_called_missing():
     text = format_battle(build_battle(laps, [T1, T2]), 12, rival="P2")
     assert "A. Rival (E2), P2 in class, was not timed on lap 12" in text
     assert "No car in your class matches" not in text
+
+
+# --- #152 red-team minors ------------------------------------------------------------
+
+def test_feed_refreshes_a_cars_names_every_frame():
+    """A driver swap (or a reused slot id) must not keep the first name seen."""
+    tr = FieldTrace()
+    tr.feed(10.0, _snap([_vs(1, "GT3", 1, 100.0, player=True), _vs(2, "GT3", 1, 150.0)]))
+    swapped = _vs(2, "GT3", 1, 160.0)
+    swapped.driver, swapped.car = "New Driver", "New Entry"
+    tr.feed(10.2, _snap([_vs(1, "GT3", 1, 110.0, player=True), swapped]))
+    car = tr.take()["cars"][2]
+    assert (car["driver"], car["car"]) == ("New Driver", "New Entry")
+
+
+def test_feed_keeps_a_bounded_trace_while_the_driver_never_crosses_the_line():
+    """Live in the garage/monitor for a long time: the trace keeps only the last
+    TRACE_MAX_S seconds, it does not grow for the whole sitting."""
+    from simcoach.battle import TRACE_MAX_S
+    tr = FieldTrace()
+    for i in range(1000):
+        tr.feed(float(i), _snap([_vs(1, "GT3", 0, float(i), player=True)]))
+    pts = tr.take()["cars"][1]["pts"]
+    assert pts[0][0] >= 999.0 - TRACE_MAX_S and len(pts) <= TRACE_MAX_S + 1
+
+
+def test_the_default_rival_headline_does_not_overstate_one_corner():
+    one = CarLap(1, "You", "E1", 3, True, entry={1: 10.0, 2: 20.0, 3: 30.0},
+                 exit={1: 11.0, 2: 21.0, 3: 31.0})
+    b = build_battle([one, _lap(2, {1: 10.5, 2: 50.0, 3: 60.0})], [T1, T2])
+    assert "Rival (nearest to you on lap 12)" in format_battle(b, 12)
+    assert "most of" not in format_battle(b, 12)
+
+
+@pytest.mark.parametrize("over, cmap, why", [
+    ({}, None, "there is no corner map for this track"),
+    ({"partial": "out"}, "map", "lap 2 was an out-lap"),
+    ({"partial": "in"}, "map", "lap 2 was an in-lap"),
+    ({"partial": "partial"}, "map", "lap 2 was only partly captured"),
+    ({"pit": True}, "map", "lap 2 included a pit stop"),
+    ({"field_trace": None}, "map", "the field of cars was not recorded on lap 2"),
+    ({"field_trace": {"player_id": 1, "track_len": L, "cars": {
+        1: {"driver": "You", "car": "E1", "class_position": 3,
+            "pts": _pts(0.0, 10.0, 50.0, n=3)}}}},
+     "map", "none of lap 2's corners were timed from the scoring feed"),
+])
+def test_no_battle_read_says_why(monkeypatch, over, cmap, why):
+    monkeypatch.setattr("simcoach.race.resolve_car", lambda name, *a: name)
+    rec = _race_record(2, over.pop("field_trace", _trace(_rival(800.0))), **over)
+    snap = RaceTracker().commit(rec, CornerMap([T1, T2]) if cmap else None)
+    assert snap.battle is None
+    assert format_battle(None, 2, note=snap.battle_note) == (
+        f"As of lap 2. No battle read for lap 2: {why}.")
