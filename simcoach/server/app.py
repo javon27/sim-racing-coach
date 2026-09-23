@@ -33,6 +33,7 @@ from .captures import (
     _drop_pending,
     _load_cloud,
     _save_cloud,
+    _session_key,
 )
 from .core import _in
 from .security import SIDECAR_PORT
@@ -75,6 +76,19 @@ def _capture_loop(source, store, app_state) -> None:
     (build_app) wraps this in a retry loop so a real LMU source reconnects
     after a drop."""
     for lap in source.laps():
+        if getattr(app_state, "mapping", False):
+            # #154 safety net: mapping belongs to the session it was started in. A phase
+            # (practice -> qualifying -> race), track, car or session change ends it, and
+            # this lap is an ordinary lap. Unpinned (no lap yet this sidecar run) -> the
+            # first mapping lap pins it.
+            key = _session_key(lap)
+            pinned = getattr(app_state, "mapping_key", None)
+            if pinned is None:
+                app_state.mapping_key = key
+            elif key != pinned:
+                app_state.mapping = False
+                logging.getLogger(__name__).info(
+                    "mapping mode ended: live session changed %s -> %s", pinned, key)
         # Mapping mode: buffer the lap for ribbon reconstruction AND persist it,
         # flagged mapping=True so it gives an immediately-editable lap + shows in the
         # session/lap list, but best_lap excludes it from coaching signals. The lap
@@ -160,6 +174,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     app.state.mapping = False        # mapping-capture mode: buffer laps, don't persist
     app.state.map_buffer = []        # LapRecords captured while mapping (transient)
     app.state.last_ribbon = None     # last built ribbon {world, corners, sectors} for save
+    app.state.mapping_key = None     # _session_key mapping was started in (#154)
 
     deps = SimpleNamespace()   # helpers each module publishes for the next (#113)
     core.register(app, deps)

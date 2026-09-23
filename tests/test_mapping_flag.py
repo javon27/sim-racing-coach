@@ -5,6 +5,7 @@ import sqlite3
 import types
 
 import numpy as np
+import pytest
 
 from simcoach.coach_tools import CoachContext
 from simcoach.model_types import LapRecord
@@ -96,3 +97,74 @@ def test_race_mapping_lap_reads_as_a_race_lap(tmp_path):
     assert "mapping" not in line.lower()
     listing = ctx.list_recent_laps()
     assert "race" in listing and "mapping" not in listing.lower(), listing
+
+
+# --- mapping ends by itself when the live session changes (#154 safety net) ---------
+
+def _app(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from simcoach.coach import Coach
+    from simcoach.lmu import smm
+    from simcoach.model.fake import FakeModel
+    from simcoach.server.app import create_app
+    monkeypatch.setattr(smm, "read_session_track_car", lambda: None)   # no live sim
+    store = _store(tmp_path)
+    app = create_app(store, Coach(FakeModel()), tracks_dir=str(tmp_path / "tracks"))
+    return app, store, TestClient(app, base_url="http://127.0.0.1")
+
+
+def _changed(field, value, ts):
+    lap = _lap("practice", ts=ts)
+    setattr(lap, field, value)
+    return lap
+
+
+def test_mapping_ends_when_the_phase_changes(tmp_path, monkeypatch):
+    app, store, c = _app(tmp_path, monkeypatch)
+    _capture_loop(_Src([_lap("practice", ts=1.0)]), store, app.state)   # driving practice
+    assert c.post("/mapcapture/start", json={}).status_code == 200
+    _capture_loop(_Src([_lap("practice", ts=2.0)]), store, app.state)   # a mapping pass
+    assert app.state.mapping is True and len(app.state.map_buffer) == 1
+    _capture_loop(_Src([_lap("qualifying", ts=3.0)]), store, app.state)
+    assert app.state.mapping is False                                   # ended itself
+    assert len(app.state.map_buffer) == 1                              # not buffered
+    q = store.load(app.state.latest["lap_id"])
+    assert q.phase == "qualifying" and q.mapping is False
+    assert c.get("/mapcapture/status").json()["active"] is False
+
+
+def test_mapping_started_before_any_lap_ends_on_the_next_change(tmp_path, monkeypatch):
+    # A sidecar restart: no lap yet this run, so the first mapping lap pins the session.
+    app, store, c = _app(tmp_path, monkeypatch)
+    c.post("/mapcapture/start", json={})
+    _capture_loop(_Src([_lap("practice", ts=1.0), _lap("practice", ts=2.0),
+                        _lap("race", ts=3.0)]), store, app.state)
+    assert app.state.mapping is False
+    assert [r["mapping"] for r in store.session_laps(store.load(
+        app.state.latest["lap_id"]).session_id)] == [True, True, False]
+
+
+
+@pytest.mark.parametrize("field,value", [
+    ("track", "OtherTrack"),
+    ("car", "LMP2"),
+    ("session_id", "maptrack--gt3--offline"),
+])
+def test_mapping_ends_on_a_track_car_or_session_change(tmp_path, monkeypatch, field, value):
+    app, store, c = _app(tmp_path, monkeypatch)
+    c.post("/mapcapture/start", json={})
+    _capture_loop(_Src([_lap("practice", ts=1.0), _changed(field, value, 2.0)]),
+                  store, app.state)
+    assert app.state.mapping is False
+    assert store.load(app.state.latest["lap_id"]).mapping is False
+
+
+def test_a_new_session_instance_of_the_same_base_does_not_end_mapping(tmp_path, monkeypatch):
+    # The store resolves `base` to `base~<date>` instances; that is the same live session.
+    app, store, c = _app(tmp_path, monkeypatch)
+    _capture_loop(_Src([_lap("practice", ts=1.0)]), store, app.state)
+    app.state.latest["record"].session_id = SID + "~20260923T1300"
+    c.post("/mapcapture/start", json={})
+    _capture_loop(_Src([_lap("practice", ts=2.0)]), store, app.state)
+    assert app.state.mapping is True

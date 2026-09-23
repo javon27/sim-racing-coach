@@ -284,7 +284,9 @@ def test_discard_covers_every_track_in_the_buffer(tmp_path):
     other = _edge(1)
     other.track = "OtherTrack"
     _drive(app, store, 1)
-    app.state.mapping = True
+    # A track change now ENDS mapping (#154); a two-track buffer is still handled, so
+    # build one by re-pinning the session, as a fresh start on the other track would.
+    app.state.mapping, app.state.mapping_key = True, None
     _capture_loop(_Src([other]), store, app.state)
     other_dir = tmp_path / "data" / "captures" / "pending" / "othertrack"
     assert _pending(tmp_path) and list(other_dir.glob("*.npz"))  # precondition
@@ -304,8 +306,10 @@ def test_a_mixed_track_buffer_saves_and_drops_only_the_current_track(tmp_path):
     # OtherTrack's laps into this cloud nor drop them as "promoted".
     app, store = _app(tmp_path)
     app.state.mapping = True
-    _capture_loop(_Src([_on("OtherTrack", 1), _on("OtherTrack", -1),
-                        _on("MapTrack", 1), _on("MapTrack", -1)]), store, app.state)
+    _capture_loop(_Src([_on("OtherTrack", 1), _on("OtherTrack", -1)]), store, app.state)
+    # A track change ENDS mapping (#154); re-pin to build the mixed buffer regardless.
+    app.state.mapping, app.state.mapping_key = True, None
+    _capture_loop(_Src([_on("MapTrack", 1), _on("MapTrack", -1)]), store, app.state)
     other = tmp_path / "data" / "captures" / "pending" / "othertrack"
     assert len(list(other.glob("*.npz"))) == 2
     assert _tc(app).post("/mapcapture/save-cloud", json={}).status_code == 200

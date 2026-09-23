@@ -67,6 +67,16 @@ def _load_cloud(path) -> list[dict]:
         return []
 
 
+def _session_key(lap) -> tuple:
+    """The live session a lap was driven in, for ending mapping on a change (#154):
+    track, car, phase and the session's (track, car, mode) base -- never its `~<date>`
+    instance, which the store resolves after the fact and so differs between the
+    committed `latest` record and a lap that has not been saved yet."""
+    from ..store import _session_base
+    sid = lap.session_id
+    return (lap.track, lap.car, lap.phase, _session_base(sid) if sid else None)
+
+
 def _pending_dir(data_dir, slug: str) -> Path:
     # #150: the mapping capture being DRIVEN, one file per lap, before Save promotes it
     # to captures/<slug>.npz. A subdirectory, so _newest_capture's captures/*.npz glob
