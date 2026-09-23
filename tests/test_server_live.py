@@ -4,7 +4,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-import simcoach.server.app as app_mod
+import simcoach.server.trackfile as trackfile_mod
 from simcoach.coach import Coach
 from simcoach.corners import CornerMap
 from simcoach.lmu.live import FieldSnapshot, SessionState, VehicleState
@@ -114,8 +114,8 @@ def test_live_resolves_the_track_file_once_not_every_tick(tmp_path, monkeypatch)
     monkeypatch.setattr("simcoach.lmu.live.read_field_snapshot", lambda: _snap(True))
     client = _client(tmp_path, tracks_dir=str(tracks))
     calls = []
-    real = app_mod.load_map_data
-    monkeypatch.setattr(app_mod, "load_map_data",
+    real = trackfile_mod.load_map_data
+    monkeypatch.setattr(trackfile_mod, "load_map_data",
                         lambda *a, **k: calls.append(a) or real(*a, **k))
     with client.websocket_connect("/live", headers={"host": "127.0.0.1"}) as ws:
         frames = [ws.receive_json() for _ in range(3)]
