@@ -1094,3 +1094,90 @@ def test_build_lap_record_keeps_an_untimed_lap_when_it_is_flagged_partial():
     # Unflagged, an untimed lap is still the sentinel that must never be stored.
     assert build_lap_record(sim="lmu", track="T", car="C", lap_time=-1.0, invalidated=False,
                             timestamp=1.0, channels=ch) is None
+
+
+def test_sample_from_telem_maps_fuel_capacity():
+    """#152: the tank size, for the pit window's earliest lap."""
+    t = roundtrip(make_telem(mFuelCapacity=110.0))
+    assert sample_from_telem(t, lap_dist=0.0)["fuel_capacity"] == pytest.approx(110.0)
+
+
+def _drive_one_race_lap():
+    """#152: drive one full lap through _poll_once over a 4-car multiclass scoring
+    frame and return the committed records."""
+    import mmap
+
+    from simcoach.lmu import smm
+    from simcoach.lmu.rf2structs import rF2Scoring, rF2Telemetry
+
+    tag = uuid.uuid4().hex
+    tn, sn = f"$simcoach_test_telem_{tag}$", f"$simcoach_test_scoring_{tag}$"
+    tmap = mmap.mmap(-1, C.sizeof(rF2Telemetry), tagname=tn, access=mmap.ACCESS_WRITE)
+    smap = mmap.mmap(-1, C.sizeof(rF2Scoring), tagname=sn, access=mmap.ACCESS_WRITE)
+
+    # (id, place, class, driver, entry, gap to the car one place up)
+    field = [(1, 5, b"GT3", b"You", b"Car", 1.0),
+             (2, 3, b"GT3", b"A. Rival", b"Rival Entry", 4.0),
+             (3, 4, b"Hyper", b"H. Car", b"Hyper Entry", 0.8),
+             (4, 6, b"GT3", b"B. Chaser", b"Chaser Entry", 2.4)]
+
+    def write(dist, last_lap, total_laps):
+        t = rF2Telemetry(); t.mVersionUpdateBegin = t.mVersionUpdateEnd = 1; t.mNumVehicles = 1
+        v = t.mVehicles[0]; v.mID = 1; v.mLocalVel.z = -50.0
+        v.mTrackName = b"Test Circuit"; v.mVehicleName = b"Car"
+        s = rF2Scoring(); s.mScoringInfo.mVersionUpdateBegin = s.mScoringInfo.mVersionUpdateEnd = 1
+        s.mScoringInfo.mSession = 12; s.mScoringInfo.mCurrentET = 1200.0
+        s.mScoringInfo.mEndET = 3600.0; s.mScoringInfo.mLapDist = 4000.0
+        s.mScoringInfo.mNumVehicles = len(field)
+        for i, (cid, place, cls, drv, entry, gap) in enumerate(field):
+            pv = s.mVehicles[i]; pv.mID = cid; pv.mPlace = place; pv.mVehicleClass = cls
+            pv.mDriverName = drv; pv.mVehicleName = entry; pv.mTimeBehindNext = gap
+            pv.mTotalLaps = total_laps
+        pv = s.mVehicles[0]; pv.mIsPlayer = True; pv.mLapDist = dist; pv.mLastLapTime = last_lap
+        tmap.seek(0); tmap.write(bytes(t)); smap.seek(0); smap.write(bytes(s))
+
+    src = smm.LmuSource(poll_hz=60, now_fn=lambda: 1_700_000_000.0)
+    records = []
+    write(5.0, -1.0, 1)
+    for i in range(11):
+        write(5.0 + 3895.0 * i / 10, -1.0, 1)
+        r = src._poll_once(tn, sn)
+        if r is not None:
+            records.append(r)
+    write(3.0, 92.5, 2)                              # cross S/F with a fresh time: COMMIT
+    r = src._poll_once(tn, sn)
+    if r is not None:
+        records.append(r)
+    tmap.close(); smap.close()
+    return records
+
+
+def test_committed_lap_carries_the_race_sample_from_the_same_scoring_frame():
+    """#152: at commit, _poll_once reads the race situation from the scoring frame it
+    already holds -- class position, the class gap THROUGH a car of another class, and
+    the clock -- and puts it on the LapRecord. No second reader."""
+    records = _drive_one_race_lap()
+    assert len(records) == 1
+    rs = records[0].race
+    assert rs.class_position == 2                    # GT3 order: rival P3, you P5, chaser P6
+    assert rs.class_ahead == "A. Rival (Rival Entry)"
+    assert rs.class_gap_ahead == pytest.approx(1.8)  # 0.8 (Hyper) + 1.0 (you)
+    assert rs.class_behind == "B. Chaser (Chaser Entry)"
+    assert rs.class_gap_behind == pytest.approx(2.4)
+    assert rs.time_left == pytest.approx(2400.0) and rs.max_laps is None
+
+
+def test_a_race_sample_failure_never_costs_the_lap(monkeypatch, caplog):
+    """#152: the race sample is a nice-to-have on the capture thread -- if building it
+    raises, the lap still commits (race None) and the failure is logged."""
+    from simcoach.lmu import smm
+
+    def boom(_snap):
+        raise RuntimeError("bad scoring frame")
+
+    monkeypatch.setattr(smm, "race_sample", boom)
+    with caplog.at_level("WARNING", logger=smm.__name__):
+        records = _drive_one_race_lap()
+    assert len(records) == 1 and records[0].race is None
+    assert records[0].lap_time == pytest.approx(92.5)
+    assert "race sample" in caplog.text

@@ -13,6 +13,7 @@ ReadProcessMemory the game -- same footprint as CrewChief/SimHub, which
 coexist with LMU anti-cheat.
 """
 import ctypes as C
+import logging
 import math
 import mmap
 import re
@@ -22,6 +23,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from simcoach.lmu.live import read_field
 from simcoach.lmu.rf2structs import (
     MAX_MAPPED_VEHICLES,
     TelemInfoV01,
@@ -30,6 +32,7 @@ from simcoach.lmu.rf2structs import (
     rF2Telemetry,
 )
 from simcoach.model_types import LapRecord
+from simcoach.race import race_sample
 
 # Candidate MMF names, tried in order -- extensible so a future LMU/plugin
 # update that renames the interface is a config change here, not a code
@@ -428,6 +431,9 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
         # (fraction ~0.485 vs percent ~48.5) is INFERRED, NOT MEASURED.
         "rear_brake_bias": _electronic(telem.mRearBrakeBias),
         "fuel": telem.mFuel,
+        # #152: a full tank (L), for the pit window's earliest lap. PENDING LIVE
+        # VALIDATION: mFuelCapacity's offset has not been checked against a running sim.
+        "fuel_capacity": telem.mFuelCapacity,
         "virtual_energy": telem.mVirtualEnergy,
         "soc": telem.mSoC,
         "battery_charge": telem.mBatteryChargeFraction,
@@ -847,6 +853,15 @@ class LmuSource:
                     sectors=sectors, position=position, sector_bounds=sector_bounds,
                     lap_no=lap_no, pit=self._pit_during_lap, partial=partial,
                 )
+                if record is not None:
+                    # #152: the race situation at this commit, from the SAME scoring
+                    # frame -- no second reader. read_field is pure (no I/O). A failure
+                    # here costs the race tools one sample, never the lap.
+                    try:
+                        record.race = race_sample(read_field(scoring))
+                    except Exception:
+                        logging.getLogger(__name__).warning(
+                            "race sample not built for this lap", exc_info=True)
                 if record is not None and fresh:
                     self._committed_time = lap_time
             self._channels = {}  # start the next lap fresh (committed or discarded)
