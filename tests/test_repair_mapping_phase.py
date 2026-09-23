@@ -34,6 +34,7 @@ def _db(tmp_path):
     store = LapStore(db, str(tmp_path / "telem"))
     ids = {}
     for name, ts, phase in [("p1", 100, "practice"), ("p2", 200, "practice"),
+                            ("pm", 300, "mapping"),
                             ("q1", 1300, "mapping"), ("q2", 1400, "mapping"),
                             ("r1", 2600, "mapping"), ("r2", 4000, "mapping"),
                             ("stray", 20000, "mapping")]:
@@ -64,6 +65,8 @@ def test_dry_run_reports_and_changes_nothing(tmp_path, capsys):
     assert not list(tmp_path.glob("*.pre-repair-*.bak"))
     assert f"lap {ids['q1']}" in out and "-> qualifying" in out and "-> race" in out
     assert f"lap {ids['stray']}" in out and "untouched" in out
+    assert "-> race, mapping flag 1 -> 0" in out
+    assert "-> practice, mapping flag 1 -> 1" in out
     assert "dry run" in out.lower()
 
 
@@ -73,10 +76,12 @@ def test_apply_recovers_phases_and_backs_up_first(tmp_path, capsys):
     assert repair.main(["--db", db, "--apply"]) == 0
     rows = _rows(db)
     assert rows[ids["p1"]] == ("practice", 0)                   # never touched
-    assert rows[ids["q1"]] == ("qualifying", 1)
-    assert rows[ids["q2"]] == ("qualifying", 1)
-    assert rows[ids["r1"]] == ("race", 1)
-    assert rows[ids["r2"]] == ("race", 1)
+    # Qualifying/race were stamped only by the stuck mode: they count again (flag 0).
+    assert rows[ids["q1"]] == ("qualifying", 0)
+    assert rows[ids["q2"]] == ("qualifying", 0)
+    assert rows[ids["r1"]] == ("race", 0)
+    assert rows[ids["r2"]] == ("race", 0)
+    assert rows[ids["pm"]] == ("practice", 1)                   # may be a real pass
     assert rows[ids["stray"]] == ("mapping", 1)                 # ambiguous: left as is
     (bak,) = tmp_path.glob("simcoach.sqlite.pre-repair-*.bak")
     assert _rows(str(bak)) == before                             # the pre-repair state
@@ -108,6 +113,7 @@ def test_apply_on_a_v22_db_without_the_flag_column(tmp_path):
     assert repair.main(["--db", db]) == 0                        # dry run reads it
     assert repair.main(["--db", db, "--apply"]) == 0
     rows = _rows(db)
-    assert rows[ids["r1"]] == ("race", 1)
+    assert rows[ids["r1"]] == ("race", 0)
+    assert rows[ids["pm"]] == ("practice", 1)
     assert rows[ids["stray"]] == ("mapping", 1)
     assert rows[ids["p1"]] == ("practice", 0)
