@@ -32,6 +32,22 @@ class Corner:
     apexes: list[float] | None = None  # lap_distances; defaults to [apex_dist] (double-apex -> 2)
 
 
+def next_corner(corners: list[Corner], dist: float) -> Corner | None:
+    """The corner the car is in, else the next corner entry ahead of `dist`, wrapping
+    past S/F to the first. None when there are no corners.
+
+    Corner identity is owned data (#151): the Coach rail map's "Next: T10 Pouhon (L)"
+    comes from here, server-side, never from the UI. A seam-wrapping window
+    (start > end) is handled by in_window; wrap-around needs no lap length because
+    "no entry ahead" simply means the lowest entry is next.
+    """
+    for c in corners:
+        if in_window(dist, c.start_dist, c.end_dist):
+            return c
+    ahead = [c for c in corners if c.start_dist >= dist]
+    return min(ahead or corners, key=lambda c: c.start_dist, default=None)
+
+
 def validated_sectors(sectors, length: float) -> list[float]:
     """Sector splits as floats, or TypeError/ValueError naming what's wrong.
 
