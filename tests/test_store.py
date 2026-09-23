@@ -2529,3 +2529,47 @@ def test_session_laps_race_index_single_race_and_non_race_laps(tmp_path, synthet
     by_id = {r["id"]: r["race_index"] for r in rows}
     assert [by_id[i] for i in race] == [1, 1, 1]
     assert by_id[practice] is None
+
+
+# --- issue #152: the race situation at each lap's commit --------------------------
+
+def test_v20_schema_migrates_race_sample_columns_to_v21(tmp_path, synthetic_lap):
+    """#152: a real v20 laps table (no race columns) gains them on open; the old row
+    keeps NULLs, which is exactly what it is (captured before the sample existed)."""
+    from simcoach.store import _RACE_COLUMNS, SCHEMA_VERSION, LapStore
+    db = str(tmp_path / "c.sqlite")
+    s = LapStore(db, str(tmp_path / "telem"))
+    old_id = s.save(synthetic_lap)
+    for col, _ in _RACE_COLUMNS:
+        s.conn.execute(f"ALTER TABLE laps DROP COLUMN {col}")
+    s.conn.execute("PRAGMA user_version = 20")
+    s.conn.commit(); s.conn.close()
+
+    s2 = LapStore(db, str(tmp_path / "telem"))
+    assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    cols = {r[1] for r in s2.conn.execute("PRAGMA table_info(laps)")}
+    assert {c for c, _ in _RACE_COLUMNS} <= cols
+    row = s2.conn.execute("SELECT class_position, class_gap_ahead FROM laps WHERE id = ?",
+                          (old_id,)).fetchone()
+    assert row == (None, None)
+    assert s2.load(old_id).lap_time == synthetic_lap.lap_time
+
+
+def test_save_stores_the_race_sample_on_the_lap_row(tmp_path, synthetic_lap):
+    import dataclasses
+
+    from simcoach.model_types import RaceSample
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "telem"))
+    rs = RaceSample(class_position=2, class_ahead="A. Rival (Rival Entry)",
+                    class_gap_ahead=1.8, class_behind="B. Chaser (Chaser Entry)",
+                    class_gap_behind=None, time_left=2400.0, max_laps=None)
+    lid = s.save(dataclasses.replace(synthetic_lap, race=rs))
+    row = s.conn.execute(
+        "SELECT class_position, class_ahead, class_gap_ahead, class_behind, "
+        "class_gap_behind, time_left, max_laps FROM laps WHERE id = ?", (lid,)).fetchone()
+    assert row == (2, "A. Rival (Rival Entry)", 1.8, "B. Chaser (Chaser Entry)", None,
+                   2400.0, None)
+    none_id = s.save(synthetic_lap)                  # no sample -> all NULL, still saves
+    assert s.conn.execute("SELECT class_position FROM laps WHERE id = ?",
+                          (none_id,)).fetchone() == (None,)

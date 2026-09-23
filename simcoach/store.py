@@ -91,7 +91,7 @@ def _session_base(sid: str) -> str:
     """The (track, car, mode) base of a session id, dropping any ~<instance> suffix."""
     return sid.split(_SESSION_SEP, 1)[0]
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
@@ -129,6 +129,14 @@ CREATE TABLE IF NOT EXISTS coach_chat (
 # can never drift apart.
 _USAGE_COLUMNS = (("input_tokens", "input"), ("output_tokens", "output"),
                   ("cache_read_tokens", "cache_read"), ("cache_write_tokens", "cache_write"))
+
+# The race situation at each lap's commit (#152), as (laps column, SQL type), in
+# RaceSample field order. One list so the migration, the fresh schema check and the
+# INSERT can never drift apart.
+_RACE_COLUMNS = (("class_position", "INTEGER"), ("class_ahead", "TEXT"),
+                 ("class_gap_ahead", "REAL"), ("class_behind", "TEXT"),
+                 ("class_gap_behind", "REAL"), ("time_left", "REAL"),
+                 ("max_laps", "INTEGER"))
 
 # Longitudinal driver profile: reviewed "memories" (driver_learnings), the
 # concise always-on summary the coach prompt carries (driver_summary, a single
@@ -181,7 +189,14 @@ CREATE TABLE IF NOT EXISTS laps (
     sector_bounds TEXT,
     lap_no INTEGER,
     pit INTEGER,
-    partial TEXT
+    partial TEXT,
+    class_position INTEGER,
+    class_ahead TEXT,
+    class_gap_ahead REAL,
+    class_behind TEXT,
+    class_gap_behind REAL,
+    time_left REAL,
+    max_laps INTEGER
 );
 CREATE TABLE IF NOT EXISTS ingested_files (
     path TEXT PRIMARY KEY,
@@ -649,6 +664,16 @@ class LapStore:
                 cols = [r[1] for r in self.conn.execute("PRAGMA table_info(laps)")]
                 if cols and "partial" not in cols:
                     _add_column(self.conn, "laps", "partial TEXT")
+            if current_version < 21:
+                # v20 -> v21: the race situation at each lap's commit (#152) -- class
+                # position, the in-class car ahead/behind and their gaps, time left and
+                # a lap-count race's length -- so the gap trend has a stored history.
+                # Existing rows stay NULL. Guarded like the v18-v20 steps.
+                cols = [r[1] for r in self.conn.execute("PRAGMA table_info(laps)")]
+                if cols:
+                    for c, typ in _RACE_COLUMNS:
+                        if c not in cols:
+                            _add_column(self.conn, "laps", f"{c} {typ}")
         if current_version != stamp:
             self.conn.execute(f"PRAGMA user_version = {stamp}")
         self.conn.commit()
@@ -747,15 +772,17 @@ class LapStore:
                     return record.sectors[i] if record.sectors and len(record.sectors) > i else None
                 bounds = json.dumps(record.sector_bounds) if record.sector_bounds else None
                 pit = None if record.pit is None else int(record.pit)
+                race = [getattr(record.race, c) if record.race else None
+                        for c, _ in _RACE_COLUMNS]
                 cur = self.conn.execute(
                     "INSERT INTO laps (ts, sim, track, car, lap_time, valid, telemetry_path, "
                     "phase, session_id, s1, s2, s3, position, sector_bounds, lap_no, pit, "
-                    "partial) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "partial, " + ", ".join(c for c, _ in _RACE_COLUMNS) + ") "
+                    "VALUES (" + ", ".join(["?"] * (17 + len(_RACE_COLUMNS))) + ")",
                     (record.timestamp, record.sim, record.track, record.car,
                      record.lap_time, int(record.valid), None,
                      record.phase, sid, _sec(0), _sec(1), _sec(2),
-                     record.position, bounds, record.lap_no, pit, record.partial),
+                     record.position, bounds, record.lap_no, pit, record.partial, *race),
                 )
                 lap_id = cur.lastrowid
                 telemetry_path = os.path.join(self.data_dir, f"{lap_id}.npz")
