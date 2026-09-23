@@ -110,8 +110,10 @@ silently drift as ruff's own default rule set broadens over releases.
 ## Scope discipline
 
 The deferred list (voice + live in-ear coaching, Assetto Corsa, multi-car/track
-per session, local model, vector-DB RAG, side-by-side replay overlay, CrewChief
-replacement) is intentional — each bolts onto a seam left open. The web UI is no
+per session, local model, vector-DB RAG, side-by-side replay overlay) is
+intentional — each bolts onto a seam left open. **Not pursuing:** a CrewChief
+replacement / in-ear spotter — race questions are answered by the coach over PTT,
+and the Pit Wall screen was retired (#151). The web UI is no
 longer deferred: it is realized as the FastAPI sidecar + Tauri app. Do not build
 ahead of the list; new ideas get triaged into scope or deferred explicitly, not
 added silently.

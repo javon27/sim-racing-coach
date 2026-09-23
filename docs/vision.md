@@ -13,10 +13,14 @@ and a swappable Model, per the architecture invariants in `CLAUDE.md`.
 1. **Coach** — between laps. Setup + driving technique, grounded in trustworthy
    telemetry-computed corner data (the edge over a general LLM notebook).
    *Built (v1).*
-2. **Pit Wall** — live, in-race. A race-engineer persona for pit timing, fuel/
-   energy-to-finish, gaps and deltas, relative pace. Agentic: it has the tools
-   to answer whatever comes up, not a fixed command set. Aims to replace
-   CrewChief. *Vision.*
+2. **Race questions over PTT** — live, in-race. The coach answers race
+   questions (position and gap trend, fuel/energy to the end, pit window, tire
+   life, where a rival is faster) over push-to-talk, from figures computed at
+   lap boundaries. Agentic: it has the tools to answer whatever comes up, not a
+   fixed command set. **Not pursuing:** an in-ear spotter or a CrewChief
+   replacement. The separate Pit Wall screen was retired 2026-09-22 (#151); its
+   one used feature, the live corner map, is now the Coach screen's rail map.
+   *Tools: #152.*
 3. **Deep-dive Analyst** — after sessions. Reflective, cross-lap/cross-session
    analysis to nail down concrete improvements for next time. *Vision.*
 4. **Longitudinal driver profile** — underneath all three. A coach-maintained,
@@ -37,7 +41,7 @@ not a rewrite.
 
 Register → practice server → event (brief practice → qualy → race), all as **one
 session** `(track, car, online)`. Before going out: ask for a setup
-recommendation. During: hands-free race-engineer questions (Pit Wall). After:
+recommendation. During: race questions over push-to-talk (no in-ear spotter). After:
 the arc and struggles are already known; deep-dive to plan improvements. The
 driver profile carries the learnings into the next session. Rinse and repeat.
 
@@ -83,14 +87,15 @@ decisions:
    Phase 0 setup-channel capture → Phase 2 setup diagnostics.
 3. **Voice loop** — a thin speech-in → core → speech-out path over the existing
    agentic coach. Unblocks the VR reality; highest daily-use leverage.
-4. **Pit Wall persona + live-race tools** — standings/gaps, fuel/energy, pit
-   window, relative pace (most data already reachable via `simcoach/lmu/rest.py`
-   plus the per-lap position capture already in place).
+4. **Race tools for the coach (PTT)** — race state and gap trend, fuel/energy
+   and pit window, tire life, battle comparison (#152; spec
+   `docs/superpowers/specs/2026-09-22-coach-absorbs-pit-wall-design.md` §3).
+   The Pit Wall screen is retired (#151).
 5. **Deep-dive Analyst mode** — leans on the longitudinal profile, which
    shipped 2026-09-08 (summary injection, driver memories, session setups).
 
-Later/optional: proactive *push* spotter alerts ("box this lap, fuel's short"),
-distinct from the agentic *pull* model above. Fast-follow after voice: make
+Not pursuing: proactive *push* spotter alerts ("box this lap, fuel's short") —
+race answers are PTT only (decided 2026-09-22). Fast-follow after voice: make
 building a track map less of a curation loop (#100).
 
 ## Where v1 stands
