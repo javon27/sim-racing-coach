@@ -55,7 +55,7 @@ from ..track_lookup import (
     track_slug,
 )
 from ..trackmap import average_racing_line, direction_from_path
-from . import core, maps, security, trackfile
+from . import core, maps, security, status_routes, trackfile
 from .captures import (
     _POS_CHANNELS,
     _append_pending_lap,
@@ -293,69 +293,9 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     _slug_map_key = deps._slug_map_key
 
     security.install(app)
-
-    @app.get("/health")
-    def health():
-        return {"status": "ok"}
-
-    def _status_view() -> dict:
-        # Live track/car from shared memory FIRST, so a track/car change is detected
-        # right away. The latest captured lap adds rich context (on_track + session/
-        # lap ids) but ONLY while it still matches the live session; once the driver
-        # moves to another track/car it's stale, so drop it (else we'd report the old
-        # track and, worse, map the new track under the old slug).
-        try:
-            from ..lmu.smm import read_live_status
-            live = read_live_status()  # {track, car, state} | None
-        except Exception:
-            live = None
-        live_tc = (live["track"], live["car"]) if live else None
-        latest = app.state.latest
-        matches_live = (
-            latest is not None
-            and (live_tc is None
-                 or (latest["record"].track == live_tc[0] and latest["record"].car == live_tc[1]))
-        )
-        session_id = lap_id = None
-        if matches_live:
-            record = latest["record"]
-            track, car = record.track, record.car
-            session_id, lap_id = record.session_id, latest["lap_id"]
-        elif live:
-            track, car = live["track"], live["car"]
-            # The live track/car doesn't match the latest stored lap (a track
-            # change): report the id the first lap on the new track will be
-            # stamped with, so the strip and chat pin move right away instead
-            # of waiting on that lap (#127). lap_id stays None -- no lap yet.
-            session_id = _live_session_id()
-        else:
-            # #137: no live SMM and nothing captured this process (a sidecar
-            # restart with LMU in the lobby) -- fall back to the newest stored
-            # lap so the strip isn't blank. on_track/activity stay False/None
-            # below (live is None here), which is correct: we don't know the
-            # driver is on track, only what they last drove.
-            row = store.latest_lap_row()
-            if row is not None:
-                track, car, session_id = row["track"], row["car"], row["session_id"]
-            else:
-                track, car = None, None
-        # `activity` is the live driving state (track/pits/garage), detected from
-        # scoring immediately — not gated on a captured lap. on_track mirrors it.
-        activity = live["state"] if live else None
-        return {
-            "track": track, "car": car,
-            "car_model": resolve_car(car) if car else None,
-            "on_track": activity == "track",
-            "activity": activity,
-            "has_map": _has_canonical(*_live_map_key(track, car)),
-            "lmu_connected": _ensure_rest() is not None,
-            "session_id": session_id,
-            "lap_id": lap_id,
-        }
-
-    @app.get("/status")
-    def status():
-        return _status_view()
+    status_routes.register(app, deps)
+    _status_view = deps._status_view
+    status = deps.status
 
     @app.get("/sessions")
     def sessions(track: str | None = None, car: str | None = None,
