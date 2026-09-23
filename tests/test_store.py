@@ -2598,7 +2598,8 @@ def test_battle_rows_round_trip_one_per_car_and_reset_clears_them(tmp_path, synt
     me = CarLap(1, "You", "E1", 3, True, entry={1: 104.0}, exit={1: 106.0},
                 apex_kph={1: 150.0})
     rival = CarLap(2, "A. Rival", "AF Corse #51", 2, False, entry={1: 103.0},
-                   exit={1: 105.3}, model="Ferrari 296 GT3")
+                   exit={1: 105.3}, model="Ferrari 296 GT3", lap={1: 1},
+                   pit=[(110.0, 131.4)])
     s.save_battle(lid, [rival, me])                  # saved out of order: read by car id
     assert s.battle_laps(lid) == [me, rival]
     assert s.battle_laps(lid + 1) == []              # keyed to the driver's lap

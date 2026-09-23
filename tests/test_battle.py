@@ -66,7 +66,7 @@ def test_feed_records_the_players_class_once_per_scoring_frame():
     out = tr.take()
     assert out["player_id"] == 1 and out["track_len"] == L
     assert set(out["cars"]) == {1, 2}   # other classes are not recorded
-    assert out["cars"][2]["pts"] == [(10.0, 1150.0, pytest.approx(180.0))]
+    assert out["cars"][2]["pts"] == [(10.0, 1150.0, pytest.approx(180.0), False)]
     assert out["cars"][2]["class_position"] == 2
 
 
@@ -74,7 +74,7 @@ def test_feed_drops_a_frame_where_lap_distance_reset_before_the_lap_count():
     tr = FieldTrace()
     for t, laps, dist in ((10.0, 1, 990.0), (10.2, 1, 5.0), (10.4, 2, 15.0)):
         tr.feed(t, _snap([_vs(1, "GT3", laps, dist, player=True)]))
-    assert [s for _, s, _ in tr.take()["cars"][1]["pts"]] == [1990.0, 2015.0]
+    assert [p[1] for p in tr.take()["cars"][1]["pts"]] == [1990.0, 2015.0]
 
 
 def test_feed_drops_a_frame_where_the_lap_count_ticked_before_lap_distance_reset():
@@ -85,7 +85,7 @@ def test_feed_drops_a_frame_where_the_lap_count_ticked_before_lap_distance_reset
     for t, laps, dist in ((10.0, 1, 990.0), (10.2, 2, 995.0), (10.4, 2, 15.0),
                           (10.6, 2, 25.0)):
         tr.feed(t, _snap([_vs(1, "GT3", laps, dist, player=True)]))
-    assert [s for _, s, _ in tr.take()["cars"][1]["pts"]] == [1990.0, 2015.0, 2025.0]
+    assert [p[1] for p in tr.take()["cars"][1]["pts"]] == [1990.0, 2015.0, 2025.0]
 
 
 def test_take_keeps_the_last_seconds_for_the_next_lap():
@@ -93,7 +93,7 @@ def test_take_keeps_the_last_seconds_for_the_next_lap():
     for i in range(21):
         tr.feed(float(i), _snap([_vs(1, "GT3", 1, 10.0 * i, player=True)]))
     assert len(tr.take()["cars"][1]["pts"]) == 21
-    assert [t for t, _, _ in tr.take()["cars"][1]["pts"]] == [15.0, 16.0, 17.0, 18.0, 19.0,
+    assert [p[0] for p in tr.take()["cars"][1]["pts"]] == [15.0, 16.0, 17.0, 18.0, 19.0,
                                                               20.0]
 
 
@@ -254,3 +254,51 @@ def test_no_battle_without_a_corner_map_but_an_invalidated_lap_still_counts(monk
             "pts": _pts(95.0, 1800.0, 50.0)}}}
     snap = tr.commit(_race_record(3, lap3, valid=False), CornerMap([T1]))
     assert [r.driver for r in snap.battle.rivals] == ["A. Rival"]
+
+
+# --- #152 red-team: pairing never mixes two of a rival's laps; pit lane; far rivals --
+
+def _pts_v(t0, s0, v, n=200, hz=5.0):
+    return [(t0 + i / hz, s0 + v * i / hz, v * 3.6) for i in range(n)]
+
+
+@pytest.mark.parametrize("v", [47.0, 50.0, 53.0])
+def test_every_zone_pairs_the_rivals_crossings_on_one_lap_in_order(v):
+    """A rival anywhere on the lap (up to half a lap either way, a little faster or
+    slower): every corner and section compares the rival's crossings on ONE of his laps,
+    in order -- never a lap-sized "gain" from an entry on one lap and an exit on another."""
+    for off in range(-490, 500, 7):
+        trace = _trace({2: {"driver": "R", "car": "E2", "class_position": 2,
+                            "pts": _pts_v(95.0, 750.0 + off, v)}})
+        by_id = {c.car_id: c for c in car_laps(trace, [T1, T2], lap_no=2)}
+        if 2 not in by_id:
+            continue
+        for z in zone_deltas(by_id[1], by_id[2], [T1, T2]):
+            assert abs(z.delta) < 2.0, (off, v, z)
+
+
+def test_a_rival_who_pits_mid_lap_is_not_compared_through_the_pit_lane():
+    """1 s ahead, into the pits between Turn 1 and Turn 2 at pit-lane speed: the section
+    he spent in the pit lane is not compared (it would read "you are quicker by 6 s")."""
+    pts, t, s = [], 95.0, 800.0
+    while t < 125.0:
+        pit = 1350.0 <= s < 1550.0
+        pts.append((t, s, (20.0 if pit else 50.0) * 3.6, pit))
+        s += (20.0 if pit else 50.0) * 0.2
+        t += 0.2
+    trace = _trace({2: {"driver": "R", "car": "E2", "class_position": 2, "pts": pts}})
+    by_id = {c.car_id: c for c in car_laps(trace, [T1, T2], lap_no=2)}
+    zones = zone_deltas(by_id[1], by_id[2], [T1, T2])
+    assert [z.label for z in zones] == ["Turn 1 (La Source)", "Turn 2 (Eau Rouge)"]
+    assert all(abs(z.delta) < 0.01 for z in zones)
+
+
+def test_a_named_car_that_never_came_near_is_not_compared():
+    """Spec: deltas only for a car that was within the battle range DURING the lap. A
+    P1 20 s up the road gets no corner-by-corner read, just that it wasn't near."""
+    far = CarLap(5, "B. Leader", "E5", 1, False, entry={1: 84.0, 2: 92.0},
+                 exit={1: 86.5, 2: 94.0}, model="Ferrari 499P")
+    text = format_battle(build_battle([ME, far], [T1, T2]), 12, rival="P1")
+    assert "B. Leader (Ferrari 499P), P1 in class, wasn't near you on lap 12" in text
+    assert "no corner-by-corner comparison" in text
+    assert " by " not in text

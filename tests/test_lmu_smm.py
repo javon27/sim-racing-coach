@@ -1250,7 +1250,7 @@ def test_committed_lap_carries_the_same_class_field_trace():
     assert tr["player_id"] == 1 and tr["track_len"] == 4000.0
     assert set(tr["cars"]) == {1, 2}                 # the Hypercar is not recorded
     assert len(tr["cars"][2]["pts"]) == 12           # 12 scoring frames, each once
-    ss = [s for _, s, _ in tr["cars"][1]["pts"]]
+    ss = [p[1] for p in tr["cars"][1]["pts"]]
     assert ss == sorted(ss) and ss[-1] == 8003.0     # unwrapped across the line
 
 
@@ -1267,7 +1267,7 @@ def test_a_second_race_in_the_same_sitting_still_gets_a_trace(clock_back):
     rig.lap(0, 95.0)                                  # race 2, lap 1
     rig.close()
     assert len(rig.records) == 3
-    ss = [s for _, s, _ in rig.records[2].field_trace["cars"][1]["pts"]]
+    ss = [p[1] for p in rig.records[2].field_trace["cars"][1]["pts"]]
     assert ss[0] == 5.0 and ss[-1] == 4003.0 and len(ss) == 12
 
 
@@ -1280,7 +1280,7 @@ def test_a_clock_that_runs_backwards_alone_starts_a_fresh_trace():
     rig.et = 10.0
     rig.lap(2, 92.0)
     rig.close()
-    ss = [s for _, s, _ in rig.records[1].field_trace["cars"][1]["pts"]]
+    ss = [p[1] for p in rig.records[1].field_trace["cars"][1]["pts"]]
     assert ss[0] == 8005.0 and ss[-1] == 12003.0
 
 

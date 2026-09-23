@@ -41,7 +41,8 @@ class FieldTrace:
 
     Pure: capture feeds it the FieldSnapshot it already reads; it never reads memory
     itself. Distance is unwrapped (laps * track length + lap distance), so each car's
-    trace rises monotonically across the line, whenever that car crosses it."""
+    trace rises monotonically across the line, whenever that car crosses it. A sample is
+    (time, unwrapped distance, km/h, in the pit lane)."""
 
     def __init__(self) -> None:
         self.last_t: float | None = None
@@ -71,10 +72,10 @@ class FieldTrace:
             # ponytail: if a car's very FIRST sample is a lap-ahead frame, its trace
             # stays blocked until it really gets there; the next take() tail limits it.
             if e["pts"]:
-                t0, s0, _ = e["pts"][-1]
+                t0, s0 = e["pts"][-1][:2]
                 if s < s0 or s - s0 > MAX_PLAUSIBLE_SPEED_MS * (t - t0):
                     continue
-            e["pts"].append((t, s, c.speed * 3.6))
+            e["pts"].append((t, s, c.speed * 3.6, bool(c.in_pits)))
 
     def take(self) -> dict:
         """Hand over the trace so far; keep the last TRACE_TAIL_S seconds for the next
@@ -100,6 +101,12 @@ class CarLap:
     exit: dict[int, float] = field(default_factory=dict)
     apex_kph: dict[int, float] = field(default_factory=dict)
     model: str = ""         # the car model, resolved off the capture thread
+    # Which of this car's laps (unwrapped lap index) each corner was timed on: a
+    # section is only compared between two crossings on the SAME lap.
+    lap: dict[int, int] = field(default_factory=dict)
+    # (from, to) scoring-clock spans this car spent in the pit lane: no zone that
+    # overlaps one is compared (a stop is not "slower through that section").
+    pit: list[tuple[float, float]] = field(default_factory=list)
 
 
 def _time_at(pts: list, s: float) -> float | None:
@@ -109,22 +116,38 @@ def _time_at(pts: list, s: float) -> float | None:
         return pts[i][0]
     if i == 0 or i == len(pts):
         return None
-    (t0, s0, _), (t1, s1, _) = pts[i - 1], pts[i]
+    (t0, s0), (t1, s1) = pts[i - 1][:2], pts[i][:2]
     return t0 + (t1 - t0) * (s - s0) / (s1 - s0)
 
 
-def _crossing(pts: list, dist: float, length: float,
-              t_ref: float) -> tuple[float, float] | None:
-    """(time, unwrapped distance) of this car's crossing of lap distance `dist` NEAREST
-    IN TIME to `t_ref` -- the driver's own crossing of the same spot. That, not "the same
-    lap number", pairs two cars: it holds across the line whichever of them crosses it
-    first, and for a car on another lap count."""
+def _crossing_lap(pts: list, dist: float, length: float, t_ref: float) -> int | None:
+    """Which of this car's laps (unwrapped lap index) crossed lap distance `dist`
+    NEAREST IN TIME to `t_ref` -- the driver's own crossing of the same spot. That, not
+    "the same lap number", pairs two cars: it holds across the line whichever of them
+    crosses it first, and for a car on another lap count. Only a corner's ENTRY is
+    paired this way; its apex and exit are read on the same lap as its entry."""
     best = None
     for k in range(int(pts[0][1] // length), int(pts[-1][1] // length) + 1):
         t = _time_at(pts, k * length + dist)
         if t is not None and (best is None or abs(t - t_ref) < abs(best[0] - t_ref)):
-            best = (t, k * length + dist)
-    return best
+            best = (t, k)
+    return None if best is None else best[1]
+
+
+def _pit_spans(pts: list) -> list[tuple[float, float]]:
+    """Runs of pit-lane samples, widened to the neighbouring samples on each side:
+    scoring is a few Hz, so the car entered/left the lane somewhere in between."""
+    spans, i, n = [], 0, len(pts)
+    while i < n:
+        if len(pts[i]) > 3 and pts[i][3]:
+            j = i
+            while j + 1 < n and pts[j + 1][3]:
+                j += 1
+            spans.append((pts[max(i - 1, 0)][0], pts[min(j + 1, n - 1)][0]))
+            i = j + 1
+        else:
+            i += 1
+    return spans
 
 
 def car_laps(trace: dict, corners: list[Corner], lap_no: int) -> list[CarLap]:
@@ -155,21 +178,20 @@ def car_laps(trace: dict, corners: list[Corner], lap_no: int) -> list[CarLap]:
         pts = e["pts"]
         if not pts:
             continue
-        lap = CarLap(cid, e["driver"], e["car"], e.get("class_position", 0), cid == me_id)
-        for n, (c, te, ta, tx) in ref.items():
-            if cid == me_id:
-                ent = (te, base + c.start_dist)
-                apx = (ta, base + c.apex_dist)
-                ext = (tx, base + c.end_dist)
-            else:
-                ent = _crossing(pts, c.start_dist, length, te)
-                apx = _crossing(pts, c.apex_dist, length, ta)
-                ext = _crossing(pts, c.end_dist, length, tx)
-            if ent is None or ext is None or ext[0] <= ent[0]:
+        lap = CarLap(cid, e["driver"], e["car"], e.get("class_position", 0), cid == me_id,
+                     pit=_pit_spans(pts))
+        for n, (c, te, _, _) in ref.items():
+            k = lap_no - 1 if cid == me_id else _crossing_lap(pts, c.start_dist, length, te)
+            if k is None:
                 continue
-            lap.entry[n], lap.exit[n] = ent[0], ext[0]
+            ent, apx, ext = (_time_at(pts, k * length + d)
+                             for d in (c.start_dist, c.apex_dist, c.end_dist))
+            if ent is None or ext is None or ext <= ent:
+                continue
+            lap.entry[n], lap.exit[n], lap.lap[n] = ent, ext, k
             if apx is not None:
-                lap.apex_kph[n] = min(pts, key=lambda p, s=apx[1]: abs(p[1] - s))[2]
+                s_apex = k * length + c.apex_dist
+                lap.apex_kph[n] = min(pts, key=lambda p, s=s_apex: abs(p[1] - s))[2]
         if lap.entry:
             out.append(lap)
     return out
@@ -188,9 +210,17 @@ def _corner_label(c: Corner) -> str:
         else turn
 
 
+def _clear(car: CarLap, a: float, b: float) -> bool:
+    """True when `car` was out of the pit lane for the whole span a..b."""
+    return not any(p <= b and q >= a for p, q in car.pit)
+
+
 def zone_deltas(me: CarLap, rival: CarLap, corners: list[Corner]) -> list[Zone]:
     """Per-corner (entry to exit) and per-section (one corner's exit to the next timed
-    corner's entry) time differences, over the zones BOTH cars were timed through."""
+    corner's entry) time differences, over the zones BOTH cars were timed through.
+
+    A section is only compared when each car's two crossings are on ONE of its laps and
+    in order; no zone is compared across a car's time in the pit lane."""
     cs = sorted((c for c in corners if c.number in me.entry and c.number in rival.entry),
                 key=lambda c: c.start_dist)
     out = []
@@ -198,14 +228,25 @@ def zone_deltas(me: CarLap, rival: CarLap, corners: list[Corner]) -> list[Zone]:
         n = c.number
         apex = (me.apex_kph[n] - rival.apex_kph[n]
                 if n in me.apex_kph and n in rival.apex_kph else None)
-        out.append(Zone(_corner_label(c),
-                        (rival.exit[n] - rival.entry[n]) - (me.exit[n] - me.entry[n]), apex))
+        if all(_clear(x, x.entry[n], x.exit[n]) for x in (me, rival)):
+            out.append(Zone(_corner_label(c),
+                            (rival.exit[n] - rival.entry[n]) - (me.exit[n] - me.entry[n]),
+                            apex))
         if i + 1 < len(cs):
             m = cs[i + 1].number
-            out.append(Zone(f"{_corner_label(c)} exit to {_corner_label(cs[i + 1])}",
-                            (rival.entry[m] - rival.exit[n]) - (me.entry[m] - me.exit[n]),
-                            None))
+            if all(x.lap.get(n) == x.lap.get(m) and x.exit[n] < x.entry[m]
+                   and _clear(x, x.exit[n], x.entry[m]) for x in (me, rival)):
+                out.append(Zone(f"{_corner_label(c)} exit to {_corner_label(cs[i + 1])}",
+                                (rival.entry[m] - rival.exit[n])
+                                - (me.entry[m] - me.exit[n]), None))
     return out
+
+
+def _was_near(me: CarLap, o: CarLap) -> bool:
+    """Within BATTLE_RANGE_S of the driver at some corner entry on the lap (spec: only
+    a car in battle range during the lap is compared)."""
+    return any(abs(o.entry[n] - t) <= BATTLE_RANGE_S for n, t in me.entry.items()
+               if n in o.entry)
 
 
 def nearest_rivals(me: CarLap, others: list[CarLap]) -> list[CarLap]:
@@ -292,6 +333,11 @@ def format_battle(b: Battle | None, as_of_lap: int, units: str = "metric",
         if not all_zones:
             # Unmeasured is not "even": nothing timed for both is nothing compared.
             lines.append(f"No corner was timed for both of you on lap {as_of_lap}.")
+            continue
+        if not _was_near(me, o):
+            lines[-1] = (f"{o.driver} ({o.model or o.car}), P{o.class_position} in class, "
+                         f"wasn't near you on lap {as_of_lap} (never within "
+                         f"{BATTLE_RANGE_S:.0f} s) -- no corner-by-corner comparison.")
             continue
         # The floor applies to the delta AS STATED (2 dp): 0.1000001 s reads "0.10 s",
         # which the closing line says is never listed.

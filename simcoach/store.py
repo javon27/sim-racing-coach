@@ -865,7 +865,8 @@ class LapStore:
         """#152: every same-class car's corner timing for one of the driver's laps."""
         rows = [(lap_id, c.car_id, c.driver, c.car, c.model, c.class_position,
                  int(c.is_player),
-                 json.dumps({"entry": c.entry, "exit": c.exit, "apex_kph": c.apex_kph}))
+                 json.dumps({"entry": c.entry, "exit": c.exit, "apex_kph": c.apex_kph,
+                             "lap": c.lap, "pit": c.pit}))
                 for c in laps]
         with self._lock, self.conn:
             self.conn.executemany(
@@ -882,10 +883,11 @@ class LapStore:
         out = []
         for car_id, driver, car, model, pos, is_player, crossings in rows:
             x = json.loads(crossings)
-            timing = {k: {int(n): v for n, v in x[k].items()}
-                      for k in ("entry", "exit", "apex_kph")}
+            timing = {k: {int(n): v for n, v in x.get(k, {}).items()}
+                      for k in ("entry", "exit", "apex_kph", "lap")}
             out.append(CarLap(car_id, driver, car, pos, bool(is_player), **timing,
-                              model=model or ""))
+                              model=model or "",
+                              pit=[tuple(span) for span in x.get("pit", [])]))
         return out
 
     def load(self, lap_id: int) -> LapRecord:
