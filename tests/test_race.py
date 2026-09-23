@@ -5,11 +5,15 @@ import numpy as np
 import pytest
 
 from simcoach.lmu.live import FieldSnapshot, VehicleState, empty_snapshot
+from simcoach.model_types import LapRecord, RaceSample
 from simcoach.race import (
     LapFacts,
     PitWindow,
+    RaceTracker,
     catch_lap,
     class_neighbours,
+    format_race_state,
+    format_strategy,
     gap_slope,
     is_clean,
     lap_facts,
@@ -177,3 +181,97 @@ def test_energy_binds_when_it_runs_out_first():
     assert s.advice.binding_resource == "energy"
     assert s.save_per_lap == pytest.approx(0.1 * (1 - 7.5 / 12))
     assert s.window.binding == "energy" and s.window.latest == 19
+
+
+_W = ("fl", "fr", "rl", "rr")
+
+
+def _rec(lap_no, gap_ahead, fuel_start, wear, *, phase="race", pit=False, partial=None,
+         lap_time=100.0, ahead="A. Rival (Rival Entry)"):
+    n = 50
+    ch = {"fuel": np.linspace(fuel_start, fuel_start - 2.5, n),
+          "fuel_capacity": np.full(n, 100.0)}
+    for w in _W:
+        ch[f"tire_wear_{w}"] = np.linspace(wear + 0.01, wear, n)
+    race = RaceSample(class_position=3, class_ahead=ahead, class_gap_ahead=gap_ahead,
+                      class_behind="B. Chaser (Chaser Entry)", class_gap_behind=2.0,
+                      time_left=None, max_laps=24)
+    return LapRecord("lmu", "Spa", "GT3", lap_time, True, float(lap_no), ch, phase=phase,
+                     session_id="spa--gt3--offline", position=7, lap_no=lap_no, pit=pit,
+                     partial=partial, race=race)
+
+
+def _tracker_at_lap_12():
+    tr = RaceTracker()
+    for lap_no, gap, fuel, wear in ((10, 3.1, 32.5, 0.80), (11, 2.8, 30.0, 0.78),
+                                    (12, 2.5, 27.5, 0.76)):
+        tr.commit(_rec(lap_no, gap, fuel, wear))
+    return tr
+
+
+def test_tracker_snapshot_is_stamped_and_projects_from_the_stint():
+    snap = _tracker_at_lap_12().snapshot
+    assert snap.as_of_lap == 12 and snap.state.laps_to_go == 12
+    assert snap.state.ahead.slope == pytest.approx(-0.3) and snap.state.ahead.catch_lap == 21
+    assert snap.state.behind.slope == pytest.approx(0.0) and snap.state.behind.catch_lap is None
+    assert snap.strategy.window == PitWindow(22, 13, "fuel", True)
+
+
+def test_a_new_car_ahead_starts_a_new_gap_trend():
+    tr = _tracker_at_lap_12()
+    tr.commit(_rec(13, 0.9, 25.0, 0.74, ahead="C. Other (Other Entry)"))
+    assert tr.snapshot.state.ahead.who == "C. Other (Other Entry)"
+    assert tr.snapshot.state.ahead.slope is None            # one lap behind this car
+
+
+def test_a_pit_stop_starts_a_new_stint_and_the_guard_holds_until_two_clean_laps():
+    tr = _tracker_at_lap_12()
+    tr.commit(_rec(13, 2.5, 25.0, 0.76, pit=True, partial="in", lap_time=None))
+    tr.commit(_rec(14, 20.0, 100.0, 1.0, pit=True, partial="out", lap_time=None))
+    tr.commit(_rec(15, 19.5, 97.5, 0.99))
+    snap = tr.snapshot
+    assert snap.strategy.note.startswith("not enough laps yet")
+    assert snap.state.ahead.slope is None
+
+
+def test_leaving_the_race_clears_the_snapshot():
+    tr = _tracker_at_lap_12()
+    assert tr.commit(_rec(1, 3.0, 50.0, 0.9, phase="practice")) is None
+    assert tr.snapshot is None
+
+
+def test_the_cached_snapshot_only_changes_on_a_lap_commit():
+    tr = _tracker_at_lap_12()
+    snap = tr.snapshot
+    first = (format_race_state(snap), format_strategy(snap))
+    assert (format_race_state(snap), format_strategy(snap)) == first
+    assert tr.snapshot is snap                        # reading never recomputes
+    tr.commit(_rec(13, 2.2, 25.0, 0.74))
+    assert tr.snapshot is not snap and tr.snapshot.as_of_lap == 13
+
+
+def test_format_race_state_leads_with_the_lap_stamp_and_states_only_trends():
+    text = format_race_state(_tracker_at_lap_12().snapshot)
+    assert text.startswith("As of lap 12 (race).")
+    assert "Position: P7 overall, P3 in class." in text
+    assert "Remaining: 12 of 24 laps." in text
+    assert ("Car ahead in class: A. Rival (Rival Entry), 2.5 s ahead; you are closing "
+            "0.30 s/lap; at this rate you reach him around lap 21.") in text
+    assert "Car behind in class: B. Chaser (Chaser Entry), 2.0 s behind; holding steady" in text
+
+
+def test_format_strategy_states_margin_save_target_threshold_and_window():
+    text = format_strategy(_tracker_at_lap_12().snapshot)
+    assert text.startswith("As of lap 12.")
+    assert ("Fuel: 2.50 L/lap, 25.0 L on board = 10.0 laps: short by 2.0 laps; "
+            "save 0.42 L/lap") in text
+    assert "about 23 laps to the 30% threshold (a chosen threshold, not a measured limit)" in text
+    assert "Pit window: laps 13 to 22 (latest set by fuel;" in text
+
+
+def test_format_strategy_guard_reads_as_not_enough_laps():
+    tr = RaceTracker()
+    tr.commit(_rec(10, 3.1, 32.5, 0.80))
+    assert format_strategy(tr.snapshot) == (
+        "As of lap 10. No projection: not enough laps yet: needs 2 clean laps in this stint "
+        "(out-, in- and partial laps don't count).")

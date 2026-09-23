@@ -15,6 +15,7 @@ import tempfile
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 
@@ -53,6 +54,7 @@ from ..model.factory import CoachUserError, make_model
 from ..model_types import LapRecord
 from ..pricing import estimate_chat_cost
 from ..pronunciations import table_for
+from ..race import RaceTracker
 from ..ribbon import multi_signal_direction, reconstruct_surface, ribbon_to_screen
 from ..tiers import adjustable_from_setup, legal_adjustments
 from ..track_lookup import (
@@ -376,6 +378,16 @@ def _clamp_tts_cache_mb(voice_cfg: dict) -> int:
     return max(0, min(mb, 5000))
 
 
+def _race_commit(app_state, lap) -> None:
+    """Refresh the race tools' cached snapshot for a stored lap (#152). A failure costs
+    the race tools one lap of freshness, never a lap of capture -- logged, not raised
+    (an exception inside a pool future would otherwise vanish silently)."""
+    try:
+        app_state.race.commit(lap)
+    except Exception:
+        logging.getLogger(__name__).warning("race snapshot not refreshed", exc_info=True)
+
+
 def _capture_loop(source, store, app_state) -> None:
     """One pass over `source.laps()`: save each completed lap to `store` and
     record it on `app_state.latest` so /status and the lap list see it live.
@@ -406,6 +418,15 @@ def _capture_loop(source, store, app_state) -> None:
             lap.phase = "mapping"
         lap_id = store.save(lap)
         app_state.latest = {"record": lap, "lap_id": lap_id}
+        if getattr(app_state, "race", None) is not None:
+            # #152: refresh the race tools' snapshot OFF this thread -- source.laps() is
+            # suspended while this body runs, so work here would delay the next poll.
+            try:
+                app_state.race_pool.submit(_race_commit, app_state, lap)
+            except RuntimeError:
+                # The pool is shut down (app/interpreter exit): skip the snapshot,
+                # never stop capture over it.
+                logging.getLogger(__name__).warning("race pool closed; snapshot skipped")
 
 
 def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_factory=None,
@@ -454,6 +475,9 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     app.state.canon = {}             # per-(track,car) canonical map payload cache
     app.state.live_cmap = None       # (live track, CornerMap|None) for /live's next corner
     app.state.latest = None  # set by the capture thread (build_app): {"record", "lap_id"} | None
+    app.state.race = RaceTracker()   # #152: the race tools' snapshot, one per lap commit
+    # One worker: commits are processed in lap order, and never on the capture thread.
+    app.state.race_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="race-state")
     app.state.mapping = False        # mapping-capture mode: buffer laps, don't persist
     app.state.map_buffer = []        # LapRecords captured while mapping (transient)
     app.state.last_ribbon = None     # last built ribbon {world, corners, sectors} for save

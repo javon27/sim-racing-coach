@@ -13,7 +13,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from simcoach.analysis import _WHEELS, LapAnalysis, stint_tire_trend
+from simcoach.analysis import _MIN_TIRE_TREND_LAPS, _WHEELS, LapAnalysis, stint_tire_trend
+from simcoach.format import format_laptime
 from simcoach.fuel import SaveAdvice, laps_remaining, stint_save_advice, use_per_lap_from_channel
 from simcoach.lmu.live import FieldSnapshot, VehicleState
 from simcoach.model_types import LapRecord, RaceSample
@@ -270,3 +271,211 @@ def strategy(stint: list[LapFacts], laps_to_go: int | None) -> Strategy:
     window = pit_window(latest.lap_no, laps_to_go, limits) if limits else None
     return Strategy(None, laps_to_go, resources, advice, save, wheel, rem, rate, tire_laps,
                     window)
+
+
+_WHEEL_NAME = {"fl": "front-left", "fr": "front-right", "rl": "rear-left", "rr": "rear-right"}
+
+
+@dataclass
+class GapRead:
+    who: str
+    gap: float | None           # s now; None = a lap or more away
+    slope: float | None         # s/lap over the trend laps; negative = the gap is shrinking
+    catch_lap: int | None       # the lap it reaches zero at that slope, before the flag
+
+
+@dataclass
+class RaceState:
+    position: int | None
+    class_position: int | None
+    max_laps: int | None
+    time_left: float | None
+    pace: float | None          # recent clean-lap pace, s
+    laps_to_go: int | None
+    ahead: GapRead | None
+    behind: GapRead | None
+
+
+@dataclass
+class RaceSnapshot:
+    """Everything the race tools answer from, as of one committed lap."""
+    as_of_lap: int
+    session_id: str | None
+    state: RaceState
+    strategy: Strategy
+
+
+def _gap_read(stint: list[LapFacts], side: str, final_lap: int | None) -> GapRead | None:
+    """The in-class car ahead/behind now, and the gap trend over the laps spent with
+    that SAME car there -- a new car starts a new trend. Clean laps only."""
+    who_key, gap_key = f"class_{side}", f"class_gap_{side}"
+    latest = stint[-1]
+    who = getattr(latest.race, who_key) if latest.race else None
+    if who is None:
+        return None
+    points = []
+    for f in reversed(stint):
+        if f.race is None or getattr(f.race, who_key) != who:
+            break
+        gap = getattr(f.race, gap_key)
+        if f.clean and gap is not None:
+            points.append((f.lap_no, gap))
+    gap = getattr(latest.race, gap_key)
+    slope = gap_slope(points[:GAP_TREND_LAPS])
+    caught = (catch_lap(latest.lap_no, gap, slope, final_lap)
+              if slope is not None and gap is not None else None)
+    return GapRead(who, gap, slope, caught)
+
+
+def build_snapshot(stint: list[LapFacts], session_id: str | None) -> RaceSnapshot:
+    latest = stint[-1]
+    r = latest.race or RaceSample()
+    clean = [f for f in stint if f.clean]
+    recent = clean[-PACE_LAPS:]
+    pace = (sum(f.lap_time for f in recent) / len(recent)
+            if len(clean) >= MIN_STINT_LAPS else None)
+    to_go = laps_left(latest.lap_no, r.max_laps, r.time_left, pace)
+    final = latest.lap_no + to_go if to_go is not None else None
+    state = RaceState(latest.position, r.class_position, r.max_laps, r.time_left, pace, to_go,
+                      _gap_read(stint, "ahead", final), _gap_read(stint, "behind", final))
+    return RaceSnapshot(latest.lap_no, session_id, state, strategy(stint, to_go))
+
+
+class RaceTracker:
+    """The current race stint's per-lap facts, and the ONE cached snapshot the race
+    tools read.
+
+    `commit` runs once per stored lap, off the capture thread (the sidecar hands it to a
+    one-worker pool); the tools only read `snapshot`, so nothing is computed while the
+    driver waits. The snapshot is replaced by a single assignment, so a reader on another
+    thread sees the old one or the new one, never a half-built one.
+
+    ponytail: in memory only. After a sidecar restart mid-race the tools say "not enough
+    laps yet" until two clean laps land; seed from the store if that ever matters."""
+
+    def __init__(self) -> None:
+        self._stint: list[LapFacts] = []
+        self._key: tuple | None = None
+        self.snapshot: RaceSnapshot | None = None
+
+    def commit(self, record: LapRecord) -> RaceSnapshot | None:
+        if record.phase != "race" or record.lap_no is None:
+            # Practice, qualy, a mapping lap: there is no live race to answer about.
+            self._stint, self._key, self.snapshot = [], None, None
+            return None
+        facts = lap_facts(record)
+        key = (record.session_id, record.track, record.car)
+        restarted = key != self._key or bool(
+            self._stint and facts.lap_no <= self._stint[-1].lap_no)
+        # A stop starts a new stint: rates from before it describe other tires and fuel.
+        if restarted or record.pit or record.partial in ("out", "in"):
+            self._stint = []
+        self._key = key
+        self._stint.append(facts)
+        self.snapshot = build_snapshot(self._stint, record.session_id)
+        return self.snapshot
+
+
+def _clock(seconds: float) -> str:
+    s = int(seconds)
+    return f"{s // 60}:{s % 60:02d}"
+
+
+def _gap_line(label: str, g: GapRead | None, side: str) -> str:
+    if g is None:
+        return f"{label}: none" + (" — you lead your class." if side == "ahead" else ".")
+    if g.gap is None:
+        return f"{label}: {g.who}, a lap or more away."
+    head = f"{label}: {g.who}, {g.gap:.1f} s {side}"
+    if g.slope is None:
+        return (f"{head}; trend: not enough laps yet (needs {MIN_STINT_LAPS} clean laps with "
+                "this car there, in this stint).")
+    if abs(g.slope) < GAP_STEADY_S_PER_LAP:
+        return f"{head}; holding steady (under {GAP_STEADY_S_PER_LAP:.2f} s/lap either way)."
+    closing = g.slope < 0
+    if side == "ahead":
+        trend = f"you are {'closing' if closing else 'losing'} {abs(g.slope):.2f} s/lap"
+        reach = "you reach him"
+    else:
+        trend = f"he is {'closing' if closing else 'dropping back'} {abs(g.slope):.2f} s/lap"
+        reach = "he reaches you"
+    if g.catch_lap is not None:
+        trend += f"; at this rate {reach} around lap {g.catch_lap}"
+    elif closing:
+        trend += "; not before the flag at this rate"
+    return f"{head}; {trend}."
+
+
+def format_race_state(snap: RaceSnapshot) -> str:
+    st = snap.state
+    pos = f"P{st.position}" if st.position else "unknown"
+    cls = f"P{st.class_position}" if st.class_position else "unknown"
+    lines = [f"As of lap {snap.as_of_lap} (race).", f"Position: {pos} overall, {cls} in class."]
+    if st.max_laps:
+        lines.append(f"Remaining: {max(st.max_laps - snap.as_of_lap, 0)} of {st.max_laps} laps.")
+    if st.time_left is not None:
+        if st.time_left <= 0:
+            lines.append("Remaining: the clock has run out — this is the last lap.")
+        elif st.pace:
+            lines.append(f"Remaining: {_clock(st.time_left)} on the clock, about "
+                         f"{st.laps_to_go} laps at your recent clean pace "
+                         f"({format_laptime(st.pace)}/lap).")
+        else:
+            lines.append(f"Remaining: {_clock(st.time_left)} on the clock; laps left need "
+                         f"{MIN_STINT_LAPS} clean laps in this stint for a pace.")
+    if not st.max_laps and st.time_left is None:
+        lines.append("Remaining: the game reports no lap count or clock for this race.")
+    lines.append(_gap_line("Car ahead in class", st.ahead, "ahead"))
+    lines.append(_gap_line("Car behind in class", st.behind, "behind"))
+    return "\n".join(lines)
+
+
+def format_strategy(snap: RaceSnapshot) -> str:
+    s = snap.strategy
+    head = f"As of lap {snap.as_of_lap}."
+    if s.note:
+        return f"{head} No projection: {s.note}."
+    final = snap.as_of_lap + s.laps_to_go
+    lines = [head, f"Laps to go: {s.laps_to_go} (flag at the end of lap {final})."]
+    binding = s.advice.binding_resource if s.advice and not s.advice.make_it else None
+    for r in s.resources:
+        if r.name == "fuel":
+            txt = f"Fuel: {r.per_lap:.2f} L/lap, {r.on_board:.1f} L on board = {r.laps:.1f} laps"
+            save = f"save {s.save_per_lap:.2f} L/lap" if s.save_per_lap is not None else ""
+        else:
+            txt = (f"Virtual energy: {r.per_lap * 100:.1f}%/lap, {r.on_board * 100:.0f}% left "
+                   f"= {r.laps:.1f} laps")
+            save = (f"save {s.save_per_lap * 100:.1f}% energy/lap"
+                    if s.save_per_lap is not None else "")
+        margin = r.laps - s.laps_to_go
+        if margin >= 0:
+            txt += f": makes the flag with {margin:.1f} laps spare."
+        else:
+            txt += f": short by {-margin:.1f} laps"
+            txt += f"; {save} to finish without stopping." if r.name == binding else "."
+        lines.append(txt)
+    if not s.resources:
+        lines.append("Fuel/energy: no clear per-lap burn measured in this stint.")
+    if s.tire_laps is not None:
+        lines.append(f"Tires: worst is the {_WHEEL_NAME[s.tire_wheel]} at "
+                     f"{s.tire_remaining_pct:.0f}% tread, wearing {s.tire_rate_pct:.1f}%/lap: "
+                     f"about {max(s.tire_laps, 0):.0f} laps to the {WEAR_FLOOR_PCT:.0f}% "
+                     "threshold (a chosen threshold, not a measured limit).")
+    else:
+        lines.append(f"Tires: no wear rate yet (needs {_MIN_TIRE_TREND_LAPS} clean laps with "
+                     "wear data in this stint).")
+    w = s.window
+    if w is None:
+        lines.append("Pit window: no stop needed on these rates"
+                     + (" (tires not yet measured)." if s.tire_laps is None else "."))
+    elif not w.one_stop:
+        lines.append(f"Pit window: pit by lap {w.latest} ({w.binding} runs out first); one "
+                     "stop can't reach the flag from there — more than one stop is needed.")
+    elif w.earliest is None:
+        lines.append(f"Pit window: pit by lap {w.latest} ({w.binding} runs out first); the "
+                     "earliest lap is unknown (tank size not reported).")
+    else:
+        lines.append(f"Pit window: laps {w.earliest} to {w.latest} (latest set by "
+                     f"{w.binding}; earliest is the first lap one full service reaches the "
+                     "flag from).")
+    return "\n".join(lines)
