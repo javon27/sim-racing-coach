@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 import simcoach
 import simcoach.server.app as app_module
+import simcoach.server.core as core_mod
 from simcoach import analysis
 from simcoach.analysis import (
     CORNER_GEOMETRY_KEYS,
@@ -618,7 +619,7 @@ def _installed(tmp_path, monkeypatch):
     from an older build: T5 renamed, a note on T13, T13 still holding the stale bake, and
     T7 holding a real radius where the bundle's is unusable. Returns
     (client, bundled_dir, user_dir)."""
-    monkeypatch.setattr(app_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(core_mod.sys, "frozen", True, raising=False)
     shipped = _shipped(IMOLA)
     shipped["corners"] = [dict(c, **REBAKED_T13) if str(c["label"]) == "13"
                           else dict(c, radius_m=T7_SHIPPED_RADIUS) if str(c["label"]) == "7"

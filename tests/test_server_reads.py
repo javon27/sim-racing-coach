@@ -1329,14 +1329,14 @@ def test_installed_build_writes_maps_to_appdata_not_bundle(tmp_path, monkeypatch
     # A frozen (installed) build must save map edits to app-data, never the bundled
     # dir (read-only / a onefile temp dir wiped on exit). Simulate install via
     # sys.frozen; the write should land under store.data_dir/tracks.
-    from simcoach.server import app as app_module
+    from simcoach.server import core as core_mod
     from simcoach.track_lookup import track_slug
 
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     lid = store.save(_curve_lap("Imola", "GT3", 90.0))
     bundled = (tmp_path / "tracks").resolve()
     bundled.mkdir()
-    monkeypatch.setattr(app_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(core_mod.sys, "frozen", True, raising=False)
     coach = Coach(FakeModel())
     c = _tc(create_app(store, coach, tracks_dir=str(bundled)))
     assert c.post(f"/laps/{lid}/rotation", json={"degrees": 45}).status_code == 200
@@ -1348,13 +1348,13 @@ def test_installed_build_writes_maps_to_appdata_not_bundle(tmp_path, monkeypatch
 
 def test_dev_build_writes_maps_to_bundle(tmp_path, monkeypatch):
     # Dev (not frozen) curates the shipped set: writes land in the repo tracks dir.
-    from simcoach.server import app as app_module
+    from simcoach.server import core as core_mod
     from simcoach.track_lookup import track_slug
 
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     lid = store.save(_curve_lap("Imola", "GT3", 90.0))
     bundled = (tmp_path / "tracks").resolve()
-    monkeypatch.setattr(app_module.sys, "frozen", False, raising=False)
+    monkeypatch.setattr(core_mod.sys, "frozen", False, raising=False)
     coach = Coach(FakeModel())
     c = _tc(create_app(store, coach, tracks_dir=str(bundled)))
     assert c.post(f"/laps/{lid}/rotation", json={"degrees": 45}).status_code == 200

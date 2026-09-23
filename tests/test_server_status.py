@@ -184,14 +184,14 @@ def test_status_probe_bounded_by_probe_timeout_not_a_full_hang(tmp_path, monkeyp
     # urllib honoring a timeout: it sleeps only up to the `probe_timeout` it was
     # given, then raises -- so this test fails (sleeps 0.3s) if the probe call
     # ever drops the kwarg and falls back to the fake's hang duration.
-    from simcoach.server import app as app_module
+    from simcoach.server import core as core_mod
 
     class SlowRest:
         def get_setup(self, probe_timeout=None):
             time.sleep(probe_timeout if probe_timeout is not None else 0.3)
             raise TimeoutError("LMU REST not answering")
 
-    monkeypatch.setattr(app_module, "REST_PROBE_TIMEOUT", 0.1)
+    monkeypatch.setattr(core_mod, "REST_PROBE_TIMEOUT", 0.1)
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     app = create_app(store, Coach(FakeModel()), rest_factory=SlowRest)
     c = TestClient(app, base_url="http://127.0.0.1")

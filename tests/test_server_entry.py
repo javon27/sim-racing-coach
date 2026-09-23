@@ -62,13 +62,13 @@ def test_status_lmu_connected_reflects_disconnect(tmp_path, monkeypatch):
 
     from simcoach.coach import Coach
     from simcoach.model.fake import FakeModel
-    from simcoach.server import app as app_module
+    from simcoach.server import core as core_mod
     from simcoach.server.app import create_app
     from simcoach.store import LapStore
 
     # Probe on every call so the transition is observed synchronously (prod caps
     # the probe rate via REST_PROBE_TTL; here we want each /status to re-probe).
-    monkeypatch.setattr(app_module, "REST_PROBE_TTL", 0.0)
+    monkeypatch.setattr(core_mod, "REST_PROBE_TTL", 0.0)
 
     class FakeRest:
         alive = True
