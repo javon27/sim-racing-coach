@@ -2605,3 +2605,21 @@ def test_battle_rows_round_trip_one_per_car_and_reset_clears_them(tmp_path, synt
     assert s.battle_laps(lid + 1) == []              # keyed to the driver's lap
     s.clear_all()
     assert s.battle_laps(lid) == []
+
+
+def test_saving_a_laps_battle_twice_replaces_it_never_duplicates(tmp_path, synthetic_lap):
+    """#152 red-team: a re-run commit must not double a lap's rows (and so its field)."""
+    import sqlite3
+
+    from simcoach.battle import CarLap
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "telem"))
+    lid = s.save(synthetic_lap)
+    me = CarLap(1, "You", "E1", 3, True, entry={1: 104.0}, exit={1: 106.0})
+    a = CarLap(2, "A. Rival", "E2", 2, False, entry={1: 103.0}, exit={1: 105.3})
+    b = CarLap(3, "B. Chaser", "E3", 4, False, entry={1: 105.0}, exit={1: 107.0})
+    s.save_battle(lid, [me, a])
+    s.save_battle(lid, [me, b])
+    assert s.battle_laps(lid) == [me, b]
+    with pytest.raises(sqlite3.IntegrityError):     # the table itself refuses a duplicate
+        s.conn.execute("INSERT INTO battle_laps (lap_id, car_id) VALUES (?, 1)", (lid,))

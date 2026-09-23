@@ -182,7 +182,8 @@ CREATE TABLE IF NOT EXISTS battle_laps (
     model TEXT,
     class_position INTEGER,
     is_player INTEGER,
-    crossings TEXT
+    crossings TEXT,
+    UNIQUE (lap_id, car_id)
 );
 """
 
@@ -869,6 +870,8 @@ class LapStore:
                              "lap": c.lap, "pit": c.pit}))
                 for c in laps]
         with self._lock, self.conn:
+            # A lap's battle is replaced whole: a re-run commit never doubles its rows.
+            self.conn.execute("DELETE FROM battle_laps WHERE lap_id = ?", (lap_id,))
             self.conn.executemany(
                 "INSERT INTO battle_laps (lap_id, car_id, driver, car, model, "
                 "class_position, is_player, crossings) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
