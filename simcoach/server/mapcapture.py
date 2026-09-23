@@ -110,25 +110,27 @@ def register(app, deps) -> None:
         # too, so a cancel must not be a way to lose driven laps. Next start resumes it.
         # {"discard": true} (the editor's explicit "Discard capture") deletes it: every
         # track in the buffer (the sim may change track mid-session), else the live one.
-        # Nothing to resolve is a 409, never a silent no-op the UI reads as success.
-        discarded = 0
-        discard = body.get("discard") is True
-        if discard:
-            buf = list(app.state.map_buffer)
-            names = {r.track for r in buf} if buf else {_live_track()}
-            slugs = {track_slug(n) for n in names if n} - {""}
-            if not slugs:
-                raise HTTPException(409, "no track to discard a capture for; is the "
-                                         "sim running?")
-            app.state.mapping = False
-            for slug in slugs:
-                d = _pending_dir(store.data_dir, slug)
-                discarded += _drop_pending(sorted(d.glob("*.npz")) if d.is_dir() else [])
+        # Mapping ends FIRST, whatever the discard finds (#154): a 409 raised before
+        # this left mapping on after a sidecar restart, and every qualifying/race lap for
+        # 40 min was stamped a mapping lap. No track to resolve discards nothing and SAYS
+        # so in `note` -- never a silent no-op the UI reads as "laps deleted".
         app.state.mapping = False
+        discard = body.get("discard") is True
+        buf = list(app.state.map_buffer)
         app.state.map_buffer = []
         app.state.last_ribbon = None
-        # A plain cancel's reply is unchanged; only a discard reports its count.
-        return {"active": False, "discarded": discarded} if discard else {"active": False}
+        if not discard:
+            return {"active": False}   # a plain cancel's reply is unchanged
+        names = {r.track for r in buf} if buf else {_live_track()}
+        slugs = {track_slug(n) for n in names if n} - {""}
+        if not slugs:
+            return {"active": False, "discarded": 0,
+                    "note": "no track to discard a capture for; is the sim running?"}
+        discarded = 0
+        for slug in slugs:
+            d = _pending_dir(store.data_dir, slug)
+            discarded += _drop_pending(sorted(d.glob("*.npz")) if d.is_dir() else [])
+        return {"active": False, "discarded": discarded}
 
     @app.get("/mapcapture/status")
     def mapcapture_status():
@@ -230,12 +232,14 @@ def register(app, deps) -> None:
             raise HTTPException(422, "the capture this map was built from is gone; "
                                      "use Generate map layout to record one")
         dropped = _write_track_json(track, out)
+        # A saved map ends mapping on EVERY path (#154), a rebuild's too (laps None):
+        # left on, it stamped every later lap a mapping lap. FIRST, which also shrinks
+        # the window for a lap landing mid-promote.
+        app.state.mapping = False
         if rib.get("laps"):
-            # Promoted: the Build's laps are in captures/<slug>.npz now. Leave mapping
-            # mode FIRST (shrinks the window for a lap landing mid-promote), then drop
-            # only those laps' files: a lap driven after Build stays pending, and in
-            # the buffer, for the next Generate map layout.
-            app.state.mapping = False
+            # Promoted: the Build's laps are in captures/<slug>.npz now. Drop only those
+            # laps' files: a lap driven after Build stays pending, and in the buffer,
+            # for the next Generate map layout.
             built = rib.get("buffered") or []
             _drop_pending(_pending_files(built))
             rib.pop("buffered", None)   # a second Save must not drop a newer lap

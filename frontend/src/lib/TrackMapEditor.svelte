@@ -300,6 +300,11 @@
   // True once THIS editor started a capture (vs. a rebuild preview): only then does
   // the footer button discard the laps it put on disk (#150).
   let captured = $state(false);
+  // #154: this editor turned mapping mode on and no cancel has confirmed it off. NOT
+  // reset by resetGen: Save/Rebuild/a failed Discard all reset genPhase to "off", and the
+  // close paths gated on genPhase alone then never told the server -- mapping stayed on
+  // for 40 min. Plain (not $state): only the teardown paths read it.
+  let serverMapping = false;
 
   function resetGen() {
     genPhase = "off";
@@ -317,6 +322,7 @@
       genErr = "Couldn't start mapping capture — is the sim running?";
       return;
     }
+    serverMapping = true;
     capLaps = [];
     ribbon = null;
     captured = true;
@@ -394,8 +400,10 @@
   // discard=true only from the footer's "Discard capture" button: closing / unmounting
   // keeps the driven laps on disk for the next Generate map layout (#150).
   async function cancelGen(discard = false) {
+    let note: string | undefined;
     try {
-      await cancelMapCapture(discard);
+      note = (await cancelMapCapture(discard)).note;
+      serverMapping = false;
     } catch (e) {
       // A plain cancel is best-effort. A failed DISCARD left the laps on disk, and the
       // driver must hear that rather than believe they are gone (#150).
@@ -407,12 +415,14 @@
       return;
     }
     resetGen();
+    // A discard that found no track still ended mapping, but deleted nothing (#154).
+    if (discard && note) genErr = `Nothing discarded — ${note}`;
   }
 
   onDestroy(() => {
     // Unmount mid-capture -> tell the server to leave mapping mode, else real
     // laps keep buffering unsaved.
-    if (genPhase !== "off") cancelMapCapture().catch(() => {});
+    if (genPhase !== "off" || serverMapping) cancelMapCapture().catch(() => {});
   });
 
   // Ribbon fill = left edge forward, right edge back, closed.
@@ -436,7 +446,7 @@
       loadedSlug = null;
       // Closing mid-capture must not leave the server buffering real laps into
       // mapping mode (silent data loss) — same teardown as the × button.
-      if (genPhase !== "off") cancelGen();
+      if (genPhase !== "off" || serverMapping) cancelGen();
       return;
     }
     if (lapId == null) {
@@ -802,7 +812,7 @@
   }
 
   function close() {
-    if (genPhase !== "off") cancelGen();
+    if (genPhase !== "off" || serverMapping) cancelGen();
     onClose?.();
   }
   function onKeydown(e: KeyboardEvent) {

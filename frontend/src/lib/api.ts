@@ -473,8 +473,11 @@ export function startMapCapture(): Promise<{ active: boolean }> {
 }
 
 // Leaving mapping mode keeps the driven laps on disk (#150); discard=true deletes them.
-export function cancelMapCapture(discard = false): Promise<{ active: boolean }> {
-  return request<{ active: boolean }>("/mapcapture/cancel", {
+// A discard that finds no track still ends mapping: discarded 0 and a `note` (#154).
+export function cancelMapCapture(
+  discard = false,
+): Promise<{ active: boolean; discarded?: number; note?: string }> {
+  return request<{ active: boolean; discarded?: number; note?: string }>("/mapcapture/cancel", {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify(discard ? { discard: true } : {}),

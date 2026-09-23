@@ -278,14 +278,6 @@ def test_discard_after_restart_uses_the_live_track(tmp_path):
     assert not _pending(tmp_path)
 
 
-def test_discard_with_no_track_is_an_error_not_a_silent_noop(tmp_path):
-    app, store = _app(tmp_path)
-    _drive(app, store, 2)
-    app2, _ = _app(tmp_path)                                    # no buffer, no live track
-    assert _tc(app2).post("/mapcapture/cancel", json={"discard": True}).status_code == 409
-    assert len(_pending(tmp_path)) == 2
-
-
 def test_discard_covers_every_track_in_the_buffer(tmp_path):
     # The sim changed track mid-session: both tracks' pending laps go.
     app, store = _app(tmp_path)
@@ -347,3 +339,58 @@ def test_a_locked_old_tombstone_does_not_resurrect_a_promoted_lap(tmp_path):
     with open(d / "00000.dropped", "rb"):          # held open: Windows won't replace it
         assert _drop_pending([d / "00000.npz"]) == 1
     assert _pending(tmp_path) == []
+
+
+def _live_laps(store, n=4):
+    # Driven laps of MapTrack (not a capture): what "Rebuild from saved capture" falls
+    # back to when there is no captures/<slug>.npz.
+    for i in range(n):
+        store.save(_edge(1 if i % 2 else -1))
+
+
+def test_discard_with_no_track_still_ends_mapping(tmp_path):
+    # #154: the sidecar had just restarted, so no track resolved and the discard 409'd
+    # BEFORE `mapping = False` -- every lap for 40 min was then stamped a mapping lap.
+    app, store = _app(tmp_path)
+    _drive(app, store, 2)
+    app2, _ = _app(tmp_path)                                    # no buffer, no live track
+    c = _tc(app2)
+    assert c.post("/mapcapture/start", json={}).status_code == 200
+    r = c.post("/mapcapture/cancel", json={"discard": True})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["active"] is False and body["discarded"] == 0
+    assert "no track to discard" in body["note"]
+    assert app2.state.mapping is False
+    assert app2.state.map_buffer == [] and app2.state.last_ribbon is None
+    assert len(_pending(tmp_path)) == 2                         # nothing discarded
+
+
+def test_save_of_a_rebuild_ends_mapping(tmp_path):
+    # #154: a rebuild's ribbon has laps=None, and Save only left mapping mode on the
+    # capture path -- so start -> rebuild -> save left mapping ON.
+    app, store = _app(tmp_path)
+    _live_laps(store)
+    c = _tc(app)
+    assert c.post("/mapcapture/start", json={}).status_code == 200
+    assert c.post("/mapcapture/rebuild", json={"slug": "maptrack"}).status_code == 200
+    assert c.post("/mapcapture/save", json={}).status_code == 200
+    assert app.state.mapping is False
+
+
+def test_rig_sequence_start_failed_discard_rebuild_save_ends_mapping(tmp_path):
+    # The exact server.log sequence from #154: start -> discard (no track) -> rebuild ->
+    # save, and the dialog closed with no further cancel. Mapping must be OFF.
+    app, store = _app(tmp_path)
+    _live_laps(store)
+    c = _tc(app)
+    assert c.post("/mapcapture/start", json={}).status_code == 200
+    assert c.post("/mapcapture/cancel", json={"discard": True}).status_code == 200
+    assert c.post("/mapcapture/rebuild", json={"slug": "maptrack"}).status_code == 200
+    assert c.post("/mapcapture/save", json={}).status_code == 200
+    assert app.state.mapping is False
+
+
+def test_sidecar_restart_comes_up_with_mapping_off(tmp_path):
+    app, _ = _app(tmp_path)
+    assert app.state.mapping is False
