@@ -70,15 +70,19 @@ describe("App shell", () => {
 
   // The shell mounts after the splash finishes its boot (health + prefetch),
   // so these await the shell rather than querying synchronously.
-  it("renders the three nav items and a theme toggle", async () => {
+  it("renders the nav items and a theme toggle — and no Pit Wall (#151)", async () => {
     const { container } = render(App);
-    await screen.findByText("Pit Wall");
+    await screen.findByRole("navigation"); // shell mounts past the splash
     const nav = within(container.querySelector(".nav") as HTMLElement);
 
     expect(nav.getByText("Coach")).toBeTruthy();
     expect(nav.getByText("Sessions")).toBeTruthy();
-    expect(nav.getByText("Pit Wall")).toBeTruthy();
+    expect(nav.getByText("Tracks")).toBeTruthy();
+    expect(nav.getByText("Settings")).toBeTruthy();
     expect(nav.getByText(/^Theme ·/)).toBeTruthy();
+    expect(nav.queryByText("Pit Wall")).toBeNull();
+    // Coach is the landing screen and still mounts.
+    expect(nav.getByText("Coach").closest(".nav-item")?.classList.contains("on")).toBe(true);
   });
 
   it("has a draggable resizer for the lap pane", async () => {
@@ -143,7 +147,7 @@ describe("Coach screen assembly", () => {
 
   it("renders the session bar, lap list, corner/setup tabs, and chat composer together", async () => {
     const { container } = render(App);
-    await screen.findByText("Pit Wall"); // wait for the shell to mount past the splash
+    await screen.findByRole("navigation"); // wait for the shell to mount past the splash
     const bar = container.querySelector(".bar") as HTMLElement;
 
     expect(await within(bar).findByText("Le Mans")).toBeTruthy(); // session bar
@@ -156,7 +160,7 @@ describe("Coach screen assembly", () => {
 
   it("#106: nothing polls once the shell has booted", async () => {
     render(App);
-    await screen.findByText("Pit Wall"); // shell mounts past the splash
+    await screen.findByRole("navigation"); // shell mounts past the splash
     await screen.findByText("Lap 1"); // everything has loaded its first data
 
     // A quiet window longer than the 2 s period the status/map pollers ran at.
@@ -184,7 +188,7 @@ describe("Coach screen assembly", () => {
       corners: [],
     });
     const { container } = render(App);
-    await screen.findByText("Pit Wall"); // shell mounts past the splash
+    await screen.findByRole("navigation"); // shell mounts past the splash
 
     await fireEvent.click(await screen.findByText("Lap 1")); // selects lap 9, feeds InputsPanel real channels
     const panel = (await screen.findByTestId("inputs-panel-body")).closest(".panel") as HTMLElement;
@@ -199,7 +203,7 @@ describe("Coach screen assembly", () => {
 
   it("flows a selected lap's id into the corner panel and highlights the row", async () => {
     render(App);
-    await screen.findByText("Pit Wall"); // shell mounts past the splash
+    await screen.findByRole("navigation"); // shell mounts past the splash
 
     const lapRow = await screen.findByText("Lap 1");
     const cell = lapRow.closest(".lap") as HTMLElement; // grid container keeps best/selected
@@ -217,7 +221,7 @@ describe("Coach screen assembly", () => {
 
   it("switches to the Sessions screen when the Sessions nav item is clicked", async () => {
     const { container } = render(App);
-    await screen.findByText("Pit Wall"); // shell mounts past the splash
+    await screen.findByRole("navigation"); // shell mounts past the splash
     const nav = within(container.querySelector(".nav") as HTMLElement);
 
     await fireEvent.click(nav.getByText("Sessions"));
@@ -227,7 +231,7 @@ describe("Coach screen assembly", () => {
 
   it("switches to the Settings screen when the Settings nav item is clicked", async () => {
     const { container } = render(App);
-    await screen.findByText("Pit Wall"); // shell mounts past the splash
+    await screen.findByRole("navigation"); // shell mounts past the splash
     const nav = within(container.querySelector(".nav") as HTMLElement);
 
     await fireEvent.click(nav.getByText("Settings"));
@@ -237,7 +241,7 @@ describe("Coach screen assembly", () => {
 
   it("switches to the Tracks screen when the Tracks nav item is clicked", async () => {
     const { container } = render(App);
-    await screen.findByText("Pit Wall"); // shell mounts past the splash
+    await screen.findByRole("navigation"); // shell mounts past the splash
     const nav = within(container.querySelector(".nav") as HTMLElement);
 
     await fireEvent.click(nav.getByText("Tracks"));
@@ -247,7 +251,7 @@ describe("Coach screen assembly", () => {
 
   it("deep-links a clicked session row into the Coach screen and loads that session's laps", async () => {
     const { container } = render(App);
-    await screen.findByText("Pit Wall"); // shell mounts past the splash
+    await screen.findByRole("navigation"); // shell mounts past the splash
     const nav = within(container.querySelector(".nav") as HTMLElement);
 
     await fireEvent.click(nav.getByText("Sessions"));
@@ -268,7 +272,7 @@ describe("Coach screen assembly", () => {
     // This used to wait out LapList's real 5 s poll; the new live session is now
     // a status frame, so it lands immediately.
     const { container } = render(App);
-    await screen.findByText("Pit Wall"); // shell mounts past the splash
+    await screen.findByRole("navigation"); // shell mounts past the splash
     const nav = within(container.querySelector(".nav") as HTMLElement);
 
     await fireEvent.click(nav.getByText("Sessions"));

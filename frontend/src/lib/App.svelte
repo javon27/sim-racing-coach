@@ -13,11 +13,10 @@
   import SessionsScreen from "./SessionsScreen.svelte";
   import SettingsScreen from "./SettingsScreen.svelte";
   import TracksScreen from "./TracksScreen.svelte";
-  import PitWall from "./PitWall.svelte";
   import NestorMark from "./NestorMark.svelte";
   import Splash from "./Splash.svelte";
 
-  type Screen = "coach" | "sessions" | "pitwall" | "tracks" | "settings";
+  type Screen = "coach" | "sessions" | "tracks" | "settings";
 
   let booted = $state(false);
   let railOpen = $state(false); // narrow-width laps drawer
@@ -31,9 +30,9 @@
   // string = open that specific chat.
   let activeChatId: string | null | undefined = $state(undefined);
 
-  // Start the shared feeds once, for the whole app lifetime: the pit-wall field
-  // (so live data keeps flowing while another view is open) and the /events feed
-  // that replaced the screens' HTTP pollers (#106).
+  // Start the shared feeds once, for the whole app lifetime: the /live feed (the
+  // Coach rail map's live car + next corner, #151) and the /events feed that
+  // replaced the screens' HTTP pollers (#106).
   onMount(() => {
     liveField.start();
     eventFeed.start();
@@ -111,8 +110,6 @@
     dragging: draggingInputs,
   });
 
-  // Draggable divider above the track-map pane (mirrors the laps handle). The
-  // handle sits above the map, so dragging DOWN shrinks it.
   // #151: the rail map's expand control WIDENS the rail (.main.rail-wide in app.css),
   // pushing the chat column narrower — never over it. Remembered per viewer; a
   // blocked storage just means it isn't remembered. Expanding also gives the map
@@ -146,6 +143,8 @@
       /* private mode / storage disabled — the choice just won't persist */
     }
   }
+  // Draggable divider above the track-map pane (mirrors the laps handle). The
+  // handle sits above the map, so dragging DOWN shrinks it.
   let mapStartY = 0;
   let mapStartH = 0;
   let draggingMap = $state(false);
@@ -225,15 +224,6 @@
     <button
       type="button"
       class="nav-item"
-      class:on={screen === "pitwall"}
-      onclick={() => (screen = "pitwall")}
-    >
-      <span class="lbl">Pit Wall</span>
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2.5 7 5-14 2.5 7H21"/></svg>
-    </button>
-    <button
-      type="button"
-      class="nav-item"
       class:on={screen === "tracks"}
       onclick={() => (screen = "tracks")}
     >
@@ -256,10 +246,8 @@
     </button>
   </nav>
   <div class="content">
-    <!-- One shared header for Coach + Pit Wall: a single instance (kept mounted
-         across a coach<->pitwall switch) so the two views can never show different
-         status/track/car for a frame. Sessions/Settings have their own headers. -->
-    {#if screen === "coach" || screen === "pitwall"}<SessionBar />{/if}
+    <!-- The Coach screen's header. Sessions/Tracks/Settings have their own. -->
+    {#if screen === "coach"}<SessionBar />{/if}
     <div class="screens">
     <section class="screen" class:on={screen === "coach"}>
       <div class="app">
@@ -325,9 +313,6 @@
     </section>
     <section class="screen" class:on={screen === "sessions"}>
       <SessionsScreen onselectSession={handleSelectSession} />
-    </section>
-    <section class="screen" class:on={screen === "pitwall"}>
-      {#if screen === "pitwall"}<PitWall />{/if}
     </section>
     <section class="screen" class:on={screen === "tracks"}>
       {#if screen === "tracks"}<TracksScreen />{/if}
