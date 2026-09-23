@@ -123,3 +123,15 @@ def test_live_resolves_the_track_file_once_not_every_tick(tmp_path, monkeypatch)
     assert [f["next_corner"]["name"] for f in frames] == ["Hairpin"] * 3
     # ...but the track file was read once, not at 4 Hz.
     assert len(calls) == 1
+
+
+def test_a_generic_turn_name_is_not_repeated_in_the_callout(tmp_path, monkeypatch):
+    # "Next: T2 Turn 2 (L)" only repeats the label; the callout drops a generic name.
+    cmap = CornerMap.from_data({"corners": [
+        {"number": 2, "name": "Turn 2", "direction": "left",
+         "start_dist": 900, "apex_dist": 950, "end_dist": 1000}]})
+    monkeypatch.setattr("simcoach.lmu.live.read_field_snapshot", lambda: _snap(True))
+    with _client(tmp_path, cmap=cmap).websocket_connect(
+            "/live", headers={"host": "127.0.0.1"}) as ws:
+        data = ws.receive_json()
+    assert data["next_corner"] == {"label": "2", "name": "", "direction": "left"}

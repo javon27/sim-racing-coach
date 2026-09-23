@@ -1131,7 +1131,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     def lap_inputs(lap_id: int):
         # Lap-keyed input traces for the coaching screen's Inputs panel (#95):
         # selected lap vs its track/car best, both resampled the same way as
-        # /track/inputs (which stays the Pit Wall's live-keyed version).
+        # /track/inputs (the live-keyed version; its Pit Wall caller was retired in #151).
         try:
             rec = store.load(lap_id)
         except KeyError:
@@ -1169,7 +1169,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
 
     @app.get("/track/map")
     def track_map():
-        # The current LIVE track's canonical map — for the Pit Wall, which needs the
+        # The current LIVE track's canonical map — for the live rail map, which needs the
         # layout keyed on the track itself (a practice session has no completed lap_id
         # to route through /laps/{id}/map).
         try:
@@ -1183,7 +1183,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
 
     @app.get("/track/inputs")
     def track_inputs():
-        # Driver-input traces (throttle/brake/steering) for the Pit Wall graphs (#21):
+        # Driver-input traces (throttle/brake/steering), live-keyed (#21; no UI caller since #151):
         # the LAST completed lap and the current track/car BEST, both resampled onto
         # the same uniform lap_distance grid so they overlay directly.
         #
@@ -2548,7 +2548,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             created.append({"id": mid, "text": text, "status": "pending", "track": track, "car": car})
         return {"memories": created, "summary": str(parsed.get("summary", "")).strip()}
 
-    _LIVE_PERIOD = 0.25  # ~4 Hz; the map/tower don't need capture-rate updates
+    _LIVE_PERIOD = 0.25  # ~4 Hz; the rail map doesn't need capture-rate updates
 
     @app.websocket("/live")
     async def live_ws(ws: WebSocket):
@@ -2572,7 +2572,11 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             if cached is None or cached[0] != track:
                 cached = app.state.live_cmap = (track, _cmap_for_map(track) if track else None)
             c = next_corner(cached[1].corners, dist) if cached[1] else None
-            return {"label": c.label, "name": c.name, "direction": c.direction} if c else None
+            if c is None:
+                return None
+            # A generic "Turn 10" name only repeats the label ("Next: T10 Turn 10").
+            name = "" if c.name.strip().lower() == f"turn {c.label}".lower() else c.name
+            return {"label": c.label, "name": name, "direction": c.direction}
 
         def _live_tick() -> dict:
             # Blocking mmap + track-file reads: run off the event loop. Trimmed to what

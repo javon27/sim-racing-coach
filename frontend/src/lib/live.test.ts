@@ -28,6 +28,17 @@ describe("LiveField", () => {
     expect(lf.connected).toBe(true);
   });
 
+  it("drops the last frame when the socket closes, so nothing stays 'live' frozen", () => {
+    const lf = new LiveField();
+    lf.subscribe(() => {});
+    lf.start();
+    FakeWS.last!.onopen?.();
+    FakeWS.last!.onmessage?.({ data: JSON.stringify(snap) });
+    expect(lf.snapshot).not.toBeNull();
+    FakeWS.last!.onclose?.();
+    expect(lf.snapshot).toBeNull();
+  });
+
   it("reconnects after the socket closes", () => {
     vi.useFakeTimers();
     const lf = new LiveField();

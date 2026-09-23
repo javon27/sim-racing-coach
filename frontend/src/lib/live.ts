@@ -67,6 +67,8 @@ export class LiveField {
     ws.onerror = () => ws.close();
     ws.onclose = () => {
       this.connected = false;
+      // #151: a dead feed must not leave the rail map "live" on a frozen frame.
+      this.snapshot = null;
       this.#notify();
       if (!this.#stopped && !this.#timer) {
         this.#timer = setTimeout(() => { this.#timer = null; this.#open(); }, RECONNECT_MS);
