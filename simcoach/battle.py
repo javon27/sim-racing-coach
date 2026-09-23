@@ -10,9 +10,11 @@ tenths of a second apart: BATTLE_NOISE_FLOOR_S hides anything smaller than that 
 from __future__ import annotations
 
 import bisect
+import re
 from dataclasses import dataclass, field
 
 from simcoach.corners import Corner
+from simcoach.format import unit_fns
 from simcoach.lmu.live import FieldSnapshot
 
 # A rival within this many seconds of the driver at a corner entry is "in the fight"
@@ -171,3 +173,135 @@ def car_laps(trace: dict, corners: list[Corner], lap_no: int) -> list[CarLap]:
         if lap.entry:
             out.append(lap)
     return out
+
+
+@dataclass
+class Zone:
+    label: str
+    delta: float                   # rival's time minus yours; + = you are quicker there
+    apex_gain_kph: float | None    # your apex speed minus his (corners only)
+
+
+def _corner_label(c: Corner) -> str:
+    turn = f"Turn {c.label or c.number}"
+    return f"{turn} ({c.name})" if c.name and c.name not in (turn, str(c.number), c.label) \
+        else turn
+
+
+def zone_deltas(me: CarLap, rival: CarLap, corners: list[Corner]) -> list[Zone]:
+    """Per-corner (entry to exit) and per-section (one corner's exit to the next timed
+    corner's entry) time differences, over the zones BOTH cars were timed through."""
+    cs = sorted((c for c in corners if c.number in me.entry and c.number in rival.entry),
+                key=lambda c: c.start_dist)
+    out = []
+    for i, c in enumerate(cs):
+        n = c.number
+        apex = (me.apex_kph[n] - rival.apex_kph[n]
+                if n in me.apex_kph and n in rival.apex_kph else None)
+        out.append(Zone(_corner_label(c),
+                        (rival.exit[n] - rival.entry[n]) - (me.exit[n] - me.entry[n]), apex))
+        if i + 1 < len(cs):
+            m = cs[i + 1].number
+            out.append(Zone(f"{_corner_label(c)} exit to {_corner_label(cs[i + 1])}",
+                            (rival.entry[m] - rival.exit[n]) - (me.entry[m] - me.exit[n]),
+                            None))
+    return out
+
+
+def nearest_rivals(me: CarLap, others: list[CarLap]) -> list[CarLap]:
+    """The same-class car(s) the driver was nearest to for most of the lap, decided in
+    code: at each corner entry the closest rival within BATTLE_RANGE_S scores a point.
+    The top scorer is the rival; a second is named too when it scored at least a third
+    of the timed corners -- the fight changed hands. Empty when nobody was in range."""
+    score: dict[int, int] = {}
+    for n, t in me.entry.items():
+        near = [(abs(o.entry[n] - t), o.car_id) for o in others
+                if n in o.entry and abs(o.entry[n] - t) <= BATTLE_RANGE_S]
+        if near:
+            cid = min(near)[1]
+            score[cid] = score.get(cid, 0) + 1
+    ranked = sorted(score, key=lambda c: -score[c])
+    picks = ranked[:1] + [c for c in ranked[1:2] if score[c] * 3 >= len(me.entry)]
+    by_id = {o.car_id: o for o in others}
+    return [by_id[c] for c in picks]
+
+
+def match_rival(others: list[CarLap], query: str) -> CarLap | None:
+    """The rival the driver named: 'P4' is a CLASS position (the field here is one
+    class); anything else matches part of a driver, entry or car-model name."""
+    q = re.sub(r"^(the|that)\s+", "", query.strip().lower())
+    pos = re.fullmatch(r"p\s*(\d+)", q)
+    for o in sorted(others, key=lambda o: o.class_position):
+        if pos:
+            if o.class_position == int(pos[1]):
+                return o
+        elif q and any(q in name.lower() for name in (o.driver, o.car, o.model)):
+            return o
+    return None
+
+
+@dataclass
+class Battle:
+    laps: list[CarLap]        # every same-class car timed on the lap, the driver included
+    corners: list[Corner]
+    rivals: list[CarLap]      # the default rival(s): nearest for most of the lap
+
+
+def build_battle(laps: list[CarLap], corners: list[Corner]) -> Battle | None:
+    me = next((c for c in laps if c.is_player), None)
+    if me is None:
+        return None
+    return Battle(laps, corners, nearest_rivals(me, [c for c in laps if not c.is_player]))
+
+
+def format_battle(b: Battle | None, as_of_lap: int, units: str = "metric",
+                  rival: str | None = None) -> str:
+    head = f"As of lap {as_of_lap}."
+    if b is None:
+        return (f"{head} No battle read for that lap: it needs a corner map for this track "
+                "and a lap that was not an out-, in- or partial lap or a pit stop.")
+    me = next(c for c in b.laps if c.is_player)
+    others = [c for c in b.laps if not c.is_player]
+    if rival:
+        hit = match_rival(others, rival)
+        if hit is None:
+            field_txt = "; ".join(f"P{o.class_position} {o.driver} ({o.model or o.car})"
+                                  for o in sorted(others, key=lambda o: o.class_position))
+            return (f"{head} No car in your class matches {rival!r}. In your class: "
+                    f"{field_txt or 'nobody else was timed'}.")
+        picks, why = [hit], "the car you named"
+    else:
+        picks, why = b.rivals, f"nearest to you for most of lap {as_of_lap}"
+        if not picks:
+            return (f"{head} Nobody in your class was within {BATTLE_RANGE_S:.0f} s of you "
+                    f"on lap {as_of_lap}; no battle to compare.")
+    spd, _, spd_u, _ = unit_fns(units)
+
+    def _zone(z: Zone) -> str:
+        txt = f"{z.label} by {abs(z.delta):.2f} s"
+        if z.apex_gain_kph is not None and abs(z.apex_gain_kph) > APEX_SPEED_FLOOR_KPH:
+            more = "more" if z.apex_gain_kph > 0 else "less"
+            txt += f", you carry {abs(spd(z.apex_gain_kph)):.0f} {spd_u} {more} at the apex"
+        return txt
+
+    lines = [head]
+    for o in picks:
+        lines.append(f"Rival ({why}): {o.driver} ({o.model or o.car}), "
+                     f"P{o.class_position} in class.")
+        all_zones = zone_deltas(me, o, b.corners)
+        if not all_zones:
+            # Unmeasured is not "even": nothing timed for both is nothing compared.
+            lines.append(f"No corner was timed for both of you on lap {as_of_lap}.")
+            continue
+        # The floor applies to the delta AS STATED (2 dp): 0.1000001 s reads "0.10 s",
+        # which the closing line says is never listed.
+        zones = [z for z in all_zones if round(abs(z.delta), 2) > BATTLE_NOISE_FLOOR_S]
+        his = sorted((z for z in zones if z.delta < 0), key=lambda z: z.delta)
+        mine = sorted((z for z in zones if z.delta > 0), key=lambda z: -z.delta)
+        lines.append("He is quicker: " + ("; ".join(map(_zone, his))
+                                          or "nowhere by more than the timing noise") + ".")
+        lines.append("You are quicker: " + ("; ".join(map(_zone, mine))
+                                            or "nowhere by more than the timing noise") + ".")
+    lines.append(f"Differences of {BATTLE_NOISE_FLOOR_S:.2f} s or less are within the timing "
+                 "noise and are not listed.")
+    return "\n".join(lines)

@@ -3,7 +3,16 @@ import dataclasses
 
 import pytest
 
-from simcoach.battle import FieldTrace, car_laps
+from simcoach.battle import (
+    CarLap,
+    FieldTrace,
+    build_battle,
+    car_laps,
+    format_battle,
+    match_rival,
+    nearest_rivals,
+    zone_deltas,
+)
 from simcoach.corners import Corner
 from simcoach.lmu.live import FieldSnapshot, VehicleState, empty_snapshot
 
@@ -118,3 +127,93 @@ def test_a_car_on_another_lap_count_is_paired_by_time_not_by_the_drivers_lap_num
 
 def test_car_laps_is_empty_without_the_drivers_own_trace():
     assert car_laps({"player_id": 9, "track_len": L, "cars": {}}, [T1], lap_no=2) == []
+
+
+ME = CarLap(1, "You", "E1", 3, True, entry={1: 104.0, 2: 112.0}, exit={1: 106.0, 2: 114.0},
+            apex_kph={1: 150.0, 2: 200.0})
+RIVAL = CarLap(2, "A. Rival", "AF Corse #51", 2, False, entry={1: 103.0, 2: 111.5},
+               exit={1: 105.3, 2: 113.2}, apex_kph={1: 142.0, 2: 201.0},
+               model="Ferrari 296 GT3")
+
+
+def _lap(cid, entries, pos=2, driver=None):
+    return CarLap(cid, driver or f"D{cid}", f"E{cid}", pos, False, entry=entries,
+                  exit={n: t + 1.0 for n, t in entries.items()})
+
+
+def test_zone_deltas_per_corner_and_section_signed_you_quicker_positive():
+    zones = {z.label: z for z in zone_deltas(ME, RIVAL, [T1, T2])}
+    assert zones["Turn 1 (La Source)"].delta == pytest.approx(0.3)
+    assert zones["Turn 1 (La Source)"].apex_gain_kph == pytest.approx(8.0)
+    assert zones["Turn 1 (La Source) exit to Turn 2 (Eau Rouge)"].delta == pytest.approx(0.2)
+    assert zones["Turn 2 (Eau Rouge)"].delta == pytest.approx(-0.3)
+
+
+def test_nearest_rivals_names_the_top_scorer_and_a_second_when_the_fight_changed_hands():
+    me = CarLap(1, "You", "E1", 3, True, entry={1: 10.0, 2: 20.0, 3: 30.0})
+    a = _lap(2, {1: 10.5, 2: 20.5, 3: 31.5})              # nearest at T1 and T2
+    b = _lap(3, {1: 12.5, 2: 22.5, 3: 30.2}, pos=4)       # nearest at T3 only: a third
+    far = _lap(4, {1: 60.0, 2: 70.0, 3: 80.0}, pos=5)     # never within 2 s
+    assert [r.car_id for r in nearest_rivals(me, [a, b, far])] == [2, 3]
+    assert [r.car_id for r in nearest_rivals(me, [a, far])] == [2]
+    assert nearest_rivals(me, [far]) == []
+
+
+def test_match_rival_by_class_position_driver_entry_or_model():
+    others = [RIVAL, _lap(3, {1: 1.0}, pos=4, driver="B. Chaser")]
+    assert match_rival(others, "P4").car_id == 3
+    assert match_rival(others, "p 2").car_id == 2
+    assert match_rival(others, "chaser").car_id == 3
+    assert match_rival(others, "the Ferrari").car_id == 2
+    assert match_rival(others, "#51").car_id == 2
+    assert match_rival(others, "P9") is None and match_rival(others, "McLaren") is None
+
+
+def test_format_battle_ranks_zones_above_the_noise_floor_only():
+    text = format_battle(build_battle([ME, RIVAL], [T1, T2]), 12)
+    assert text.startswith("As of lap 12.")
+    assert ("Rival (nearest to you for most of lap 12): A. Rival (Ferrari 296 GT3), "
+            "P2 in class.") in text
+    assert "He is quicker: Turn 2 (Eau Rouge) by 0.30 s." in text
+    assert ("You are quicker: Turn 1 (La Source) by 0.30 s, you carry 8 km/h more at the "
+            "apex; Turn 1 (La Source) exit to Turn 2 (Eau Rouge) by 0.20 s.") in text
+    assert "0.10 s or less are within the timing noise" in text
+
+
+def test_a_difference_inside_the_noise_floor_is_never_stated():
+    close = CarLap(2, "A. Rival", "E2", 2, False, entry={1: 103.0}, exit={1: 105.08})
+    text = format_battle(build_battle([ME, close], [T1, T2]), 12)
+    assert "He is quicker: nowhere by more than the timing noise." in text
+    assert "You are quicker: nowhere by more than the timing noise." in text
+    assert "0.08" not in text
+
+
+def test_a_delta_a_hair_over_the_floor_is_not_stated_as_the_floor_itself():
+    """0.10000000001 s is over the floor as a float but reads "0.10 s", which the text
+    itself says is never listed: the floor applies to the value as stated."""
+    hair = CarLap(2, "A. Rival", "E2", 2, False, entry={1: 103.0},
+                  exit={1: 105.10000000001})
+    text = format_battle(build_battle([ME, hair], [T1, T2]), 12)
+    assert "by 0.10 s" not in text
+    assert "You are quicker: nowhere by more than the timing noise." in text
+
+
+def test_a_named_car_with_no_corner_timed_for_both_is_not_called_even():
+    """Unmeasured is not "no difference": no shared corner means nothing is compared."""
+    ahead = CarLap(2, "A. Rival", "E2", 2, False, entry={9: 50.0}, exit={9: 52.0})
+    text = format_battle(build_battle([ME, ahead], [T1, T2]), 12, rival="P2")
+    assert "nowhere by more than the timing noise" not in text
+    assert "No corner was timed for both of you on lap 12." in text
+
+
+def test_format_battle_units_named_rival_and_the_no_read_cases():
+    b = build_battle([ME, RIVAL], [T1, T2])
+    assert "you carry 5 mph more at the apex" in format_battle(b, 12, units="imperial")
+    named = format_battle(b, 12, rival="P2")
+    assert "Rival (the car you named): A. Rival (Ferrari 296 GT3), P2 in class." in named
+    assert format_battle(b, 12, rival="McLaren") == (
+        "As of lap 12. No car in your class matches 'McLaren'. In your class: "
+        "P2 A. Rival (Ferrari 296 GT3).")
+    assert format_battle(None, 12).startswith("As of lap 12. No battle read")
+    lonely = build_battle([ME, _lap(4, {1: 60.0, 2: 70.0})], [T1, T2])
+    assert "Nobody in your class was within 2 s of you on lap 12" in format_battle(lonely, 12)
