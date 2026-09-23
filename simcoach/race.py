@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from simcoach.analysis import _MIN_TIRE_TREND_LAPS, _WHEELS, LapAnalysis, stint_tire_trend
+from simcoach.analysis import _MIN_TIRE_TREND_LAPS, _WHEELS
 from simcoach.format import format_laptime
 from simcoach.fuel import SaveAdvice, laps_remaining, stint_save_advice, use_per_lap_from_channel
 from simcoach.lmu.live import FieldSnapshot, VehicleState
@@ -254,14 +254,16 @@ def strategy(stint: list[LapFacts], laps_to_go: int | None) -> Strategy:
         if not advice.make_it:
             save = advice.save_per_lap_fraction * by[advice.binding_resource].per_lap
     wheel = rem = rate = tire_laps = None
-    worn = [f for f in clean if f.wear_end and f.lap_time]
-    trend = stint_tire_trend(
-        [LapAnalysis(f.lap_time, [], False, wheels={"tire_wear_end": f.wear_end})
-         for f in worn],
-        [f.lap_time for f in worn])
-    if trend["ok"] and latest.wear_end:
-        cands = [((latest.wear_end[w] * 100 - WEAR_FLOOR_PCT) / r, w, r)
-                 for w, r in trend["wear_pct_per_lap"].items() if r > 0]
+    worn = [f for f in clean if f.wear_end]
+    if len({f.lap_no for f in worn}) >= _MIN_TIRE_TREND_LAPS and latest.wear_end:
+        # Fitted on LAP NUMBER, not sample index: a non-clean lap between two clean
+        # ones (track limits, say) is left out of the series but still wore the tire.
+        laps = [f.lap_no for f in worn]
+        cands = []
+        for w in _WHEELS:
+            r = -float(np.polyfit(laps, [f.wear_end[w] * 100 for f in worn], 1)[0])
+            if r > 0:
+                cands.append(((latest.wear_end[w] * 100 - WEAR_FLOOR_PCT) / r, w, r))
         if cands:
             tire_laps, wheel, rate = min(cands)
             rem = latest.wear_end[wheel] * 100

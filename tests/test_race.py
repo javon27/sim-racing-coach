@@ -297,3 +297,14 @@ def test_live_race_only_serves_the_snapshot_of_the_race_being_driven():
     assert live_race(snap, track="Spa", car="GT3", phase="practice", current_lap=13) == \
         (None, None)
     assert live_race(None, current_lap=1, **ok)[1].startswith("Not enough laps yet")
+
+
+def test_tire_wear_rate_is_fitted_on_lap_number_not_sample_index():
+    """#152 red-team: an invalid (track-limits) lap drops out of the clean series, but
+    its wear still happened -- so the rate is per LAP NUMBER. 2%/lap true."""
+    invalid = dataclasses.replace(_clean(12, 25.0, 0.76, 0.88), clean=False)
+    stint = [_clean(10, 30.0, 0.80, 0.90), _clean(11, 27.5, 0.78, 0.89), invalid,
+             _clean(13, 22.5, 0.74, 0.87)]
+    s = strategy(stint, laps_to_go=11)
+    assert s.tire_wheel == "fl" and s.tire_rate_pct == pytest.approx(2.0)
+    assert s.tire_laps == pytest.approx(22.0)                  # (74 - 30) / 2
