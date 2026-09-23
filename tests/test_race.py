@@ -308,3 +308,31 @@ def test_tire_wear_rate_is_fitted_on_lap_number_not_sample_index():
     s = strategy(stint, laps_to_go=11)
     assert s.tire_wheel == "fl" and s.tire_rate_pct == pytest.approx(2.0)
     assert s.tire_laps == pytest.approx(22.0)                  # (74 - 30) / 2
+
+
+def _fmt_strategy(stint, laps_to_go):
+    from simcoach.race import RaceSnapshot
+    return format_strategy(RaceSnapshot(stint[-1].lap_no, None, None,
+                                        strategy(stint, laps_to_go)))
+
+
+def test_pit_window_with_under_a_lap_left_says_pit_now_not_more_stops():
+    """#152 red-team: latest = lap_no + floor(0.6) = lap_no, earliest = lap_no + 1: that
+    is 'pit at the next opportunity', not 'more than one stop is needed'."""
+    assert pit_window(12, 12, [("fuel", 0.6, 40.0)]) == PitWindow(12, 13, "fuel", True)
+    stint = [_clean(10, 6.5, 0.80), _clean(11, 4.0, 0.78), _clean(12, 1.5, 0.76)]
+    text = _fmt_strategy(stint, 12)
+    assert "Pit window: pit at the next opportunity: fuel has under a lap left." in text
+    assert "more than one stop" not in text
+
+
+def test_tires_are_never_worded_as_running_out():
+    """#152 red-team: tires reach a CHOSEN threshold; they don't 'run out'."""
+    worn = [_clean(10, 30.0, 0.32), _clean(11, 27.5, 0.31), _clean(12, 25.0, 0.30)]
+    text = _fmt_strategy(worn, 5)
+    assert ("Pit window: pit at the next opportunity: the front-left tire is at or past "
+            "the 30% threshold.") in text
+    fresh = [_clean(10, 30.0, 0.50), _clean(11, 27.5, 0.48), _clean(12, 25.0, 0.46)]
+    text = _fmt_strategy(fresh, 9)                     # tires bind at lap 12 + 8
+    assert "runs out" not in text.split("Pit window:")[1]
+    assert "tires reach the 30% threshold" in text

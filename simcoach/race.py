@@ -219,7 +219,10 @@ def pit_window(lap_no: int, laps_to_go: int,
     fills = [fill for _, _, fill in limits]
     earliest = (None if any(f is None for f in fills)
                 else max(lap_no + 1, lap_no + laps_to_go - math.floor(min(fills))))
-    return PitWindow(latest, earliest, binding, earliest is None or earliest <= latest)
+    # Under a lap left on the binding limit: latest == lap_no, i.e. "pit at the next
+    # opportunity" -- the first lap a stop can happen is lap_no + 1 either way.
+    return PitWindow(latest, earliest, binding,
+                     earliest is None or earliest <= max(latest, lap_no + 1))
 
 
 def strategy(stint: list[LapFacts], laps_to_go: int | None) -> Strategy:
@@ -498,17 +501,27 @@ def format_strategy(snap: RaceSnapshot) -> str:
         lines.append(f"Tires: no wear rate yet (needs {_MIN_TIRE_TREND_LAPS} clean laps with "
                      "wear data in this stint).")
     w = s.window
+    limit = (f"tires reach the {WEAR_FLOOR_PCT:.0f}% threshold" if w and w.binding == "tires"
+             else f"{w.binding} runs out" if w else "")
     if w is None:
         lines.append("Pit window: no stop needed on these rates"
                      + (" (tires not yet measured)." if s.tire_laps is None else "."))
+    elif w.latest <= snap.as_of_lap:
+        now = (f"the {_WHEEL_NAME[s.tire_wheel]} tire is at or past the "
+               f"{WEAR_FLOOR_PCT:.0f}% threshold" if w.binding == "tires"
+               else f"{w.binding} has under a lap left")
+        lines.append(f"Pit window: pit at the next opportunity: {now}."
+                     + ("" if w.one_stop else " One stop can't reach the flag from there "
+                        "— more than one stop is needed."))
     elif not w.one_stop:
-        lines.append(f"Pit window: pit by lap {w.latest} ({w.binding} runs out first); one "
+        lines.append(f"Pit window: pit by lap {w.latest} ({limit} first); one "
                      "stop can't reach the flag from there — more than one stop is needed.")
     elif w.earliest is None:
-        lines.append(f"Pit window: pit by lap {w.latest} ({w.binding} runs out first); the "
+        lines.append(f"Pit window: pit by lap {w.latest} ({limit} first); the "
                      "earliest lap is unknown (tank size not reported).")
     else:
-        lines.append(f"Pit window: laps {w.earliest} to {w.latest} (latest set by "
-                     f"{w.binding}; earliest is the first lap one full service reaches the "
+        set_by = (f"latest: the lap the {limit}" if w.binding == "tires"
+                  else f"latest set by {w.binding}")
+        lines.append(f"Pit window: laps {w.earliest} to {w.latest} ({set_by}; earliest is the first lap one full service reaches the "
                      "flag from).")
     return "\n".join(lines)
