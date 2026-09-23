@@ -50,7 +50,6 @@ from ..lmu.ingest import ingest_all
 from ..model.base import TokenUsage
 from ..model.factory import CoachUserError, make_model
 from ..model_types import LapRecord
-from ..pricing import estimate_chat_cost
 from ..pronunciations import table_for
 from ..race import RaceTracker, live_race
 from ..ribbon import multi_signal_direction, reconstruct_surface, ribbon_to_screen
@@ -66,6 +65,7 @@ from ..track_lookup import (
 from ..trackmap import average_racing_line, build_track_map, direction_from_path
 from . import security
 from .security import ALLOWED_HOSTS, SIDECAR_PORT, _bad_origin
+from .serialize import _clean, _usage_view
 
 # Imported from here by __main__, tests and scripts; defined in the sibling modules (#113).
 __all__ = ["SIDECAR_PORT", "_capture_loop", "create_app"]
@@ -130,23 +130,6 @@ def _utf8(s: str, field: str) -> str:
     return s
 
 
-def _usage_view(agg: dict) -> dict:
-    """Shape a LapStore.chat_usage() aggregate for the wire: the four buckets +
-    total + message count, the estimated $, and whether that $ is the whole story.
-
-    The core owns the arithmetic (pricing lives in simcoach.pricing) — the UI only
-    formats what it's given. `by_model` stays server-side; the client has no use for
-    the breakdown, only for the one number and the completeness flag.
-
-    A chat with any pre-v12/NULL-usage row (`null_usage_rows`) is never "complete" —
-    those rows billed real money that COALESCEs to 0, so a chat that is ALL such rows
-    must not read as a genuinely-zero-cost, fully-priced chat."""
-    usage = {k: agg.get(k, 0) for k in
-             ("input", "output", "cache_read", "cache_write", "total", "messages")}
-    cost, complete = estimate_chat_cost(agg.get("by_model") or {})
-    if agg.get("null_usage_rows"):
-        complete = False
-    return {"usage": usage, "cost": cost, "cost_complete": complete}
 _CLEAN_LAP_RATIO = 1.07  # keep laps within +7% of the track/car best (drop in/out/off laps)
 
 REST_PROBE_TTL = 2.0  # s: liveness probe rate cap so /status polling can't hammer LMU's REST
@@ -155,18 +138,6 @@ REST_PROBE_TTL = 2.0  # s: liveness probe rate cap so /status polling can't hamm
 # normal request timeout (4.0s) is for real setup reads, not this probe.
 REST_PROBE_TIMEOUT = 1.5
 _EVENTS_PERIOD = 1.0  # s: /events push loop period (module constant so tests can monkeypatch it)
-
-
-def _clean(v):
-    # CornerMetrics.min_spd et al. can be float('nan') on real data;
-    # NaN/Inf are invalid JSON, so map non-finite floats to None.
-    if isinstance(v, float) and not math.isfinite(v):
-        return None
-    if isinstance(v, dict):
-        return {k: _clean(x) for k, x in v.items()}
-    if isinstance(v, list):
-        return [_clean(x) for x in v]
-    return v
 
 
 _POS_CHANNELS = ("pos_x", "pos_y", "pos_z", "lap_distance")
