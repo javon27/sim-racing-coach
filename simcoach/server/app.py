@@ -2560,7 +2560,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             return
         await ws.accept()
 
-        from ..lmu.live import read_field_snapshot, snapshot_to_dict
+        from ..lmu.live import read_field_snapshot
 
         def _next_corner_view(dist: float) -> dict | None:
             # #151: the rail map's "Next: T10 Pouhon (L)". Corner identity is owned
@@ -2575,17 +2575,16 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             return {"label": c.label, "name": c.name, "direction": c.direction} if c else None
 
         def _live_tick() -> dict:
-            # Blocking mmap + track-file reads: run off the event loop.
+            # Blocking mmap + track-file reads: run off the event loop. Trimmed to what
+            # the Coach rail map draws (#151): the player's position and next corner.
+            # The full field stays available to the core via read_field_snapshot()
+            # (the race-state tools, #152) -- it just isn't streamed to the UI.
             snap = read_field_snapshot()
-            payload = snapshot_to_dict(snap)
-            # Live scoring only carries the team/entry name; map it to the car
-            # MODEL the same way /status does (raw name stays the resolve key).
-            for c in payload["cars"]:
-                c["car"] = resolve_car(c["car"], c["cls"])
             me = next((c for c in snap.cars if c.is_player), None)
-            live = snap.session.live and me is not None
-            payload["next_corner"] = _next_corner_view(me.lap_dist) if live else None
-            return payload
+            if not snap.session.live or me is None:
+                return {"live": False, "player": None, "next_corner": None}
+            return {"live": True, "player": {"lap_dist": me.lap_dist, "cls": me.cls},
+                    "next_corner": _next_corner_view(me.lap_dist)}
 
         loop = asyncio.get_running_loop()
         try:

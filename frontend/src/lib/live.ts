@@ -1,4 +1,4 @@
-// WS client for the /live pit-wall feed (simcoach/server/app.py @app.websocket("/live")).
+// WS client for the /live feed (simcoach/server/app.py @app.websocket("/live")).
 // UI-agnostic core rule: this file only streams + shapes the snapshot, no analysis.
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8765";
@@ -15,35 +15,19 @@ export const CLASS_COLOR: Record<string, string> = {
   LMP3: "#A855F7", GT3: "#22C55E", GTE: "#F59E0B",
 };
 
-export interface VehicleState {
-  id: number; place: number; class_position: number;
-  driver: string; car: string; cls: string;
-  lap_dist: number; speed: number; sector: number; laps: number;
-  in_pits: boolean; is_player: boolean; best_lap: number | null; last_lap: number | null;
-  best_s1: number | null; best_s2: number | null;
-  gap_leader: number | null; laps_behind_leader: number;
-  gap_next: number | null; laps_behind_next: number;
-}
-
-export interface SessionState {
-  live: boolean; phase: string;
-  current_lap: number | null; max_laps: number | null;
-  track_len: number;
-  elapsed: number; end_time: number;
-  cur_s1: number | null; cur_s2: number | null;
-  best_s1: number | null; best_s2: number | null;
-  last_s1: number | null; last_s2: number | null;
-  last_lap: number | null; best_lap: number | null;
-}
-
 /** #151: the corner the server resolved from the live track's corner map. The UI
     only formats it — corner identity is owned data, never derived here. */
 export interface NextCorner { label: string; name: string; direction: string; }
 
-export interface FieldSnapshot { session: SessionState; cars: VehicleState[]; next_corner: NextCorner | null; }
+/** One /live frame (#151): only what the Coach rail map draws. */
+export interface LiveFrame {
+  live: boolean;
+  player: { lap_dist: number; cls: string } | null;
+  next_corner: NextCorner | null;
+}
 
 export class LiveField {
-  snapshot: FieldSnapshot | null = null;
+  snapshot: LiveFrame | null = null;
   connected = false;
 
   #ws: WebSocket | null = null;
@@ -76,7 +60,7 @@ export class LiveField {
     this.#ws = ws;
     ws.onopen = () => { this.connected = true; this.#notify(); };
     ws.onmessage = (e: MessageEvent) => {
-      try { this.snapshot = JSON.parse(e.data as string) as FieldSnapshot; }
+      try { this.snapshot = JSON.parse(e.data as string) as LiveFrame; }
       catch { return; }
       this.#notify();
     };
@@ -102,7 +86,6 @@ export class LiveField {
 }
 
 // Shared, app-lifetime live feed: started once at boot (App.svelte) and kept
-// streaming regardless of the active view, so the Pit Wall reflects live data
-// even while you're on another tab (e.g. editing a track map). Components
-// subscribe to it; they must NOT start/stop it.
+// streaming regardless of the active view. The Coach rail map (TrackMapPane)
+// subscribes; components must NOT start/stop it.
 export const liveField = new LiveField();

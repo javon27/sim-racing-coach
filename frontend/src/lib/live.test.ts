@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { LiveField, type FieldSnapshot } from "./live";
+import { LiveField, type LiveFrame } from "./live";
 
 class FakeWS {
   static last: FakeWS | null = null;
@@ -11,13 +11,7 @@ class FakeWS {
   constructor(public url: string) { FakeWS.last = this; }
 }
 
-const snap: FieldSnapshot = {
-  session: { live: true, phase: "race", current_lap: 9, max_laps: 24, elapsed: 100,
-    end_time: 0, cur_s1: null, cur_s2: null, best_s1: null, best_s2: null,
-    last_lap: null, best_lap: null },
-  cars: [],
-  next_corner: null,
-};
+const snap: LiveFrame = { live: true, player: { lap_dist: 500, cls: "GT3" }, next_corner: null };
 
 beforeEach(() => { vi.stubGlobal("WebSocket", FakeWS as unknown as typeof WebSocket); });
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
@@ -25,12 +19,12 @@ afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 describe("LiveField", () => {
   it("exposes the latest snapshot to subscribers", () => {
     const lf = new LiveField();
-    let seen: FieldSnapshot | null = null;
+    let seen: LiveFrame | null = null;
     lf.subscribe((v) => { seen = v.snapshot; });
     lf.start();
     FakeWS.last!.onopen?.();
     FakeWS.last!.onmessage?.({ data: JSON.stringify(snap) });
-    expect(seen!.session.current_lap).toBe(9);
+    expect(seen!.player!.lap_dist).toBe(500);
     expect(lf.connected).toBe(true);
   });
 

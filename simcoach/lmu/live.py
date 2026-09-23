@@ -1,7 +1,8 @@
-"""Pure live-field extraction for the Pit Wall view.
+"""Pure live-field extraction: the Coach rail map's player position (#151) and the
+input to the race-state tools (#152).
 
-read_field() maps one LMU scoring frame (all vehicles) into a FieldSnapshot the
-UI renders directly. Pure and MMF-free so it is unit-tested on synthetic
+read_field() maps one LMU scoring frame (all vehicles) into a FieldSnapshot
+(/live streams only a trimmed view of it). Pure and MMF-free so it is unit-tested on synthetic
 rF2Scoring structs (tests/test_lmu_live.py), same pattern as test_lmu_smm.py.
 
 Sign/unit conventions follow rf2structs.py + smm.compute_sectors and are PENDING

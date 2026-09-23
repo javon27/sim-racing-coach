@@ -61,16 +61,13 @@ const noStatus: StatusResponse = {
 };
 
 type Next = { label: string; name: string; direction: string } | null;
-// One /live frame with the player AND an opponent: only the player may be drawn.
+// One trimmed /live frame: the player's position and the next corner only.
 const onTrackFrame = (lapDist: number, next: Next) => ({
-  session: { live: true },
-  cars: [
-    { id: 2, is_player: true, lap_dist: lapDist, cls: "GT3" },
-    { id: 3, is_player: false, lap_dist: 10, cls: "GT3" },
-  ],
+  live: true,
+  player: { lap_dist: lapDist, cls: "GT3" },
   next_corner: next,
 });
-const offTrackFrame = () => ({ session: { live: false }, cars: [], next_corner: null });
+const offTrackFrame = () => ({ live: false, player: null, next_corner: null });
 const liveStatus = { ...noStatus, track: "Live Track", on_track: true, activity: "track", has_map: true };
 
 describe("TrackMapPane", () => {
@@ -177,7 +174,7 @@ describe("TrackMapPane", () => {
     expect(await screen.findByText("Next: T1 First (R)")).toBeTruthy();
     expect(await screen.findByText("Live Track")).toBeTruthy();
     const dots = container.querySelectorAll("circle.car-dot");
-    expect(dots.length).toBe(1); // the opponent in the frame is NOT drawn
+    expect(dots.length).toBe(1); // one dot: the player's
     expect(dots[0].classList.contains("player")).toBe(true);
     expect(dots[0].getAttribute("cx")).toBe("10"); // lap_dist 100 -> path point [10, 20]
     expect(getLapMap).not.toHaveBeenCalled(); // the pinned session's map is not what's drawn

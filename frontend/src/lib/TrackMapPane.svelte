@@ -54,11 +54,11 @@
   // carries the player position and the server-resolved next corner.
   let live = $state(liveField.snapshot);
   $effect(() => liveField.subscribe((v) => { live = v.snapshot; }));
-  const onTrack = $derived(live?.session.live === true);
-  const player = $derived(onTrack ? (live?.cars.find((c) => c.is_player) ?? null) : null);
+  const onTrack = $derived(live?.live === true);
+  const player = $derived(onTrack ? (live?.player ?? null) : null);
   // ONLY the player's car: the field is the game HUD's job, not the rail's.
   const liveCars = $derived(
-    player ? [{ id: player.id, lapDist: player.lap_dist, cls: player.cls, isPlayer: true }] : [],
+    player ? [{ id: 0, lapDist: player.lap_dist, cls: player.cls, isPlayer: true }] : [],
   );
   const nextCorner = $derived(onTrack ? (live?.next_corner ?? null) : null);
   const DIR: Record<string, string> = { left: "L", right: "R" };

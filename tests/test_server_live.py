@@ -52,25 +52,22 @@ def _snap(live):
     return FieldSnapshot(session=session, cars=cars)
 
 
-def test_live_pushes_a_snapshot(tmp_path, monkeypatch):
+def test_live_sends_only_what_the_rail_map_needs(tmp_path, monkeypatch):
     monkeypatch.setattr("simcoach.lmu.live.read_field_snapshot", lambda: _snap(True))
     # starlette's TestClient.websocket_connect hardcodes Host: testserver
     # regardless of base_url (unlike its HTTP methods) -- override explicitly
     # so this "good" request clears the Host guard (same fix as test_server_ws.py).
     with _client(tmp_path).websocket_connect("/live", headers={"host": "127.0.0.1"}) as ws:
         data = ws.receive_json()
-    assert data["session"]["live"] is True
-    assert data["session"]["current_lap"] == 9
-    assert data["cars"][0]["is_player"] is True
-    assert data["cars"][0]["gap_next"] == 2.4
+    assert data == {"live": True, "player": {"lap_dist": 500.0, "cls": "GT3"},
+                    "next_corner": None}
 
 
 def test_live_reports_not_live_when_unavailable(tmp_path, monkeypatch):
     monkeypatch.setattr("simcoach.lmu.live.read_field_snapshot", lambda: _snap(False))
     with _client(tmp_path).websocket_connect("/live", headers={"host": "127.0.0.1"}) as ws:
         data = ws.receive_json()
-    assert data["session"]["live"] is False
-    assert data["cars"] == []
+    assert data == {"live": False, "player": None, "next_corner": None}
 
 
 def test_live_rejects_spoofed_host(tmp_path):
