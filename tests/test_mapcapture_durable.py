@@ -11,6 +11,7 @@ from simcoach.lmu import smm
 from simcoach.model.fake import FakeModel
 from simcoach.model_types import LapRecord
 from simcoach.server import app as app_mod
+from simcoach.server import mapcapture as mapcapture_mod
 from simcoach.server.app import _capture_loop, create_app
 from simcoach.store import LapStore
 
@@ -219,7 +220,7 @@ def test_failed_cloud_write_leaves_no_map_without_capture(tmp_path, monkeypatch)
 
     def boom(path, laps):
         raise OSError("disk full")
-    monkeypatch.setattr(app_mod, "_save_cloud", boom)
+    monkeypatch.setattr(mapcapture_mod, "_save_cloud", boom)
     with pytest.raises(OSError):
         c.post("/mapcapture/save", json={})
     assert not tmp_path.joinpath("tracks", "maptrack.json").exists()
