@@ -44,7 +44,7 @@ from ..coach_tools import (
     race_turn_note,
     scrub_stored_answer,
 )
-from ..corners import CornerMap, in_window, validated_sections, validated_sectors
+from ..corners import CornerMap, in_window, next_corner, validated_sections, validated_sectors
 from ..driver import DriverProfile
 from ..format import format_laptime
 from ..lmu.ingest import ingest_all
@@ -452,6 +452,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     app.state.rest_factory = rest_factory  # () -> LmuRest (probed on first use)
     app.state.cmaps = {}             # per-track CornerMap cache (only non-None cached)
     app.state.canon = {}             # per-(track,car) canonical map payload cache
+    app.state.live_cmap = None       # (live track, CornerMap|None) for /live's next corner
     app.state.latest = None  # set by the capture thread (build_app): {"record", "lap_id"} | None
     app.state.mapping = False        # mapping-capture mode: buffer laps, don't persist
     app.state.map_buffer = []        # LapRecords captured while mapping (transient)
@@ -911,6 +912,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
             app.state.cmaps.pop(key, None)
         for key in [k for k in app.state.canon if track_slug(k[0]) == slug]:
             app.state.canon.pop(key, None)
+        app.state.live_cmap = None  # /live re-resolves the corner map on its next tick
 
     def _ensure_rest():
         # Return a live LMU REST client, or None. Probes get_setup() to reflect a
@@ -2559,17 +2561,36 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
         await ws.accept()
 
         from ..lmu.live import read_field_snapshot, snapshot_to_dict
+
+        def _next_corner_view(dist: float) -> dict | None:
+            # #151: the rail map's "Next: T10 Pouhon (L)". Corner identity is owned
+            # data, so it is resolved HERE from the live track's corner map, never in
+            # the UI. Resolved once per track (this runs at 4 Hz); _invalidate_canon
+            # drops the cache when a map is saved.
+            track = _live_track()
+            cached = app.state.live_cmap
+            if cached is None or cached[0] != track:
+                cached = app.state.live_cmap = (track, _cmap_for_map(track) if track else None)
+            c = next_corner(cached[1].corners, dist) if cached[1] else None
+            return {"label": c.label, "name": c.name, "direction": c.direction} if c else None
+
+        def _live_tick() -> dict:
+            # Blocking mmap + track-file reads: run off the event loop.
+            snap = read_field_snapshot()
+            payload = snapshot_to_dict(snap)
+            # Live scoring only carries the team/entry name; map it to the car
+            # MODEL the same way /status does (raw name stays the resolve key).
+            for c in payload["cars"]:
+                c["car"] = resolve_car(c["car"], c["cls"])
+            me = next((c for c in snap.cars if c.is_player), None)
+            live = snap.session.live and me is not None
+            payload["next_corner"] = _next_corner_view(me.lap_dist) if live else None
+            return payload
+
         loop = asyncio.get_running_loop()
         try:
             while True:
-                # Blocking mmap read off the event loop.
-                snap = await loop.run_in_executor(None, read_field_snapshot)
-                payload = snapshot_to_dict(snap)
-                # Live scoring only carries the team/entry name; map it to the car
-                # MODEL the same way /status does (raw name stays the resolve key).
-                for c in payload["cars"]:
-                    c["car"] = resolve_car(c["car"], c["cls"])
-                await ws.send_json(payload)
+                await ws.send_json(await loop.run_in_executor(None, _live_tick))
                 await asyncio.sleep(_LIVE_PERIOD)
         except (WebSocketDisconnect, RuntimeError):
             pass
