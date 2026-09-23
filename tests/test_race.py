@@ -367,3 +367,14 @@ def test_a_strategy_failure_never_costs_the_race_state(monkeypatch):
     snap = tr.snapshot
     assert snap.as_of_lap == 12 and snap.state.ahead.slope == pytest.approx(-0.3)
     assert format_strategy(snap).startswith("As of lap 12. No projection: strategy")
+
+
+def test_a_rivals_pit_stop_starts_a_new_gap_trend():
+    """#152 red-team: a +60 s gap step (his stop) is not 'losing 12 s/lap' -- a step
+    over GAP_STEP_BREAK_S breaks the trend like a change of car."""
+    tr = RaceTracker()
+    for lap_no, gap, fuel in ((10, 3.1, 32.5), (11, 2.8, 30.0), (12, 62.8, 27.5)):
+        tr.commit(_rec(lap_no, gap, fuel, 0.8))
+    assert tr.snapshot.state.ahead.slope is None
+    tr.commit(_rec(13, 62.5, 25.0, 0.8))
+    assert tr.snapshot.state.ahead.slope == pytest.approx(-0.3)

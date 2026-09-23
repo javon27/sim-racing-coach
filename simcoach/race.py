@@ -27,6 +27,10 @@ GAP_TREND_LAPS = 5
 # A gap slope under this, either way, reads as "holding steady". A judgement, not a
 # measurement: the class gap is sampled once per lap from the scoring feed. PENDING RIG.
 GAP_STEADY_S_PER_LAP = 0.05
+# A lap-to-lap class-gap jump above this (s) is an event -- his pit stop, a spin, a
+# penalty -- not pace, so it starts a new gap trend like a change of car does. PENDING
+# RIG: the size of a real lap-to-lap swing in close racing.
+GAP_STEP_BREAK_S = 5.0
 # "Recent clean-lap pace" = the mean of at most this many latest clean laps.
 PACE_LAPS = 3
 
@@ -333,10 +337,15 @@ def _gap_read(stint: list[LapFacts], side: str, final_lap: int | None) -> GapRea
     if who is None:
         return None
     points = []
+    newer = None                     # the gap one lap later than f, walking back
     for f in reversed(stint):
         if f.race is None or getattr(f.race, who_key) != who:
             break
         gap = getattr(f.race, gap_key)
+        if gap is not None and newer is not None and abs(newer - gap) > GAP_STEP_BREAK_S:
+            break                    # a step, not a trend: his stop, a spin, a penalty
+        if gap is not None:
+            newer = gap
         if f.clean and gap is not None:
             points.append((f.lap_no, gap))
     gap = getattr(latest.race, gap_key)
