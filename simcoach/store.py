@@ -12,6 +12,7 @@ from uuid import uuid4
 
 import numpy as np
 
+from simcoach.battle import CarLap
 from simcoach.car_lookup import resolve_car, resolve_car_class
 from simcoach.model_types import LapRecord
 
@@ -91,7 +92,7 @@ def _session_base(sid: str) -> str:
     """The (track, car, mode) base of a session id, dropping any ~<instance> suffix."""
     return sid.split(_SESSION_SEP, 1)[0]
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
@@ -169,6 +170,22 @@ CREATE TABLE IF NOT EXISTS session_setups (
 );
 """
 
+# #152 get_battle: one row per (driver's lap, same-class car -- the driver included) with
+# that car's corner crossing times and apex speeds on the lap, as JSON. SQLite, not the
+# .npz: a few dozen numbers per car, cross-session, not a full-rate channel.
+_BATTLE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS battle_laps (
+    lap_id INTEGER,
+    car_id INTEGER,
+    driver TEXT,
+    car TEXT,
+    model TEXT,
+    class_position INTEGER,
+    is_player INTEGER,
+    crossings TEXT
+);
+"""
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS laps (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -237,7 +254,7 @@ CREATE TABLE IF NOT EXISTS race_sessions (
     mode TEXT,
     logged_ts REAL
 );
-""" + _COACH_CHAT_SCHEMA + _PROFILE_SCHEMA
+""" + _COACH_CHAT_SCHEMA + _PROFILE_SCHEMA + _BATTLE_SCHEMA
 
 
 def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
@@ -674,6 +691,10 @@ class LapStore:
                     for c, typ in _RACE_COLUMNS:
                         if c not in cols:
                             _add_column(self.conn, "laps", f"{c} {typ}")
+            if current_version < 22:
+                # v21 -> v22: per-lap battle rows for get_battle (#152). A new table, so
+                # nothing to backfill: laps stored before it have no battle rows.
+                self.conn.executescript(_BATTLE_SCHEMA)
         if current_version != stamp:
             self.conn.execute(f"PRAGMA user_version = {stamp}")
         self.conn.commit()
@@ -839,6 +860,33 @@ class LapStore:
         if row is None:
             return None
         return dict(zip(("id", "track", "car", "session_id", "ts"), row))
+
+    def save_battle(self, lap_id: int, laps: list[CarLap]) -> None:
+        """#152: every same-class car's corner timing for one of the driver's laps."""
+        rows = [(lap_id, c.car_id, c.driver, c.car, c.model, c.class_position,
+                 int(c.is_player),
+                 json.dumps({"entry": c.entry, "exit": c.exit, "apex_kph": c.apex_kph}))
+                for c in laps]
+        with self._lock, self.conn:
+            self.conn.executemany(
+                "INSERT INTO battle_laps (lap_id, car_id, driver, car, model, "
+                "class_position, is_player, crossings) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
+
+    def battle_laps(self, lap_id: int) -> list[CarLap]:
+        """The CarLaps save_battle stored for a lap (JSON's string keys back to corner
+        numbers), ordered by car id."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT car_id, driver, car, model, class_position, is_player, crossings "
+                "FROM battle_laps WHERE lap_id = ? ORDER BY car_id", (lap_id,)).fetchall()
+        out = []
+        for car_id, driver, car, model, pos, is_player, crossings in rows:
+            x = json.loads(crossings)
+            timing = {k: {int(n): v for n, v in x[k].items()}
+                      for k in ("entry", "exit", "apex_kph")}
+            out.append(CarLap(car_id, driver, car, pos, bool(is_player), **timing,
+                              model=model or ""))
+        return out
 
     def load(self, lap_id: int) -> LapRecord:
         with self._lock:
@@ -1414,7 +1462,7 @@ class LapStore:
             present = {r[0] for r in self.conn.execute(
                 "SELECT name FROM sqlite_master WHERE type = 'table'")}
             for t in ("corner_metrics", "coach_chat", "laps", "setups",
-                      "race_sessions", "ingested_files"):
+                      "race_sessions", "ingested_files", "battle_laps"):
                 if t in present:
                     self.conn.execute(f"DELETE FROM {t}")
             self.conn.commit()

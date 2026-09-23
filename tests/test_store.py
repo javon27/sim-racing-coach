@@ -2573,3 +2573,34 @@ def test_save_stores_the_race_sample_on_the_lap_row(tmp_path, synthetic_lap):
     none_id = s.save(synthetic_lap)                  # no sample -> all NULL, still saves
     assert s.conn.execute("SELECT class_position FROM laps WHERE id = ?",
                           (none_id,)).fetchone() == (None,)
+
+
+# --- issue #152 get_battle: one row per (lap, same-class car) ----------------------
+
+def test_v21_schema_migrates_to_v22_with_the_battle_table(tmp_path):
+    from simcoach.store import SCHEMA_VERSION, LapStore
+    db = str(tmp_path / "c.sqlite")
+    s = LapStore(db, str(tmp_path / "telem"))
+    s.conn.execute("DROP TABLE battle_laps")
+    s.conn.execute("PRAGMA user_version = 21")
+    s.conn.commit(); s.conn.close()
+
+    s2 = LapStore(db, str(tmp_path / "telem"))
+    assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 22
+    assert s2.battle_laps(1) == []
+
+
+def test_battle_rows_round_trip_one_per_car_and_reset_clears_them(tmp_path, synthetic_lap):
+    from simcoach.battle import CarLap
+    from simcoach.store import LapStore
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "telem"))
+    lid = s.save(synthetic_lap)
+    me = CarLap(1, "You", "E1", 3, True, entry={1: 104.0}, exit={1: 106.0},
+                apex_kph={1: 150.0})
+    rival = CarLap(2, "A. Rival", "AF Corse #51", 2, False, entry={1: 103.0},
+                   exit={1: 105.3}, model="Ferrari 296 GT3")
+    s.save_battle(lid, [rival, me])                  # saved out of order: read by car id
+    assert s.battle_laps(lid) == [me, rival]
+    assert s.battle_laps(lid + 1) == []              # keyed to the driver's lap
+    s.clear_all()
+    assert s.battle_laps(lid) == []
