@@ -1,6 +1,6 @@
 # Coach absorbs the Pit Wall — design
 
-Date: 2026-09-22. Status: approved in chat, awaiting written-spec review.
+Date: 2026-09-22. Status: approved by the driver 2026-09-22.
 
 ## Why
 
@@ -17,24 +17,25 @@ something the coach answers over PTT.
 
 Three pieces, shipped in this order (1 lands before 2 so the one used feature is never missing):
 
-1. Live map panel on the Coach screen.
+1. The Coach screen's rail map goes live (and expands without covering the chat).
 2. Retire the Pit Wall screen.
 3. Three race tools for the coach: race state, strategy, and battle (opponent comparison).
 
 Out of scope: proactive/unprompted spoken callouts (decided: **PTT only**), spotter functions,
 instantaneous gap or tactical calls, multi-driver/team strategy.
 
-## 1. Live map panel (Coach screen)
+## 1. Live rail map (Coach screen)
 
-> **OPEN QUESTION for the driver (found while planning):** the Coach screen's lap rail already has
-> a `TrackMapPane` (the selected session's map). The lighter build is to make THAT map go live
-> while on track (car dot, sectors, next-corner callout) instead of adding a second map panel.
-> Plan A waits on this answer.
+> **Decided 2026-09-22 (driver, final):** reuse the EXISTING rail map (`TrackMapPane` in the Coach
+> screen's lap rail) — no new panel, no second map. It stays where it is and goes live while on
+> track. It must be **expandable without ever covering the chat text**: expanding WIDENS the rail
+> (pushing the chat column narrower, still fully readable); collapsing restores it. This replaces
+> today's 🔍 overlay view on the Coach screen.
 
-- New collapsible `LiveMapPanel` on the Coach screen beside the inputs panel. **Open by default when
-  the badge is On track**; the driver's collapse choice is remembered per viewer (localStorage,
-  wrapped in try/catch, render correctly without it). Hidden when LMU is offline or the track has no
-  corner map.
+- **While on track the rail map is live** (player car dot, next-corner callout); otherwise it shows
+  the selected session's map exactly as today. The expanded/normal choice is remembered per viewer
+  (localStorage, wrapped in try/catch, render correctly without it). The rail's existing height
+  resizer keeps working.
 - Reuses the existing `TrackMap`/`TrackMapPane` rendering and the live position feed the Pit Wall
   uses today — no new map renderer.
 - Shows: track outline, corner labels, **sector boundaries** (from the map's `sectors`; absent →
@@ -44,8 +45,8 @@ instantaneous gap or tactical calls, multi-driver/team strategy.
   derives corner identity (architecture invariant: corners are owned data). Direction comes from
   the map, never inferred.
 - Tests: pure unit test for next-corner selection (mid-lap, between last corner and the line,
-  wrap-around at start/finish, no map → none); vitest for panel visibility and default-open by
-  status.
+  wrap-around at start/finish, no map → none); vitest for live vs. session mode by status, and that
+  expanding widens the rail and never overlays the chat.
 
 ## 2. Retire the Pit Wall
 
@@ -53,8 +54,8 @@ instantaneous gap or tactical calls, multi-driver/team strategy.
   `LiveTower.svelte`, `SectorDeltas.svelte` and their tests (nothing else imports them).
   **Correction (2026-09-22, post-approval):** `RaceStrip.svelte` is NOT Pit Wall-only — it is the
   post-race result strip in the Coach screen's lap rail, and it stays.
-- Keep `TrackMap`/`TrackMapPane` (used by §1) and the `/live` feed, trimmed to what the panel needs
-  (player position + next corner).
+- Keep `TrackMap`/`TrackMapPane` (used by §1) and the `/live` feed, trimmed to what the rail map
+  needs (player position + next corner).
 - Keep `simcoach/lmu/live.py` `read_field_snapshot()` — it becomes the input to `get_race_state`.
 - Docs: `docs/vision.md` — replace the Pit Wall / CrewChief-replacement direction with "the coach
   answers race questions over PTT; no in-ear spotter"; `CLAUDE.md` scope list — "CrewChief
