@@ -8,6 +8,7 @@ computed here and reaches the model as a fact, stamped with the lap it is as of.
 """
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 
@@ -120,6 +121,10 @@ def laps_left(lap_no: int, max_laps: int | None, time_left: float | None,
 WEAR_FLOOR_PCT = 30.0
 # Burn and wear rates average at most this many latest clean laps.
 RATE_LAPS = 5
+# The largest believable fuel tank, L. mFuelCapacity's offset is unverified (PENDING
+# RIG): a reading that is not finite, not above one lap's burn, below the fuel on board
+# or above this is treated as "tank size not reported", never stated.
+MAX_FUEL_CAPACITY_L = 250.0
 
 
 @dataclass
@@ -194,6 +199,8 @@ def lap_facts(record: LapRecord) -> LapFacts:
     fuel_used, fuel_end = _burn(ch, "fuel")
     energy_used, energy_end = _burn(ch, "virtual_energy")
     cap = float(ch["fuel_capacity"][-1]) if len(ch.get("fuel_capacity", ())) else 0.0
+    if not (math.isfinite(cap) and 0 < cap <= MAX_FUEL_CAPACITY_L):
+        cap = 0.0
     wear = ({w: float(ch[f"tire_wear_{w}"][-1]) for w in _WHEELS}
             if all(len(ch.get(f"tire_wear_{w}", ())) for w in _WHEELS) else None)
     return LapFacts(lap_no=record.lap_no or 0, lap_time=record.lap_time,
@@ -239,15 +246,18 @@ def strategy(stint: list[LapFacts], laps_to_go: int | None) -> Strategy:
         return empty
     latest = stint[-1]
     resources = []
-    for name, used, end, cap in (
-            ("fuel", [f.fuel_used for f in clean], latest.fuel_end, latest.fuel_capacity),
-            ("energy", [f.energy_used for f in clean], latest.energy_end, 1.0)):
+    for name, used, end, cap, most in (
+            ("fuel", [f.fuel_used for f in clean], latest.fuel_end, latest.fuel_capacity,
+             MAX_FUEL_CAPACITY_L),
+            ("energy", [f.energy_used for f in clean], latest.energy_end, 1.0, 1.0)):
         rates = [u for u in used if u]
         if len(rates) < MIN_STINT_LAPS or end is None:
             continue
         per = sum(rates) / len(rates)
+        full = (cap is not None and math.isfinite(cap) and per < cap <= most
+                and cap >= end)
         resources.append(Resource(name, per, end, laps_remaining(end, per),
-                                  cap / per if cap else None))
+                                  cap / per if full else None))
     advice = save = None
     if resources:
         by = {r.name: r for r in resources}
@@ -348,8 +358,14 @@ def build_snapshot(stint: list[LapFacts], session_id: str | None,
     final = latest.lap_no + to_go if to_go is not None else None
     state = RaceState(latest.position, r.class_position, r.max_laps, r.time_left, pace, to_go,
                       _gap_read(stint, "ahead", final), _gap_read(stint, "behind", final))
-    return RaceSnapshot(latest.lap_no, session_id, state, strategy(stint, to_go),
-                        track, car)
+    try:
+        strat = strategy(stint, to_go)
+    except Exception:
+        # Computed apart from the race state, so one bad channel can't cost it too.
+        logging.getLogger(__name__).warning("race strategy not computed", exc_info=True)
+        strat = Strategy("strategy unavailable this lap (a calculation failed)", to_go, [],
+                         None, None, None, None, None, None, None)
+    return RaceSnapshot(latest.lap_no, session_id, state, strat, track, car)
 
 
 class RaceTracker:

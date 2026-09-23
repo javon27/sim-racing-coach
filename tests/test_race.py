@@ -336,3 +336,34 @@ def test_tires_are_never_worded_as_running_out():
     text = _fmt_strategy(fresh, 9)                     # tires bind at lap 12 + 8
     assert "runs out" not in text.split("Pit window:")[1]
     assert "tires reach the 30% threshold" in text
+
+
+@pytest.mark.parametrize("cap", [float("nan"), float("inf"), 1e30, 9000.0, -5.0, 0.0])
+def test_lap_facts_drops_an_implausible_tank_size(synthetic_lap, cap):
+    """#152 red-team: mFuelCapacity's offset is unverified -- garbage is 'not reported'."""
+    ch = {**synthetic_lap.channels, "fuel_capacity": np.full(10, cap)}
+    assert lap_facts(dataclasses.replace(synthetic_lap, channels=ch)).fuel_capacity is None
+
+
+@pytest.mark.parametrize("cap", [float("nan"), float("inf"), 2.0, 3.0, 400.0])
+def test_strategy_treats_an_implausible_tank_size_as_not_reported(cap):
+    """#152 red-team: NaN made math.floor raise (the whole snapshot froze); a tank
+    smaller than one lap's burn or than the fuel on board (25 L) is not a tank."""
+    stint = [dataclasses.replace(f, fuel_capacity=cap) for f in STINT]
+    s = strategy(stint, laps_to_go=12)
+    assert s.resources[0].per_fill is None
+    assert s.window.earliest is None
+
+
+def test_a_strategy_failure_never_costs_the_race_state(monkeypatch):
+    """#152 red-team: state and strategy are computed independently."""
+    import simcoach.race as race_mod
+
+    def boom(*_a, **_k):
+        raise ValueError("bad channel")
+
+    monkeypatch.setattr(race_mod, "strategy", boom)
+    tr = _tracker_at_lap_12()
+    snap = tr.snapshot
+    assert snap.as_of_lap == 12 and snap.state.ahead.slope == pytest.approx(-0.3)
+    assert format_strategy(snap).startswith("As of lap 12. No projection: strategy")
