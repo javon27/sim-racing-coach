@@ -94,9 +94,32 @@ def test_race_mapping_lap_reads_as_a_race_lap(tmp_path):
     ctx = CoachContext(store, record=loaded, lap_id=lap_id, session_id=loaded.session_id)
     line = ctx._lap_line(loaded, lap_id)
     assert "race lap 1" in line, line
-    assert "mapping" not in line.lower()
+    assert "mapping lap" not in line.lower() and "mapping run" not in line.lower()
+    # The capture detail rides along, so a weave is never narrated as a bad lap.
+    assert NOTE in line
     listing = ctx.list_recent_laps()
-    assert "race" in listing and "mapping" not in listing.lower(), listing
+    assert "race lap 1" in listing and NOTE in listing, listing
+
+
+NOTE = "mapping capture lap (boundary weave, not a timed attempt)"
+
+
+def test_an_ordinary_lap_has_no_mapping_note(tmp_path):
+    store = _store(tmp_path)
+    lap_id = store.save(_lap("race", ts=100.0))
+    loaded = store.load(lap_id)
+    ctx = CoachContext(store, record=loaded, lap_id=lap_id, session_id=loaded.session_id)
+    assert "mapping" not in ctx._lap_line(loaded, lap_id)
+    assert "mapping" not in ctx.list_recent_laps()
+
+
+def test_session_bests_exclude_mapping_laps(tmp_path):
+    store = _store(tmp_path)
+    state = types.SimpleNamespace(mapping=True, map_buffer=[], latest=None)
+    _capture_loop(_Src([_lap("practice", 80.0, ts=1.0)]), store, state)   # FASTER, mapping
+    store.save(_lap("practice", 95.0, ts=2.0))
+    assert store.session_summary()["personal_best"] == 95.0
+    assert [r["best"] for r in store.recent_race_sessions()] == [95.0]
 
 
 # --- mapping ends by itself when the live session changes (#154 safety net) ---------

@@ -1014,7 +1014,8 @@ class LapStore:
             # model ("BMW M4 LMGT3") while laps are stored under the raw entry name, so
             # matching on car would wrongly return nothing (matches the UI, which
             # scopes by session_id).
-            cols = "SELECT id, lap_time, valid, phase, partial, position, pit FROM laps WHERE "
+            cols = ("SELECT id, lap_time, valid, phase, partial, position, pit, mapping "
+                    "FROM laps WHERE ")
             if session_id is not None:
                 query = cols + "session_id = ?"
                 params: list = [session_id]
@@ -1026,10 +1027,12 @@ class LapStore:
             query += " ORDER BY id DESC LIMIT ?"
             params.append(limit)
             rows = self.conn.execute(query, params).fetchall()
-            keys = ("lap_id", "lap_time", "valid", "phase", "partial", "position", "pit")
+            keys = ("lap_id", "lap_time", "valid", "phase", "partial", "position", "pit",
+                    "mapping")
             out = [dict(zip(keys, r)) for r in rows]
             for d in out:
                 d["pit"] = None if d["pit"] is None else bool(d["pit"])
+                d["mapping"] = bool(d["mapping"])
             return out
 
     def split_merged_sessions(self) -> dict:
@@ -1292,7 +1295,9 @@ class LapStore:
                 # silently inflate every historical session's total the day they
                 # started being stored.
                 "SELECT session_id, track, car, SUM(partial IS NULL), "
-                "MIN(CASE WHEN valid THEN lap_time END), MIN(ts), MAX(ts) "
+                # A mapping lap (#154) is never a best, as in best_lap.
+                "MIN(CASE WHEN valid AND NOT COALESCE(mapping, 0) THEN lap_time END), "
+                "MIN(ts), MAX(ts) "
                 f"FROM laps WHERE {where} GROUP BY session_id "
                 "ORDER BY MAX(ts) DESC LIMIT ? OFFSET ?",
                 params + [limit, offset]).fetchall()
@@ -1325,7 +1330,8 @@ class LapStore:
         (the chart is hidden otherwise), keeping the all-tracks case to pure
         aggregates."""
         where, params = self._session_where(track, car, car_class)
-        per = (f"SELECT session_id, car, MIN(CASE WHEN valid THEN lap_time END) AS best, "
+        per = ("SELECT session_id, car, "
+               "MIN(CASE WHEN valid AND NOT COALESCE(mapping, 0) THEN lap_time END) AS best, "
                f"MIN(ts) AS started FROM laps WHERE {where} GROUP BY session_id")
         with self._lock:
             count = self.conn.execute(f"SELECT COUNT(*) FROM ({per})", params).fetchone()[0]

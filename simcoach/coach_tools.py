@@ -593,6 +593,10 @@ def _lap_age(ts: float) -> str:
     return time.strftime("%Y-%m-%d", time.localtime(ts))
 
 
+# #154: appended to a mapping-mode lap's identity line and lap-list row.
+_MAPPING_NOTE = "mapping capture lap (boundary weave, not a timed attempt)"
+
+
 class CoachContext:
     """Live data bound for one question; tools read from it. Rebuilt each turn."""
 
@@ -848,6 +852,10 @@ class CoachContext:
         # read a stint-ending outlier as damage or a spin.
         if record.pit:
             tail_bits.append("pit stop this lap")
+        # #154: a mapping pass keeps its real phase (a race lap reads as one) but is a
+        # boundary weave -- say so, or its time and corners read as a bad lap.
+        if record.mapping:
+            tail_bits.append(_MAPPING_NOTE)
         if record.phase == "race" and lap_id is not None and self.session_id:
             sess_laps = self.store.session_laps(self.session_id)
             idx = next((i for i, r in enumerate(sess_laps) if r["id"] == lap_id), None)
@@ -1124,6 +1132,8 @@ class CoachContext:
             pos = (f" P{r['position']}" if r.get("phase") == "race"
                    and r.get("position") is not None else "")
             pit = " (pit)" if r.get("pit") else ""
+            if r.get("mapping"):
+                pit += f" — {_MAPPING_NOTE}"
             # A partial lap keeps its NUMBER (that is why it is stored) but has no
             # time to print and is not "INVALID" -- it is unfinished (#77).
             if r.get("partial"):
