@@ -1181,3 +1181,133 @@ def test_a_race_sample_failure_never_costs_the_lap(monkeypatch, caplog):
     assert len(records) == 1 and records[0].race is None
     assert records[0].lap_time == pytest.approx(92.5)
     assert "race sample" in caplog.text
+
+
+class _FieldRig:
+    """#152 get_battle: a 3-car multiclass scoring frame written to test-owned shared
+    memory, polled twice per scoring frame (capture polls faster than scoring updates)."""
+
+    def __init__(self):
+        import mmap
+
+        from simcoach.lmu import smm
+        from simcoach.lmu.rf2structs import rF2Scoring, rF2Telemetry
+        self.rF2Scoring, self.rF2Telemetry = rF2Scoring, rF2Telemetry
+        tag = uuid.uuid4().hex
+        self.tn, self.sn = f"$simcoach_test_telem_{tag}$", f"$simcoach_test_scoring_{tag}$"
+        self.tmap = mmap.mmap(-1, C.sizeof(rF2Telemetry), tagname=self.tn,
+                              access=mmap.ACCESS_WRITE)
+        self.smap = mmap.mmap(-1, C.sizeof(rF2Scoring), tagname=self.sn,
+                              access=mmap.ACCESS_WRITE)
+        self.src = smm.LmuSource(poll_hz=60, now_fn=lambda: 1_700_000_000.0)
+        self.records = []
+        self.et = 1000.0
+        self.session = 12
+
+    def frame(self, dist, last_lap, total_laps):
+        self.et += 4.0      # ~390 m per frame: a plausible ~97 m/s, not a teleport
+        t = self.rF2Telemetry(); t.mVersionUpdateBegin = t.mVersionUpdateEnd = 1
+        t.mNumVehicles = 1
+        v = t.mVehicles[0]; v.mID = 1; v.mLocalVel.z = -50.0
+        v.mTrackName = b"Test Circuit"; v.mVehicleName = b"Car"
+        s = self.rF2Scoring()
+        s.mScoringInfo.mVersionUpdateBegin = s.mScoringInfo.mVersionUpdateEnd = 1
+        s.mScoringInfo.mSession = self.session; s.mScoringInfo.mCurrentET = self.et
+        s.mScoringInfo.mLapDist = 4000.0
+        cars = [(1, 5, b"GT3", True, dist), (2, 3, b"GT3", False, min(dist + 100.0, 3999.0)),
+                (3, 4, b"Hyper", False, dist)]
+        s.mScoringInfo.mNumVehicles = len(cars)
+        for i, (cid, place, cls, is_player, d) in enumerate(cars):
+            pv = s.mVehicles[i]; pv.mID = cid; pv.mPlace = place; pv.mVehicleClass = cls
+            pv.mIsPlayer = is_player; pv.mLapDist = d; pv.mTotalLaps = total_laps
+        s.mVehicles[0].mLastLapTime = last_lap
+        self.tmap.seek(0); self.tmap.write(bytes(t))
+        self.smap.seek(0); self.smap.write(bytes(s))
+        for _ in range(2):
+            r = self.src._poll_once(self.tn, self.sn)
+            if r is not None:
+                self.records.append(r)
+
+    def lap(self, laps_before, lap_time):
+        """One full lap on counter `laps_before`, then S/F with a fresh time."""
+        for i in range(11):
+            self.frame(5.0 + 3895.0 * i / 10, -1.0, laps_before)
+        self.frame(3.0, lap_time, laps_before + 1)
+
+    def close(self):
+        self.tmap.close(); self.smap.close()
+
+
+def test_committed_lap_carries_the_same_class_field_trace():
+    """#152 get_battle: _poll_once feeds every NEW scoring frame's same-class cars into
+    the lap's field trace (other classes are not recorded; a repeated frame is not
+    recorded twice) and hands it over on the committed LapRecord."""
+    rig = _FieldRig()
+    rig.lap(1, 92.5)
+    rig.close()
+    assert len(rig.records) == 1
+    tr = rig.records[0].field_trace
+    assert tr["player_id"] == 1 and tr["track_len"] == 4000.0
+    assert set(tr["cars"]) == {1, 2}                 # the Hypercar is not recorded
+    assert len(tr["cars"][2]["pts"]) == 12           # 12 scoring frames, each once
+    ss = [s for _, s, _ in tr["cars"][1]["pts"]]
+    assert ss == sorted(ss) and ss[-1] == 8003.0     # unwrapped across the line
+
+
+@pytest.mark.parametrize("clock_back", [True, False], ids=["clock-reset", "clock-runs-on"])
+def test_a_second_race_in_the_same_sitting_still_gets_a_trace(clock_back):
+    """#152: a new race restarts the lap count (and usually the scoring clock). The old
+    trace's samples sit laps ahead / seconds later, so feeding them on would drop every
+    new sample as a backwards frame -- the new race's laps would have no battle read."""
+    rig = _FieldRig()
+    rig.lap(3, 92.5)
+    rig.lap(4, 92.0)
+    if clock_back:
+        rig.et = 10.0
+    rig.lap(0, 95.0)                                  # race 2, lap 1
+    rig.close()
+    assert len(rig.records) == 3
+    ss = [s for _, s, _ in rig.records[2].field_trace["cars"][1]["pts"]]
+    assert ss[0] == 5.0 and ss[-1] == 4003.0 and len(ss) == 12
+
+
+def test_a_clock_that_runs_backwards_alone_starts_a_fresh_trace():
+    """Same lap count, scoring clock reset (a session restart): the old samples are
+    LATER in time, which the trace's speed check would read as every new frame
+    teleporting."""
+    rig = _FieldRig()
+    rig.lap(1, 92.5)
+    rig.et = 10.0
+    rig.lap(2, 92.0)
+    rig.close()
+    ss = [s for _, s, _ in rig.records[1].field_trace["cars"][1]["pts"]]
+    assert ss[0] == 8005.0 and ss[-1] == 12003.0
+
+
+def test_a_session_phase_change_starts_a_fresh_trace():
+    rig = _FieldRig()
+    rig.lap(1, 92.5)
+    before = rig.src._trace
+    rig.session = 10                                  # qualifying -> race
+    rig.frame(100.0, 92.5, 2)
+    rig.close()
+    assert rig.src._trace is not before
+
+
+def test_a_field_trace_failure_never_costs_the_lap(monkeypatch, caplog):
+    """#152: the battle feed is a nice-to-have on the capture thread -- if it raises, the
+    lap still commits (no trace) and the failure is logged once, not every frame."""
+    from simcoach.battle import FieldTrace
+
+    def boom(self, t, snap):
+        raise RuntimeError("bad scoring frame")
+
+    monkeypatch.setattr(FieldTrace, "feed", boom)
+    from simcoach.lmu import smm
+    with caplog.at_level("WARNING", logger=smm.__name__):
+        rig = _FieldRig()
+        rig.lap(1, 92.5)
+        rig.close()
+    assert len(rig.records) == 1 and rig.records[0].lap_time == pytest.approx(92.5)
+    assert rig.records[0].race is not None
+    assert caplog.text.count("field trace") == 1

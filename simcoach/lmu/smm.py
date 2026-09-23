@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from simcoach.battle import FieldTrace
 from simcoach.lmu.live import read_field
 from simcoach.lmu.rf2structs import (
     MAX_MAPPED_VEHICLES,
@@ -777,6 +778,42 @@ class LmuSource:
         # makes a stored fragment an OUT-lap rather than a spin (#77). None until
         # that first frame lands.
         self._pit_at_lap_start: bool | None = None
+        # #152 get_battle: the same-class field over this lap, from each NEW scoring
+        # frame. _trace_key/_trace_laps detect a new session or race (see _feed_trace).
+        self._trace = FieldTrace()
+        self._trace_key: tuple | None = None
+        self._trace_laps: int | None = None
+        self._trace_warned = False
+
+    def _feed_trace(self, scoring, player, vt) -> None:
+        """Feed the battle trace from the scoring frame already in hand -- no second
+        reader. Only on a NEW frame: scoring updates at a few Hz, this polls at 50, and
+        read_field walks every car. Never raises: the battle read is a nice-to-have,
+        the lap commit is not (logged once per trace, not every frame).
+
+        A new session, track, car or phase, or the scoring clock or the driver's lap
+        count going BACKWARDS (a new race in the same sitting), starts a fresh trace:
+        the old samples sit later / laps ahead, and FieldTrace drops every new sample
+        that reads as going backwards."""
+        try:
+            et = float(scoring.mScoringInfo.mCurrentET)
+            if et == self._trace.last_t:
+                return
+            key = (bytes(vt.mTrackName), bytes(vt.mVehicleName),
+                   int(scoring.mScoringInfo.mSession), _is_online(scoring))
+            laps = int(player.mTotalLaps)
+            last_t = self._trace.last_t
+            if (key != self._trace_key or (last_t is not None and et < last_t)
+                    or (self._trace_laps is not None and laps < self._trace_laps)):
+                self._trace = FieldTrace()
+                self._trace_warned = False
+            self._trace_key, self._trace_laps = key, laps
+            self._trace.feed(et, read_field(scoring))
+        except Exception:
+            if not self._trace_warned:
+                self._trace_warned = True
+                logging.getLogger(__name__).warning(
+                    "field trace not fed (get_battle loses this lap)", exc_info=True)
 
     def _partial_kind(self, player) -> str | None:
         """The kind of unfinished lap the buffered fragment is ('out'/'in'/'partial'),
@@ -811,10 +848,15 @@ class LmuSource:
         if player is None or vt is None:
             return None
 
+        self._feed_trace(scoring, player, vt)
+
         record = None
         dist = player.mLapDist
         # Finish line / lap boundary: lap distance jumped backward a long way.
         if self._prev_dist is not None and dist < self._prev_dist - _LAP_WRAP_M:
+            # #152: hand over the lap's field trace at EVERY wrap, committed or not, so a
+            # trace never spans two of the driver's laps.
+            trace = self._trace.take()
             lap_time = player.mLastLapTime
             # A completed, freshly-timed lap COMMITS. A teleport/exit/out-lap also
             # wraps here but carries a stale or sentinel (<=0) lap time -- those used
@@ -862,6 +904,7 @@ class LmuSource:
                     except Exception:
                         logging.getLogger(__name__).warning(
                             "race sample not built for this lap", exc_info=True)
+                    record.field_trace = trace
                 if record is not None and fresh:
                     self._committed_time = lap_time
             self._channels = {}  # start the next lap fresh (committed or discarded)

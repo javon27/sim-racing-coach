@@ -44,3 +44,6 @@ class LapRecord:
     partial: str | None = None
     # The race situation at this lap's commit (#152); stored on the lap row (v21).
     race: RaceSample | None = None
+    # This lap's same-class field trace (#152 get_battle) -- TRANSIENT: handed from
+    # capture to the race tracker, never written to the store or the .npz.
+    field_trace: dict | None = None
