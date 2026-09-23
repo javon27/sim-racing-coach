@@ -307,3 +307,26 @@ def test_every_arpabet_mapping_is_in_kokoros_vocab():
     # and the whole shipped dictionary converts (no ARPAbet symbol missing from the table)
     tts_kokoro._cmudict_fallback(types.SimpleNamespace(text="a"))
     assert all(tts_kokoro._arpabet_to_misaki(a) for a in tts_kokoro._cmudict.values())
+
+
+@pytest.mark.skipif(not HAVE_KOKORO, reason="voice extra not installed")
+def test_a_glued_token_with_an_unknown_part_is_unpronounceable_not_silent(tmp_path):
+    # Red-team: with a fallback set, misaki blanks the whole "499Ps" to its unk marker
+    # without raising, and kokoro drops it -- "Both ... pitted", no signal.
+    eng = KokoroEngine(tmp_path, backend=None)
+    with pytest.raises(Unpronounceable) as exc_info:
+        eng._phonemes_for("Both 499Ps pitted.")
+    assert exc_info.value.words == ["499Ps"]
+
+
+@pytest.mark.skipif(not HAVE_KOKORO, reason="voice extra not installed")
+def test_non_english_name_words_are_refused_not_read_in_english():
+    for w in ("Les", "Torre", "Vip", "Grande", "di"):
+        assert tts_kokoro._cmudict_fallback(types.SimpleNamespace(text=w)) == (None, None)
+
+
+@pytest.mark.skipif(not HAVE_KOKORO, reason="voice extra not installed")
+def test_a_possessive_of_a_cmudict_only_word_is_spoken():
+    from simcoach.tts_kokoro import phonemize
+    assert phonemize("Kowalczyk's") == phonemize("Kowalczyk") + "s"
+    assert phonemize("Glickenhaus's").endswith("ɪz")

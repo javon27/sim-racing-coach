@@ -92,7 +92,8 @@ def install_stubs() -> None:
         sys.modules[mod.__name__] = mod
 
 
-_GPL_MODULES = ("phonemizer", "espeakng_loader", "spacy", "num2words")
+# "cmudict" is the PyPI package (GPL-3.0 code) -- we vendor only its BSD data (#148).
+_GPL_MODULES = ("phonemizer", "espeakng_loader", "spacy", "num2words", "cmudict")
 
 
 def gpl_free() -> bool:
@@ -211,6 +212,10 @@ _ARPABET = {  # ARPAbet -> misaki US phonemes (misaki writes diphthongs as one c
     "SH": "ʃ", "T": "t", "TH": "θ", "V": "v", "W": "w", "Y": "j", "Z": "z", "ZH": "ʒ",
 }
 _STRESS = {"1": "ˈ", "2": "ˌ"}
+# Non-English words from shipped names that CMUdict reads in English ("Les" as "less" is
+# the #123 bug). Refused, so a bare one still goes to the Unpronounceable path instead of
+# being mispronounced in Kokoro's own voice; the curated tables cover the full names.
+_NOT_ENGLISH = frozenset({"les", "di", "torre", "vip", "grande"})
 _cmudict: dict[str, str] | None = None
 
 
@@ -240,8 +245,20 @@ def _cmudict_fallback(token):
             if head and "(" not in head:        # "word(2)" is an alternate reading; keep the first
                 d[head] = rest.strip()
         _cmudict = d
-    arpabet = _cmudict.get(token.text.replace("’", "'").lower())
-    return (_arpabet_to_misaki(arpabet), 3) if arpabet else (None, None)
+    word = token.text.replace("’", "'").lower()
+    if word in _NOT_ENGLISH:
+        return None, None
+    arpabet = _cmudict.get(word)
+    suffix = ""
+    if not arpabet and word.endswith("'s") and word[:-2] not in _NOT_ENGLISH:
+        # A possessive of a CMUdict-only word ("Kowalczyk's"): the stem + the regular
+        # English ending, voiced by the stem's last sound.
+        arpabet = _cmudict.get(word[:-2])
+        if arpabet:
+            last = arpabet.split()[-1].rstrip("012")
+            suffix = ("ɪz" if last in ("S", "Z", "SH", "ZH", "CH", "JH")
+                      else "s" if last in ("P", "T", "K", "F", "TH") else "z")
+    return (_arpabet_to_misaki(arpabet) + suffix, 3) if arpabet else (None, None)
 
 
 def _patch_misaki():
@@ -265,6 +282,11 @@ def phonemize(text: str) -> str:
         if _g2p is None:
             _g2p = _patch_misaki()
         phonemes, _tokens = _g2p(text)
+    # misaki marks an unresolved word with `unk` and DOESN'T raise; kokoro's tokenizer then
+    # drops it silently. With a fallback set, one unknown part of a glued token ("499Ps",
+    # "Porsche963") blanks the WHOLE token -- so raise, and the word goes Unpronounceable.
+    if _g2p.unk in phonemes:
+        raise ValueError(f"unresolved word in {text!r}")
     return phonemes
 
 
