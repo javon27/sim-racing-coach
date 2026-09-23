@@ -1,25 +1,23 @@
 """Localhost FastAPI adapter over the synchronous core. Handlers are plain def
 (FastAPI runs them in a threadpool), matching the blocking store/coach. Binds to
 127.0.0.1 only, validates the Host header (DNS-rebinding defense), and disables
-the docs/openapi surface. Reuses store/coach/analysis unchanged."""
+the docs/openapi surface. Reuses store/coach/analysis unchanged. Routes and helpers live
+in the sibling modules; create_app wires them (#113)."""
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
-from fastapi import FastAPI, WebSocket
-from starlette.websockets import WebSocketDisconnect, WebSocketState
+from fastapi import FastAPI
 
 from .. import config
-from ..corners import next_corner
 from ..race import RaceTracker
 from . import (
     coach_ws,
     core,
+    live_ws,
     mapcapture,
     maps,
     profile,
@@ -37,7 +35,7 @@ from .captures import (
     _save_cloud,
 )
 from .core import _in
-from .security import ALLOWED_HOSTS, SIDECAR_PORT, _bad_origin
+from .security import SIDECAR_PORT
 from .settings_routes import _clamp_tts_cache_mb
 
 # Imported from here by __main__, tests and scripts; defined in the sibling modules (#113).
@@ -55,8 +53,6 @@ __all__ = [
 # Shipped corner-map dir, resolved off the package (not cwd) so it's correct
 # wherever the sidecar is launched from. simcoach/server/app.py -> simcoach/tracks.
 _DEFAULT_TRACKS_DIR = Path(__file__).resolve().parent.parent / "tracks"
-
-_EVENTS_PERIOD = 1.0  # s: /events push loop period (module constant so tests can monkeypatch it)
 
 
 def _race_commit(app_state, store, lap, lap_id) -> None:
@@ -165,165 +161,15 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
 
     deps = SimpleNamespace()   # helpers each module publishes for the next (#113)
     core.register(app, deps)
-    _invalidate_canon = deps._invalidate_canon
-    _live_track = deps._live_track
     trackfile.register(app, deps)
     maps.register(app, deps)
-    _rebuild_clouds = deps._rebuild_clouds
-    _cmap_for_map = deps._cmap_for_map
-    _map_payload = deps._map_payload
-    _live_map_key = deps._live_map_key
-
-    security.install(app)
+    security.install(app)      # before any route; see the order note inside install()
     status_routes.register(app, deps)
-    _status_view = deps._status_view
     reads.register(app, deps)
     tracks.register(app, deps)
     mapcapture.register(app, deps)
-    mapcapture_status = deps.mapcapture_status
     coach_ws.register(app, deps)
     profile.register(app, deps)
-
-    _LIVE_PERIOD = 0.25  # ~4 Hz; the rail map doesn't need capture-rate updates
-
-    @app.websocket("/live")
-    async def live_ws(ws: WebSocket):
-        # HTTP Host-guard middleware does NOT run for websockets — check here
-        # (same preamble as /coach).
-        host = (ws.headers.get("host") or "").split(":")[0].lower()
-        if host not in ALLOWED_HOSTS or _bad_origin(ws.headers.get("origin")):
-            await ws.close(code=1008)
-            return
-        await ws.accept()
-
-        from ..lmu.live import read_field_snapshot
-
-        def _next_corner_view(dist: float) -> dict | None:
-            # #151: the rail map's "Next: T10 Pouhon (L)". Corner identity is owned
-            # data, so it is resolved HERE from the live track's corner map, never in
-            # the UI. Resolved once per track (this runs at 4 Hz); _invalidate_canon
-            # drops the cache when a map is saved.
-            track = _live_track()
-            cached = app.state.live_cmap
-            if cached is None or cached[0] != track:
-                cached = app.state.live_cmap = (track, _cmap_for_map(track) if track else None)
-            c = next_corner(cached[1].corners, dist) if cached[1] else None
-            if c is None:
-                return None
-            # A generic "Turn 10" name only repeats the label ("Next: T10 Turn 10").
-            name = "" if c.name.strip().lower() == f"turn {c.label}".lower() else c.name
-            return {"label": c.label, "name": name, "direction": c.direction}
-
-        def _live_tick() -> dict:
-            # Blocking mmap + track-file reads: run off the event loop. Trimmed to what
-            # the Coach rail map draws (#151): the player's position and next corner.
-            # The full field stays available to the core via read_field_snapshot()
-            # (the race-state tools, #152) -- it just isn't streamed to the UI.
-            snap = read_field_snapshot()
-            me = next((c for c in snap.cars if c.is_player), None)
-            if not snap.session.live or me is None:
-                return {"live": False, "player": None, "next_corner": None}
-            return {"live": True, "player": {"lap_dist": me.lap_dist, "cls": me.cls},
-                    "next_corner": _next_corner_view(me.lap_dist)}
-
-        loop = asyncio.get_running_loop()
-        try:
-            while True:
-                await ws.send_json(await loop.run_in_executor(None, _live_tick))
-                await asyncio.sleep(_LIVE_PERIOD)
-        except (WebSocketDisconnect, RuntimeError):
-            pass
-        finally:
-            if ws.client_state == WebSocketState.CONNECTED:
-                try: await ws.close()
-                except Exception: pass
-
-    @app.websocket("/events")
-    async def events_ws(ws: WebSocket):
-        # Replaces the frontend's status/laps/map/mapcapture/voice-status pollers
-        # (#106) with one push. Same host/origin preamble as /coach and /live.
-        host = (ws.headers.get("host") or "").split(":")[0].lower()
-        if host not in ALLOWED_HOSTS or _bad_origin(ws.headers.get("origin")):
-            await ws.close(code=1008)
-            return
-        await ws.accept()
-
-        log = logging.getLogger(__name__)
-        _MISSING = object()
-        last: dict = {}  # per-connection change-detection state
-
-        def _events_tick() -> list[tuple[str, dict]]:
-            # Runs off the event loop (blocking store/smm/disk reads). Each topic is
-            # independently guarded: a broken one is logged and skipped, never taking
-            # `status` (the client's liveness signal) down with it.
-            frames: list[tuple[str, dict]] = []
-            status_data = _status_view()
-            frames.append(("status", status_data))  # every tick
-
-            try:
-                sid = status_data["session_id"]
-                laps = store.session_laps(sid) if sid else []
-                sig = (sid, len(laps), laps[-1]["id"] if laps else None)
-                if last.get("_laps_sig", _MISSING) != sig:
-                    last["_laps_sig"] = sig
-                    frames.append(("laps", {"session_id": sid, "laps": laps}))
-            except Exception:
-                log.warning("events: laps tick failed", exc_info=True)
-
-            try:
-                track, car = status_data["track"], status_data["car"]
-                key = (track, car)
-                if last.get("_map_key", _MISSING) != key:
-                    # Only on a track/car change: _map_payload re-reads the track file
-                    # and the store's sector bounds, which is not 1 Hz work.
-                    last["_map_key"] = key
-                    frames.append(("map", _map_payload(*_live_map_key(track, car)) if track else {}))
-            except Exception:
-                log.warning("events: map tick failed", exc_info=True)
-
-            try:
-                was_mapping = last.get("_mapcapture_active", False)
-                if app.state.mapping or was_mapping:
-                    mc_data = mapcapture_status()
-                    sig = json.dumps(mc_data, sort_keys=True, default=str)
-                    if last.get("_mapcapture_sig") != sig:
-                        last["_mapcapture_sig"] = sig
-                        frames.append(("mapcapture", mc_data))
-                    last["_mapcapture_active"] = app.state.mapping
-            except Exception:
-                log.warning("events: mapcapture tick failed", exc_info=True)
-
-            for inst in (app.state.voice_installer, app.state.kokoro_installer):
-                try:
-                    vs_data = inst.status()
-                    engine = vs_data.get("engine", "whisper")
-                    installing_key, sig_key = f"_voice_installing_{engine}", f"_voice_sig_{engine}"
-                    was_installing = last.get(installing_key, False)
-                    if vs_data.get("installing") or was_installing:
-                        sig = json.dumps(vs_data, sort_keys=True, default=str)
-                        if last.get(sig_key) != sig:
-                            last[sig_key] = sig
-                            frames.append(("voice_setup", vs_data))
-                        last[installing_key] = vs_data.get("installing")
-                except Exception:
-                    log.warning("events: voice_setup tick failed", exc_info=True)
-
-            return frames
-
-        loop = asyncio.get_running_loop()
-        try:
-            while True:
-                frames = await loop.run_in_executor(None, _events_tick)
-                for topic, data in frames:
-                    await ws.send_json({"topic": topic, "data": data})
-                await asyncio.sleep(_EVENTS_PERIOD)
-        except (WebSocketDisconnect, RuntimeError):
-            pass
-        finally:
-            if ws.client_state == WebSocketState.CONNECTED:
-                try: await ws.close()
-                except Exception: pass
-
+    live_ws.register(app, deps)
     settings_routes.register(app, deps)
-
     return app

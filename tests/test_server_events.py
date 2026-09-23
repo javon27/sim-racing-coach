@@ -6,7 +6,7 @@ from starlette.websockets import WebSocketDisconnect
 from simcoach.coach import Coach
 from simcoach.model.fake import FakeModel
 from simcoach.model_types import LapRecord
-from simcoach.server import app as app_module
+from simcoach.server import live_ws as live_ws_mod
 from simcoach.server import maps as maps_mod
 from simcoach.server.app import create_app
 from simcoach.store import LapStore
@@ -19,7 +19,7 @@ def _client(tmp_path):
 
 
 def _fast(monkeypatch):
-    monkeypatch.setattr(app_module, "_EVENTS_PERIOD", 0.01)
+    monkeypatch.setattr(live_ws_mod, "_EVENTS_PERIOD", 0.01)
 
 
 def _drain_until(ws, topic, limit=20):

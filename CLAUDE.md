@@ -101,7 +101,7 @@ silently drift as ruff's own default rule set broadens over releases.
   `speech_numbers.py` (number-to-words for spoken cues; also the `num2words` shim),
   `pronunciations.py` (per-track `pronunciations` table → misaki inline markup;
   harvested once by `scripts/harvest_pronunciations.py` on a dev machine, never shipped).
-- `simcoach/server/` — the FastAPI sidecar the desktop app talks to.
+- `simcoach/server/` — the FastAPI sidecar the desktop app talks to. `app.py` is wiring only (state + `register` calls); routes live in `reads`/`tracks`/`mapcapture`/`profile`/`settings_routes`/`status_routes`/`coach_ws`/`live_ws`, shared per-app helpers in `core`/`trackfile`/`maps` (published on a `deps` namespace), guard in `security`.
 - `simcoach/tracks/*.json` — committed shipped corner maps (curated defaults).
 - `frontend/` — Svelte + TypeScript desktop UI; `src-tauri/` — the Tauri shell.
   Voice loop: `voice.ts` (state machine), `audio.ts` (browser mic/TTS adapters),
