@@ -1790,15 +1790,35 @@ class CoachContext:
                                                 if rec is not None else (None, None)))
         return self._provisional_strategy(race_laps, race_minutes)
 
+    def _live_instance(self) -> str | None:
+        """The session id the LIVE laps are stored under. live_lap carries the BASE id
+        (smm session_id_for); the store files laps under this weekend's instance
+        (`base~YYYYMMDDTHHMM` after a 6 h gap), so the base is resolved -- read-only --
+        at the live lap's start time. Without a live lap: the chat's session id.
+        #161 red-team round 2: the bare base read ANOTHER weekend's race lap."""
+        m = self.live_lap or {}
+        if m.get("session_id"):
+            try:
+                return self.store.resolve_current_instance(m["session_id"], m.get("start_ts"))
+            except Exception:
+                return None   # never fall back to the bare base: that is another weekend
+        return self.session_id
+
+    def _this_car(self, row) -> bool:
+        """A lap row at the live track in the live car (raw entry name or resolved model)."""
+        return not ((self.track and row.get("track") != self.track)
+                    or (self.car and self.car not in (row.get("car"), row.get("car_model"))))
+
     def _race_lap_record(self):
         """The stored lap the live race snapshot is as of (the newest race row of the
         live session with that lap number), or None. A practice lap never stands in:
         its damage was repaired in the garage and its fuel is not what is on board."""
         if self.race is None:
             return None
-        sid = (self.live_lap or {}).get("session_id") or self.session_id
+        sid = self._live_instance()
         rows = [r for r in (self.store.session_laps(sid) if sid else [])
-                if r.get("phase") == "race" and r.get("lap_no") == self.race.as_of_lap]
+                if r.get("phase") == "race" and r.get("lap_no") == self.race.as_of_lap
+                and self._this_car(r)]
         try:
             return self.store.load(rows[-1]["id"]) if rows else None
         except Exception:
@@ -1821,15 +1841,14 @@ class CoachContext:
         # The LIVE session's laps (the chat may carry another session the UI had
         # selected), and only this track and car (#161 red-team: a Fuji plan at Road
         # Atlanta).
-        sid = (self.live_lap or {}).get("session_id") or self.session_id
+        sid = self._live_instance()
         if not sid:
             return no("no session to read practice/qualifying laps from")
         practice = []
         for row in self.store.session_laps(sid):
             if row.get("phase") == "race" or row.get("mapping"):
                 continue
-            if ((self.track and row.get("track") != self.track)
-                    or (self.car and self.car not in (row.get("car"), row.get("car_model")))):
+            if not self._this_car(row):
                 continue
             try:
                 rec = self.store.load(row["id"])

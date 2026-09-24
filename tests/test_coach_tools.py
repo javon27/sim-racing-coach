@@ -2593,31 +2593,69 @@ def test_get_strategy_rejects_a_bool_or_fractional_race_length(tmp_path, synthet
     assert "= about 1 lap." in ctx.dispatch("get_strategy", {"race_minutes": 0.5})
 
 
-def test_provisional_plan_mid_race_starts_from_the_snapshots_own_race_lap(tmp_path,
-                                                                          synthetic_lap):
-    """#161 red-team (t4, Road Atlanta race laps 1/20/21): with a snapshot whose lap was
-    not the newest stored lap (a commit in flight), the plan fell back to 'Assumes you
-    start on 100%' from lap 0. It must start from what was on board at THAT lap's line."""
+def _repeat_weekend(tmp_path, synthetic_lap):
+    """A deterministic session on its SECOND weekend, as the real DB holds them (e.g.
+    algarve): an older race under the bare base -- lap 1 with a flat FL -- and this
+    weekend's laps, which the store files under `base~YYYYMMDDTHHMM` (the 6 h gap).
+    Returns (store, base, this weekend's instance, T)."""
     import dataclasses
 
     import numpy as np
-
-    from simcoach.race import LapFacts, build_snapshot
-    store = _weekend(tmp_path, synthetic_lap)
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    base = "michelin-raceway-road-atlanta--13-autosport-2026-13-lm--online"
+    T = 1_790_000_000.0
     n = len(synthetic_lap.channels["lap_distance"])
-    for lap, fuel, ve in ((1, 73.8, 1.0), (2, 71.5, 0.966)):   # real race-lap-1 shape
+
+    def lap(ts, phase, lap_no, fuel, ve, flat=False, burn=2.3):
         ch = dict(synthetic_lap.channels)
-        ch.update(fuel=np.linspace(fuel, fuel - 2.3, n), fuel_capacity=np.full(n, 100.0),
-                  virtual_energy=np.linspace(ve, ve - 0.034, n))
-        store.save(dataclasses.replace(synthetic_lap, channels=ch, lap_time=95.0,
-                                       session_id="s1", phase="race", lap_no=lap,
-                                       timestamp=50.0 + lap))
-    snap = build_snapshot([LapFacts(lap_no=1, lap_time=95.0, clean=False)], "s1")
+        ch.update(fuel=np.linspace(fuel, fuel - burn, n), fuel_capacity=np.full(n, 100.0),
+                  virtual_energy=np.linspace(ve, ve - 0.034, n),
+                  dent_max=np.full(n, 40.0 if flat else 0.0), dent_total=np.zeros(n),
+                  detached=np.zeros(n), overheating=np.zeros(n),
+                  flat_fl=np.full(n, 1.0 if flat else 0.0))
+        return store.save(dataclasses.replace(synthetic_lap, channels=ch, lap_time=95.0,
+                                              session_id=base, phase=phase,
+                                              lap_no=lap_no, timestamp=ts))
+    for i in range(3):     # the older weekend (three days earlier): 5 L a lap in qualy
+        lap(T - 3 * 86400 - 1000 + 100 * i, "qualifying", i + 1, 90.0 - 5 * i,
+            1.0 - 0.05 * i, burn=5.0)
+    old = lap(T - 3 * 86400, "race", 1, 30.0, 0.40, flat=True)
+    for i in range(4):                                             # this weekend's qualy
+        lap(T + 100 * i, "qualifying", i + 1, 80.0 - 2.3 * i, 1.0 - 0.034 * i)
+    lap(T + 1000, "race", 1, 73.8, 1.0)                            # real race-lap-1 shape
+    lap(T + 1100, "race", 2, 71.5, 0.966)
+    inst = store.load(old + 1).session_id   # the first lap saved after the old race
+    assert inst.startswith(base + "~") and store.load(old).session_id == base
+    return store, base, inst, T
+
+
+def test_provisional_plan_mid_race_starts_from_this_weekends_race_lap(tmp_path,
+                                                                     synthetic_lap):
+    """#161 red-team rounds 1-2 (t4, t13): the plan must start from what was on board at
+    the snapshot's OWN race lap -- of THIS weekend. The live lap carries the bare base id;
+    reading it unresolved stated another race's lap 1 (a flat FL, 30 L) as fact."""
+    from simcoach.race import LapFacts, build_snapshot
+    store, base, inst, T = _repeat_weekend(tmp_path, synthetic_lap)
+    snap = build_snapshot([LapFacts(lap_no=1, lap_time=95.0, clean=False)], inst)
     assert snap.strategy.note is not None                 # 1 lap: no race projection yet
     ctx = CoachContext(store, track=synthetic_lap.track, car=synthetic_lap.car,
-                       session_id="s1", on_track=True, race=snap,
+                       session_id=inst, on_track=True, race=snap,
+                       live_lap={"session_id": base, "lap_no": 3, "start_ts": T + 1200},
                        live_session=_live(max_laps=14, current_lap=3))
     out = ctx.dispatch("get_strategy", {})
     assert "As of race lap 1: what was on board at the line" in out, out
-    assert "Assumes" not in out
-    assert "71.5 L on board" in out                        # lap 1's line: 73.8 - 2.3
+    assert "71.5 L on board" in out                        # this lap 1's line: 73.8 - 2.3
+    assert "Fuel: 2.30 L/lap" in out                       # this weekend's qualy burn
+    assert "flat" not in out and "27.7 L" not in out       # never the older race's lap 1
+
+
+def test_provisional_pre_race_plan_reads_this_weekends_laps_from_the_bare_base(
+        tmp_path, synthetic_lap):
+    store, base, inst, T = _repeat_weekend(tmp_path, synthetic_lap)
+    ctx = CoachContext(store, track=synthetic_lap.track, car=synthetic_lap.car,
+                       session_id=inst, on_track=True,
+                       live_lap={"session_id": base, "lap_no": 5, "start_ts": T + 400},
+                       live_session=_live("qualifying"))
+    out = ctx.dispatch("get_strategy", {"race_laps": 14})
+    assert out.startswith("PROVISIONAL — from your last 4 clean"), out
+    assert "Fuel: 2.30 L/lap measured" in out and "5.00" not in out   # this weekend's
