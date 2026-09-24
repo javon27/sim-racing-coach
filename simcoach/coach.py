@@ -1,3 +1,5 @@
+import re
+
 import numpy as np
 
 from simcoach.driver import DriverProfile
@@ -229,6 +231,11 @@ AGENTIC_SYSTEM_PROMPT = (
     "as a double-apex (it reports per-apex minimum speeds), coach it as one: sacrifice entry "
     "for the first apex, rotate the car, and get the line right for the second apex and the "
     "exit that follows — reference both minima.\n\n"
+    "MEASURED ONLY: every figure, position, gap, lap number or other driver's name you "
+    "state comes from a tool you called THIS turn. Never restate a figure from earlier in "
+    "the conversation as current without re-reading it via a tool — the earlier answer is "
+    "stale by now. Never say you are pulling, checking or looking something up unless you "
+    "call a tool in the same turn. Never name a driver no tool result named.\n\n"
     "For a track's character, cues, or hazards — or how any corner drives — call "
     "get_track_notes and quote the authored notes; NEVER invent track character from "
     "memory. If no notes exist, say so and coach from telemetry. The authored track "
@@ -338,6 +345,73 @@ VOICE_CONVERSATION = (
 )
 
 
+# --- #159: no data answer without data ------------------------------------------
+# A draft that states race/lap/telemetry facts or announces a lookup, yet called no
+# tool, is not accepted. Deliberately cheap, deterministic regexes over the answer
+# text: a false positive only costs one forced tool round, so they lean inclusive.
+UNCONFIRMED = "I can't confirm that from the data."
+
+_LOOKUP = re.compile(
+    r"\b(?:let me|lemme|i'll|i will|i'm going to)\s+(?:quickly\s+|just\s+)?"
+    r"(?:pull|check|look|grab|get|fetch|read|see|dig)\b", re.IGNORECASE)
+_UNIT = (r"(?:s/lap|s|secs?|seconds?|tenths?|hundredths?|laps?|°\s?[CF]|deg(?:rees)?|"
+         r"psi|kpa|bar|%|percent|km/h|kph|mph|m|meters?|metres?|l|litres?|liters?|kg|"
+         r"kw|mj|rpm|mm)")
+_NUMWORD = (r"(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+            r"fifteen|twenty|thirty|forty|fifty|hundred|half)")
+_FIGURE = re.compile(
+    rf"\d+(?:[.,]\d+)?\s*{_UNIT}(?![A-Za-z])"          # 8.4 s, 141 °F, 3.36 s/lap
+    r"|\b\d+:\d{2}(?:\.\d+)?\b"                        # 1:18.402
+    r"|\bP\d+\b|\blap \d+\b"                           # P4, lap 37
+    rf"|\b{_NUMWORD}[\s-]+(?:\w+\s+)?(?:tenths?|seconds?|laps?|degrees|psi|percent)\b",
+    re.IGNORECASE)
+# A capitalised First Last pair in a sentence with a race-relative cue reads as
+# another driver. ponytail: a heuristic -- a single name ("Kevin is behind"), an
+# all-caps or lowercase name slips through, and a corner/track name beside a cue
+# that no tool result spelled out is cut too. Upgrade: match the field's entry list.
+_WORD = r"[A-Z][a-z]+(?:[A-Z][a-z]+)?(?:['-][A-Z]?[a-z]+)?"
+_NAME = re.compile(rf"\b({_WORD})\s+({_WORD})\b")
+_NOT_A_FIRST_NAME = {"The", "This", "That", "Your", "Turn", "Lap", "Sector", "As", "In"}
+_RIVAL_CUE = re.compile(
+    r"\b(?:behind|ahead|gap|closing|catch\w*|pass\w*|rival|in front|leader|leads?|"
+    r"pit\w*|chasing|P\d+)\b", re.IGNORECASE)
+# One sentence: terminal punctuation counts only when whitespace/end follows ("8.4").
+_SENTENCE = re.compile(r"[^\s.!?](?:[^.!?\n]|[.!?](?=\S))*[.!?]*")
+
+
+def _ungrounded_names(sentence: str, known: str) -> list[str]:
+    if not _RIVAL_CUE.search(sentence):
+        return []
+    return [f"{a} {b}" for a, b in _NAME.findall(sentence)
+            if a not in _NOT_A_FIRST_NAME and f"{a} {b}".lower() not in known]
+
+
+def ground_names(text: str, known: str) -> tuple[str, list[str]]:
+    """Cut every sentence naming another driver that `known` (this turn's tool
+    results + the driver's own words + the system context) never mentions, replacing
+    it with UNCONFIRMED. Returns (text, the ungrounded names). Limits: see _NAME."""
+    known = known.lower()
+    names: list[str] = []
+
+    def cut(m):
+        bad = _ungrounded_names(m.group(0), known)
+        names.extend(bad)
+        return UNCONFIRMED if bad else m.group(0)
+
+    out = _SENTENCE.sub(cut, text)
+    # Adjacent cut sentences say it once.
+    dup = re.escape(UNCONFIRMED)
+    return re.sub(rf"(?:{dup}\s+)+{dup}", UNCONFIRMED, out), names
+
+
+def states_data(text: str, known: str) -> bool:
+    """True when an answer announces a lookup or states a race/lap/telemetry fact --
+    a figure with a unit, a lap time, a position, a lap number, or another driver's
+    name absent from `known`. Such an answer needs a tool call in its turn."""
+    return bool(_LOOKUP.search(text) or _FIGURE.search(text)
+                or ground_names(text, known)[1])
+
+
 class Coach:
     """Assembles prompts from analysis + corner facts + knowledge notes and calls the Model."""
 
@@ -410,7 +484,14 @@ class Coach:
         voice: str | None = None,
     ):
         """Like `ask_agentic`, but yields tool/text events as they occur instead of
-        returning a final string. Does not persist or emit done/error — the caller does."""
+        returning a final string. Does not persist or emit done/error — the caller does.
+
+        #159: a turn that called no tool and whose draft states data (`states_data`)
+        is discarded unseen and re-asked once with `force_tool`; if that still reads
+        nothing, the answer is UNCONFIRMED. After a tool ran, a sentence naming a
+        driver no tool result named is cut, sent as a final {"type": "replace",
+        "text"} event: the whole corrected answer, which the caller persists and
+        sends on `done` in place of the streamed text."""
         from simcoach.coach_tools import TOOLS
         _, _, spd_u, temp_u = unit_fns(units)
         system = self._augment_system(
@@ -423,14 +504,54 @@ class Coach:
             system += " " + VOICE_CONVERSATION
         messages = list(history) if history else []
         messages.append({"role": "user", "content": question})
-        # #133: a text block that starts right after a tool round (rather than
-        # continuing the same block) needs a paragraph break, or two openings glue
-        # together ("...pair.Good news first..."). Model-agnostic: every adapter's
-        # run_stream yields the same {"type": ...} event shape, so this one seam
-        # covers the fake model in tests and the real one alike.
+        # #159: what an answer may name without a tool this turn -- the system context
+        # and the driver's own words. NOT earlier coach answers: re-stating those is
+        # the bug.
+        said = [m["content"] for m in messages
+                if m.get("role") == "user" and isinstance(m.get("content"), str)]
+        known = "\n".join([system, context.track or "", context.car or "", *said])
+        start = len(context.tool_calls)
+        for force in (False, True):
+            # Text is HELD until a tool call proves this turn read data; a tool-free
+            # draft is released only if it states no data (small talk, technique).
+            held: list[dict] | None = []
+            text = ""
+            for ev in self._separated(self.model.run_stream(
+                    system, messages, TOOLS, context.dispatch, force_tool=force)):
+                if ev["type"] == "text":
+                    text += ev["text"]
+                if held is not None and ev["type"] == "tool":
+                    yield from held
+                    held = None
+                if held is not None and ev["type"] == "text":
+                    held.append(ev)
+                else:
+                    yield ev
+            if held is None:
+                # A tool ran. Names are the one claim checked against its results;
+                # the corrected answer replaces the streamed one on `done`.
+                results = "\n".join(str(c.get("result", ""))
+                                    for c in context.tool_calls[start:])
+                fixed, names = ground_names(text, known + "\n" + results)
+                if names:
+                    yield {"type": "replace", "text": fixed}
+                return
+            if not states_data(text, known):
+                yield from held
+                return
+            # Ungrounded draft: discarded unseen; re-ask once with a tool forced.
+        yield {"type": "text", "text": UNCONFIRMED}
+
+    @staticmethod
+    def _separated(stream):
+        """#133: a text block that starts right after a tool round (rather than
+        continuing the same block) needs a paragraph break, or two openings glue
+        together ("...pair.Good news first..."). Model-agnostic: every adapter's
+        run_stream yields the same {"type": ...} event shape, so this one seam
+        covers the fake model in tests and the real one alike."""
         text_so_far = ""
         saw_tool_since_text = False
-        for ev in self.model.run_stream(system, messages, TOOLS, context.dispatch):
+        for ev in stream:
             if ev["type"] == "text":
                 if saw_tool_since_text and text_so_far and not text_so_far[-1].isspace():
                     yield {"type": "text", "text": "\n\n"}

@@ -297,6 +297,11 @@ def register(app, deps) -> None:
                         turn_usage = turn_usage + TokenUsage(**ev["usage"])
                         used_model = ev.get("model") or used_model
                         continue
+                    if ev["type"] == "replace":
+                        # #159: an ungrounded claim was cut after streaming; `done`
+                        # carries the corrected answer (the UI and PTT voice use it).
+                        text = ev["text"]
+                        continue
                     if ev["type"] == "text":
                         text += ev["text"]       # accumulate streamed deltas into the full answer
                     _emit(ev)
