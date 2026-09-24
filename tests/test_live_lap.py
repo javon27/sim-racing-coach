@@ -121,6 +121,26 @@ def test_the_lap_commit_supersedes_its_provisional_corners(tmp_path, synthetic_l
     assert store.conn.execute("SELECT COUNT(*) FROM live_corners").fetchone()[0] == 0
 
 
+def test_off_track_this_lap_is_the_newest_lap_that_never_completed(tmp_path, synthetic_lap):
+    """Lap 4 crashed (never committed); lap 5 ran and committed. Off track, 'this lap'
+    is lap 4 -- a newer lap's superseded rows must not hide it."""
+    store = _store(tmp_path)
+    live = _worker(store)
+    crashed = _Source(lap_no=4)
+    crashed.meta["start_ts"] = START_TS - 300
+    live.source = crashed
+    crashed.drive(synthetic_lap, 1300)
+    live.tick()
+    live.source = src = _Source(lap_no=5)
+    src.drive(synthetic_lap, 1300)
+    live.tick()
+    store.save(dataclasses.replace(synthetic_lap, session_id=BASE, phase="race", lap_no=5,
+                                   timestamp=START_TS + 92.5))
+    out = _ctx(store, on_track=False).dispatch("get_corner", {"corner": "1",
+                                                              "which": "this lap"})
+    assert "game lap 4" in out and "never completed" in out
+
+
 def test_a_committed_lap_from_another_phase_does_not_supersede(tmp_path, synthetic_lap):
     store = _store(tmp_path)
     live = _worker(store)
@@ -166,7 +186,9 @@ def test_live_tools_are_gated_to_the_live_session(tmp_path, synthetic_lap):
     live = _worker(store)
     live.source = src = _Source()
     src.drive(synthetic_lap, 500)                        # on track, no corner done yet
-    ctx = _ctx(store, on_track=False)
+    # Off track, even a status left over from a buffer is not read (the gate is the
+    # live session, not whether a status string happens to exist).
+    ctx = _ctx(store, on_track=False, live=live)
     assert "no live session" in ctx.dispatch("get_car_status", {}).lower()
     ctx = _ctx(store, on_track=True, live=live)
     out = ctx.dispatch("get_corner", {"corner": "1", "which": "this lap"})
