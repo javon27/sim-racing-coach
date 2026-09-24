@@ -832,4 +832,10 @@ def _strategy_lines(s: Strategy, as_of_lap: int) -> list[str]:
                   else f"latest set by {w.binding}")
         lines.append(f"Pit window: laps {w.earliest} to {w.latest} ({set_by}; earliest is the first lap one full service reaches the "
                      "flag from).")
+    # #162: the stop COUNT is stated here, never left to the model -- "a stop is needed"
+    # beside a one-stop window read as "one stop won't be enough" (Road Atlanta lap 11).
+    if w is not None:
+        lines.append("Stops to the flag: " + (
+            "more than one." if not w.one_stop else "one." if w.earliest is not None
+            else "not known (tank size not reported)."))
     return lines

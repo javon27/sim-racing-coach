@@ -613,3 +613,49 @@ def test_a_wheel_the_car_reports_flat_is_named_in_the_pit_menu():
                                   strategy=strategy(STINT, 8))      # fuel makes the flag
     text = format_strategy(no_stop, damage=dmg, damage_lap=12)
     assert "Tyres: change FL — reads flat on lap 12." in text
+
+
+def _road_atlanta_lap_11(**over):
+    """#162: race lap 11 at Road Atlanta, 2026-09-23 (chat turn 224), replayed through
+    the current code: 31 laps to go, energy 3.4 %/lap with 64 % left (18.9 laps),
+    fuel 2.23 L/lap with 49.3 L on board."""
+    rs = RaceSample(class_position=7, max_laps=over.get("max_laps", 42))
+    return build_snapshot([
+        LapFacts(lap_no=10, lap_time=83.5, clean=True, race=rs, fuel_used=2.23,
+                 fuel_end=51.53, fuel_capacity=90.0, energy_used=0.0338,
+                 energy_end=0.6738),
+        LapFacts(lap_no=11, lap_time=82.7, clean=True, race=rs, fuel_used=2.23,
+                 fuel_end=49.3, fuel_capacity=90.0, energy_used=0.0338,
+                 energy_end=0.64),
+    ], "s")
+
+
+def test_strategy_states_the_number_of_stops_itself():
+    """#162: 'short by 12.1 laps; a stop is needed' beside 'Pit window: laps 13 to 29'
+    and the coach said "one stop won't be enough". The stop COUNT is code's to state."""
+    text = format_strategy(_road_atlanta_lap_11())
+    assert "Pit window: laps 13 to 29" in text
+    assert "Stops to the flag: one." in text
+    assert "more than one stop" not in text
+
+
+def test_strategy_states_more_than_one_stop_when_one_full_service_cannot_reach():
+    # An 80-lap race: a full charge (29.6 laps) can't cover the 69 to go in one stop.
+    snap = _road_atlanta_lap_11(max_laps=80)
+    text = format_strategy(snap)
+    assert not snap.strategy.window.one_stop
+    assert "Stops to the flag: more than one." in text
+    assert "Stops to the flag: one." not in text
+
+
+def test_strategy_states_no_stop_when_every_resource_makes_the_flag():
+    snap = _road_atlanta_lap_11()
+    snap.strategy.window = None
+    assert "Stops to the flag" not in "\n".join(
+        l for l in format_strategy(snap).splitlines() if not l.startswith("Pit window"))
+
+
+def test_strategy_never_counts_stops_off_an_unknown_tank():
+    snap = _road_atlanta_lap_11()
+    snap.strategy.window = PitWindow(latest=20, earliest=None, binding="fuel", one_stop=True)
+    assert "Stops to the flag: not known (tank size not reported)." in format_strategy(snap)
