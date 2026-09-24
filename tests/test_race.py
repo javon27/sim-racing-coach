@@ -166,7 +166,7 @@ def test_strategy_fuel_short_save_target_tire_life_and_window():
     assert s.tire_wheel == "fl" and s.tire_rate_pct == pytest.approx(2.0)
     assert s.tire_remaining_pct == pytest.approx(76.0)
     assert s.tire_laps == pytest.approx(23.0)                  # (76 - 30) / 2
-    assert s.window == PitWindow(22, 13, "fuel", True)
+    assert s.window == PitWindow(21, 13, "fuel", True)   # floor(10 / 1.05)
 
 
 def test_strategy_makes_it_with_no_stop():
@@ -222,7 +222,7 @@ def test_tracker_snapshot_is_stamped_and_projects_from_the_stint():
     assert snap.as_of_lap == 12 and snap.state.laps_to_go == 12
     assert snap.state.ahead.slope == pytest.approx(-0.3) and snap.state.ahead.catch_lap == 21
     assert snap.state.behind.slope == pytest.approx(0.0) and snap.state.behind.catch_lap is None
-    assert snap.strategy.window == PitWindow(22, 13, "fuel", True)
+    assert snap.strategy.window == PitWindow(21, 13, "fuel", True)
 
 
 def test_a_new_car_ahead_starts_a_new_gap_trend():
@@ -274,7 +274,7 @@ def test_format_strategy_states_margin_save_target_threshold_and_window():
     assert ("Fuel: 2.50 L/lap, 25.0 L on board = 10.0 laps: short by 2.0 laps; "
             "a stop is needed") in text
     assert "about 23 laps to the 30% threshold (a chosen threshold, not a measured limit)" in text
-    assert "Pit window: laps 13 to 22 (latest set by fuel;" in text
+    assert "Pit window: laps 13 to 21 (latest set by fuel;" in text
 
 
 def test_format_strategy_guard_reads_as_not_enough_laps():
@@ -477,12 +477,16 @@ def _practice(n=3, energy=0.125, fuel=2.5, cap=100.0):
             for i in range(1, n + 1)]
 
 
-def test_provisional_plan_before_any_race_lap_assumes_a_full_fill():
-    s = provisional_strategy(_practice(), laps_to_go=15)
+def test_provisional_plan_before_any_race_lap_assumes_full_energy_not_a_full_tank():
+    """#161 red-team: Road Atlanta started on 73.8 L at 100% VE, not a full 120 L tank --
+    on a virtual-energy car the fuel on board is unknown until race lap 1."""
+    s = provisional_strategy(_practice(), laps_to_go=14)
     assert s.note is None
     by = {r.name: r for r in s.resources}
-    assert by["energy"].laps == pytest.approx(8.0) and by["fuel"].laps == pytest.approx(40.0)
-    assert s.window == PitWindow(8, 7, "energy", True)
+    assert by["energy"].laps == pytest.approx(8.0) and "fuel" not in by
+    assert s.burn_only == {"fuel": pytest.approx(2.5)}
+    # latest keeps the 5% reserve: floor(8 / 1.05) = 7; earliest 14 - 8 = 6.
+    assert s.window == PitWindow(7, 6, "energy", True)
     assert s.tire_laps is None           # practice wear spans tire changes: not projected
 
 
@@ -496,22 +500,27 @@ def test_provisional_plan_mid_race_starts_from_the_race_lap_on_board():
                     fuel_capacity=100.0, energy_end=0.88)
     s = provisional_strategy(_practice(), 14, start=lap1)
     assert {r.name: r.on_board for r in s.resources} == {"fuel": 97.0, "energy": 0.88}
-    assert s.window.latest == 1 + 7                    # floor(0.88 / 0.125)
+    assert s.window.latest == 1 + 6          # floor(0.88 / (0.125 * 1.05))
 
 
 def test_format_provisional_is_labelled_and_states_the_stop_as_pit_menu_settings():
-    s = provisional_strategy(_practice(), laps_to_go=15)
+    s = provisional_strategy(_practice(), laps_to_go=14)
     text = format_provisional(s, as_of_lap=0, basis="15 laps (the live race's lap count)",
                               n_practice=3)
     assert text.startswith("PROVISIONAL — from your last 3 clean practice/qualifying laps "
                            "this session; firms up after 2 clean race laps.")
     assert "Race length: 15 laps (the live race's lap count)." in text
-    assert "Assumes you start on a full fill (100% virtual energy, a full tank)." in text
-    assert "Pit window: laps 7 to 8" in text
-    # 7 laps from a stop at the end of lap 8, 12.5 %/lap, +5 % margin = 91.9 -> 92 %.
-    assert ("Pit menu: set virtual energy to 92% for a stop at the end of lap 8 "
+    assert ("Assumes you start on 100% virtual energy; the fuel on board is unknown until "
+            "race lap 1.") in text
+    assert ("Fuel: 2.50 L/lap measured; the amount on board is unknown, so no laps-left "
+            "figure.") in text
+    assert "L on board" not in text
+    assert "Pit window: laps 6 to 7" in text
+    # 7 laps from a stop at the end of lap 7, 12.5 %/lap, +5 % margin = 91.9 -> 92 %;
+    # a lap earlier costs 12.5 x 1.05 = 13.1 %.
+    assert ("Pit menu: set virtual energy to 92% for a stop at the end of lap 7 "
             "(the 7 laps from there to the flag, +5% margin); each lap earlier needs "
-            "about 12.5% more.") in text
+            "about 13.1% more.") in text
     assert "Fuel ratio: not read before a race lap" in text
     assert "Tyres: wear not measured in this race stint yet" in text
     assert "crew" not in text.lower()
@@ -538,8 +547,54 @@ def test_format_strategy_pit_menu_fuel_ratio_direction_tyres_and_repairs():
 
 def test_format_strategy_fuel_only_car_sets_fuel_litres_and_keeps_tyres():
     text = format_strategy(_tracker_at_lap_12().snapshot)
-    # 2 laps x 2.5 L x 1.05 = 5.25 -> 6 L.
-    assert ("Pit menu: set fuel to 6 L for a stop at the end of lap 22 (the 2 laps from "
-            "there to the flag, +5% margin); each lap earlier needs about 2.5 L more.") in text
+    # Stop at lap 21 (floor(10 / 1.05)); 3 laps x 2.5 L x 1.05 = 7.9 -> 8 L.
+    assert ("Pit menu: set fuel to 8 L for a stop at the end of lap 21 (the 3 laps from "
+            "there to the flag, +5% margin); each lap earlier needs about 2.6 L more.") in text
     assert "Tyres: no change needed" in text
     assert "Repairs: no damage data captured" in text
+
+
+def _road_atlanta_quali(n=5):
+    """Road Atlanta 2026-09-23 qualifying burn: 2.27 L and 3.44 % virtual energy a lap."""
+    return [LapFacts(i, 83.0, True, fuel_used=2.27, fuel_capacity=120.0,
+                     energy_used=0.0344) for i in range(1, n + 1)]
+
+
+def test_the_stint_one_stop_lap_keeps_the_margin():
+    """#161 red-team: the raw latest (lap 29) left 0.3% virtual energy in the tank."""
+    s = provisional_strategy(_road_atlanta_quali(), 44)
+    assert s.window.latest == 27 and s.window.earliest == 15   # floor(29.07 / 1.05) = 27
+    text = format_provisional(s, 0, "44 laps", 5)
+    assert "Pit window: laps 15 to 27" in text
+
+
+def test_a_full_fill_that_barely_covers_the_rest_says_how_thin_it_is():
+    """#161 red-team: 3.44 %/lap x 58 laps needs 104.7 % after the stop with the margin;
+    plan_stint capped it at 100 % and the line still claimed '+5% margin'."""
+    text = format_provisional(provisional_strategy(_road_atlanta_quali(), 58), 0, "58 laps", 5)
+    assert ("Pit menu: set virtual energy to 100% for a stop at the end of lap 29 — a full "
+            "fill covers 29.1 laps for the 29 from there to the flag: only 0.2% spare, "
+            "under the 5% margin.") in text
+    assert "each lap earlier" not in text
+
+
+def test_a_fuel_only_car_full_tank_overflow_and_no_virtual_energy_wording():
+    practice = [LapFacts(i, 90.0, True, fuel_used=3.2, fuel_capacity=100.0)
+                for i in range(1, 6)]
+    text = format_provisional(provisional_strategy(practice, 62), 0, "62 laps", 5)
+    assert "Assumes you start on a full tank." in text
+    assert "virtual energy" not in text.lower()
+    assert ("Pit menu: set fuel to a full tank (100 L) for a stop at the end of lap 31 — a "
+            "full fill covers 31.2 laps for the 31 from there to the flag: only 0.8 L "
+            "spare, under the 5% margin.") in text
+
+
+def test_no_fuel_or_energy_projection_is_never_no_stop_needed():
+    """#161 red-team, Fuji GT3 laps 7251-7255: VE flat at 0 and no tank size -> nothing
+    projected, which printed 'Pit window: no stop needed'."""
+    flat = [LapFacts(i, 100.0, True, fuel_end=50.0) for i in range(1, 4)]
+    text = format_strategy(dataclasses.replace(build_snapshot(flat, "s"),
+                                               strategy=strategy(flat, 20)))
+    assert "no stop needed" not in text
+    assert "Pit window: no fuel/energy projection, so no stop call." in text
+    assert "Pit menu: no fuel/energy projection — nothing computed." in text

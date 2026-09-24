@@ -142,6 +142,9 @@ RATE_LAPS = 5
 # A save target above this fraction of the per-lap burn is not a plan: the driver is
 # told a stop is needed instead. A judgement (lift-and-coast buys a few percent).
 MAX_SAVE_FRACTION = 0.15
+# The reserve kept on fuel/energy: the stint-1 stop lap and every refill figure plan
+# with it -- the same 5% `fuel.plan_stint` plans with by default. A judgement.
+REFILL_MARGIN = 0.05
 # The largest believable fuel tank, L. mFuelCapacity's offset is unverified (PENDING
 # RIG): a reading that is not finite, not above one lap's burn, below the fuel on board
 # or above this is treated as "tank size not reported", never stated.
@@ -196,6 +199,9 @@ class Strategy:
     window: PitWindow | None     # None = no stop needed on these rates
     # #164: laps to WEAR_FLOOR_PCT per wheel that is wearing -- which tires to change.
     tire_laps_by_wheel: dict[str, float] | None = None
+    # A measured per-lap burn whose amount ON BOARD is unknown (fuel before race lap 1
+    # on a virtual-energy car): stated as a rate, never projected (#161 red-team).
+    burn_only: dict[str, float] | None = None
 
 
 def is_clean(record: LapRecord) -> bool:
@@ -249,22 +255,32 @@ def lap_facts(record: LapRecord) -> LapFacts:
 
 
 def pit_window(lap_no: int, laps_to_go: int,
-               limits: list[tuple[str, float, float | None]]) -> PitWindow | None:
+               limits: list[tuple[str, float, float | None]],
+               margin: float = 0.0) -> PitWindow | None:
     """The stop window from each limit's (name, laps left on it, laps a full fill or a
     new set lasts). None when every limit reaches the flag.
 
     latest = the lap the first-running-out limit is still good for. earliest = the
     first lap from which one full service reaches the flag on every limit.
     ponytail: a full service (fuel, energy AND tires) is assumed; a no-tire-change stop
-    is not modelled."""
+    is not modelled.
+
+    `margin` (fuel/energy only): latest keeps that reserve in the tank -- Road Atlanta's
+    raw "latest" left 0.3% virtual energy. When that pushes latest before `earliest`,
+    the reserve can't be kept on both stints and latest is `earliest` (the refill line
+    then says how thin it is)."""
     short = [(name, laps) for name, laps, _ in limits if laps < laps_to_go]
     if not short:
         return None
     binding, laps = min(short, key=lambda x: x[1])
-    latest = lap_no + math.floor(laps)
+    raw_latest = lap_no + math.floor(laps)
+    latest = (raw_latest if binding == "tires"
+              else lap_no + math.floor(laps / (1 + margin)))
     fills = [fill for _, _, fill in limits]
     earliest = (None if any(f is None for f in fills)
                 else max(lap_no + 1, lap_no + laps_to_go - math.floor(min(fills))))
+    if earliest is not None and latest < earliest <= raw_latest:
+        latest = earliest
     # Under a lap left on the binding limit: latest == lap_no, i.e. "pit at the next
     # opportunity" -- the first lap a stop can happen is lap_no + 1 either way.
     return PitWindow(latest, earliest, binding,
@@ -284,15 +300,18 @@ def strategy(stint: list[LapFacts], laps_to_go: int | None) -> Strategy:
                       "pace yet for a timed race")
         return empty
     latest = stint[-1]
-    resources = []
+    resources, burn_only = [], {}
     for name, used, end, cap, most in (
             ("fuel", [f.fuel_used for f in clean], latest.fuel_end, latest.fuel_capacity,
              MAX_FUEL_CAPACITY_L),
             ("energy", [f.energy_used for f in clean], latest.energy_end, 1.0, 1.0)):
         rates = [u for u in used if u]
-        if len(rates) < MIN_STINT_LAPS or end is None:
+        if len(rates) < MIN_STINT_LAPS:
             continue
         per = sum(rates) / len(rates)
+        if end is None:
+            burn_only[name] = per
+            continue
         # cap >= end, with a sliver of slack: a reading a hair over the tank is rounding.
         full = (cap is not None and math.isfinite(cap) and per < cap <= most
                 and cap >= end - 0.05 * cap)
@@ -324,9 +343,10 @@ def strategy(stint: list[LapFacts], laps_to_go: int | None) -> Strategy:
     limits = [(r.name, r.laps, r.per_fill) for r in resources]
     if tire_laps is not None:
         limits.append(("tires", max(tire_laps, 0.0), (100 - WEAR_FLOOR_PCT) / rate))
-    window = pit_window(latest.lap_no, laps_to_go, limits) if limits else None
+    window = (pit_window(latest.lap_no, laps_to_go, limits, REFILL_MARGIN)
+              if limits else None)
     return Strategy(None, laps_to_go, resources, advice, save, wheel, rem, rate, tire_laps,
-                    window, by_wheel)
+                    window, by_wheel, burn_only or None)
 
 
 def provisional_strategy(practice: list[LapFacts], laps_to_go: int | None,
@@ -335,14 +355,18 @@ def provisional_strategy(practice: list[LapFacts], laps_to_go: int | None,
 
     The same `strategy` math, on burn rates from `practice` (this session's clean
     practice/qualifying laps) and the amounts on board in `start` -- the latest race
-    lap's, at the line -- or, before any race lap, a full fill (100% virtual energy and
-    a full tank; `format_provisional` says that is assumed). Tires are not projected:
-    practice runs span tire changes, so their wear says nothing about this set."""
+    lap's, at the line -- or, before any race lap, an ASSUMED start (`format_provisional`
+    says so): 100% virtual energy on a car that has it, with the fuel on board unknown
+    (the fuel ratio decides it: Road Atlanta started on 73.8 L, not a 120 L tank); a full
+    tank only on a fuel-only car. Tires are not projected: practice runs span tire
+    changes, so their wear says nothing about this set."""
     rates = [replace(f, wear_end=None) for f in practice if f.clean]
     if start is None:
         cap = next((f.fuel_capacity for f in reversed(practice) if f.fuel_capacity), None)
-        start = LapFacts(lap_no=0, lap_time=None, clean=False, fuel_end=cap,
-                         fuel_capacity=cap, energy_end=1.0)
+        ve = any(f.energy_used for f in rates)
+        start = LapFacts(lap_no=0, lap_time=None, clean=False,
+                         fuel_end=None if ve else cap, fuel_capacity=cap,
+                         energy_end=1.0 if ve else None)
     else:
         start = replace(start, clean=False, wear_end=None)
     return strategy(rates + [start], laps_to_go)
@@ -613,18 +637,21 @@ def format_provisional(s: Strategy, as_of_lap: int, basis: str, n_practice: int,
             f"session; firms up after {MIN_STINT_LAPS} clean race laps.")
     if s.note:
         return f"{head} No projection: {s.note}."
-    start = ("Assumes you start on a full fill (100% virtual energy, a full tank)."
-             if as_of_lap == 0 else
-             f"As of race lap {as_of_lap}: what was on board at the line, burned at your "
-             "practice/qualifying rates.")
-    # No fuel ratio read off an ASSUMED full fill: a full tank is not the ratio's fill.
+    names = {r.name for r in s.resources}
+    if as_of_lap:
+        start = (f"As of race lap {as_of_lap}: what was on board at the line, burned at "
+                 "your practice/qualifying rates.")
+    elif "energy" in names:
+        start = ("Assumes you start on 100% virtual energy; the fuel on board is unknown "
+                 "until race lap 1.")
+    elif "fuel" in names:
+        start = "Assumes you start on a full tank."
+    else:
+        start = "No start amount can be assumed (no tank size reported)."
+    # No fuel ratio read off an ASSUMED start: it needs what is really on board.
     return "\n".join([head, f"Race length: {basis}.", start]
                      + _strategy_lines(s, as_of_lap)
                      + _pit_menu_lines(s, as_of_lap, damage, damage_lap, as_of_lap > 0))
-
-
-# The refill margin -- the same 5% `fuel.plan_stint` plans with by default.
-REFILL_MARGIN = 0.05
 
 
 def _pit_menu_lines(s: Strategy, as_of_lap: int, damage: dict | None,
@@ -637,7 +664,9 @@ def _pit_menu_lines(s: Strategy, as_of_lap: int, damage: dict | None,
     a DIRECTION only (`ratio_balance`): its unit/formula is unconfirmed, so no number."""
     w = s.window
     if w is None:
-        return ["Pit menu: no stop needed on these rates — nothing to set."]
+        return ["Pit menu: " + ("no stop needed on these rates — nothing to set."
+                                if s.resources else
+                                "no fuel/energy projection — nothing computed.")]
     by = {r.name: r for r in s.resources}
     lines = []
     stop = max(w.latest, as_of_lap + 1)
@@ -653,17 +682,28 @@ def _pit_menu_lines(s: Strategy, as_of_lap: int, damage: dict | None,
     else:
         cap = 1.0 if r.name == "energy" else (r.per_fill * r.per_lap if r.per_fill
                                                else math.inf)
-        amt = plan_stint(r.per_lap, cap, 0.0, 1.0, margin=REFILL_MARGIN,
-                         laps_override=after, resource=r.name).start_amount
-        if r.name == "energy":
-            amount, step = f"{math.ceil(amt * 100 - 1e-9)}%", f"{r.per_lap * 100:.1f}%"
+        plan = plan_stint(r.per_lap, cap, 0.0, 1.0, margin=REFILL_MARGIN,
+                          laps_override=after, resource=r.name)
+        pct = r.name == "energy"
+        if plan.total_needed > cap:
+            # plan_stint caps at the tank: say how thin a full fill is, never hide it.
+            spare = cap - r.per_lap * after
+            full = "100%" if pct else f"a full tank ({cap:.0f} L)"
+            left = f"{spare * 100:.1f}%" if pct else f"{spare:.1f} L"
+            lines.append(f"Pit menu: set {what} to {full} for a stop at the end of lap "
+                         f"{stop} — a full fill covers {cap / r.per_lap:.1f} laps for the "
+                         f"{after} from there to the flag: only {left} spare, under the "
+                         f"{REFILL_MARGIN:.0%} margin.")
         else:
-            amount, step = f"{math.ceil(amt - 1e-9)} L", f"{r.per_lap:.1f} L"
-        lines.append(f"Pit menu: set {what} to {amount} for a stop at the end of lap {stop} "
-                     f"(the {after} laps from there to the flag, +{REFILL_MARGIN:.0%} "
-                     f"margin); each lap earlier needs about {step} more.")
-    if "fuel" in by and "energy" in by:
-        if not ratio:
+            amt, step = plan.start_amount, r.per_lap * (1 + REFILL_MARGIN)
+            amount, step = ((f"{math.ceil(amt * 100 - 1e-9)}%", f"{step * 100:.1f}%") if pct
+                            else (f"{math.ceil(amt - 1e-9)} L", f"{step:.1f} L"))
+            lines.append(f"Pit menu: set {what} to {amount} for a stop at the end of lap "
+                         f"{stop} (the {after} laps from there to the flag, "
+                         f"+{REFILL_MARGIN:.0%} margin); each lap earlier needs about "
+                         f"{step} more.")
+    if "energy" in by and ("fuel" in by or "fuel" in (s.burn_only or {})):
+        if not ratio or "fuel" not in by:
             lines.append("Fuel ratio: not read before a race lap (needs the fuel and "
                          "energy actually on board).")
         else:
@@ -734,7 +774,11 @@ def _strategy_lines(s: Strategy, as_of_lap: int) -> list[str]:
             txt += (f": short by {-margin:.1f} laps; a stop is needed (saving that much — "
                     f"over {MAX_SAVE_FRACTION:.0%} a lap — is not realistic).")
         lines.append(txt)
-    if not s.resources:
+    for name, per in (s.burn_only or {}).items():
+        rate = f"{per:.2f} L/lap" if name == "fuel" else f"{per * 100:.1f}%/lap"
+        lines.append(f"{'Fuel' if name == 'fuel' else 'Virtual energy'}: {rate} measured; "
+                     "the amount on board is unknown, so no laps-left figure.")
+    if not s.resources and not s.burn_only:
         lines.append("Fuel/energy: no clear per-lap burn measured in this stint.")
     if s.tire_laps is not None and s.tire_laps <= 0:
         lines.append(f"Tires: worst is the {_WHEEL_NAME[s.tire_wheel]} at "
@@ -752,7 +796,9 @@ def _strategy_lines(s: Strategy, as_of_lap: int) -> list[str]:
     w = s.window
     limit = (f"tires reach the {WEAR_FLOOR_PCT:.0f}% threshold" if w and w.binding == "tires"
              else f"{w.binding} runs out" if w else "")
-    if w is None:
+    if w is None and not s.resources:
+        lines.append("Pit window: no fuel/energy projection, so no stop call.")
+    elif w is None:
         lines.append("Pit window: no stop needed on these rates"
                      + (" (tires not yet measured)." if s.tire_laps is None else "."))
     elif w.latest <= as_of_lap:

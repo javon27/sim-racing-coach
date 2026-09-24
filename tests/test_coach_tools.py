@@ -2469,11 +2469,11 @@ def test_get_strategy_on_the_grid_gives_a_provisional_plan_not_a_refusal(tmp_pat
     store = _weekend(tmp_path, synthetic_lap)
     ctx = CoachContext(store, track=synthetic_lap.track, car=synthetic_lap.car,
                        session_id="s1", on_track=True, race=None, race_note=NO_RACE_LAP_YET,
-                       live_session=_live(max_laps=15))
+                       live_session=_live(max_laps=14))
     out = ctx.dispatch("get_strategy", {})
     assert out.startswith("PROVISIONAL — from your last 4 clean practice/qualifying laps"), out
-    assert "Race length: 15 laps (the live race's lap count)." in out
-    assert "Pit menu: set virtual energy to 92% for a stop at the end of lap 8" in out
+    assert "Race length: 14 laps (the live race's lap count)." in out
+    assert "Pit menu: set virtual energy to 92% for a stop at the end of lap 7" in out
     assert "crew" not in out.lower()
 
 
@@ -2488,7 +2488,7 @@ def test_get_strategy_in_practice_plans_from_the_race_length_the_driver_gives(tm
     # 25 min at the 101.0 s practice pace -> ceil(1500 / 101) = 15 laps.
     assert "Race length: 25 minutes (as you said) at your practice pace of 1:41.000 " \
            "= about 15 laps." in out, out
-    assert "Pit window: laps 7 to 8" in out
+    assert "Pit window: laps 7 to 7" in out
 
 
 def test_get_strategy_provisional_needs_two_clean_practice_laps(tmp_path, synthetic_lap):
