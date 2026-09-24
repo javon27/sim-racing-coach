@@ -657,6 +657,30 @@ describe("ChatPanel", () => {
     await waitFor(() => expect(speaker.enqueued).toEqual(["Brake later.", "Carry more speed."]));
   });
 
+  it("conversation mode: a done answer that revises the voiced text never speaks a spliced tail (#159)", async () => {
+    const stream = new FakeStream();
+    const { voice, speaker, recorder, asked } = fakeVoice();
+    render(ChatPanel, { props: { stream, voice } });
+
+    const mic = screen.getByRole("button", { name: /hold to talk/i });
+    await fireEvent.pointerDown(mic);
+    await fireEvent.pointerUp(mic);
+    await waitFor(() => expect(voice.mode).toBe("conversation"));
+    recorder.frame(0.2);
+    for (let i = 0; i < 20; i++) recorder.frame(0);
+    await waitFor(() => expect(asked.length).toBe(1));
+    await waitFor(() => expect(voice.state).toBe("asking"));
+
+    stream.emit({ phase: "streaming", answer: "Good pace. Kevin Fischer is eight sec" });
+    await waitFor(() => expect(speaker.enqueued).toEqual(["Good pace."]));
+
+    // The server's final answer differs from what streamed: the old prefix length
+    // would slice this into "om the data." -- instead drop the fragment, say so once.
+    stream.emit({ phase: "done", answer: "Good pace. I can't confirm that from the data." });
+    await waitFor(() => expect(speaker.enqueued).toEqual(["Good pace.", "Correction: I can't confirm that."]));
+    expect(speaker.enqueued.join(" ")).not.toMatch(/Kevin|om the data/);
+  });
+
   it("composer: voice enabled + empty box shows the mic, no Send button", async () => {
     const { voice } = fakeVoice();
     render(ChatPanel, { props: { stream: new FakeStream(), voice } });

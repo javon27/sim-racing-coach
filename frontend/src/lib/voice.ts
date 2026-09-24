@@ -266,6 +266,14 @@ export class VoiceLoop {
       if (spoken) this.#o.speaker.enqueue(spoken);
     }
   }
+  // #159 backstop, conversation mode only: the answer changed after part of it was
+  // voiced. Drop the not-yet-spoken fragment of the old text and say so once --
+  // never splice the new text onto the old. (PTT speaks only the final answer.)
+  onRevised(): void {
+    if (this.mode !== "conversation" || (this.state !== "asking" && this.state !== "speaking")) return;
+    this.#textBuf = "";
+    this.onText("Correction: I can't confirm that. ");
+  }
   onError(message: string): void {
     if (this.state !== "asking") return;
     this.#fail(message);

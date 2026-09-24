@@ -473,7 +473,7 @@
     // Diffed from `answer`'s growth rather than adding a field to CoachStream --
     // ChatPanel already tracks `answer` for rendering, so this is the smaller
     // plumbing than threading a `lastDelta` through the stream/store contract.
-    let voicedAnswerLen = 0;
+    let voiced = "";   // the answer text already handed to the voice loop
     const unsubscribe = stream.subscribe((s) => {
       const snap = s as { phase: CoachPhase; toolActivity: ToolActivity | null; answer: string; chatId: string | null; error: string | null; usage?: ChatUsage | null; cost?: number | null; costComplete?: boolean; longChat?: boolean };
       phase = snap.phase;
@@ -481,11 +481,18 @@
       answer = snap.answer;
       error = snap.error;
       if (snap.phase === "connecting") {
-        voicedAnswerLen = 0;
+        voiced = "";
       }
-      if (snap.answer.length > voicedAnswerLen) {
-        const delta = snap.answer.slice(voicedAnswerLen);
-        voicedAnswerLen = snap.answer.length;
+      if (!snap.answer.startsWith(voiced)) {
+        // #159: the answer was revised after part of it was voiced (e.g. `done`
+        // carried a corrected text). Slicing by length would splice the new text
+        // onto the old ("...eight secthe data."): restart from the new answer
+        // and let the loop say it once instead.
+        voiced = snap.answer;
+        activeVoice?.onRevised();
+      } else if (snap.answer.length > voiced.length) {
+        const delta = snap.answer.slice(voiced.length);
+        voiced = snap.answer;
         activeVoice?.onText(delta);
       }
       if (snap.phase === "done") {
