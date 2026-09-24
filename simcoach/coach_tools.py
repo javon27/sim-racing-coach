@@ -630,7 +630,7 @@ class CoachContext:
         # The current on-track stint (practice/qualy/race), for scoping laps and the
         # reference to this session rather than all-time. From the live lap's stamp.
         self.session_id = session_id or (record.session_id if record else None)
-        self.tool_calls: list = []   # (name, input) invoked this turn, for the chat log
+        self.tool_calls: list = []   # {name, input, result} invoked this turn, for the chat log
         self._analysis_cache: dict = {}
         self._lap_numbering_cache: tuple[dict, dict] | None = None
         self._current_lap_cache: tuple | None = None
@@ -1764,9 +1764,20 @@ class CoachContext:
         return f"Last setup run at {track} / {car} ({when}):\n" + "\n".join(lines)
 
     def dispatch(self, name: str, args: dict) -> str:
-        """Execute one tool call by name. Unknown tool -> error string."""
+        """Execute one tool call by name. Unknown tool -> error string. The call AND
+        its result land in `tool_calls` (#159), so a persisted answer can be audited
+        against exactly what the coach read."""
         args = args or {}
-        self.tool_calls.append({"name": name, "input": args})
+        entry = {"name": name, "input": args}
+        self.tool_calls.append(entry)
+        try:
+            entry["result"] = self._run_tool(name, args)
+        except Exception as e:
+            entry["result"] = f"error: {type(e).__name__}: {e}"
+            raise
+        return entry["result"]
+
+    def _run_tool(self, name: str, args: dict) -> str:
         handler = {
             "get_session_status": lambda: self.get_session_status(),
             "list_recent_laps": lambda: self.list_recent_laps(args.get("limit", 10)),

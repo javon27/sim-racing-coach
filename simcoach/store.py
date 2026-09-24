@@ -97,7 +97,10 @@ SCHEMA_VERSION = 23
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
 # (NULL for pre-lap general questions); tool_calls is a JSON list of the on-demand
-# tools the agentic coach invoked that turn (added v4). chat_id (added v5) groups
+# tools the agentic coach invoked that turn (added v4); since #159 each entry also
+# carries the tool's `result` text, capped at TOOL_RESULT_CAP chars, so any answer
+# can be audited against what the coach actually read (no schema change: the column
+# was always JSON, older rows just lack the key). chat_id (added v5) groups
 # messages into a chat that can span multiple race sessions (session_id stays the
 # race-session scope). The four *_tokens columns and `model` (added v12) record what
 # each turn actually cost to bill; `model` is per ROW because Settings can change the
@@ -128,6 +131,9 @@ CREATE TABLE IF NOT EXISTS coach_chat (
 # (coach_chat column, TokenUsage/wire key) for the v12 usage buckets, in the order
 # chat_usage() reports them. One list so the migration, the INSERT and the SUM
 # can never drift apart.
+# #159: one lap summary runs a few KB; a cap keeps a long chat's rows bounded.
+TOOL_RESULT_CAP = 4000
+
 _USAGE_COLUMNS = (("input_tokens", "input"), ("output_tokens", "output"),
                   ("cache_read_tokens", "cache_read"), ("cache_write_tokens", "cache_write"))
 
@@ -439,6 +445,14 @@ def _drop_duplicate_result_laps(conn: sqlite3.Connection, pairs: list[tuple]) ->
 # a bare `laps` of two columns -- nothing to clean in such a db anyway.
 _CLEANUP_COLUMNS = frozenset({"id", "source", "telemetry_path", "track", "car", "phase", "ts",
                               "lap_time", "session_id", "s1", "s2", "s3"})
+
+
+def _capped_result(call):
+    """A tool-call entry with its `result` bounded (#159); the caller's dict is untouched."""
+    r = call.get("result") if isinstance(call, dict) else None
+    if not isinstance(r, str) or len(r) <= TOOL_RESULT_CAP:
+        return call
+    return {**call, "result": r[:TOOL_RESULT_CAP] + " ...[truncated]"}
 
 
 def _decode(tc):
@@ -1125,7 +1139,7 @@ class LapStore:
         against what was written; NULL for a non-voice or non-PTT turn."""
         if chat_id is None:
             raise ValueError("chat_id is required")
-        tc_json = json.dumps(tool_calls) if tool_calls else None
+        tc_json = json.dumps([_capped_result(c) for c in tool_calls]) if tool_calls else None
         u = usage or {}
         with self._lock, self.conn:
             self.conn.execute(

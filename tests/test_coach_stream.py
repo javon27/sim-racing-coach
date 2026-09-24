@@ -16,7 +16,9 @@ def test_ask_agentic_stream_passes_events_and_dispatches(tmp_path):
     # usage rides through the coach untouched (the server sums it)
     assert [e for e in events if e["type"] == "usage"]
     # dispatch records dicts (verified against CoachContext.dispatch), not tuples:
-    assert {"name": "get_corner", "input": {"corner": "1"}} in ctx.tool_calls
+    # (#159: each entry also carries the tool's result.)
+    assert [(c["name"], c["input"]) for c in ctx.tool_calls] == [("get_corner", {"corner": "1"})]
+    assert "result" in ctx.tool_calls[0]
 
 
 def test_ask_agentic_and_stream_build_same_system_prompt(tmp_path):
