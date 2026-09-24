@@ -260,7 +260,9 @@ AGENTIC_SYSTEM_PROMPT = (
     "knowledge is 'the track notes' — never call it a wiki or a guide. "
     "When reference lap times are given, you MAY compare the driver's time to the "
     "benchmark for their class as an absolute yardstick — but these are community times, "
-    "not the driver's data; frame them as a reference, not a verdict.\n\n"
+    "not the driver's data; frame them as a reference, not a verdict. Reference times "
+    "live in the track notes: for a reference/benchmark/target-time question call "
+    "get_track_notes, and never say none is loaded without having called it.\n\n"
     "For the car's handling character, a setup direction, or a driver-aid (ABS/TC/"
     "brake-bias) question, call get_car_notes and ground your advice in the authored "
     "car notes and the shared LMU setup concepts it returns — prefer these over general "
@@ -379,6 +381,14 @@ _LOOKUP = re.compile(
     r"|\bI'?m\s+(?:pulling|checking|looking|grabbing|fetching|digging)\b",  # not
     # "reading": "I'm reading you fine" is radio talk (replay #119)
     re.IGNORECASE)
+# #162: a claim that data is MISSING is a data claim too ("a community benchmark isn't
+# something I have loaded -- that's outside my data", turn #215, no tool called; the
+# track notes carried reference times). ponytail: keyed on a negation near a
+# loaded/on-file/reference/benchmark/"my data" word; other absence wordings slip through.
+_ABSENCE = re.compile(
+    r"\b(?:no|not|isn't|aren't|don't|doesn't|haven't|hasn't|without|outside)\b"
+    r"[^.!?\n]{0,50}?\b(?:(?<!-)loaded|on file|reference (?:times?|laps?)|benchmarks?|"
+    r"(?:my|the|any) data)\b", re.IGNORECASE)
 _UNIT = (r"(?:s/lap|s|secs?|seconds?|tenths?|hundredths?|laps?|°\s?[CF]|deg(?:rees)?|"
          r"psi|kpa|bar|%|percent|km/h|kph|mph|m|meters?|metres?|l|litres?|liters?|kg|"
          r"kw|mj|rpm|mm)")
@@ -453,6 +463,8 @@ def states_data(text: str, known: str) -> str:
     name absent from `known`."""
     if m := _LOOKUP.search(text):
         return f"lookup {m.group(0)!r}"
+    if m := _ABSENCE.search(text):
+        return f"absence {m.group(0)!r}"
     for m in _FIGURE.finditer(text):
         if not re.search(rf"(?<!\w){re.escape(m.group(0))}(?!\w)", known, re.IGNORECASE):
             return f"figure {m.group(0)!r}"
