@@ -192,11 +192,13 @@
     color: var(--text);
   }
   .next-corner {
+    /* #155: read at a glance mid-race, so large and heavy -- 13px was unreadable. */
     margin: 0;
     padding: 6px 12px 10px;
     font-family: var(--mono, monospace);
-    font-size: 13px;
-    font-weight: 700;
+    font-size: 24px;
+    line-height: 1.2;
+    font-weight: 800;
     color: var(--accent);
   }
   .empty {
