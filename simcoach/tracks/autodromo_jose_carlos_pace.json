@@ -9800,11 +9800,9 @@
   "notes": {
     "overview": "4.309 km, 15 turns, WEC layout. A short, technical rhythm track with constant elevation change and short straights -- lap time comes from smooth, consistent exits rather than raw entry speed, and both axles wear quickly if corners are overdriven. Overdriving the downhill corners (Mergulho, Descida do Lago) destabilises the rear; brake earlier than instinct on uphill sections to avoid lock-ups, and feed throttle patiently uphill or you overload the rears. Common mistakes: overdriving downhill, late braking into the hairpins, jerky steering in medium kinks killing exit speed, early uphill throttle, and excessive kerb use on the fast corners.",
     "corners": {
-      "1-2": "Heavy braking into T1 (left), late apex, position left for T2 (mid-apex, full throttle).",
       "3": "High-speed downhill right, flat out normally, avoid aggressive kerb use; lift slightly if understeering.",
       "4": "Downhill left, brake after the sideroad on the right, light inside kerb use for rotation, throttle on exit.",
       "5": "Downhill left, medium brake, short-shift if traction-limited -- early exit matters for the front straight.",
-      "6-7": "T6 is a fast right kink (mostly a lift, stay central for T7); T7 is a steep uphill right, late apex, throttle after the apex.",
       "8": "Low-speed left, trail-brake to the apex, sparing inside kerb use, focus on rotation and exit.",
       "9": "Deep trail-brake, early smooth throttle after the apex, use the full track, gear 1-2 depending on the car.",
       "10": "Tight right hairpin, heavy braking with trail-brake rotation, late apex, enter wide and exit toward the middle of the track.",
@@ -9812,9 +9810,18 @@
       "12": "Medium-speed left, late apex, use full track width.",
       "13": "All slight left-hand kinks -- minimal steering and the inside line to reduce drag and keep the shortest path onto the front straight.",
       "14": "All slight left-hand kinks -- minimal steering and the inside line to reduce drag and keep the shortest path onto the front straight.",
-      "15": "All slight left-hand kinks -- minimal steering and the inside line to reduce drag and keep the shortest path onto the front straight."
+      "15": "All slight left-hand kinks -- minimal steering and the inside line to reduce drag and keep the shortest path onto the front straight.",
+      "1-2": "Heavy braking into T1 (left), late apex, position left for T2 (mid-apex, full throttle).",
+      "6-7": "T6 is a fast right kink (mostly a lift, stay central for T7); T7 is a steep uphill right, late apex, throttle after the apex."
     },
-    "source": "LMU wiki (lemansultimate.wiki.gg), CC-BY-SA, summarized 2026-08-29."
+    "source": "LMU wiki (lemansultimate.wiki.gg), CC-BY-SA, summarized 2026-08-29.",
+    "reference_times": {
+      "Hypercar": "1:23.245",
+      "LMGT3": "1:33.856",
+      "LMP2": "1:23.596",
+      "LMP3": "1:28.698",
+      "GTE": "1:34.240"
+    }
   },
   "pronunciations": {
     "Arquibancadas": "ˌɑːɹkwɪbɐŋkˈɑːdəz",

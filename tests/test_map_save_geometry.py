@@ -74,6 +74,7 @@ BAKED_MAPS = [
     "fuji_speedway",
     "michelin_raceway_road_atlanta",
     "monza_curva_grande_circuit",
+    "silverstone_national_circuit",
     "weathertech_raceway_laguna_seca",
 ]
 

@@ -9730,15 +9730,22 @@
   "notes": {
     "overview": "5.793 km, 11 turns, WEC layout with all three chicanes (Rettifilo, Roggia, Ascari). The 'Temple of Speed' is more technical than it looks: lap time is braking efficiency, kerb discipline and exit speed, not raw entry pace, since most corners are slow chicanes or tight turns feeding long straights where a bad exit is costly. Kerb angle matters -- the wrong one destabilises the car. A clean exit beats defending or attacking on entry at every chicane. Hypercar needs smoother chicane inputs and patient Parabolica throttle. Common mistakes: over-using kerbs, entry over exit, overheating the fronts, and rushing Parabolica.",
     "corners": {
-      "1-2": "Braking from the far left, starting just after the 150m board (100m in qualifying). T1 (right): late apex, careful inside kerb, avoid the orange sausage kerb. T2 (left): let the car flow naturally, inside kerb okay but keep steering straight. Good exit matters more than defending into T1.",
       "3": "High-speed downhill right, flat out, minimal steering to cut drag; car drifts naturally left toward Roggia.",
-      "4-5": "Braking just before the 100m board. T4 (left): short sharp turn-in, light kerb. T5 (right): trail-brake and engine-brake to rotate, late apex, use all the exit kerb. Overusing the inside kerbs here costs speed into Lesmo 1.",
       "6": "Braking at the orange marshal stand, progressive braking with light trail-braking, late apex, exit patience is critical to avoid a rear slip. Running wide ruins the whole Lesmo sequence. (Direction not stated in the source -- see completeness note below.)",
       "7": "Braking at the 50m board, let the car rotate, late apex, watch track limits on exit, avoid the inside kerb. (Direction not stated.)",
-      "8-10": "Brake just after the 100m board. T8 (left): light trail-brake, early apex, open up for the right. T9 (right): straighten the car, controlled kerb use. T10 (left): late apex, commit fully to the exit. Rhythm matters -- corrections here kill back-straight speed.",
-      "11": "Braking between the 100m board and the flag-light depending on fuel/tyres, progressive braking with long trail-braking, very late apex, gradual and patient throttle, use all the track width. Early throttle destroys speed down the main straight. (Direction not stated.)"
+      "11": "Braking between the 100m board and the flag-light depending on fuel/tyres, progressive braking with long trail-braking, very late apex, gradual and patient throttle, use all the track width. Early throttle destroys speed down the main straight. (Direction not stated.)",
+      "1-2": "Braking from the far left, starting just after the 150m board (100m in qualifying). T1 (right): late apex, careful inside kerb, avoid the orange sausage kerb. T2 (left): let the car flow naturally, inside kerb okay but keep steering straight. Good exit matters more than defending into T1.",
+      "4-5": "Braking just before the 100m board. T4 (left): short sharp turn-in, light kerb. T5 (right): trail-brake and engine-brake to rotate, late apex, use all the exit kerb. Overusing the inside kerbs here costs speed into Lesmo 1.",
+      "8-10": "Brake just after the 100m board. T8 (left): light trail-brake, early apex, open up for the right. T9 (right): straighten the car, controlled kerb use. T10 (left): late apex, commit fully to the exit. Rhythm matters -- corrections here kill back-straight speed."
     },
-    "source": "LMU wiki (lemansultimate.wiki.gg), CC-BY-SA, summarized 2026-08-29."
+    "source": "LMU wiki (lemansultimate.wiki.gg), CC-BY-SA, summarized 2026-08-29.",
+    "reference_times": {
+      "Hypercar": "1:33.808",
+      "LMGT3": "1:48.916",
+      "LMP2": "1:36.685",
+      "LMP3": "1:44.295",
+      "GTE": "1:32.245"
+    }
   },
   "pronunciations": {
     "Ascari": "ɐskˈæɹi",

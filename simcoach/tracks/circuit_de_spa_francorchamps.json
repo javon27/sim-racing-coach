@@ -194,5 +194,30 @@
       "start_dist": 6622.0,
       "end_dist": 6903.0
     }
-  ]
+  ],
+  "notes": {
+    "overview": "Spa is a 7.004 km, 20-corner lap of long flat-out stretches linked by a few big stops (La Source, Les Combes, the Bus Stop) and a string of long, loaded corners in the middle sector. It heats the tyres fast, the front-left above all in a GT3, so smooth, wide, flowing lines beat pointy V-shaped entries and a clean turn-in pays more than hard trail braking; only use the flatter kerbs. Hypercars have far more aero grip and brake much later, but they are sensitive to pitch and ride height, so a precise brake release and measured torque delivery out of the slow corners decide the lap. Typical mistakes: too much steering, throttle too early, and attacking kerbs with a lot of lock. Setup pointers from the guide: medium-to-low rear wing, slightly lower starting tyre pressures, more diff preload for the slow corners, and brake bias a touch forward for La Source and the Bus Stop.",
+    "corners": {
+      "1": "La Source, the slow right-hand hairpin and a prime passing spot. In a GT3, brake early and do not overshoot the entry, which kills traction; take it in second with a short coast before feeding the throttle in progressively. A Hypercar can brake much later, but release the brake smoothly to keep the rear settled and watch for torque spikes when getting on the power early. The exit onto the run to Eau Rouge matters more than the minimum speed.",
+      "7": "Malmedy. Only a light touch of the brakes is needed. Do not lean on the inside kerb too much; use the full width of the road and the exit kerb.",
+      "8": "Bruxelles, the long downhill right-hander. In a GT3 be patient on turn-in, hold a steady steering angle to a late apex, and do not open the throttle early or it will push wide. In a Hypercar brake a little earlier for stability, trail the brake off gently because the rear goes light downhill, and build the throttle progressively since the torque can snap the rear mid-exit.",
+      "9": "Speaker's Corner. A light brake once past the flag marker on the right. Use all of the kerb, but keep off the raised sausage kerb, which upsets the car.",
+      "14": "Campus. Start braking where the left-hand kerb begins and use all of the kerb. Trail the brakes deep into the corner so the rear does not lose traction.",
+      "15": "Stavelot, which sets up the long flat-out run that follows. Take an early apex and get the car straight as soon as you can; traction is everything here, so do not be aggressive with the throttle. In both classes the turn itself should be flat out; do not let it run wide into the gravel on the exit.",
+      "17": "Blanchimont. Flat in a GT3 if the tyres allow it; tyre condition decides whether it is flat. Keep corrections small and do not lift mid-corner, which makes the rear lose grip. Completely flat in a Hypercar; small corrections only and watch for slower traffic.",
+      "2-4": "Eau Rouge / Raidillon. A GT3 is flat here on new tyres and light fuel: stay tight on the left, keep the car pointing straight as it crosses the first kerb, and at most breathe off briefly through the right-hand kink. A Hypercar is flat in race trim, but the compression at the bottom is very sensitive to ride height: use as little steering as possible there and do not hammer the kerbs. Exit speed carries all the way down Kemmel.",
+      "5-6": "Les Combes, the heavy stop at the end of Kemmel into a right-left-right sequence that finishes at Malmedy. The kerbs can be used, but never with a lot of steering lock on. After the left-hander put the car in the middle of the track and watch for oversteer building before Malmedy. In both classes a stable exit toward Malmedy is the priority.",
+      "10-11": "Pouhon, the double left and one of the hardest sections on the tyres. Brake lightly at the flag marker on the right, in fourth for a GT3 (fourth or fifth in a Hypercar), then make one clean turn-in and avoid correcting mid-corner, which costs a lot of time. In both classes a slightly slower entry with early throttle gives a more stable car and a better exit than attacking the entry.",
+      "12-13": "Les Fagnes, a technical right-left. Take the right with a late apex, trail-braking or rolling in depending on the car, and keep it settled. The left wants a mid apex with a slight lift at the apex; use the inside kerb to help rotation and all of the exit, even a little over the edge. A Hypercar can brake hard initially; make the right-to-left switch cleanly, avoid bottoming on the kerbs, and early throttle on the second apex is fine.",
+      "18-19": "The Bus Stop chicane, a strong overtaking spot. Brake in a straight line rather than on a diagonal. The flat kerbs can be used; the priority is the exit onto the start/finish straight."
+    },
+    "reference_times": {
+      "Hypercar": "2:00.192",
+      "LMGT3": "2:17.421",
+      "LMP2": "2:02.270",
+      "LMP3": "2:10.645",
+      "GTE": "2:14.471"
+    },
+    "source": "https://lemansultimate.wiki.gg/wiki/Track_Guide:_Spa (LMU wiki track guide; paraphrased)"
+  }
 }

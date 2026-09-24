@@ -9938,7 +9938,13 @@
       "23": "Right, part of the final complex mirroring the GP circuit's end. Set up so that the last corner, not this one, is compromised.",
       "24": "Final right onto the long pit straight. Priority is exit: sacrifice entry, get the car straight early and hard on throttle for the biggest straight of the lap."
     },
-    "reference_times": {},
+    "reference_times": {
+      "Hypercar": "2:12.116",
+      "LMGT3": "2:27.207",
+      "LMP2": "2:19.516",
+      "LMP3": "2:23.015",
+      "GTE": "2:39.424"
+    },
     "source": "Le Mans Ultimate Bahrain track guides (RaceControl, LMU Wiki); general Bahrain International Circuit corner guides (TrackTitan, sim-racing guides); Wikipedia (Endurance Circuit 6.299 km, 23 turns). Reference times omitted: no credible class times exist for the 6.3 km Endurance layout (WEC/F1 records are for the 5.412 km GP circuit)."
   },
   "pronunciations": {

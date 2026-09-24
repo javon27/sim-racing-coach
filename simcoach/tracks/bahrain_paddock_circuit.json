@@ -9700,7 +9700,13 @@
       "9": "Right leading into the final complex. Combined braking and turning, so be measured on entry and keep the car stable for the linked T10.",
       "10": "Last right before the line. Late apex and progressive throttle only, guarding against a wide exit that would cost you all the way down the straight."
     },
-    "reference_times": {},
+    "reference_times": {
+      "Hypercar": "1:13.125",
+      "LMGT3": "1:21.526",
+      "LMP2": "1:13.149",
+      "LMP3": "1:18.208",
+      "GTE": "1:21.651"
+    },
     "source": "Bahrain International Circuit corner guides (Honda F1, RaceControl/Le Mans Ultimate wiki, Senate GP corner-by-corner, tracktitan.io); directions/apex positions taken from the app's computed corner map. T6-T10 return-loop notes grounded in geometry + Bahrain surface character; opening T1-T5 grounded in shared Bahrain GP knowledge."
   },
   "pronunciations": {

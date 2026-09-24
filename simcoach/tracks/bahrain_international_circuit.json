@@ -9751,7 +9751,13 @@
       "13": "The lap-time-critical final right onto the pit straight. Late turn-in, progressive throttle only -- getting greedy magnifies mistakes and costs the whole straight."
     },
     "source": "LMU wiki (lemansultimate.wiki.gg), CC-BY-SA, summarized 2026-08-29.",
-    "reference_times": {}
+    "reference_times": {
+      "Hypercar": "1:45.105",
+      "LMGT3": "1:59.223",
+      "LMP2": "1:46.736",
+      "LMP3": "1:53.749",
+      "GTE": "1:56.692"
+    }
   },
   "pronunciations": {
     "Michael Schumacher Corner": "mˈaɪkəl ʃˈuːmɑːkɚ kˈɔːɹnɚ",
