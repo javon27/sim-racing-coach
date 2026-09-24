@@ -11,7 +11,8 @@ class FakeModel:
     `run_stream` can be scripted with tool calls to exercise the agentic loop offline."""
 
     def __init__(self, reply: str = "ok", tool_script: list | None = None,
-                 stream_script: list[tuple] | None = None):
+                 stream_script: list[tuple] | None = None,
+                 forced_stream_script: list[tuple] | None = None):
         self.reply = reply
         # tool_script: list of (tool_name, input_dict) the fake "model" will call
         # via dispatch before returning `reply`. Empty = answer with no tool calls.
@@ -21,6 +22,10 @@ class FakeModel:
         # with tool calls (#133) rather than tool_script's tools-then-one-reply
         # shape. None -> fall back to tool_script + reply.
         self.stream_script = stream_script
+        # forced_stream_script (#159): what run_stream replays when called with
+        # force_tool=True -- a forced re-ask. None -> the normal script again.
+        self.forced_stream_script = forced_stream_script
+        self.forced: list[bool] = []    # force_tool of each run_stream call, in order
         self.last_system: str | None = None
         self.last_messages: list[dict] | None = None
         self.last_tools: list[dict] | None = None
@@ -49,7 +54,7 @@ class FakeModel:
         return RunResult(text=self.reply, usage=self._usage(messages))
 
     def run_stream(self, system: str, messages: list[dict], tools: list[dict],
-                   dispatch: Callable[[str, dict], str]):
+                   dispatch: Callable[[str, dict], str], force_tool: bool = False):
         """With stream_script set, replay it verbatim (dispatching each "tool" step)
         so callers can script text/tool/text interleavings (#133). Otherwise: dispatch
         the scripted tool calls, yielding a tool event per call, then yield the fixed
@@ -59,8 +64,12 @@ class FakeModel:
         self.last_system = system
         self.last_messages = messages
         self.last_tools = tools
-        if self.stream_script is not None:
-            for step in self.stream_script:
+        self.forced.append(force_tool)
+        script = self.stream_script
+        if force_tool and self.forced_stream_script is not None:
+            script = self.forced_stream_script
+        if script is not None:
+            for step in script:
                 if step[0] == "text":
                     yield {"type": "text", "text": step[1]}
                 else:

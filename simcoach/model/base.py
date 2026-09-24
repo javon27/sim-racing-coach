@@ -91,6 +91,7 @@ class Model(Protocol):
         messages: list[dict],
         tools: list[dict],
         dispatch: Callable[[str, dict], str],
+        force_tool: bool = False,
     ) -> Iterator[dict]:
         """Like `run`, but yield events as they occur instead of returning a string:
         {"type":"tool","name","input"} as each tool is called, then one or more
@@ -103,5 +104,9 @@ class Model(Protocol):
              "model": "<model id>"}
         A multi-turn tool loop therefore yields several; the cost of the question is
         their sum. `model` rides along per event because the configured model can
-        change between calls, so a chat total is not priceable from one id."""
+        change between calls, so a chat total is not priceable from one id.
+
+        `force_tool=True` (#159) makes the FIRST model turn call a tool (any tool --
+        the model picks which) instead of answering; later turns are unconstrained.
+        The coach uses it to re-ask when a draft stated data without reading any."""
         ...

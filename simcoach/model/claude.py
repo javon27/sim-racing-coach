@@ -49,7 +49,8 @@ class ClaudeModel:
         )
         return _first_text(resp)
 
-    def _stream_turn(self, system: str, convo: list[dict], tools: list[dict] | None):
+    def _stream_turn(self, system: str, convo: list[dict], tools: list[dict] | None,
+                     force_tool: bool = False):
         """One model turn. Streams token deltas via `messages.stream` (yielding a
         `text` event per chunk) when the client supports it; falls back to a
         single whole-block `messages.create` call otherwise (a client/test-double
@@ -69,6 +70,11 @@ class ClaudeModel:
               "messages": convo, "thinking": self._thinking_param()}
         if tools is not None:
             kw["tools"] = tools
+        if force_tool:
+            # #159: must call a tool this turn. The API rejects a forced tool_choice
+            # with thinking on, so this one turn runs without it.
+            kw["tool_choice"] = {"type": "any"}
+            kw["thinking"] = {"type": "disabled"}
         if not hasattr(self.client.messages, "stream"):
             resp = self.client.messages.create(**kw)
             text = _first_text(resp)
@@ -92,6 +98,7 @@ class ClaudeModel:
         messages: list[dict],
         tools: list[dict],
         dispatch: Callable[[str, dict], str],
+        force_tool: bool = False,
     ) -> Iterator[dict]:
         """Agentic tool-use loop: let the model call `tools` to fetch data on
         demand, executing each via `dispatch`, until it stops calling tools.
@@ -100,8 +107,9 @@ class ClaudeModel:
         # Copy so we don't mutate the caller's history (the coach appends only the
         # final Q/A itself). tool_use/tool_result turns stay internal to this call.
         convo = list(messages)
-        for _ in range(MAX_TOOL_ITERATIONS):
-            final = yield from self._stream_turn(system, convo, tools)
+        for i in range(MAX_TOOL_ITERATIONS):
+            final = yield from self._stream_turn(system, convo, tools,
+                                                 force_tool=force_tool and i == 0)
             if final.stop_reason != "tool_use":
                 return
             convo.append({"role": "assistant", "content": final.content})
