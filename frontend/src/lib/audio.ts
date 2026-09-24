@@ -129,8 +129,10 @@ export function playEarcon(ctx: AudioContext, kind: Earcon): void {
 }
 
 // #163: awaited before each enqueue()d sentence starts; resolves early once
-// `cancelled()` is true. null = speak at once, as before (voice-shell crewChiefHold).
-export type Hold = (cancelled: () => boolean) => Promise<void>;
+// `cancelled()` is true. `reset()` starts a new answer's wait budget (on cancel and on
+// going idle). A rejecting hold speaks anyway. null = speak at once, as before
+// (voice-shell crewChiefHold).
+export type Hold = ((cancelled: () => boolean) => Promise<void>) & { reset?(): void };
 
 export class SynthSpeaker implements Speaker {
   voiceName: string | null = null;
@@ -179,6 +181,7 @@ export class SynthSpeaker implements Speaker {
     const settle = () => {
       this.#pending = Math.max(0, this.#pending - 1);
       if (this.#pending === 0) {
+        this.hold?.reset?.();
         const waiters = this.#idleWaiters;
         this.#idleWaiters = [];
         waiters.forEach((w) => w());
@@ -196,7 +199,7 @@ export class SynthSpeaker implements Speaker {
     const hold = this.hold;
     const gen = this.#gen;
     this.#chain = this.#chain.then(async () => {
-      await hold(() => gen !== this.#gen);
+      try { await hold(() => gen !== this.#gen); } catch { /* a broken hold must not kill speech */ }
       if (gen !== this.#gen) return;              // cancelled while held: dropped
       await new Promise<void>((done) => {
         // A cancelled utterance's late onerror must not settle the NEXT answer's count.
@@ -216,6 +219,7 @@ export class SynthSpeaker implements Speaker {
   cancel(): void {
     this.#gen++;
     this.#chain = Promise.resolve();   // never let a new answer wait on a cancelled one
+    this.hold?.reset?.();
     if (typeof speechSynthesis !== "undefined") speechSynthesis.cancel();
     this.#pending = 0;
     const waiters = this.#idleWaiters;
@@ -305,6 +309,7 @@ export class KokoroSpeaker implements Speaker {
 
   #settleIdle(): void {
     if (this.#queue.length || this.#ahead || this.#playing) return;
+    this.hold?.reset?.();
     const w = this.#idleWaiters; this.#idleWaiters = []; w.forEach((f) => f());
   }
   #cacheKey(text: string): string {
@@ -385,7 +390,7 @@ export class KokoroSpeaker implements Speaker {
     // #163: hold for CrewChief between sentences. Still `#ahead` while held, so
     // idle() stays pending and cancel() resolves + drops it at once.
     if (this.hold) {
-      await this.hold(() => gen !== this.#gen);
+      try { await this.hold(() => gen !== this.#gen); } catch { /* a broken hold must not kill speech */ }
       if (gen !== this.#gen) { ahead.resolve(); this.#settleIdle(); return; } // cancelled while held
     }
     this.#ahead = null;

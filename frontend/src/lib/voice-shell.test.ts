@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { attachShell, CC_MAX_WAIT_MS, captureNext, crewChiefHold, describeBind, deviceIdOf, isStaleBind, pushBinds, type ShellApi } from "./voice-shell";
+import { attachShell, CC_ANSWER_MAX_WAIT_MS, captureNext, crewChiefHold, describeBind, deviceIdOf, isStaleBind, pushBinds, type ShellApi } from "./voice-shell";
 
 function fakeShell() {
   const handlers = new Map<string, (p: unknown) => void>();
@@ -87,7 +87,7 @@ describe("voice-shell", () => {
 // #163: the shell reports CrewChief active (threshold + quiet tail live in Rust).
 describe("crewChiefHold", () => {
   afterEach(() => { vi.useRealTimers(); });
-  function ccShell(active: () => boolean | Error) {
+  function ccShell(active: () => boolean | null | Error) {
     const shell: ShellApi = {
       async listen() { return () => {}; },
       async invoke(cmd) {
@@ -114,12 +114,53 @@ describe("crewChiefHold", () => {
     expect(await settled(p)).toBe(true);
   });
 
-  it("speaks anyway after CC_MAX_WAIT_MS", async () => {
+  it("speaks anyway after CC_ANSWER_MAX_WAIT_MS", async () => {
     vi.useFakeTimers();
     const p = crewChiefHold(ccShell(() => true))(() => false);
-    await vi.advanceTimersByTimeAsync(CC_MAX_WAIT_MS - 100);
+    await vi.advanceTimersByTimeAsync(CC_ANSWER_MAX_WAIT_MS - 100);
     expect(await settled(p)).toBe(false);
     await vi.advanceTimersByTimeAsync(200);
+    expect(await settled(p)).toBe(true);
+  });
+
+  it("the budget is per answer: a stuck-active meter holds the whole answer CC_ANSWER_MAX_WAIT_MS total, not per sentence", async () => {
+    vi.useFakeTimers();
+    const hold = crewChiefHold(ccShell(() => true));
+    const first = hold(() => false);
+    await vi.advanceTimersByTimeAsync(CC_ANSWER_MAX_WAIT_MS + 100);
+    expect(await settled(first)).toBe(true);
+    expect(await settled(hold(() => false))).toBe(true);   // 2nd sentence: budget spent, no wait
+    hold.reset();                                          // new answer
+    const next = hold(() => false);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await settled(next)).toBe(false);               // held again
+  });
+
+  it("sentences of one answer share the budget", async () => {
+    vi.useFakeTimers();
+    let active = true;
+    const hold = crewChiefHold(ccShell(() => active));
+    const first = hold(() => false);
+    await vi.advanceTimersByTimeAsync(5000);
+    active = false;
+    await vi.advanceTimersByTimeAsync(60);
+    expect(await settled(first)).toBe(true);
+    active = true;
+    const second = hold(() => false);
+    await vi.advanceTimersByTimeAsync(CC_ANSWER_MAX_WAIT_MS - 5060 - 200);
+    expect(await settled(second)).toBe(false);
+    await vi.advanceTimersByTimeAsync(400);                // only the ~3 s left, not a fresh 8 s
+    expect(await settled(second)).toBe(true);
+  });
+
+  it("an unknown (null, watcher not read yet) reply keeps waiting instead of trusting quiet", async () => {
+    vi.useFakeTimers();
+    let reply: boolean | null = null;
+    const p = crewChiefHold(ccShell(() => reply))(() => false);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await settled(p)).toBe(false);
+    reply = false;
+    await vi.advanceTimersByTimeAsync(60);
     expect(await settled(p)).toBe(true);
   });
 

@@ -52,26 +52,37 @@ export async function pushBinds(
 }
 
 // #163: the coach never talks over CrewChief. The shell (src-tauri/src/crewchief.rs)
-// owns the peak threshold and the ~300 ms quiet tail; the per-sentence cap is here.
-// PENDING RIG: longest a sentence is held for CrewChief before it's spoken anyway.
-export const CC_MAX_WAIT_MS = 8000;
+// owns the peak threshold, the ~300 ms quiet tail and the stuck-loud cutoff; the cap
+// on how long one answer may be held is here.
+// PENDING RIG: most an answer is held in total (all its sentences share it) before
+// it's spoken anyway -- a stuck meter costs one answer this much, never more.
+export const CC_ANSWER_MAX_WAIT_MS = 8000;
 const CC_POLL_MS = 50;
 
-/** A speaker's `hold` (audio.ts): resolves once CrewChief is quiet, after CC_MAX_WAIT_MS,
- * as soon as `cancelled()` turns true, or at once if the shell can't answer -- so a
- * missing shell/command/CrewChief behaves exactly as with no hold at all. */
-export function crewChiefHold(shell: ShellApi = tauriShell()): (cancelled: () => boolean) => Promise<void> {
-  return async (cancelled) => {
+/** A speaker's `hold` (audio.ts): resolves once CrewChief is quiet, when the answer's
+ * CC_ANSWER_MAX_WAIT_MS budget is spent, as soon as `cancelled()` turns true, or at
+ * once if the shell can't answer -- so a missing shell/command/CrewChief behaves
+ * exactly as with no hold at all. A null reply (watcher not read yet) keeps waiting.
+ * `reset()` refills the budget: speakers call it on cancel and when they go idle. */
+export function crewChiefHold(shell: ShellApi = tauriShell()): ((cancelled: () => boolean) => Promise<void>) & { reset(): void } {
+  let leftMs = CC_ANSWER_MAX_WAIT_MS;
+  const hold = async (cancelled: () => boolean) => {
     const start = Date.now();
-    while (!cancelled() && Date.now() - start < CC_MAX_WAIT_MS) {
-      try {
-        if ((await shell.invoke("crewchief_active")) !== true) return;
-      } catch {
-        return;
+    try {
+      while (!cancelled() && Date.now() - start < leftMs) {
+        try {
+          const active = await shell.invoke("crewchief_active");
+          if (active !== true && active !== null) return;
+        } catch {
+          return;
+        }
+        await new Promise((r) => setTimeout(r, CC_POLL_MS));
       }
-      await new Promise((r) => setTimeout(r, CC_POLL_MS));
+    } finally {
+      leftMs = Math.max(0, leftMs - (Date.now() - start));
     }
   };
+  return Object.assign(hold, { reset: () => { leftMs = CC_ANSWER_MAX_WAIT_MS; } });
 }
 
 export interface DeviceInfo { device: string; name: string }

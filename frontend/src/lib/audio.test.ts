@@ -336,7 +336,10 @@ describe("makeSpeaker", () => {
 // #163: a hold (CrewChief talking) gates each sentence BEFORE it starts; cancel never waits on it.
 function manualHold() {
   const releases: (() => void)[] = [];
-  const hold = vi.fn((_cancelled: () => boolean) => new Promise<void>((r) => releases.push(r)));
+  const hold = Object.assign(
+    vi.fn((_cancelled: () => boolean) => new Promise<void>((r) => releases.push(r))),
+    { reset: vi.fn() },
+  );
   return { hold, releases };
 }
 
@@ -388,6 +391,38 @@ describe("KokoroSpeaker hold (#163)", () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(sources.length).toBe(0);                    // nothing held ever plays
   });
+  it("a rejecting hold still speaks the sentence, and the next one", async () => {
+    const { ctx, sources } = fakeAudio();
+    const sp = new KokoroSpeaker({ fetchWav: vi.fn(async () => wav(10)), audio: ctx });
+    sp.hold = vi.fn(async () => { throw new Error("boom"); });
+    sp.enqueue("One."); sp.enqueue("Two.");
+    await vi.waitFor(() => expect(sources.length).toBe(1));
+    sources[0].stop();
+    await vi.waitFor(() => expect(sources.length).toBe(2));
+    sources[1].stop();
+    await sp.idle();
+  });
+
+  it("resets the hold's answer budget on cancel and when it goes idle, not between queued sentences", async () => {
+    const { ctx, sources } = fakeAudio();
+    const sp = new KokoroSpeaker({ fetchWav: vi.fn(async () => wav(10)), audio: ctx });
+    const { hold, releases } = manualHold();
+    sp.hold = hold;
+    sp.enqueue("One."); sp.enqueue("Two.");
+    await vi.waitFor(() => expect(hold).toHaveBeenCalledTimes(1));
+    releases[0]();
+    await vi.waitFor(() => expect(sources.length).toBe(1));
+    sources[0].stop();
+    await vi.waitFor(() => expect(hold).toHaveBeenCalledTimes(2));
+    expect(hold.reset).not.toHaveBeenCalled();         // same answer: budget carries over
+    releases[1]();
+    await vi.waitFor(() => expect(sources.length).toBe(2));
+    sources[1].stop();
+    await sp.idle();
+    expect(hold.reset).toHaveBeenCalledTimes(1);       // drained: next answer starts fresh
+    sp.cancel();
+    expect(hold.reset).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("SynthSpeaker hold (#163)", () => {
@@ -422,6 +457,54 @@ describe("SynthSpeaker hold (#163)", () => {
     expect(spoken.length).toBe(1);
     releases[1]();
     await vi.waitFor(() => expect(spoken.length).toBe(2));
+    spoken[1].onend!();
+    await sp.idle();
+  });
+
+  it("tells the held sentence to stop waiting on cancel()", async () => {
+    fakeSynth();
+    const sp = new SynthSpeaker();
+    const { hold } = manualHold();
+    sp.hold = hold;
+    sp.enqueue("One.");
+    await vi.waitFor(() => expect(hold).toHaveBeenCalledTimes(1));
+    const cancelled = hold.mock.calls[0][0];
+    expect(cancelled()).toBe(false);
+    sp.cancel();
+    expect(cancelled()).toBe(true);
+    expect(hold.reset).toHaveBeenCalled();
+  });
+
+  it("a cancelled utterance's late onerror does not settle the next answer", async () => {
+    const spoken = fakeSynth();
+    const sp = new SynthSpeaker();
+    const { hold, releases } = manualHold();
+    sp.hold = hold;
+    sp.enqueue("One.");
+    await vi.waitFor(() => expect(hold).toHaveBeenCalledTimes(1));
+    releases[0]();
+    await vi.waitFor(() => expect(spoken.length).toBe(1));   // "One." is speaking
+    sp.cancel();
+    sp.enqueue("Two.");                                       // next answer pending
+    let idle = false; void sp.idle().then(() => (idle = true));
+    spoken[0].onerror!();                                     // the engine's late "interrupted"
+    await new Promise((r) => setTimeout(r, 10));
+    expect(idle).toBe(false);
+    await vi.waitFor(() => expect(hold).toHaveBeenCalledTimes(2));
+    releases[1]();
+    await vi.waitFor(() => expect(spoken.length).toBe(2));
+    spoken[1].onend!();
+    await vi.waitFor(() => expect(idle).toBe(true));
+  });
+
+  it("a rejecting hold does not break the chain: every sentence is still spoken", async () => {
+    const spoken = fakeSynth();
+    const sp = new SynthSpeaker();
+    sp.hold = vi.fn(async () => { throw new Error("boom"); });
+    sp.enqueue("One."); sp.enqueue("Two.");
+    await vi.waitFor(() => expect(spoken.length).toBe(1));
+    spoken[0].onend!();
+    await vi.waitFor(() => expect(spoken.map((u) => u.text)).toEqual(["One.", "Two."]));
     spoken[1].onend!();
     await sp.idle();
   });
