@@ -2576,7 +2576,7 @@ def test_provisional_plan_reads_only_the_live_track_and_car(tmp_path, synthetic_
                                        phase="practice", timestamp=200.0 + i, lap_no=10 + i))
     ctx = CoachContext(store, track=synthetic_lap.track, car=synthetic_lap.car,
                        session_id="fuji", on_track=True,
-                       live_lap={"session_id": "s1", "lap_no": 5, "start_ts": 0.0},
+                       live_lap={"session_id": "s1", "lap_no": 5, "start_ts": 300.0},
                        live_session=_live("qualifying"))
     out = ctx.dispatch("get_strategy", {"race_laps": 14})
     assert out.startswith("PROVISIONAL — from your last 4 clean"), out
@@ -2659,3 +2659,28 @@ def test_provisional_pre_race_plan_reads_this_weekends_laps_from_the_bare_base(
     out = ctx.dispatch("get_strategy", {"race_laps": 14})
     assert out.startswith("PROVISIONAL — from your last 4 clean"), out
     assert "Fuel: 2.30 L/lap measured" in out and "5.00" not in out   # this weekend's
+
+
+def test_an_old_weekend_chat_as_newest_activity_never_serves_the_old_race(
+        tmp_path, synthetic_lap):
+    """#161 red-team round 3 (t15 POISON=1): a chat stamped under the OLD weekend's bare
+    id is the newest activity, so resolving the base returns the old weekend -- and its
+    race lap 1 (a flat FL) was stated as this race's. Rows must fall inside the store's
+    session gap before the live lap started, whatever id they resolve under."""
+    from simcoach.race import LapFacts, build_snapshot
+    store, base, inst, T = _repeat_weekend(tmp_path, synthetic_lap)
+    store.save_chat("chat-old-selected", base, None, None, None, "q", "a", ts=T + 1150)
+    assert store.resolve_current_instance(base, T + 1200) == base      # the poison holds
+    snap = build_snapshot([LapFacts(lap_no=1, lap_time=95.0, clean=False)], inst)
+    ctx = CoachContext(store, track=synthetic_lap.track, car=synthetic_lap.car,
+                       session_id=inst, on_track=True, race=snap,
+                       live_lap={"session_id": base, "lap_no": 3, "start_ts": T + 1200},
+                       live_session=_live(max_laps=14, current_lap=3))
+    out = ctx.dispatch("get_strategy", {})
+    assert "flat" not in out and "dent severity" not in out, out
+    assert "5.00" not in out                  # nor the old weekend's qualifying burn
+    pre = CoachContext(store, track=synthetic_lap.track, car=synthetic_lap.car,
+                       session_id=inst, on_track=True,
+                       live_lap={"session_id": base, "lap_no": 5, "start_ts": T + 1200},
+                       live_session=_live("qualifying"))
+    assert "5.00" not in pre.dispatch("get_strategy", {"race_laps": 14})

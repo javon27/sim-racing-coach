@@ -64,6 +64,7 @@ from simcoach.race import (
     picked_up_mid_lap,
     provisional_strategy,
 )
+from simcoach.store import _SESSION_GAP_S
 from simcoach.track_lookup import load_track_knowledge, note_key_binds
 
 # ponytail: hard cap on an incident scan. Each lap past the cache costs a telemetry
@@ -1804,10 +1805,23 @@ class CoachContext:
                 return None   # never fall back to the bare base: that is another weekend
         return self.session_id
 
-    def _this_car(self, row) -> bool:
-        """A lap row at the live track in the live car (raw entry name or resolved model)."""
-        return not ((self.track and row.get("track") != self.track)
-                    or (self.car and self.car not in (row.get("car"), row.get("car_model"))))
+    def _live_row(self, row) -> bool:
+        """A lap row of the car being driven NOW: the live track, the live car (raw entry
+        name or resolved model), and -- with a live lap -- stored within the store's own
+        session gap before that lap started (`start_ts` is the live LAP's start, smm
+        `_now()` at its first sample; a stored lap's ts is its end). #161 red-team round
+        3: an old-weekend chat as the newest activity resolves to the OLD instance, and
+        its race's lap 14 (a flat FL) was stated as this race's."""
+        if ((self.track and row.get("track") != self.track)
+                or (self.car and self.car not in (row.get("car"), row.get("car_model")))):
+            return False
+        if not self.live_lap:
+            return True
+        # No start_ts (smm always sets one): the question is being asked now, mid-lap.
+        start = self.live_lap.get("start_ts") or time.time()
+        # +60 s: the lap just committed is stamped at its line crossing, the same moment
+        # the live lap starts -- never let clock jitter drop it.
+        return start - _SESSION_GAP_S <= row["ts"] <= start + 60
 
     def _race_lap_record(self):
         """The stored lap the live race snapshot is as of (the newest race row of the
@@ -1818,7 +1832,7 @@ class CoachContext:
         sid = self._live_instance()
         rows = [r for r in (self.store.session_laps(sid) if sid else [])
                 if r.get("phase") == "race" and r.get("lap_no") == self.race.as_of_lap
-                and self._this_car(r)]
+                and self._live_row(r)]
         try:
             return self.store.load(rows[-1]["id"]) if rows else None
         except Exception:
@@ -1848,7 +1862,7 @@ class CoachContext:
         for row in self.store.session_laps(sid):
             if row.get("phase") == "race" or row.get("mapping"):
                 continue
-            if not self._this_car(row):
+            if not self._live_row(row):
                 continue
             try:
                 rec = self.store.load(row["id"])
