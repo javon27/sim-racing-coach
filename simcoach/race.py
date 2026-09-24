@@ -834,7 +834,9 @@ def _strategy_lines(s: Strategy, as_of_lap: int) -> list[str]:
                      "flag from).")
     # #162: the stop COUNT is stated here, never left to the model -- "a stop is needed"
     # beside a one-stop window read as "one stop won't be enough" (Road Atlanta lap 11).
-    if w is not None:
+    if w is None and s.resources:
+        lines.append("Stops to the flag: none on these rates.")
+    elif w is not None:
         lines.append("Stops to the flag: " + (
             "more than one." if not w.one_stop else "one." if w.earliest is not None
             else "not known (tank size not reported)."))

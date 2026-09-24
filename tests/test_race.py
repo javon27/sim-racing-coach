@@ -651,8 +651,10 @@ def test_strategy_states_more_than_one_stop_when_one_full_service_cannot_reach()
 def test_strategy_states_no_stop_when_every_resource_makes_the_flag():
     snap = _road_atlanta_lap_11()
     snap.strategy.window = None
-    assert "Stops to the flag" not in "\n".join(
-        l for l in format_strategy(snap).splitlines() if not l.startswith("Pit window"))
+    assert "Stops to the flag: none on these rates." in format_strategy(snap)
+    # No projection at all: no stop count either way.
+    snap.strategy.resources = []
+    assert "Stops to the flag" not in format_strategy(snap)
 
 
 def test_strategy_never_counts_stops_off_an_unknown_tank():
