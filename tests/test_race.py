@@ -606,9 +606,9 @@ def test_a_wheel_the_car_reports_flat_is_named_in_the_pit_menu():
     dmg = {"dent_max": 0.0, "dent_total": 0.0, "detached": False, "overheating": False,
            "wheels_flat": ["fl"], "wheels_detached": []}
     text = format_strategy(_tracker_at_lap_12().snapshot, damage=dmg, damage_lap=12)
-    assert "Tyres: change FL — reads flat on lap 12." in text
-    assert "Tyres: the others stay above the 30% threshold" in text
-    assert "no change needed" not in text
+    assert ("Tyres: change FL — reads flat on lap 12; the others stay above the 30% "
+            "threshold to the flag on the measured wear.") in text
+    assert text.count("Tyres:") == 1 and "no change needed" not in text
     no_stop = dataclasses.replace(_tracker_at_lap_12().snapshot,
                                   strategy=strategy(STINT, 8))      # fuel makes the flag
     text = format_strategy(no_stop, damage=dmg, damage_lap=12)

@@ -2098,3 +2098,14 @@ def test_stint_tire_trend_warm_up_laps_are_not_a_temperature_trend():
     res = stint_tire_trend(analyses, lap_times)
     assert res["temp_slope"]["rl"] > 1.0                  # the raw fit sees the warm-up
     assert abs(res["temp_slope_settled"]["rl"]) < 1.0     # the settled one does not
+
+
+def test_stint_tire_trend_a_zero_tread_reading_is_not_wear():
+    """#161 red-team round 2, Silverstone race laps 7124-7130: the FR read 0.0 on 7130
+    (a lost/flat wheel) and the fit printed 'FR wear +11.0%/lap'."""
+    from simcoach.analysis import stint_tire_trend
+    analyses, lap_times = _trend_stint(n=7, wear_fall=0.0)
+    for a, t in zip(analyses, (0.992, 0.982, 0.973, 0.963, 0.954, 0.945, 0.0)):
+        a.wheels["tire_wear_end"]["fr"] = t
+    res = stint_tire_trend(analyses, lap_times)
+    assert 0.8 < res["wear_pct_per_lap"]["fr"] < 1.0      # ~0.9 %/lap, laps 7124-7129

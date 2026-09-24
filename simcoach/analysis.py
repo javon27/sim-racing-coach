@@ -1435,7 +1435,11 @@ def stint_tire_trend(analyses: "list[LapAnalysis]", lap_times: "list[float]",
             xs, ys = zip(*pxy)
             press_slope[w] = float(np.polyfit(xs, ys, 1)[0])
 
-        wxy = _series(lambda a, w=w: (a.wheels or {}).get("tire_wear_end", {}).get(w))
+        # A 0.0 reading is a lost or flat wheel, not tread worn off (#161 red-team,
+        # Silverstone FR on lap 7130 read "+11.0%/lap"): it is no wear sample.
+        wxy = [(i, v) for i, v in
+               _series(lambda a, w=w: (a.wheels or {}).get("tire_wear_end", {}).get(w))
+               if v > 0]
         # Tread only goes down on one tyre: a rise is a new tyre (a change the pit flag
         # missed), so the series restarts there (#161 red-team, Le Mans "-0.4 %/lap").
         rises = [k for k in range(1, len(wxy)) if wxy[k][1] > wxy[k - 1][1]]
