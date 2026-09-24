@@ -663,10 +663,19 @@ def _pit_menu_lines(s: Strategy, as_of_lap: int, damage: dict | None,
     the menu's "VIRTUAL ENERGY:" entry as the absolute refill). The fuel ratio is given as
     a DIRECTION only (`ratio_balance`): its unit/formula is unconfirmed, so no number."""
     w = s.window
+    # #164 red-team: a wheel the car reports flat or detached is named, measured.
+    dmg = damage or {}
+    hurt = {k: "reads flat" for k in dmg.get("wheels_flat", ())}
+    hurt.update({k: "reads detached" for k in dmg.get("wheels_detached", ())})
+    hurt_line = (("Tyres: change " + ", ".join(f"{k.upper()} — {why}" for k, why in
+                                               hurt.items())
+                  + f" on lap {damage_lap}.") if hurt else None)
     if w is None:
-        return ["Pit menu: " + ("no stop needed on these rates — nothing to set."
-                                if s.resources else
-                                "no fuel/energy projection — nothing computed.")]
+        head = ("Pit menu: no stop needed on these rates — nothing to set."
+                if s.resources else "Pit menu: no fuel/energy projection — nothing computed.")
+        if hurt_line:
+            head = head.removesuffix(" — nothing to set.") + " for fuel/energy or wear, but:"
+        return [head] + ([hurt_line] if hurt_line else [])
     by = {r.name: r for r in s.resources}
     lines = []
     stop = max(w.latest, as_of_lap + 1)
@@ -720,21 +729,27 @@ def _pit_menu_lines(s: Strategy, as_of_lap: int, damage: dict | None,
                         "fuel per % of virtual energy).")
             lines.append(txt + " Direction only: the ratio's unit isn't confirmed, so no "
                                "number.")
+    if hurt_line:
+        lines.append(hurt_line)
     if s.tire_laps is None:
         lines.append(f"Tyres: wear not measured in this race stint yet (needs "
-                     f"{_MIN_TIRE_TREND_LAPS} clean laps with wear data) — no call.")
+                     f"{_MIN_TIRE_TREND_LAPS} clean laps with wear data) — no call"
+                     + (" on the others." if hurt else "."))
     else:
-        short = {k for k, v in (s.tire_laps_by_wheel or {}).items() if v < s.laps_to_go}
+        short = {k for k, v in (s.tire_laps_by_wheel or {}).items()
+                 if v < s.laps_to_go and k not in hurt}
         change = [k.upper() for k in _WHEELS if k in short]
-        keep = [k.upper() for k in _WHEELS if k not in short]
+        keep = [k.upper() for k in _WHEELS if k not in short and k not in hurt]
         if change:
             lines.append(f"Tyres: change {', '.join(change)} "
                          f"({'it reaches' if len(change) == 1 else 'they reach'} the "
                          f"{WEAR_FLOOR_PCT:.0f}% threshold before the flag on the measured "
                          "wear)" + (f"; keep {', '.join(keep)}." if keep else "."))
         else:
-            lines.append(f"Tyres: no change needed — every tire stays above the "
-                         f"{WEAR_FLOOR_PCT:.0f}% threshold to the flag on the measured wear.")
+            lines.append(("Tyres: the others stay" if hurt else
+                          "Tyres: no change needed — every tire stays")
+                         + f" above the {WEAR_FLOOR_PCT:.0f}% threshold to the flag on the "
+                         "measured wear.")
     if not damage:
         lines.append("Repairs: no damage data captured.")
     elif (damage.get("dent_max", 0) > 0 or damage.get("detached")
