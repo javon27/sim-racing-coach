@@ -302,7 +302,10 @@ def test_race_position_in_recent_laps_lap_line_and_status(tmp_path, synthetic_la
     assert "position P20 overall (from P25 overall)" in lap_line
 
     status = ctx.get_session_status()
-    assert "Position: P11 overall (started P8 overall, low P25 overall)" in status
+    # #67: the first captured lap is never called a start.
+    assert ("Position: P11 overall (P8 overall on the first captured lap, low P25 "
+            "overall)") in status
+    assert "started" not in status.lower()
 
 
 def test_practice_session_shows_no_position(tmp_path, synthetic_lap):
@@ -2188,7 +2191,7 @@ def test_get_session_status_counts_the_races_and_scopes_the_race_to_this_one(
     out = ctx.get_session_status()
     assert f"Races this session: 2 (current: race 2, started {_hhmm(_T0 + 400)})" in out
     assert "this race: 2," in out          # race 2's two laps, not all four
-    assert "Position: P6 overall (started P5 overall, low P6 overall)" in out   # race 2's places only
+    assert "Position: P6 overall (P5 overall on the first captured lap, low P6 overall)" in out   # race 2's places only
 
 
 def test_get_race_result_names_which_race_of_the_sitting_it_reports(
@@ -2321,7 +2324,11 @@ def test_race_state_states_the_live_penalty_count(tmp_path, synthetic_lap):
     ctx.race, ctx.race_note = None, "Not enough laps yet: x"
     assert ctx.dispatch("get_race_state", {}).startswith("Not enough laps yet: x\nPenalties: 1")
     ctx.live_session = dataclasses.replace(sess, penalties=0)
-    assert "Penalties: none outstanding" in ctx.dispatch("get_race_state", {})
+    # red-team: 0 is never said -- the channel is unverified (a dead one reads 0), and
+    # a c_short can hold garbage.
+    for n in (0, -1, 30000):
+        ctx.live_session = dataclasses.replace(sess, penalties=n)
+        assert "Penalties" not in ctx.dispatch("get_race_state", {}), n
     ctx.live_session = dataclasses.replace(sess, phase="qualifying")
     assert "Penalties" not in ctx.dispatch("get_race_state", {})
 

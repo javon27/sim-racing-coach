@@ -302,9 +302,10 @@ TOOLS = [
         "description": "LIVE RACE ONLY. Where the driver stands as of the last completed lap: "
                        "overall and class position, laps or time remaining (and laps left at "
                        "the recent clean pace), and the in-class car ahead and behind with the "
-                       "gap TREND (s/lap) and the lap he'd be caught at that rate, and the "
-                       "game's live count of outstanding penalties. Use for position, gap, "
-                       "penalties, 'am I catching him', 'how long is left'. One call "
+                       "gap TREND (s/lap) and the lap he'd be caught at that rate; a "
+                       "'Penalties:' line appears only when the game reports one outstanding "
+                       "(no line says nothing either way). Use for position, gap, "
+                       "'am I catching him', 'how long is left'. One call "
                        "answers it.",
         "input_schema": {"type": "object", "properties": {}},
     },
@@ -1152,8 +1153,9 @@ class CoachContext:
                 self.session_id, phase="race",
                 since=cur_race["start_ts"] if cur_race else None)
             if arc:
-                pos_txt = (f" | Position: P{arc['last']} overall (started "
-                           f"P{arc['start']} overall, low P{arc['worst']} overall)")
+                # #67: arc['start'] is the first CAPTURED lap, never a start position.
+                pos_txt = (f" | Position: P{arc['last']} overall (P{arc['start']} overall "
+                           f"on the first captured lap, low P{arc['worst']} overall)")
         # #136: how many races this one session id covers, and which one is current.
         races_txt = ""
         if len(self._race_windows()) > 1:
@@ -1789,13 +1791,16 @@ class CoachContext:
         text = self._no_live_race() or format_race_state(self.race)
         # #162: the game's live penalty count (lmu.live.SessionState.penalties), read
         # when the question came in. What a penalty is for only reaches us in the result
-        # log after the race (get_race_result).
+        # log after the race (get_race_result). Only a positive count is said: the channel
+        # is unverified at the rig, and a 0 from a channel LMU never fills would read as
+        # "none outstanding" -- the dead-channel failure (mGripFract). A c_short outside
+        # 1..99 is garbage, not a count.
         sess = self.live_session
         n = getattr(sess, "penalties", None)
-        if self.on_track and sess is not None and sess.phase == "race" and n is not None:
-            text += ("\nPenalties: " + (f"{n} outstanding" if n else "none outstanding")
-                     + " (the game's live count; what it is for is not reported until the "
-                       "race's result log).")
+        if (self.on_track and sess is not None and sess.phase == "race"
+                and isinstance(n, int) and 0 < n < 100):
+            text += (f"\nPenalties: {n} outstanding (the game's live count; what it is for "
+                     "is not reported until the race's result log).")
         return text
 
     def get_strategy(self, race_laps=None, race_minutes=None):
