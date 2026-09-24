@@ -265,3 +265,46 @@ def test_canonical_map_not_cached_when_a_save_lands_mid_build(tmp_path, monkeypa
     monkeypatch.setattr(maps_mod, "build_track_map", build_during_save)
     assert TestClient(app, base_url="http://127.0.0.1").get(f"/laps/{lap_id}/map").status_code == 200
     assert app.state.canon == {}
+
+
+def test_events_map_that_raises_is_retried_on_the_empty_cadence(tmp_path, monkeypatch):
+    # #155: a raising map read used to leave no retry armed (never re-asked); it must
+    # retry every _MAP_RETRY_TICKS ticks -- not every tick, and not never.
+    from pathlib import Path
+
+    import simcoach
+    from simcoach.lmu import smm
+    _fast(monkeypatch)
+    slug = "autodromo_enzo_e_dino_ferrari"
+    shipped = Path(simcoach.__file__).resolve().parent / "tracks" / f"{slug}.json"
+    tracks = tmp_path / "tracks"
+    tracks.mkdir()
+    (tracks / f"{slug}.json").write_bytes(shipped.read_bytes())
+    monkeypatch.setattr(smm, "read_live_status",
+                        lambda: {"track": slug, "car": "", "state": "garage"})
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    calls = []
+    real = store.sector_bounds
+
+    def flaky(*a, **k):   # _map_payload's last read: raise on the first call only
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("transient")
+        return real(*a, **k)
+
+    monkeypatch.setattr(store, "sector_bounds", flaky)
+    app = create_app(store, Coach(FakeModel(reply="ok")), tracks_dir=str(tracks))
+    client = TestClient(app, base_url="http://127.0.0.1")
+    ticks = 0
+    with client.websocket_connect("/events", headers={"host": "127.0.0.1"}) as ws:
+        for _ in range(80):
+            f = ws.receive_json()
+            if f["topic"] == "status":
+                ticks += 1
+            elif f["topic"] == "map":
+                break
+        else:
+            raise AssertionError("a map that raised once was never retried")
+    assert f["data"]["corners"]
+    assert len(calls) == 2                 # one raise, one retry -- not one per tick
+    assert live_ws_mod._MAP_RETRY_TICKS <= ticks <= live_ws_mod._MAP_RETRY_TICKS + 3

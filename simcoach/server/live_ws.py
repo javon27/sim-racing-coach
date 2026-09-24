@@ -123,8 +123,12 @@ def register(app, deps) -> None:
                     # {} (a first drive: no outline, no position laps yet) -- nothing
                     # saves a map when the first lap commits, so re-ask every few ticks.
                     last["_map_key"] = key
+                    # Armed BEFORE the read: a raising payload retries on the same
+                    # cadence as an empty one, not every tick and not never.
+                    last["_map_empty_ticks"] = 0 if track else None
                     payload = _map_payload(*_live_map_key(track, car)) if track else {}
-                    last["_map_empty_ticks"] = 0 if track and not payload else None
+                    if payload:
+                        last["_map_empty_ticks"] = None
                     if changed or payload:
                         frames.append(("map", payload))
                 elif empty_ticks is not None:
