@@ -96,6 +96,7 @@ def register(app, deps) -> None:
         for key in [k for k in app.state.canon if track_slug(k[0]) == slug]:
             app.state.canon.pop(key, None)
         app.state.live_cmap = None  # /live re-resolves the corner map on its next tick
+        app.state.map_rev += 1      # /events re-pushes the live map on its next tick (#155)
 
     def _ensure_rest():
         # Return a live LMU REST client, or None. Probes get_setup() to reflect a

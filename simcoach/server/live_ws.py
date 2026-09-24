@@ -112,10 +112,11 @@ def register(app, deps) -> None:
 
             try:
                 track, car = status_data["track"], status_data["car"]
-                key = (track, car)
+                key = (track, car, app.state.map_rev)
                 if last.get("_map_key", _MISSING) != key:
-                    # Only on a track/car change: _map_payload re-reads the track file
-                    # and the store's sector bounds, which is not 1 Hz work.
+                    # Only on a track/car change or a map save (_invalidate_canon bumps
+                    # map_rev, #155): _map_payload re-reads the track file and the
+                    # store's sector bounds, which is not 1 Hz work.
                     last["_map_key"] = key
                     frames.append(("map", _map_payload(*_live_map_key(track, car)) if track else {}))
             except Exception:

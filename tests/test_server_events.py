@@ -196,3 +196,31 @@ def test_voice_setup_frame_carries_engine(tmp_path, monkeypatch):
             f = _drain_until(ws, "voice_setup")
             engines.add(f["data"]["engine"])
         assert engines == {"whisper", "kokoro"}
+
+
+def test_events_map_frame_resent_when_map_saved_mid_session(tmp_path, monkeypatch):
+    # #155: the live rail map drew the map /events pushed at connect; a map saved
+    # mid-session (same track) was never re-sent, so its corners never reached the rail.
+    from pathlib import Path
+
+    import simcoach
+    from simcoach.lmu import smm
+    _fast(monkeypatch)
+    slug = "autodromo_enzo_e_dino_ferrari"
+    shipped = Path(simcoach.__file__).resolve().parent / "tracks" / f"{slug}.json"
+    tracks = tmp_path / "tracks"
+    tracks.mkdir()
+    (tracks / f"{slug}.json").write_bytes(shipped.read_bytes())
+    monkeypatch.setattr(smm, "read_live_status",
+                        lambda: {"track": slug, "car": "", "state": "garage"})
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    app = create_app(store, Coach(FakeModel(reply="ok")), tracks_dir=str(tracks))
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/events", headers={"host": "127.0.0.1"}) as ws:
+        first = _drain_until(ws, "map")["data"]
+        assert first["corners"]
+        body = client.get(f"/tracks/{slug}/map").json()
+        body["corners"][0]["name"] = "Renamed Mid-Session"
+        assert client.put(f"/tracks/{slug}/map", json=body).status_code == 200
+        again = _drain_until(ws, "map")["data"]
+    assert again["corners"][0]["name"] == "Renamed Mid-Session"
