@@ -20,6 +20,7 @@ _CLEAN_LAP_RATIO = 1.07  # keep laps within +7% of the track/car best (drop in/o
 def register(app, deps) -> None:
     store = app.state.store
     _map_for = deps._map_for
+    _fresh = deps._fresh
     _curating = deps._curating
     _capture_path = deps._capture_path
     _track_file_data = deps._track_file_data
@@ -189,6 +190,7 @@ def register(app, deps) -> None:
     def _has_canonical(track: str, car: str) -> bool:
         if not track:
             return False
+        _fresh(track)
         if (track, car) in app.state.canon:
             return True
         data = _track_file_data(track)
@@ -200,6 +202,7 @@ def register(app, deps) -> None:
     def _canonical_map(track: str, car: str, force: bool) -> dict:
         # Build (and cache) the per-track canonical screen map. force=True bypasses
         # the frozen file + cache to re-average freshly driven laps (editor use).
+        _fresh(track)
         if not force:
             cached = app.state.canon.get((track, car))
             if cached is not None:

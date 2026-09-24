@@ -173,6 +173,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     app.state.canon = {}             # per-(track,car) canonical map payload cache
     app.state.live_cmap = None       # (live track, CornerMap|None) for /live's next corner
     app.state.map_rev = 0            # bumped on every map save; /events re-pushes the map (#155)
+    app.state.track_sigs = {}        # slug -> track files' (mtime_ns, size); see core._fresh (#158)
     app.state.latest = None  # set by the capture thread (build_app): {"record", "lap_id"} | None
     app.state.race = RaceTracker()   # #152: the race tools' snapshot, one per lap commit
     # One worker: commits are processed in lap order, and never on the capture thread.

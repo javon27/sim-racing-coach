@@ -19,6 +19,7 @@ _MAP_RETRY_TICKS = 10  # while the pushed map is {}, re-ask this often (#155)
 def register(app, deps) -> None:
     store = app.state.store
     _live_track = deps._live_track
+    _fresh = deps._fresh
     _cmap_for_map = deps._cmap_for_map
     _status_view = deps._status_view
     _map_payload = deps._map_payload
@@ -43,8 +44,9 @@ def register(app, deps) -> None:
             # #151: the rail map's "Next: T10 Pouhon (L)". Corner identity is owned
             # data, so it is resolved HERE from the live track's corner map, never in
             # the UI. Resolved once per track (this runs at 4 Hz); _invalidate_canon
-            # drops the cache when a map is saved.
+            # drops the cache when a map is saved (_fresh: or rewritten on disk, #158).
             track = _live_track()
+            _fresh(track)
             cached = app.state.live_cmap
             if cached is None or cached[0] != track:
                 cached = app.state.live_cmap = (track, _cmap_for_map(track) if track else None)
@@ -113,6 +115,7 @@ def register(app, deps) -> None:
 
             try:
                 track, car = status_data["track"], status_data["car"]
+                _fresh(track)  # a track file rewritten outside the app bumps map_rev (#158)
                 key = (track, car, app.state.map_rev)
                 empty_ticks = last.get("_map_empty_ticks")
                 changed = last.get("_map_key", _MISSING) != key

@@ -48,6 +48,7 @@ def register(app, deps) -> None:
         # cheaply on the next call (it may appear once a lap completes).
         if not track:
             return None
+        _fresh(track)
         cached = app.state.cmaps.get(track)
         if cached is not None:
             return cached
@@ -97,6 +98,30 @@ def register(app, deps) -> None:
             app.state.canon.pop(key, None)
         app.state.live_cmap = None  # /live re-resolves the corner map on its next tick
         app.state.map_rev += 1      # /events re-pushes the live map on its next tick (#155)
+        app.state.track_sigs.pop(slug, None)  # the next _fresh re-baselines on the new file
+
+    def _fresh(track) -> None:
+        # #158: a track file changed on disk OUTSIDE the sidecar (a curation script,
+        # promote_map, a hand edit) invalidates like a save does -- including map_rev, so
+        # /events re-pushes the live map. Every per-track cache read calls this BEFORE it
+        # reads, so a rewrite that lands between the stat and the read only costs one
+        # spare invalidation. One stat() per file: cheap enough for /live's 4 Hz tick.
+        slug = track_slug(track) if track else ""
+        if not slug:
+            return
+        user_dir, bundled = _map_dirs()
+        sig = []
+        for d in (bundled, user_dir):
+            try:
+                st = (Path(d) / f"{slug}.json").stat()
+                sig.append((st.st_mtime_ns, st.st_size))
+            except OSError:
+                sig.append(None)
+        seen = app.state.track_sigs.get(slug)
+        app.state.track_sigs[slug] = sig
+        if seen is not None and seen != sig:
+            _invalidate_canon(track)
+            app.state.track_sigs[slug] = sig
 
     def _ensure_rest():
         # Return a live LMU REST client, or None. Probes get_setup() to reflect a
@@ -170,4 +195,4 @@ def register(app, deps) -> None:
         return store.resolve_current_instance(base) if base else None
 
     export(deps, _map_for, _curating, _map_dirs, _capture_path, _newest_capture,
-           _invalidate_canon, _ensure_rest, _live_track, _live_session_id)
+           _invalidate_canon, _fresh, _ensure_rest, _live_track, _live_session_id)
