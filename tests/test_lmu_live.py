@@ -121,3 +121,15 @@ def test_empty_snapshot_is_not_live():
     assert isinstance(snap, FieldSnapshot)
     assert snap.session.live is False
     assert snap.cars == []
+
+
+def test_read_field_carries_the_players_live_penalty_count():
+    """#162: Road Atlanta 2026-09-23 -- a drive-through for "Out of position" at the
+    start was never mentioned. The player's mNumPenalties rides on the session."""
+    s = _scoring([
+        _veh(mID=1, mPlace=1, mVehicleClass="GT3", mVehicleName="G1", mNumPenalties=2),
+        _veh(mID=2, mPlace=30, mVehicleClass="GT3", mVehicleName="Corvette",
+             mIsPlayer=True, mNumPenalties=1),
+    ])
+    assert read_field(s).session.penalties == 1
+    assert empty_snapshot().session.penalties is None

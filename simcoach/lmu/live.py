@@ -55,6 +55,10 @@ class SessionState:
     last_s2: float | None
     last_lap: float | None
     best_lap: float | None
+    # #162: the player's mNumPenalties -- rF2 documents it as the count of outstanding
+    # (unserved) penalties. PENDING RIG VERIFICATION in LMU (never eyeballed against a
+    # served drive-through). None = no live frame.
+    penalties: int | None = None
 
 
 @dataclass
@@ -170,6 +174,7 @@ def read_field(scoring: rF2Scoring) -> FieldSnapshot:
             last_s2=_pos(player.mLastSector2),
             last_lap=_pos(player.mLastLapTime),
             best_lap=_pos(player.mBestLapTime),
+            penalties=int(player.mNumPenalties),
         ),
         cars=cars,
     )

@@ -302,8 +302,9 @@ TOOLS = [
         "description": "LIVE RACE ONLY. Where the driver stands as of the last completed lap: "
                        "overall and class position, laps or time remaining (and laps left at "
                        "the recent clean pace), and the in-class car ahead and behind with the "
-                       "gap TREND (s/lap) and the lap he'd be caught at that rate. Use for "
-                       "position, gap, 'am I catching him', 'how long is left'. One call "
+                       "gap TREND (s/lap) and the lap he'd be caught at that rate, and the "
+                       "game's live count of outstanding penalties. Use for position, gap, "
+                       "penalties, 'am I catching him', 'how long is left'. One call "
                        "answers it.",
         "input_schema": {"type": "object", "properties": {}},
     },
@@ -609,7 +610,11 @@ def race_result_text(store, session_id) -> str:
         penalties = rr["penalties"]
         if penalties:
             texts = [str(p.get("text") or p) for p in penalties[:3]]
-            lines.append(f"Penalties ({len(penalties)}): {'; '.join(texts)}")
+            # #162: the log has a line per penalty issued AND per penalty served, so
+            # its length is entries, not a count of penalties.
+            n = len(penalties)
+            lines.append(f"Penalty log ({n} entr{'y' if n == 1 else 'ies'}): "
+                         f"{'; '.join(texts)}")
     if arc:
         # NEVER call arc['start'] a starting position: it is the first lap capture
         # happened to record, which is already underway (issue #67 reported a P9
@@ -1781,7 +1786,17 @@ class CoachContext:
         return None
 
     def get_race_state(self):
-        return self._no_live_race() or format_race_state(self.race)
+        text = self._no_live_race() or format_race_state(self.race)
+        # #162: the game's live penalty count (lmu.live.SessionState.penalties), read
+        # when the question came in. What a penalty is for only reaches us in the result
+        # log after the race (get_race_result).
+        sess = self.live_session
+        n = getattr(sess, "penalties", None)
+        if self.on_track and sess is not None and sess.phase == "race" and n is not None:
+            text += ("\nPenalties: " + (f"{n} outstanding" if n else "none outstanding")
+                     + " (the game's live count; what it is for is not reported until the "
+                       "race's result log).")
+        return text
 
     def get_strategy(self, race_laps=None, race_minutes=None):
         if not self.on_track:

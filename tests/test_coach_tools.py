@@ -507,7 +507,8 @@ def test_get_race_result_formats_and_falls_back(tmp_path, synthetic_lap):
     out = ctx.dispatch("get_race_result", {})
     assert "P3 overall" in out and "P2 in class" in out and "Finished" in out
     assert "Incidents (2)" in out and "Off track T7" in out
-    assert "Penalties (1)" in out and "Track limits DT" in out
+    # #162: the log lists issued AND served lines -- entries, not a penalty count.
+    assert "Penalty log (1 entry)" in out and "Track limits DT" in out
 
     # No race row for this session -> honest fallback.
     ctx.session_id = "practice-1"
@@ -2302,6 +2303,27 @@ def test_race_tools_read_the_cached_snapshot_and_lead_with_its_lap(tmp_path, syn
     assert state.startswith("As of lap 12 (race).") and "P3 in class" in state
     assert strat.startswith("As of lap 12.") and "Fuel: 2.50 L/lap" in strat
     assert ctx.race is snap and ctx.dispatch("get_race_state", {}) == state
+
+
+def test_race_state_states_the_live_penalty_count(tmp_path, synthetic_lap):
+    """#162: Road Atlanta 2026-09-23 -- a drive-through ("Out of position") was issued
+    on lap 1 and the coach never mentioned it. get_race_state says the game's live
+    count, with or without a race snapshot yet (lap 1 has none)."""
+    import dataclasses
+
+    from simcoach.lmu.live import empty_snapshot
+    sess = dataclasses.replace(empty_snapshot().session, live=True, phase="race",
+                               penalties=1)
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    ctx.race, ctx.live_session = _race_snapshot(), sess
+    assert ("Penalties: 1 outstanding (the game's live count; what it is for is not "
+            "reported until the race's result log).") in ctx.dispatch("get_race_state", {})
+    ctx.race, ctx.race_note = None, "Not enough laps yet: x"
+    assert ctx.dispatch("get_race_state", {}).startswith("Not enough laps yet: x\nPenalties: 1")
+    ctx.live_session = dataclasses.replace(sess, penalties=0)
+    assert "Penalties: none outstanding" in ctx.dispatch("get_race_state", {})
+    ctx.live_session = dataclasses.replace(sess, phase="qualifying")
+    assert "Penalties" not in ctx.dispatch("get_race_state", {})
 
 
 def test_race_tools_say_the_race_note_when_a_live_race_has_no_fresh_snapshot(tmp_path):
