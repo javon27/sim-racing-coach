@@ -232,6 +232,10 @@ class LiveLap:
         rpm_max = float(np.nanmax(rpm)) if rpm is not None and np.isfinite(rpm).any() else None
         cms = [_metrics_for_corner(record, c, cmap.length, None, rpm_max) for c in todo]
         tag_sections(cms, cmap)
+        for cm in cms:
+            # Judged against the lap's peak RPM -- mid-lap only the peak SO FAR, so a
+            # live read can be a false negative. Stated once the lap commits.
+            cm.short_shift = cm.bog = None
         events = lap_events(record, cmap, SimpleNamespace(corners=cms))
         impacts = damage_events(snap)
         for c, cm in zip(todo, cms):

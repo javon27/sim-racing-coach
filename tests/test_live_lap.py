@@ -518,3 +518,20 @@ def test_a_between_window_spin_reaches_this_lap_from_the_stored_scan(tmp_path):
     out = ctx.dispatch("get_stint_events", {})
     assert "between T1 Left Hairpin and T2 Right Sweeper" in out
     assert "not scanned" not in out
+
+
+def test_provisional_corners_omit_short_shift_and_bog(tmp_path, synthetic_lap):
+    """Both are judged against the lap's peak RPM, which mid-lap is only the peak SO
+    FAR -- live they could state a false negative. Omitted until the lap commits."""
+    rpm = 4000.0 + 50.0 * synthetic_lap.channels["speed"]
+    lap = dataclasses.replace(synthetic_lap, channels={**synthetic_lap.channels, "rpm": rpm})
+    from simcoach.analysis import analyze_lap
+    full = analyze_lap(lap, CornerMap.load(CMAP)).corners[0]
+    assert full.short_shift is not None and full.bog is not None   # the full lap reads them
+    store = _store(tmp_path)
+    live = _worker(store)
+    live.source = src = _Source()
+    src.drive(lap, 1300)
+    live.tick()
+    m = store.live_lap_corners(BASE)[1][0]["facts"]["metrics"]
+    assert m["short_shift"] is None and m["bog"] is None
