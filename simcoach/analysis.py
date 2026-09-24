@@ -1191,6 +1191,15 @@ def _metrics_for_corner(
     )
 
 
+def tag_sections(corners, cmap) -> None:
+    """Tag each corner with the named section its apex falls in (e.g. "The Corkscrew")."""
+    for cm in corners:
+        for s in getattr(cmap, "sections", []) or []:
+            if s["start_dist"] <= cm.apex_dist <= s["end_dist"]:
+                cm.section = s["name"]
+                break
+
+
 def _delta(cur, ref) -> float | None:
     """cur - ref, or None when either side is missing (None) or NaN -- a "not found"
     reading (e.g. no braking) must never be diffed as if it were a real point (#102)."""
@@ -1227,12 +1236,7 @@ def analyze_lap(
     corners = [_metrics_for_corner(record, corner, length, envelope, rpm_max_lap)
               for corner in cmap.corners]
 
-    # Tag each corner with the named section its apex falls in (e.g. "The Corkscrew").
-    for cm in corners:
-        for s in getattr(cmap, "sections", []) or []:
-            if s["start_dist"] <= cm.apex_dist <= s["end_dist"]:
-                cm.section = s["name"]
-                break
+    tag_sections(corners, cmap)
 
     has_reference = reference is not None
     if has_reference:

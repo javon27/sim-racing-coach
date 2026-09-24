@@ -117,8 +117,12 @@ def register(app, deps) -> None:
                 try:
                     # #160: the lap being driven and the car's live status, for the
                     # "this lap" reads and get_car_status. Never fails the turn.
-                    from ..lmu.smm import read_live_status
-                    live_meta, car_status = app.state.live_lap.now(read_live_status())
+                    # Only the LIVE session's buffer: one left from the previous
+                    # session (no wrap since) never answers for this one.
+                    from ..lmu.smm import read_live_session_id, read_live_status
+                    live_meta, car_status = app.state.live_lap.now(
+                        read_live_status(), live=(track, vehicle),
+                        session_id=read_live_session_id())
                 except Exception:
                     live_meta = car_status = None
                 try:

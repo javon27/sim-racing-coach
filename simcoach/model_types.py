@@ -47,6 +47,9 @@ class LapRecord:
     # This lap's same-class field trace (#152 get_battle) -- TRANSIENT: handed from
     # capture to the race tracker, never written to the store or the .npz.
     field_trace: dict | None = None
+    # #160: the provisional lap (LmuSource.live_lap meta) this record completes --
+    # TRANSIENT: store.save deletes exactly that lap's provisional rows with it.
+    live_meta: dict | None = None
     # Captured while mapping mode was on (#154): a capture detail, NOT a session type --
     # the lap keeps its real phase, and bests/references/stint reads skip it (laps.mapping).
     mapping: bool = False

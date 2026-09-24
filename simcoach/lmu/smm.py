@@ -909,6 +909,9 @@ class LmuSource:
                         logging.getLogger(__name__).warning(
                             "race sample not built for this lap", exc_info=True)
                     record.field_trace = trace
+                    # #160: this buffer's provisional key, so the commit supersedes
+                    # exactly its rows (a partial is numbered mTotalLaps, not +1).
+                    record.live_meta = self.live_lap[0] if self.live_lap else None
                 if record is not None and fresh:
                     self._committed_time = lap_time
             self._channels = {}  # start the next lap fresh (committed or discarded)

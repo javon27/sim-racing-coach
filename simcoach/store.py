@@ -194,11 +194,12 @@ CREATE TABLE IF NOT EXISTS battle_laps (
 """
 
 # #160: the lap IN PROGRESS, one row per corner as the car leaves it (livelap.py):
-# that corner's metrics + incidents as JSON, keyed to the deterministic base session
-# id, phase, the game's lap number and the wall time the lap began. PROVISIONAL: the
-# stored lap's own analysis is authoritative, so a row is superseded (hidden, then
-# deleted) by a committed lap it matches -- see _LIVE_SUPERSEDED. A lap that never
-# commits (a crash, a retirement) keeps its rows.
+# that corner's metrics + incidents as JSON, plus one label '_lap' row holding the
+# lap-wide incident scan. Keyed to the deterministic base session id, the game's lap
+# number and the wall time the lap began. PROVISIONAL: the stored lap's analysis is
+# authoritative, so saving the lap deletes exactly its rows (LapRecord.live_meta
+# carries the key). A lap that never commits (a crash, a retirement) keeps its rows
+# until the worker ages them out a day later.
 _LIVE_CORNERS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS live_corners (
     session_id TEXT,
@@ -211,18 +212,10 @@ CREATE TABLE IF NOT EXISTS live_corners (
     facts TEXT,
     UNIQUE (session_id, lap_no, start_ts, label)
 );
+CREATE INDEX IF NOT EXISTS live_corners_newest ON live_corners (session_id, start_ts);
+CREATE INDEX IF NOT EXISTS live_corners_age ON live_corners (start_ts);
 """
-# A committed lap of the same base session, phase and game lap number, stored after
-# the provisional lap began. ponytail: the 30 min bound only stops a much later lap
-# that reuses the number (mTotalLaps across a restart) from hiding a crashed lap;
-# a lap is never that long, so widen it only if a red flag ever straddles it.
-_LIVE_SUPERSEDED = (
-    "EXISTS (SELECT 1 FROM laps l WHERE l.lap_no = live_corners.lap_no "
-    "AND l.phase IS live_corners.phase "
-    "AND (l.session_id = live_corners.session_id "
-    "     OR substr(l.session_id, 1, length(live_corners.session_id) + 1) "
-    "        = live_corners.session_id || '~') "
-    "AND l.ts >= live_corners.start_ts AND l.ts <= live_corners.start_ts + 1800)")
+_LIVE_LAP_ROW = "_lap"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS laps (
@@ -509,6 +502,9 @@ class LapStore:
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.execute("PRAGMA busy_timeout=5000")
         self._lock = threading.RLock()
+        # #160: provisional-lap keys already superseded by their commit, so a worker
+        # write that lands after the commit is dropped (see save_live_corner).
+        self._live_superseded: set[tuple] = set()
         current_version = self.conn.execute("PRAGMA user_version").fetchone()[0]
         # A FRESH db is version 0 AND empty. Version 0 with tables already present is a
         # db that lost its header -- `sqlite3 .dump` + restore does exactly this, since
@@ -875,6 +871,8 @@ class LapStore:
                      int(record.mapping), *race),
                 )
                 lap_id = cur.lastrowid
+                if record.live_meta:
+                    self._supersede_live(record.live_meta)
                 telemetry_path = os.path.join(self.data_dir, f"{lap_id}.npz")
                 np.savez_compressed(telemetry_path, **record.channels)
                 self.conn.execute(
@@ -961,47 +959,68 @@ class LapStore:
                               pit=[tuple(span) for span in x.get("pit", [])]))
         return out
 
-    def save_live_corner(self, meta: dict, label: str, corner_no: int, facts: dict) -> None:
-        """#160: one corner of the lap in progress (livelap.py), replacing any earlier
-        write of the same corner."""
+    @staticmethod
+    def _live_key(meta: dict) -> tuple:
+        return (meta["session_id"], meta["lap_no"], meta["start_ts"])
+
+    def _supersede_live(self, meta: dict) -> None:
+        """Delete one provisional lap's rows by its exact key (an index lookup). Caller
+        holds the lock and the transaction."""
+        key = self._live_key(meta)
+        self._live_superseded.add(key)
+        self.conn.execute("DELETE FROM live_corners WHERE session_id = ? AND lap_no = ? "
+                          "AND start_ts = ?", key)
+
+    def supersede_live_lap(self, meta: dict) -> None:
+        """#160: the lap `meta` names has been stored -- its provisional rows go."""
         with self._lock, self.conn:
+            self._supersede_live(meta)
+
+    def age_out_live_corners(self, before_ts: float) -> None:
+        """#160: drop provisional laps that began before `before_ts` (indexed)."""
+        with self._lock, self.conn:
+            self.conn.execute("DELETE FROM live_corners WHERE start_ts < ?", (before_ts,))
+
+    def save_live_corner(self, meta: dict, label: str, corner_no: int | None,
+                         facts: dict) -> None:
+        """#160: one corner of the lap in progress (livelap.py), or its lap-wide
+        incident scan (label '_lap'), replacing any earlier write of the same row. A
+        lap already stored is never written again."""
+        with self._lock, self.conn:
+            if self._live_key(meta) in self._live_superseded:
+                return
             self.conn.execute(
                 "INSERT OR REPLACE INTO live_corners (session_id, phase, lap_no, start_ts, "
                 "label, corner_no, ts, facts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (meta["session_id"], meta["phase"], meta["lap_no"], meta["start_ts"],
                  label, corner_no, time.time(), json.dumps(facts)))
 
-    def drop_superseded_live_corners(self) -> None:
-        """#160: delete provisional rows whose lap has since been stored."""
-        with self._lock, self.conn:
-            self.conn.execute(f"DELETE FROM live_corners WHERE {_LIVE_SUPERSEDED}")
-
     def live_lap_corners(self, session_id: str, lap_no: int | None = None,
                          start_ts: float | None = None) -> tuple[dict | None, list[dict]]:
         """#160: (lap meta, corner rows in along-lap order) for one provisional lap of
-        this session -- the named one, else the newest -- never a lap already stored.
+        this session -- the named one, else the newest. meta["incidents"] is the lap-wide
+        scan (or None). A stored lap's rows are already gone (save supersedes them).
         `session_id` may be an instance id; rows are keyed to its base."""
         base = _session_base(session_id or "")
         with self._lock:
             if lap_no is None:
                 row = self.conn.execute(
-                    f"SELECT lap_no, start_ts FROM live_corners WHERE session_id = ? "
-                    f"AND NOT {_LIVE_SUPERSEDED} ORDER BY start_ts DESC LIMIT 1",
-                    (base,)).fetchone()
+                    "SELECT lap_no, start_ts FROM live_corners WHERE session_id = ? "
+                    "ORDER BY start_ts DESC LIMIT 1", (base,)).fetchone()
                 if row is None:
                     return None, []
                 lap_no, start_ts = row
             rows = self.conn.execute(
-                f"SELECT phase, label, corner_no, ts, facts FROM live_corners "
-                f"WHERE session_id = ? AND lap_no = ? AND start_ts = ? "
-                f"AND NOT {_LIVE_SUPERSEDED} ORDER BY corner_no", (base, lap_no, start_ts)
-            ).fetchall()
+                "SELECT phase, label, corner_no, ts, facts FROM live_corners "
+                "WHERE session_id = ? AND lap_no = ? AND start_ts = ? ORDER BY corner_no",
+                (base, lap_no, start_ts)).fetchall()
         if not rows:
             return None, []
+        lap_rows = [json.loads(r[4]) for r in rows if r[1] == _LIVE_LAP_ROW]
         meta = {"session_id": base, "phase": rows[0][0], "lap_no": lap_no,
-                "start_ts": start_ts}
+                "start_ts": start_ts, "incidents": lap_rows[0] if lap_rows else None}
         return meta, [{"label": r[1], "corner_no": r[2], "ts": r[3],
-                       "facts": json.loads(r[4])} for r in rows]
+                       "facts": json.loads(r[4])} for r in rows if r[1] != _LIVE_LAP_ROW]
 
     def load(self, lap_id: int) -> LapRecord:
         with self._lock:

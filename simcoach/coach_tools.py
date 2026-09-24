@@ -48,7 +48,7 @@ from simcoach.format import (
     ordinal,
 )
 from simcoach.fuel import laps_remaining
-from simcoach.livelap import impact_text
+from simcoach.livelap import impact_text, incident_lines
 from simcoach.race import format_race_state, format_strategy, lap_facts, picked_up_mid_lap
 from simcoach.track_lookup import load_track_knowledge, note_key_binds
 
@@ -204,9 +204,9 @@ TOOLS = [
                 "which": {"type": "string",
                           "description": "Which lap: 'latest' (default, the last COMPLETED "
                                          "lap), 'best', an in-session lap number like "
-                                         "'lap 2', or 'this lap' -- the lap being driven "
-                                         "now, readable corner by corner as each is "
-                                         "completed (provisional)."},
+                                         "'lap 2', or 'this lap' (also 'current', 'now') "
+                                         "-- the lap being driven now, readable corner by "
+                                         "corner as each is completed (provisional)."},
             },
             "required": ["corner"],
         },
@@ -612,7 +612,7 @@ def _lap_age(ts: float) -> str:
 
 # #160: how the driver (and so the model) names the lap being driven.
 _THIS_LAP = frozenset(("this lap", "current lap", "this lap so far", "the current lap",
-                       "lap in progress", "in progress"))
+                       "lap in progress", "in progress", "this", "now", "current"))
 
 # #154: appended to a mapping-mode lap's identity line and lap-list row.
 _MAPPING_NOTE = "mapping capture lap (boundary weave, not a timed attempt)"
@@ -1418,6 +1418,13 @@ class CoachContext:
         return (format_events(facts.get("events", []), self.cmap, self.units)
                 + [impact_text(e, self.cmap) for e in facts.get("impacts", [])])
 
+    def _row_corner_reads(self, row) -> list[str]:
+        """A corner row's own reads (lockup / wheelspin / off). Spins and hits come
+        from the lap-wide scan, which also sees the ones between corner windows."""
+        return format_events([e for e in row["facts"].get("events", [])
+                              if e["kind"] in ("lockup", "wheelspin", "off")],
+                             self.cmap, self.units)
+
     def _this_lap_corner(self, corner) -> str:
         m, rows, head = self._provisional()
         if m is None:
@@ -1444,19 +1451,31 @@ class CoachContext:
         if m is None:
             return None
         out = [f"THIS LAP SO FAR — {head.removeprefix('Lap: ')}"]
-        if not rows:
-            return out[0] + "\n  no corner completed yet"
         tags = ", ".join(corner_tag(CornerMetrics(**r["facts"]["metrics"])) for r in rows)
-        out.append(f"  corners completed: {tags}")
-        incidents = [line for r in rows for line in self._row_incidents(r)]
-        out.extend(f"  {line}" for line in (incidents or ["no incidents so far"]))
+        out.append(f"  corners completed: {tags or 'none yet'}")
+        incidents = [line for r in rows for line in self._row_corner_reads(r)]
+        scan = m.get("incidents")
+        if scan is None:
+            # Never "no incidents" off a partial look: only corner windows were read.
+            out.extend(f"  {line}" for line in incidents)
+            out.append("  (spins and hits outside corner windows: not scanned)")
+            return "\n".join(out)
+        incidents += incident_lines(scan, self.cmap, self.units)
+        if incidents:
+            out.extend(f"  {line}" for line in incidents)
+        elif scan.get("scanned_to") is not None:
+            out.append(f"  no incidents so far (whole lap scanned to "
+                       f"{scan['scanned_to']:,.0f} m)")
         return "\n".join(out)
 
     def get_car_status(self):
         """#160: the live car, gated like the race tools to the live session."""
-        if not self.on_track or self.car_status is None:
+        if not self.on_track:
             return ("No live session: car status is read live from the game, only while "
-                    "you're in a session with a lap under way.")
+                    "you're in a session.")
+        if self.car_status is None:
+            return ("Car status isn't readable yet: no lap under way in this session since "
+                    "it (re)started.")
         return self.car_status
 
     def get_corner(self, corner, which="latest"):
