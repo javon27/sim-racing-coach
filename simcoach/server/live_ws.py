@@ -13,6 +13,7 @@ from ..corners import next_corner
 from .security import ALLOWED_HOSTS, _bad_origin
 
 _EVENTS_PERIOD = 1.0  # s: /events push loop period (module constant so tests can monkeypatch it)
+_MAP_RETRY_TICKS = 10  # while the pushed map is {}, re-ask this often (#155)
 
 
 def register(app, deps) -> None:
@@ -113,12 +114,21 @@ def register(app, deps) -> None:
             try:
                 track, car = status_data["track"], status_data["car"]
                 key = (track, car, app.state.map_rev)
-                if last.get("_map_key", _MISSING) != key:
+                empty_ticks = last.get("_map_empty_ticks")
+                changed = last.get("_map_key", _MISSING) != key
+                if changed or (empty_ticks is not None and empty_ticks >= _MAP_RETRY_TICKS):
                     # Only on a track/car change or a map save (_invalidate_canon bumps
                     # map_rev, #155): _map_payload re-reads the track file and the
-                    # store's sector bounds, which is not 1 Hz work.
+                    # store's sector bounds, which is not 1 Hz work. The exception is
+                    # {} (a first drive: no outline, no position laps yet) -- nothing
+                    # saves a map when the first lap commits, so re-ask every few ticks.
                     last["_map_key"] = key
-                    frames.append(("map", _map_payload(*_live_map_key(track, car)) if track else {}))
+                    payload = _map_payload(*_live_map_key(track, car)) if track else {}
+                    last["_map_empty_ticks"] = 0 if track and not payload else None
+                    if changed or payload:
+                        frames.append(("map", payload))
+                elif empty_ticks is not None:
+                    last["_map_empty_ticks"] = empty_ticks + 1
             except Exception:
                 log.warning("events: map tick failed", exc_info=True)
 

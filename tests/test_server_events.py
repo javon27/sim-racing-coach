@@ -224,3 +224,44 @@ def test_events_map_frame_resent_when_map_saved_mid_session(tmp_path, monkeypatc
         assert client.put(f"/tracks/{slug}/map", json=body).status_code == 200
         again = _drain_until(ws, "map")["data"]
     assert again["corners"][0]["name"] == "Renamed Mid-Session"
+
+
+def test_events_empty_map_is_re_asked_until_a_lap_builds_one(tmp_path, monkeypatch):
+    # #155: a first drive of a track pushes {} at connect (no outline, no position laps).
+    # Once a lap commits the map exists; /events must re-ask, or the rail says "No map"
+    # all race.
+    from simcoach.lmu import smm
+    _fast(monkeypatch)
+    monkeypatch.setattr(smm, "read_live_status",
+                        lambda: {"track": "Curveland", "car": "GT3", "state": "garage"})
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    app = create_app(store, Coach(FakeModel(reply="ok")), tracks_dir=str(tmp_path / "tracks"))
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/events", headers={"host": "127.0.0.1"}) as ws:
+        assert _drain_until(ws, "map")["data"] == {}
+        store.save(LapRecord("lmu", "Curveland", "GT3", 90.0, True, 0.0, {
+            "pos_x": np.array([0.0, 100.0, 200.0, 200.0, 200.0]),
+            "pos_z": np.array([0.0, 0.0, 0.0, 100.0, 200.0]),
+            "lap_distance": np.array([0.0, 100.0, 200.0, 300.0, 400.0])}))
+        again = _drain_until(ws, "map", limit=60)["data"]
+    assert again["path"]
+
+
+def test_canonical_map_not_cached_when_a_save_lands_mid_build(tmp_path, monkeypatch):
+    # #155: a save that clears `canon` while a map is being built must not be undone by
+    # the build caching its payload from the OLD file.
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    lap_id = store.save(LapRecord("lmu", "Curveland", "GT3", 90.0, True, 0.0, {
+        "pos_x": np.array([0.0, 100.0, 200.0, 200.0, 200.0]),
+        "pos_z": np.array([0.0, 0.0, 0.0, 100.0, 200.0]),
+        "lap_distance": np.array([0.0, 100.0, 200.0, 300.0, 400.0])}))
+    app = create_app(store, Coach(FakeModel(reply="ok")), tracks_dir=str(tmp_path / "tracks"))
+    real = maps_mod.build_track_map
+
+    def build_during_save(*a, **k):
+        app.state.map_rev += 1   # what _invalidate_canon does on a concurrent save
+        return real(*a, **k)
+
+    monkeypatch.setattr(maps_mod, "build_track_map", build_during_save)
+    assert TestClient(app, base_url="http://127.0.0.1").get(f"/laps/{lap_id}/map").status_code == 200
+    assert app.state.canon == {}

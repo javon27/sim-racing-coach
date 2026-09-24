@@ -204,6 +204,9 @@ def register(app, deps) -> None:
             cached = app.state.canon.get((track, car))
             if cached is not None:
                 return cached
+        # A save that lands while this builds clears `canon` first; caching the payload
+        # built from the OLD file would then undo that clear (#155).
+        rev = app.state.map_rev
         path, dist = _canonical_outline(track, car, force_avg=force)
         if not path:
             return {}  # no position data anywhere yet; don't cache (may appear later)
@@ -216,7 +219,7 @@ def register(app, deps) -> None:
         }
         payload = _clean(build_track_map(channels, cmap, sectors=sectors,
                                          rotation=_track_rotation(track)))
-        if not force:
+        if not force and app.state.map_rev == rev:
             app.state.canon[(track, car)] = payload
         return payload
 
