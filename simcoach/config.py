@@ -42,6 +42,7 @@ DEFAULTS = {
         "tts_rate": 1.0,
         "tts_engine": "windows",  # "windows" | "kokoro" (#104)
         "kokoro_voice": "af_heart",
+        "crewchief_wait": True,   # hold coach speech while CrewChief talks (#163); no-op without it
         "tts_cache_mb": 200,       # disk cap for cached Kokoro audio (#135); 0 disables
         "mic_device_id": None,    # MediaDevices deviceId; None = system default
         "vad_threshold": 0.02,    # RMS, 0-1

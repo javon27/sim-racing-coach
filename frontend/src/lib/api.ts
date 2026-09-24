@@ -148,6 +148,7 @@ export interface VoiceSettings {
   ptt_wheel_name: string | null;
   ptt_gamepad_name: string | null;
   ptt_focus_gate: boolean;
+  crewchief_wait: boolean;
   tts_voice: string | null;
   tts_rate: number;
   tts_engine: "windows" | "kokoro";

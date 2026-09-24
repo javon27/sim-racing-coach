@@ -51,6 +51,29 @@ export async function pushBinds(
   }
 }
 
+// #163: the coach never talks over CrewChief. The shell (src-tauri/src/crewchief.rs)
+// owns the peak threshold and the ~300 ms quiet tail; the per-sentence cap is here.
+// PENDING RIG: longest a sentence is held for CrewChief before it's spoken anyway.
+export const CC_MAX_WAIT_MS = 8000;
+const CC_POLL_MS = 50;
+
+/** A speaker's `hold` (audio.ts): resolves once CrewChief is quiet, after CC_MAX_WAIT_MS,
+ * as soon as `cancelled()` turns true, or at once if the shell can't answer -- so a
+ * missing shell/command/CrewChief behaves exactly as with no hold at all. */
+export function crewChiefHold(shell: ShellApi = tauriShell()): (cancelled: () => boolean) => Promise<void> {
+  return async (cancelled) => {
+    const start = Date.now();
+    while (!cancelled() && Date.now() - start < CC_MAX_WAIT_MS) {
+      try {
+        if ((await shell.invoke("crewchief_active")) !== true) return;
+      } catch {
+        return;
+      }
+      await new Promise((r) => setTimeout(r, CC_POLL_MS));
+    }
+  };
+}
+
 export interface DeviceInfo { device: string; name: string }
 
 /** Lists connected wheel/gamepad devices with their friendly names (#104). Empty on error. */

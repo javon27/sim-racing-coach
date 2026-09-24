@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { attachShell, captureNext, describeBind, deviceIdOf, isStaleBind, pushBinds, type ShellApi } from "./voice-shell";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { attachShell, CC_MAX_WAIT_MS, captureNext, crewChiefHold, describeBind, deviceIdOf, isStaleBind, pushBinds, type ShellApi } from "./voice-shell";
 
 function fakeShell() {
   const handlers = new Map<string, (p: unknown) => void>();
@@ -81,5 +81,61 @@ describe("voice-shell", () => {
     expect(isStaleBind("hid:046d:c276:7")).toBe(false);
     expect(isStaleBind("xinput:0:4")).toBe(false);
     expect(isStaleBind(null)).toBe(false);
+  });
+});
+
+// #163: the shell reports CrewChief active (threshold + quiet tail live in Rust).
+describe("crewChiefHold", () => {
+  afterEach(() => { vi.useRealTimers(); });
+  function ccShell(active: () => boolean | Error) {
+    const shell: ShellApi = {
+      async listen() { return () => {}; },
+      async invoke(cmd) {
+        expect(cmd).toBe("crewchief_active");
+        const a = active(); if (a instanceof Error) throw a; return a;
+      },
+    };
+    return shell;
+  }
+  async function settled(p: Promise<void>): Promise<boolean> {
+    let done = false; void p.then(() => (done = true));
+    await vi.advanceTimersByTimeAsync(0);
+    return done;
+  }
+
+  it("holds while CrewChief is active and releases once it goes quiet", async () => {
+    vi.useFakeTimers();
+    let active = true;
+    const p = crewChiefHold(ccShell(() => active))(() => false);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await settled(p)).toBe(false);
+    active = false;                                   // Rust tail elapsed
+    await vi.advanceTimersByTimeAsync(60);
+    expect(await settled(p)).toBe(true);
+  });
+
+  it("speaks anyway after CC_MAX_WAIT_MS", async () => {
+    vi.useFakeTimers();
+    const p = crewChiefHold(ccShell(() => true))(() => false);
+    await vi.advanceTimersByTimeAsync(CC_MAX_WAIT_MS - 100);
+    expect(await settled(p)).toBe(false);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await settled(p)).toBe(true);
+  });
+
+  it("returns as soon as the sentence is cancelled", async () => {
+    vi.useFakeTimers();
+    let cancelled = false;
+    const p = crewChiefHold(ccShell(() => true))(() => cancelled);
+    await vi.advanceTimersByTimeAsync(500);
+    cancelled = true;
+    await vi.advanceTimersByTimeAsync(60);
+    expect(await settled(p)).toBe(true);
+  });
+
+  it("never holds when the shell can't answer (no command / no CrewChief)", async () => {
+    vi.useFakeTimers();
+    expect(await settled(crewChiefHold(ccShell(() => new Error("unknown command")))(() => false))).toBe(true);
+    expect(await settled(crewChiefHold(ccShell(() => false))(() => false))).toBe(true);
   });
 });

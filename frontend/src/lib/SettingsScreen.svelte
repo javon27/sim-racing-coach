@@ -763,6 +763,17 @@
           </div>
         </div>
         <div class="field">
+          <span class="lbl">Wait for CrewChief to finish talking<InfoTip text="The coach holds its next sentence while CrewChief is speaking. Does nothing when CrewChief isn't running." /></span>
+          <div class="control">
+            <input
+              type="checkbox"
+              aria-label="Wait for CrewChief to finish talking"
+              bind:checked={settings.voice.crewchief_wait}
+              onchange={saveVoiceConfig}
+            />
+          </div>
+        </div>
+        <div class="field">
           <span class="lbl">Wheel button<InfoTip text="A wheel button held to talk, in addition to the keyboard key." /></span>
           <div class="control">
             <span class="val" title={settings.voice.ptt_wheel ?? undefined}>{describeBind(settings.voice.ptt_wheel, devices, settings.voice.ptt_wheel_name)}</span>

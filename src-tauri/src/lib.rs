@@ -9,6 +9,7 @@ use std::time::Duration;
 use tauri::Manager;
 use tauri_plugin_window_state::{StateFlags, WindowExt};
 
+mod crewchief;
 mod voice_input;
 
 /// Host:port the sidecar serves on; also used to detect an already-running instance.
@@ -243,7 +244,8 @@ pub fn run() {
             voice_input::voice_set_binds,
             voice_input::voice_capture_next,
             voice_input::voice_set_hotkey,
-            voice_input::voice_list_devices
+            voice_input::voice_list_devices,
+            crewchief::crewchief_active
         ])
         .plugin(
             tauri_plugin_window_state::Builder::default()

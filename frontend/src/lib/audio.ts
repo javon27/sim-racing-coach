@@ -4,6 +4,7 @@
 // as a VoiceLoop prop in tests -- only the real app constructs these.
 import { speak as apiSpeak, transcribe as apiTranscribe, UnpronounceableError, type VoiceSettings } from "./api";
 import type { Earcon, Recorder, Speaker, Transcriber } from "./voice";
+import { crewChiefHold, isTauri } from "./voice-shell";
 
 export class MicRecorder implements Recorder {
   #ctx: AudioContext | null = null;
@@ -127,9 +128,16 @@ export function playEarcon(ctx: AudioContext, kind: Earcon): void {
   osc.stop(t + 0.08);
 }
 
+// #163: awaited before each enqueue()d sentence starts; resolves early once
+// `cancelled()` is true. null = speak at once, as before (voice-shell crewChiefHold).
+export type Hold = (cancelled: () => boolean) => Promise<void>;
+
 export class SynthSpeaker implements Speaker {
   voiceName: string | null = null;
   rate = 1.0;
+  hold: Hold | null = null;
+  #chain: Promise<void> = Promise.resolve();
+  #gen = 0;
   #beepCtx: AudioContext | null = null;
   #pending = 0;
   #idleWaiters: (() => void)[] = [];
@@ -176,9 +184,28 @@ export class SynthSpeaker implements Speaker {
         waiters.forEach((w) => w());
       }
     };
-    u.onend = settle;
-    u.onerror = settle;
-    speechSynthesis.speak(u);
+    if (!this.hold) {
+      u.onend = settle;
+      u.onerror = settle;
+      speechSynthesis.speak(u);
+      return;
+    }
+    // #163: with a hold, sentences are chained here instead of queued natively, so
+    // each one can wait for CrewChief to go quiet before it starts -- between
+    // sentences, never mid-word.
+    const hold = this.hold;
+    const gen = this.#gen;
+    this.#chain = this.#chain.then(async () => {
+      await hold(() => gen !== this.#gen);
+      if (gen !== this.#gen) return;              // cancelled while held: dropped
+      await new Promise<void>((done) => {
+        // A cancelled utterance's late onerror must not settle the NEXT answer's count.
+        const end = () => { if (gen === this.#gen) settle(); done(); };
+        u.onend = end;
+        u.onerror = end;
+        speechSynthesis.speak(u);
+      });
+    });
   }
 
   idle(): Promise<void> {
@@ -187,6 +214,8 @@ export class SynthSpeaker implements Speaker {
   }
 
   cancel(): void {
+    this.#gen++;
+    this.#chain = Promise.resolve();   // never let a new answer wait on a cancelled one
     if (typeof speechSynthesis !== "undefined") speechSynthesis.cancel();
     this.#pending = 0;
     const waiters = this.#idleWaiters;
@@ -215,6 +244,7 @@ export class KokoroSpeaker implements Speaker {
   // (#118/#123) -- makeSpeaker wires this from the same VoiceSettings.tts_voice used
   // when the engine itself is "windows".
   windowsVoiceName: string | null = null;
+  hold: Hold | null = null;
   #fetchWav: typeof apiSpeak;
   #ctx: AudioContext | null;
   #windowsFallback: SynthSpeaker | null = null;
@@ -352,6 +382,12 @@ export class KokoroSpeaker implements Speaker {
     if (gen !== this.#gen) { ahead.resolve(); this.#settleIdle(); return; }   // cancelled while synthesising
     await this.#drainPlaying();
     if (gen !== this.#gen) { ahead.resolve(); this.#settleIdle(); return; }   // cancelled while waiting to play
+    // #163: hold for CrewChief between sentences. Still `#ahead` while held, so
+    // idle() stays pending and cancel() resolves + drops it at once.
+    if (this.hold) {
+      await this.hold(() => gen !== this.#gen);
+      if (gen !== this.#gen) { ahead.resolve(); this.#settleIdle(); return; } // cancelled while held
+    }
     this.#ahead = null;
     this.#pump();                                    // start the NEXT synthesis before this one plays
     if (buf === UNPRONOUNCEABLE) {
@@ -403,6 +439,7 @@ export class KokoroSpeaker implements Speaker {
 export function makeSpeaker(v: VoiceSettings, kokoroInstalled: boolean, onFallback: (reason: string) => void): Speaker {
   if (v.tts_engine === "kokoro" && kokoroInstalled) {
     const s = new KokoroSpeaker();
+    s.hold = crewChiefHoldFor(v);
     s.voice = v.kokoro_voice;
     s.rate = v.tts_rate;
     s.windowsVoiceName = v.tts_voice;
@@ -412,5 +449,11 @@ export function makeSpeaker(v: VoiceSettings, kokoroInstalled: boolean, onFallba
   const s = new SynthSpeaker();
   s.voiceName = v.tts_voice;
   s.rate = v.tts_rate;
+  s.hold = crewChiefHoldFor(v);
   return s;
+}
+
+/** #163: the CrewChief hold when the setting is on and a Tauri shell can answer. */
+export function crewChiefHoldFor(v: VoiceSettings): Hold | null {
+  return v.crewchief_wait && isTauri() ? crewChiefHold() : null;
 }

@@ -1,12 +1,12 @@
 // frontend/src/lib/audio.test.ts
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { KokoroSpeaker, SynthSpeaker, makeSpeaker } from "./audio";
 import { UnpronounceableError, type VoiceSettings } from "./api";
 
 function voiceSettings(overrides: Partial<VoiceSettings> = {}): VoiceSettings {
   return {
     enabled: true, ptt_key: "F9", ptt_wheel: null, ptt_gamepad: null, ptt_wheel_name: null, ptt_gamepad_name: null, tts_voice: null, tts_rate: 1,
-    tts_engine: "windows", kokoro_voice: "af_heart", ptt_focus_gate: true,
+    tts_engine: "windows", kokoro_voice: "af_heart", ptt_focus_gate: true, crewchief_wait: true,
     vad_threshold: 0.02, vad_silence_ms: 1000, vad_max_s: 20, conversation_idle_s: 30, mic_device_id: null,
     ...overrides,
   };
@@ -330,5 +330,142 @@ describe("makeSpeaker", () => {
     expect(s).toBeInstanceOf(SynthSpeaker);
     expect((s as SynthSpeaker).voiceName).toBe("David");
     expect((s as SynthSpeaker).rate).toBe(1.1);
+  });
+});
+
+// #163: a hold (CrewChief talking) gates each sentence BEFORE it starts; cancel never waits on it.
+function manualHold() {
+  const releases: (() => void)[] = [];
+  const hold = vi.fn((_cancelled: () => boolean) => new Promise<void>((r) => releases.push(r)));
+  return { hold, releases };
+}
+
+describe("KokoroSpeaker hold (#163)", () => {
+  it("holds each sentence until the hold releases, between sentences only", async () => {
+    const { ctx, sources } = fakeAudio();
+    const sp = new KokoroSpeaker({ fetchWav: vi.fn(async () => wav(10)), audio: ctx });
+    const { hold, releases } = manualHold();
+    sp.hold = hold;
+    sp.enqueue("One."); sp.enqueue("Two.");
+    await vi.waitFor(() => expect(hold).toHaveBeenCalledTimes(1));
+    expect(sources.length).toBe(0);                    // held: CrewChief is talking
+    releases[0]();
+    await vi.waitFor(() => expect(sources.length).toBe(1));
+    expect(hold).toHaveBeenCalledTimes(1);             // "Two." waits for "One." to end first
+    sources[0].stop();
+    await vi.waitFor(() => expect(hold).toHaveBeenCalledTimes(2));
+    expect(sources.length).toBe(1);
+    releases[1]();
+    await vi.waitFor(() => expect(sources.length).toBe(2));
+    sources[1].stop();
+    await sp.idle();
+  });
+
+  it("idle() stays pending while a sentence is held", async () => {
+    const { ctx } = fakeAudio();
+    const sp = new KokoroSpeaker({ fetchWav: vi.fn(async () => wav(10)), audio: ctx });
+    const { hold } = manualHold();
+    sp.hold = hold;
+    sp.enqueue("One.");
+    await vi.waitFor(() => expect(hold).toHaveBeenCalled());
+    let idle = false; void sp.idle().then(() => (idle = true));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(idle).toBe(false);
+  });
+
+  it("cancel() while held drops every held/queued sentence at once, even if the hold never returns", async () => {
+    const { ctx, sources } = fakeAudio();
+    const sp = new KokoroSpeaker({ fetchWav: vi.fn(async () => wav(10)), audio: ctx });
+    const { hold, releases } = manualHold();
+    sp.hold = hold;
+    const spoken = sp.speak("One."); sp.enqueue("Two.");
+    await vi.waitFor(() => expect(hold).toHaveBeenCalledTimes(1));
+    expect(hold.mock.calls[0][0]()).toBe(false);
+    sp.cancel();
+    expect(hold.mock.calls[0][0]()).toBe(true);        // the hold is told to stop waiting
+    await spoken; await sp.idle();                     // resolved without the hold returning
+    releases[0]();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(sources.length).toBe(0);                    // nothing held ever plays
+  });
+});
+
+describe("SynthSpeaker hold (#163)", () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+  function fakeSynth() {
+    const spoken: { text: string; onend: (() => void) | null; onerror: (() => void) | null }[] = [];
+    vi.stubGlobal("SpeechSynthesisUtterance", class { onend: (() => void) | null = null; onerror: (() => void) | null = null; rate = 1; voice = null; constructor(public text: string) {} });
+    vi.stubGlobal("speechSynthesis", { speak: (u: (typeof spoken)[number]) => spoken.push(u), cancel: vi.fn(), getVoices: () => [] });
+    return spoken;
+  }
+
+  it("with no hold, enqueue() hands every sentence to the native queue at once (as before)", () => {
+    const spoken = fakeSynth();
+    const sp = new SynthSpeaker();
+    sp.enqueue("One."); sp.enqueue("Two.");
+    expect(spoken.map((u) => u.text)).toEqual(["One.", "Two."]);
+  });
+
+  it("holds each sentence, speaking the next only after the previous ended and its hold released", async () => {
+    const spoken = fakeSynth();
+    const sp = new SynthSpeaker();
+    const { hold, releases } = manualHold();
+    sp.hold = hold;
+    sp.enqueue("One."); sp.enqueue("Two.");
+    await vi.waitFor(() => expect(hold).toHaveBeenCalledTimes(1));
+    expect(spoken.length).toBe(0);
+    releases[0]();
+    await vi.waitFor(() => expect(spoken.length).toBe(1));
+    expect(hold).toHaveBeenCalledTimes(1);
+    spoken[0].onend!();
+    await vi.waitFor(() => expect(hold).toHaveBeenCalledTimes(2));
+    expect(spoken.length).toBe(1);
+    releases[1]();
+    await vi.waitFor(() => expect(spoken.length).toBe(2));
+    spoken[1].onend!();
+    await sp.idle();
+  });
+
+  it("cancel() while held drops everything and a new answer does not wait on the stale hold", async () => {
+    const spoken = fakeSynth();
+    const sp = new SynthSpeaker();
+    const { hold, releases } = manualHold();
+    sp.hold = hold;
+    sp.enqueue("One."); sp.enqueue("Two.");
+    await vi.waitFor(() => expect(hold).toHaveBeenCalledTimes(1));
+    sp.cancel();
+    await sp.idle();
+    sp.enqueue("Three.");
+    await vi.waitFor(() => expect(hold).toHaveBeenCalledTimes(2));
+    releases[1]();
+    await vi.waitFor(() => expect(spoken.map((u) => u.text)).toEqual(["Three."]));
+    releases[0]();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(spoken.map((u) => u.text)).toEqual(["Three."]);   // "One."/"Two." were dropped
+  });
+});
+
+describe("makeSpeaker CrewChief hold (#163)", () => {
+  it("has no hold outside the Tauri shell or with the setting off -- speech is ungated", () => {
+    for (const engine of ["windows", "kokoro"] as const) {
+      for (const crewchief_wait of [true, false]) {
+        const s = makeSpeaker(voiceSettings({ tts_engine: engine, crewchief_wait }), true, () => {});
+        expect((s as SynthSpeaker | KokoroSpeaker).hold).toBeNull();
+      }
+    }
+  });
+
+  it("gets a hold inside the Tauri shell when the setting is on", () => {
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    try {
+      for (const engine of ["windows", "kokoro"] as const) {
+        const on = makeSpeaker(voiceSettings({ tts_engine: engine, crewchief_wait: true }), true, () => {});
+        const off = makeSpeaker(voiceSettings({ tts_engine: engine, crewchief_wait: false }), true, () => {});
+        expect((on as SynthSpeaker | KokoroSpeaker).hold).toBeTypeOf("function");
+        expect((off as SynthSpeaker | KokoroSpeaker).hold).toBeNull();
+      }
+    } finally {
+      delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    }
   });
 });

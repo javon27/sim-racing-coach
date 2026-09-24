@@ -91,6 +91,12 @@ def test_ptt_focus_gate_defaults_true_and_round_trips(tmp_path):
     assert v["ptt_focus_gate"] is False and v["tts_rate"] == 1.2  # kept across an unrelated partial save
 
 
+def test_crewchief_wait_defaults_true(tmp_path):
+    """#163: the coach waits for CrewChief by default (a no-op when it isn't running)."""
+    from simcoach import config
+    assert config.load_config(str(tmp_path / "config.json"))["voice"]["crewchief_wait"] is True
+
+
 def test_driver_merge_still_works_after_generalising(tmp_path):
     from simcoach import config
     p = str(tmp_path / "config.json")

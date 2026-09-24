@@ -3,7 +3,7 @@
   import { CoachStream, type CoachPhase, type ToolActivity } from "./coach";
   import { getChatMessages, getChatUsage, getSettings, kokoroStatus, type ChatUsage, type VoiceSettings } from "./api";
   import { VoiceLoop, type VoiceMode, type VoiceState } from "./voice";
-  import { MicRecorder, HttpTranscriber, SynthSpeaker, KokoroSpeaker, makeSpeaker } from "./audio";
+  import { MicRecorder, HttpTranscriber, SynthSpeaker, KokoroSpeaker, makeSpeaker, crewChiefHoldFor } from "./audio";
   import { attachShell, isTauri } from "./voice-shell";
   import { eventFeed } from "./events";
 
@@ -215,6 +215,7 @@
     const s = new SynthSpeaker();
     s.voiceName = lastVoiceSettings.tts_voice;
     s.rate = lastVoiceSettings.tts_rate;
+    s.hold = crewChiefHoldFor(lastVoiceSettings);
     activeVoice.setSpeaker(s);
   }
 
