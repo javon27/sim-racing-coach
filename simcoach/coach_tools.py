@@ -52,6 +52,7 @@ from simcoach.fuel import laps_remaining
 from simcoach.livelap import impact_text, incident_lines
 from simcoach.race import (
     MIN_STINT_LAPS,
+    NO_RACE_LAP_YET,
     PACE_LAPS,
     RATE_LAPS,
     _clock,
@@ -1804,11 +1805,24 @@ class CoachContext:
         def no(why):
             return (f"No live race projection yet (it needs {MIN_STINT_LAPS} clean race "
                     f"laps in this stint), and no provisional plan: {why}.")
-        if not self.session_id:
+        sess = self.live_session
+        if (sess is not None and sess.phase == "race" and self.race is None
+                and (getattr(sess, "current_lap", None) or 0) > 1):
+            # #161 red-team: mid-race with no snapshot (a sidecar restart, a stale one)
+            # nothing on board is known -- never plan it from lap 0 on a full fill.
+            return self.race_note or NO_RACE_LAP_YET
+        # The LIVE session's laps (the chat may carry another session the UI had
+        # selected), and only this track and car (#161 red-team: a Fuji plan at Road
+        # Atlanta).
+        sid = (self.live_lap or {}).get("session_id") or self.session_id
+        if not sid:
             return no("no session to read practice/qualifying laps from")
         practice = []
-        for row in self.store.session_laps(self.session_id):
+        for row in self.store.session_laps(sid):
             if row.get("phase") == "race" or row.get("mapping"):
+                continue
+            if ((self.track and row.get("track") != self.track)
+                    or (self.car and self.car not in (row.get("car"), row.get("car_model")))):
                 continue
             try:
                 rec = self.store.load(row["id"])
@@ -1830,19 +1844,25 @@ class CoachContext:
         damage, damage_lap = self._race_lap_damage()
         if damage_lap is not None:
             start, lap_no = lap_facts(self._current_lap()[0]), damage_lap
-        sess = self.live_session
         if race_laps is not None or race_minutes is not None:
             try:
-                total = (int(race_laps) if race_laps is not None
-                         else laps_left(0, None, float(race_minutes) * 60, pace))
+                if isinstance(race_laps, bool) or isinstance(race_minutes, bool):
+                    raise TypeError      # True is not a race length
+                if race_laps is not None:
+                    total = int(race_laps)
+                    if total != float(race_laps):
+                        raise ValueError     # 43.9 laps is not a race length
+                else:
+                    total = laps_left(0, None, float(race_minutes) * 60, pace)
                 if not 0 < total <= 1000:
                     raise ValueError
             except (TypeError, ValueError, OverflowError):
                 return no("race_laps / race_minutes must be a positive number")
             to_go = max(total - lap_no, 0)
-            basis = (f"{total} laps (as you said)" if race_laps is not None else
+            laps_word = f"{total} lap{'s' if total != 1 else ''}"
+            basis = (f"{laps_word} (as you said)" if race_laps is not None else
                      f"{float(race_minutes):g} minutes (as you said) {at_pace} = about "
-                     f"{total} laps")
+                     f"{laps_word}")
         elif sess is not None and sess.phase == "race":
             clock = (sess.end_time - sess.elapsed) if sess.end_time > 0 else None
             to_go = laps_left(lap_no, sess.max_laps, clock, pace)

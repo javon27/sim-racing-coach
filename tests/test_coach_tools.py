@@ -2435,9 +2435,9 @@ def test_get_tire_trend_leaves_contact_laps_out_of_the_pace_trend(tmp_path, synt
 
 # --- #161 provisional pre-race plan / #164 pit-menu stops ------------------------
 
-def _live(phase="race", max_laps=None, elapsed=0.0, end_time=0.0):
+def _live(phase="race", max_laps=None, elapsed=0.0, end_time=0.0, current_lap=1):
     from simcoach.lmu.live import SessionState
-    return SessionState(live=True, phase=phase, current_lap=1, max_laps=max_laps,
+    return SessionState(live=True, phase=phase, current_lap=current_lap, max_laps=max_laps,
                         track_len=3000.0, elapsed=elapsed, end_time=end_time, cur_s1=None,
                         cur_s2=None, best_s1=None, best_s2=None, last_s1=None, last_s2=None,
                         last_lap=None, best_lap=None)
@@ -2535,3 +2535,59 @@ def test_get_tire_trend_starts_after_the_last_pit_stop(tmp_path, synthetic_lap):
     out = ctx.dispatch("get_tire_trend", {})
     assert out.startswith("Over 3 laps:"), out           # laps 21-23 only
     assert "deg-limited" not in out
+
+
+def test_get_strategy_mid_race_without_a_snapshot_never_plans_from_a_full_fill(
+        tmp_path, synthetic_lap):
+    """#161 red-team, Road Atlanta race lap 23 after a sidecar restart (race=None,
+    1650 s left): it printed 'Assumes full fill ... Laps to go 20 ... no stop needed'."""
+    from simcoach.race import NO_RACE_LAP_YET
+    store = _weekend(tmp_path, synthetic_lap)
+    ctx = CoachContext(store, track=synthetic_lap.track, car=synthetic_lap.car,
+                       session_id="s1", on_track=True, race=None, race_note=NO_RACE_LAP_YET,
+                       live_session=_live(end_time=3599.6, elapsed=3599.6 - 1650,
+                                          current_lap=24))
+    out = ctx.dispatch("get_strategy", {})
+    assert out == NO_RACE_LAP_YET
+    assert "PROVISIONAL" not in out and "Assumes" not in out
+
+
+def test_provisional_plan_reads_only_the_live_track_and_car(tmp_path, synthetic_lap):
+    """#161 red-team (t10): live at Road Atlanta in qualifying while the chat carried the
+    Fuji session the UI had selected -- the plan came from Fuji's laps."""
+    import dataclasses
+
+    import numpy as np
+    store = _weekend(tmp_path, synthetic_lap)
+    n = len(synthetic_lap.channels["lap_distance"])
+    for i in range(4):   # another track, 5 L a lap, in the chat's session
+        ch = dict(synthetic_lap.channels)
+        ch.update(fuel=np.linspace(90.0 - 5 * i, 85.0 - 5 * i, n),
+                  fuel_capacity=np.full(n, 100.0))
+        store.save(dataclasses.replace(synthetic_lap, channels=ch, lap_time=101.0,
+                                       track="Fuji Speedway", session_id="fuji",
+                                       phase="practice", timestamp=100.0 + i, lap_no=i + 1))
+    for i in range(4):   # this weekend's session, but another car
+        ch = dict(synthetic_lap.channels)
+        ch.update(fuel=np.linspace(90.0 - 5 * i, 85.0 - 5 * i, n),
+                  fuel_capacity=np.full(n, 100.0))
+        store.save(dataclasses.replace(synthetic_lap, channels=ch, lap_time=101.0,
+                                       car="Other Car", session_id="s1",
+                                       phase="practice", timestamp=200.0 + i, lap_no=10 + i))
+    ctx = CoachContext(store, track=synthetic_lap.track, car=synthetic_lap.car,
+                       session_id="fuji", on_track=True,
+                       live_lap={"session_id": "s1", "lap_no": 5, "start_ts": 0.0},
+                       live_session=_live("qualifying"))
+    out = ctx.dispatch("get_strategy", {"race_laps": 14})
+    assert out.startswith("PROVISIONAL — from your last 4 clean"), out
+    assert "Fuel: 2.50 L/lap measured" in out and "5.00" not in out
+
+
+def test_get_strategy_rejects_a_bool_or_fractional_race_length(tmp_path, synthetic_lap):
+    store = _weekend(tmp_path, synthetic_lap)
+    ctx = CoachContext(store, track=synthetic_lap.track, car=synthetic_lap.car,
+                       session_id="s1", on_track=True, live_session=_live("practice"))
+    for bad in ({"race_laps": True}, {"race_laps": 43.9}, {"race_minutes": True}):
+        assert "must be a positive number" in ctx.dispatch("get_strategy", bad), bad
+    assert "about 1 lap)" not in ctx.dispatch("get_strategy", {"race_minutes": 0.5})
+    assert "= about 1 lap." in ctx.dispatch("get_strategy", {"race_minutes": 0.5})
