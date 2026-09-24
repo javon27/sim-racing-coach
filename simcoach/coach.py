@@ -679,15 +679,17 @@ class Coach:
         sentences. Tool and usage events pass as they come (the whole turn still runs
         and is billed). PTT speaks only on `done`, so holding the text costs nothing
         heard; the screen just gets it in one piece."""
-        text = ""
+        text = last = ""
         for ev in stream:
             if ev["type"] == "text":
                 text += ev["text"]
                 continue
             if ev["type"] == "tool":
-                text = ""
+                # A stream that ENDS on a tool would leave nothing to say (silence and
+                # an empty stored row): keep the last non-empty segment as a fallback.
+                last, text = (text if text.strip() else last), ""
             yield ev
-        text = text.strip()
+        text = text.strip() or last.strip()
         ends = [m.end() for m in _SENTENCE_END.finditer(text)]
         if text:
             yield {"type": "text", "text": text[:ends[n - 1]] if len(ends) >= n else text}

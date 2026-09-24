@@ -122,3 +122,13 @@ def test_conversation_and_typed_answers_are_not_cut(tmp_path):
     for voice in ("conversation", None):
         text = _turn_224(tmp_path, voice)[0]
         assert text.startswith(TURN_224_PRE) and text.endswith("when you stop."), voice
+
+
+@pytest.mark.parametrize("said", ["Let me check.", "You're P8. Pit on lap 20."])
+def test_ptt_stream_ending_on_a_tool_still_says_the_last_text(tmp_path, said):
+    """Red-team round 2: a stream that ends on a tool left no text after it -- silence,
+    and an empty stored row. The last non-empty segment is said instead."""
+    model = FakeModel(stream_script=[("text", said), ("tool", "get_race_state", {})])
+    events = list(Coach(model).ask_agentic_stream(_ctx(tmp_path), "q", car="C",
+                                                  voice="ptt"))
+    assert "".join(e["text"] for e in events if e["type"] == "text") == said
