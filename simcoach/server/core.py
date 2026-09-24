@@ -98,7 +98,6 @@ def register(app, deps) -> None:
             app.state.canon.pop(key, None)
         app.state.live_cmap = None  # /live re-resolves the corner map on its next tick
         app.state.map_rev += 1      # /events re-pushes the live map on its next tick (#155)
-        app.state.track_sigs.pop(slug, None)  # the next _fresh re-baselines on the new file
 
     def _fresh(track) -> None:
         # #158: a track file changed on disk OUTSIDE the sidecar (a curation script,

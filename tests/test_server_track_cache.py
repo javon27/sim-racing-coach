@@ -54,6 +54,22 @@ def test_external_rewrite_is_served_fresh_by_every_map_cache(tmp_path):
     assert client.get(f"/tracks/{SLUG}/map").json()["corners"][0]["name"] == "Rewritten On Disk"
 
 
+def test_a_resolve_racing_an_app_save_heals_on_the_next_read(tmp_path):
+    # A resolve that stat'd + read the file before an app save but stored its result after
+    # the save's invalidation leaves the PRE-save map in cmaps. The next read must still
+    # see the new file signature and drop it -- a save that forgot the signature made the
+    # next read re-baseline on the new file and keep the stale map until restart.
+    # (A notes save: its response reads no map cache, so nothing else heals it first.)
+    client, app, _ = _setup(tmp_path, resolver=True)
+    stale = app.state.map_for(SLUG)
+    held = client.get(f"/tracks/{SLUG}/notes").json()
+    held["overview"] = "an app save"
+    assert client.put(f"/tracks/{SLUG}/notes",
+                      json={"track": SLUG, "notes": held, "rev": held["rev"]}).status_code == 200
+    app.state.cmaps[SLUG] = stale                     # the racing resolve lands late
+    assert app.state.map_for(SLUG) is not stale
+
+
 def test_external_notes_rewrite_is_served_fresh(tmp_path):
     client, _, f = _setup(tmp_path)
     client.get(f"/tracks/{SLUG}/map")
@@ -62,14 +78,40 @@ def test_external_notes_rewrite_is_served_fresh(tmp_path):
 
 
 def test_unchanged_notes_save_after_external_rewrite_is_refused(tmp_path):
-    # The incident: the screen held empty notes, a script wrote real ones (and a new
-    # corner set), then an unchanged save put the empty notes back over them.
+    # A save against notes loaded BEFORE an external rewrite is refused. (This held before
+    # #158 too -- the rev is always read from disk; the incident's wipe was the GET race
+    # in the test below.)
     client, _, f = _setup(tmp_path)
     _rewrite(f, lambda d: d.pop("notes"))
     held = client.get(f"/tracks/{SLUG}/notes").json()
     client.get(f"/tracks/{SLUG}/map")
     _rewrite(f, lambda d: (d.update(notes={"overview": "real notes"}),
                            d["corners"].pop()))
+    r = client.put(f"/tracks/{SLUG}/notes",
+                   json={"track": SLUG, "notes": held, "rev": held["rev"]})
+    assert r.status_code == 409, r.text
+    assert json.loads(f.read_text(encoding="utf-8"))["notes"] == {"overview": "real notes"}
+
+
+def test_rewrite_between_the_notes_and_rev_reads_cannot_wipe_notes(tmp_path, monkeypatch):
+    # The incident (#158 red-team): GET /notes read the file once for the notes and again
+    # for the rev. A script rewriting the file between the two served the OLD (empty)
+    # notes stamped with the NEW rev, so the unchanged PUT passed and wiped real notes.
+    from simcoach.server import trackfile
+    client, _, f = _setup(tmp_path)
+    _rewrite(f, lambda d: d.pop("notes"))
+    real = trackfile.load_map_data
+    armed = {"on": True}
+
+    def racing_load(*a, **k):
+        out = real(*a, **k)
+        if armed.pop("on", False):     # after the FIRST read only
+            _rewrite(f, lambda d: (d.update(notes={"overview": "real notes"}),
+                                   d["corners"].pop()))
+        return out
+    monkeypatch.setattr(trackfile, "load_map_data", racing_load)
+    held = client.get(f"/tracks/{SLUG}/notes").json()
+    assert held["overview"] == ""      # the race fired: the GET saw the pre-rewrite file
     r = client.put(f"/tracks/{SLUG}/notes",
                    json={"track": SLUG, "notes": held, "rev": held["rev"]})
     assert r.status_code == 409, r.text

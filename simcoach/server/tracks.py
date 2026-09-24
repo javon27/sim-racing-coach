@@ -385,14 +385,16 @@ def register(app, deps) -> None:
                  "source": str(draft.get("source", ""))}
         return {"draft": draft}
 
-    def _notes_rev(track: str) -> str:
+    def _notes_rev(data: dict) -> str:
         # Revision of what a client holding the notes was looking at: the stored notes
         # AND the corner labels they are keyed to. PUT /notes writes its body verbatim --
         # it has to, it is the author typing -- so a copy loaded before a map save that
         # re-keyed the notes (#64) would put every old key back, and the old keys match
         # the new labels, so nothing even flags them as orphans. A relabel that moved no
         # note still changes what a key means, hence the labels.
-        data = _track_file_data(track)
+        # Takes the dict the caller ALREADY read, never re-reads (#158): a rewrite between
+        # two reads served the old notes stamped with the new rev, and the unchanged PUT
+        # that followed wiped the file's notes.
         corners = data.get("corners")
         labels = [str(c.get("label") or c.get("number")) for c in corners
                   if isinstance(c, dict)] if isinstance(corners, list) else []
@@ -456,7 +458,7 @@ def register(app, deps) -> None:
         rev = body.get("rev")
         if not isinstance(rev, str):
             raise HTTPException(428, "notes rev required: load the notes first and send back their rev")
-        if rev != _notes_rev(track):
+        if rev != _notes_rev(data):
             raise HTTPException(409, "these notes changed since they were loaded (a map save "
                                      "can move or drop notes); reload them before saving")
         # An unchanged save must not rewrite the file (#145): GET /notes pads to all four
@@ -471,7 +473,9 @@ def register(app, deps) -> None:
             data["notes"] = notes
         dropped = _write_track_json(track, data)    # always {}: the caller's notes are kept
         _invalidate_canon(track)                    # same cache-clear as PUT /laps/{id}/map
-        return {"ok": True, "rev": _notes_rev(track), "dropped_notes": dropped}
+        # The rev of what was just written, not a re-read: a rewrite landing after this
+        # save must still 409 the next one.
+        return {"ok": True, "rev": _notes_rev(data), "dropped_notes": dropped}
 
     @app.get("/tracks/{slug}/notes")
     def get_notes(slug: str):
@@ -480,12 +484,13 @@ def register(app, deps) -> None:
         # defaults, NOT 404 -- the editor needs a blank-but-valid shape to edit.
         if track_slug(slug) != slug:
             raise HTTPException(400, "invalid slug")
-        raw = _track_file_data(slug).get("notes") or {}
+        data = _track_file_data(slug)
+        raw = data.get("notes") or {}
         return {"overview": str(raw.get("overview", "")),
                 "corners": {str(k): str(v) for k, v in (raw.get("corners") or {}).items()},
                 "reference_times": {str(k): str(v) for k, v in (raw.get("reference_times") or {}).items()},
                 "source": str(raw.get("source", "")),
-                "rev": _notes_rev(slug)}   # send it back with PUT; see _notes_rev
+                "rev": _notes_rev(data)}   # send it back with PUT; see _notes_rev
 
     @app.get("/tracks")
     def list_tracks():
