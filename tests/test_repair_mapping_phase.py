@@ -208,6 +208,33 @@ def test_apply_refuses_a_busy_db_and_writes_nothing(tmp_path, capsys):
     finally:
         holder.execute("ROLLBACK")
         holder.close()
-    assert "busy" in capsys.readouterr().out.lower()
+    assert "locked" in capsys.readouterr().out.lower()
     assert _rows(db) == before
     assert not list(tmp_path.glob("*.pre-repair-*.bak"))
+
+
+def test_untimed_result_rows_pair_by_lap_number(tmp_path):
+    # Red-team 2: the sidecar came up mid-qualifying -- live laps 2, 3 and an untimed
+    # in-lap 4; the log lists an untimed out-lap 1 too. Paired in id order, the untimed
+    # result lap 1 was deleted against live lap 4 and result lap 4's copy kept.
+    import types
+    db = str(tmp_path / "simcoach.sqlite")
+    store = LapStore(db, str(tmp_path / "telem"))
+    for n, lt, part in [(2, 70.5, None), (3, 70.6, None), (4, None, "in")]:
+        store.save(LapRecord("lmu", TRACK, CAR, lt, lt is not None, T0 + 60 + 70 * n,
+                             {"lap_distance": np.array([0.0, 1.0])}, phase="mapping",
+                             session_id="fuji--gt3--offline", partial=part, lap_no=n))
+    store.conn.execute("UPDATE laps SET mapping = 1 WHERE phase = 'mapping'")
+    store.conn.commit()
+    laps = [types.SimpleNamespace(lap_time=t, valid=t is not None, sectors=None, lap_no=n)
+            for n, t in [(1, None), (2, 70.5), (3, 70.6), (4, None)]]
+    store.save_result_session(types.SimpleNamespace(
+        track=TRACK, car=CAR, session_type="qualifying", date_ts=T0, sim="lmu", laps=laps,
+        position=3, class_position=2, finish_status="Finished", incidents=[], penalties=[],
+        grid_position=None, class_grid_position=None, online=False),
+        "Q-untimed", logged_ts=T0 + 600)
+    store.conn.close()
+    repair.main(["--db", db, "--apply"])
+    with sqlite3.connect(db) as c:
+        left = c.execute("SELECT lap_no FROM laps WHERE source = 'result'").fetchall()
+    assert left == [(1,)]                        # the out-lap no live row ever held

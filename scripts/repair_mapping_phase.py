@@ -22,7 +22,9 @@ a non-race session (see _drop_recovered_twins).
 
 Dry run by default: it prints the per-lap changes and the duplicate count, from the same
 writes run on an in-memory copy. --apply writes, in one transaction, after backing the
-db up to <db>.pre-repair-<timestamp>.bak; it refuses a busy db (the app running).
+db up to <db>.pre-repair-<timestamp>.bak. CLOSE SIMCOACH BEFORE --apply: the script does
+not detect the running app, it only refuses when the db is actually locked at that
+moment (the app mid-write).
 
     python scripts/repair_mapping_phase.py [--db PATH] [--apply]
 """
@@ -114,7 +116,7 @@ def _drop_recovered_twins(conn: sqlite3.Connection, fixed: list, claimed: set) -
         "SELECT session_id, track, car, phase, ts FROM laps WHERE source = 'result' "
         "GROUP BY session_id, track, car, phase, ts ORDER BY ts").fetchall()
     for sid, track, car, phase, ts in groups:
-        query = (f"SELECT id, lap_time FROM laps WHERE id IN ({marks}) "
+        query = (f"SELECT id, lap_time, lap_no FROM laps WHERE id IN ({marks}) "
                  "AND track IS ? AND car IS ? AND phase IS ?")
         params: list = [*ids, track, car, phase]
         if ts is not None:
@@ -123,12 +125,13 @@ def _drop_recovered_twins(conn: sqlite3.Connection, fixed: list, claimed: set) -
         live = [r for r in conn.execute(query + " ORDER BY id", params).fetchall()
                 if r[0] not in claimed]
         rows = conn.execute(
-            "SELECT id, lap_time, s1, s2, s3 FROM laps WHERE source = 'result' "
+            "SELECT id, lap_time, s1, s2, s3, lap_no FROM laps WHERE source = 'result' "
             "AND session_id IS ? AND track IS ? AND car IS ? AND phase IS ? AND ts IS ? "
             "AND telemetry_path IS NULL ORDER BY id",
             (sid, track, car, phase, ts)).fetchall()
-        found = [(r[0], twin, r[2], r[3], r[4])
-                 for r, twin in zip(rows, _pair_laps(live, [r[1] for r in rows]))
+        # lap_nos: untimed laps pair by the game's lap number, never by id order.
+        twins = _pair_laps(live, [r[1] for r in rows], [r[5] for r in rows])
+        found = [(r[0], twin, r[2], r[3], r[4]) for r, twin in zip(rows, twins)
                  if twin is not None]
         claimed.update(p[1] for p in found)
         pairs.extend(found)
@@ -136,14 +139,15 @@ def _drop_recovered_twins(conn: sqlite3.Connection, fixed: list, claimed: set) -
     return len(pairs)
 
 
-_BUSY = ("The database is busy (is SimCoach running?). Close the app and re-run; "
-         "nothing was written.")
+_BUSY = ("The database is locked by another connection (SimCoach writing?). Close "
+         "SimCoach and re-run; nothing was written.")
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--db", default=str(paths.db_path()), help="lap store (default: app data)")
-    ap.add_argument("--apply", action="store_true", help="write the changes (after a backup)")
+    ap.add_argument("--apply", action="store_true",
+                    help="write the changes (after a backup); close SimCoach first")
     args = ap.parse_args(argv)
 
     # Read-only unless applying: a dry run must not even create or migrate the file.

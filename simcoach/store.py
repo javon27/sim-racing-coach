@@ -383,11 +383,16 @@ def _duplicate_result_lap_pairs(conn: sqlite3.Connection) -> list[tuple]:
     pairs: list[tuple] = []
     claimed: set[int] = set()
     removed_by_sid: dict[str, int] = {}
+    # The game's lap number pairs UNTIMED laps (#154 red-team 2): without it they pair in
+    # id order, and a log's untimed out-lap was deleted against a live in-lap. NULL on a
+    # db the v16 step reaches before v18 adds the column -- the old order-based match.
+    lap_no = ("lap_no" if "lap_no" in {r[1] for r in conn.execute("PRAGMA table_info(laps)")}
+              else "NULL")
     groups = conn.execute(
         "SELECT session_id, track, car, phase, ts FROM laps WHERE source = 'result' "
         "GROUP BY session_id, track, car, phase, ts ORDER BY ts").fetchall()
     for sid, track, car, phase, ts in groups:
-        query = ("SELECT id, lap_time FROM laps WHERE source = 'live' "
+        query = (f"SELECT id, lap_time, {lap_no} FROM laps WHERE source = 'live' "
                  "AND track IS ? AND car IS ? AND phase IS ?")
         params: list = [track, car, phase]
         if ts is not None:
@@ -400,11 +405,11 @@ def _duplicate_result_lap_pairs(conn: sqlite3.Connection) -> list[tuple]:
         # change WHICH of two same-time result rows goes -- the spared one never enters
         # pairing, so the live lap stays available to the other.
         rows = conn.execute(
-            "SELECT id, lap_time, s1, s2, s3 FROM laps WHERE source = 'result' "
+            f"SELECT id, lap_time, s1, s2, s3, {lap_no} FROM laps WHERE source = 'result' "
             "AND session_id IS ? AND track IS ? AND car IS ? AND phase IS ? AND ts IS ? "
             "AND telemetry_path IS NULL ORDER BY id",
             (sid, track, car, phase, ts)).fetchall()
-        twins = _pair_laps(unclaimed, [r[1] for r in rows])
+        twins = _pair_laps(unclaimed, [r[1] for r in rows], [r[5] for r in rows])
         found = [(r[0], twin, r[2], r[3], r[4]) for r, twin in zip(rows, twins)
                  if twin is not None]
         claimed.update(p[1] for p in found)

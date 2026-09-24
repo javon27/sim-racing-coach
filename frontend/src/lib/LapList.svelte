@@ -113,7 +113,10 @@
     return (
       l.reduce<LapRow | null>(
         (best, lap) =>
-          lap.lap_time == null ? best : best === null || lap.lap_time < best.lap_time! ? lap : best,
+          // A mapping lap (#154) is a boundary weave, never the best.
+          lap.lap_time == null || lap.mapping
+            ? best
+            : best === null || lap.lap_time < best.lap_time! ? lap : best,
         null,
       )?.id ?? null
     );
@@ -304,6 +307,7 @@
     let ref: LapRow | null = null;
     for (const l of laps) {
       if (l.lap_time == null) continue;   // a partial lap is never the reference (#77)
+      if (l.mapping) continue;            // nor a mapping weave (#154)
       if (l.s1 == null && l.s2 == null && l.s3 == null) continue;
       if (ref === null || l.lap_time < ref.lap_time!) ref = l;
     }

@@ -147,6 +147,22 @@ describe("LapList", () => {
     expect([...bars10].map((b) => b.className)).toEqual(["up", "down", "up"]);
   });
 
+  it("a faster mapping lap is neither the best lap nor the sector reference (#154)", async () => {
+    pushStatus("S1", 6);
+    vi.mocked(getSessionLaps).mockResolvedValue([
+      { id: 9, lap_time: 80.0, valid: 1, ts: 100, s1: 26.0, s2: 27.0, s3: 27.0, mapping: true },
+      { id: 10, lap_time: 91.2, valid: 1, ts: 200, s1: 30.0, s2: 30.5, s3: 30.0 },
+    ]);
+
+    const { container } = render(LapList);
+
+    await screen.findByText("Lap 2");
+    expect(container.querySelector(".lap.best")).toBe(container.querySelectorAll(".lap")[1]);
+    const secRows = container.querySelectorAll(".lapsec");
+    // Lap 10 is the reference: all its sectors match.
+    expect([...secRows[1].querySelectorAll("i")].map((b) => b.className)).toEqual(["pb", "pb", "pb"]);
+  });
+
   it("expanding a lap's chevron reveals the sector delta detail", async () => {
     pushStatus("S1", 6);
     vi.mocked(getSessionLaps).mockResolvedValue([
