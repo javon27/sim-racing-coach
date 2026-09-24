@@ -2502,3 +2502,36 @@ def test_get_strategy_provisional_needs_two_clean_practice_laps(tmp_path, synthe
 def test_prompt_says_lmu_has_no_crew_radio(tmp_path, synthetic_lap):
     from simcoach.coach import AGENTIC_SYSTEM_PROMPT as AGENTIC_SYSTEM
     assert "no crew radio" in AGENTIC_SYSTEM and "never say 'tell the crew'" in AGENTIC_SYSTEM
+
+
+def test_get_tire_trend_starts_after_the_last_pit_stop(tmp_path, synthetic_lap):
+    """#161 red-team, Road Atlanta 2026-09-23 race laps 16-23 (ids 7553-7560): an FL
+    puncture, pit on laps 19 AND 20 (FL tread 0.900 -> 0.0 -> 0.941 new), read 'FL wear
+    +1.6%/lap ... deg-limited' across the change. The stint restarts after the stop."""
+    import dataclasses
+
+    import numpy as np
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    n = len(synthetic_lap.channels["lap_distance"])
+    real = [  # lap, time, pit, FL tread start -> end, FR start -> end
+        (16, 84.19, False, 0.913, 0.909, 0.900, 0.896),
+        (17, 82.75, False, 0.909, 0.904, 0.896, 0.891),
+        (18, 87.17, False, 0.904, 0.900, 0.891, 0.888),
+        (19, 173.26, True, 0.900, 0.0, 0.888, 0.885),
+        (20, 254.10, True, 0.0, 0.941, 0.885, 0.881),
+        (21, 96.09, False, 0.941, 0.933, 0.881, 0.862),
+        (22, 83.72, False, 0.933, 0.927, 0.862, 0.858),
+        (23, 83.25, False, 0.927, 0.921, 0.858, 0.854)]
+    for lap, t, pit, fl0, fl1, fr0, fr1 in real:
+        ch = dict(synthetic_lap.channels)
+        ch.update(tire_wear_fl=np.linspace(fl0, fl1, n), tire_wear_fr=np.linspace(fr0, fr1, n),
+                  tire_wear_rl=np.linspace(fr0, fr1, n), tire_wear_rr=np.linspace(fr0, fr1, n))
+        store.save(dataclasses.replace(synthetic_lap, channels=ch, lap_time=t, pit=pit,
+                                       session_id="s1", phase="race", lap_no=lap,
+                                       timestamp=float(lap)))
+    ctx = CoachContext(store, cmap=cmap, track=synthetic_lap.track, car=synthetic_lap.car,
+                       session_id="s1", on_track=True)
+    out = ctx.dispatch("get_tire_trend", {})
+    assert out.startswith("Over 3 laps:"), out           # laps 21-23 only
+    assert "deg-limited" not in out

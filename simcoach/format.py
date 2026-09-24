@@ -489,11 +489,11 @@ def format_tire_trend(result: dict, units: str = "metric") -> str:
     # fast enough to cost time, or a tire heating lap on lap. 0.6 %/lap at 93 %
     # tread (Road Atlanta) is not that; its "3.53 s/lap" was two spins.
     tires_show_it = (any(v >= _DEG_WEAR_PCT for v in wear.values())
-                     or any(v >= _TREND_TEMP_C for v in temp_slope.values()))
+                     or any(v >= _TREND_TEMP_C
+                            for v in (result.get("temp_slope_settled") or {}).values()))
     if pace_trending and pace > 0:
         out += (" — deg-limited" if tires_show_it else
-                " — pace dropped, but wear/temps don't show degradation "
-                "(likely incidents/traffic)")
+                " — pace dropped, but wear/temps don't show degradation")
     k = result.get("incident_laps") or 0
     if k:
         out += (f" {k} incident lap{'s' if k != 1 else ''} (spin/off/contact) left out "

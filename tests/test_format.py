@@ -252,8 +252,7 @@ def test_format_tire_trend_not_tire_limited_when_wear_steady():
     out = format_tire_trend(_trend_result(
         temp_slope={}, temp_mean={}, wear_pct_per_lap={}, hottest=None, most_worn=None))
     assert "temps and wear steady" in out
-    assert out.endswith("pace dropped, but wear/temps don't show degradation "
-                        "(likely incidents/traffic)")
+    assert out.endswith("pace dropped, but wear/temps don't show degradation")
 
 
 def test_format_tire_trend_silent_suffix_when_pace_steady():
@@ -635,7 +634,7 @@ def test_format_tire_trend_road_atlanta_pace_drop_is_not_called_degradation():
         temp_slope={"fl": 0.2}, temp_mean={"fl": 85.0}, hottest="fl", most_worn="fl"))
     assert "deg-limited" not in out and "degradation" in out
     assert "pace dropped, but wear/temps don't show degradation" in out
-    assert "likely incidents/traffic" in out
+    assert "likely" not in out      # no cause was measured, so none is named
 
 
 def test_format_tire_trend_names_the_incident_laps_left_out():

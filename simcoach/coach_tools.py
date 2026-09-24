@@ -1275,16 +1275,27 @@ class CoachContext:
         """(analyses, lap_times, incident) for one stint -- session + phase, valid laps
         only, telemetry-backed laps only, in lap order. Shared by `get_consistency` and
         `get_tire_trend`, which only differ in which pure function they feed it to.
-        `incident[i]` flags a spin/off/contact lap (#161: kept out of the pace trend)."""
+        `incident[i]` flags a spin/off/contact lap (#161: kept out of the pace trend).
+
+        The stint starts after the LAST stop -- a pit, out- or in-lap, the same rule
+        `RaceTracker.commit` uses (#161 red-team: Road Atlanta's puncture stop read as
+        "deg-limited" across the tyre change)."""
         if phase is None:
             cur_rec, _ = self._current_lap()
             phase = cur_rec.phase if cur_rec is not None else None
         analyses, lap_times, incident = [], [], []
+        stopped = False
         for row in self.store.session_laps(self.session_id):
+            if phase is not None and row.get("phase") != phase:
+                continue
+            if row.get("pit") or row.get("partial") in ("out", "in"):
+                # The next lap driven starts a new stint; until then (an in-lap back to
+                # the garage) the stint just finished is still the one to read.
+                stopped = True
+                continue
             # Mapping laps (#154) are boundary weaves, not driving: out of the stint, as
             # they were when capture stamped them phase='mapping'.
-            if (not row["valid"] or row.get("mapping")
-                    or (phase is not None and row.get("phase") != phase)):
+            if not row["valid"] or row.get("mapping"):
                 continue
             try:
                 record = self.store.load(row["id"])
@@ -1301,6 +1312,8 @@ class CoachContext:
                 analysis = self._analysis_for(record, row["id"])
             if analysis is None:
                 continue
+            if stopped:
+                analyses, lap_times, incident, stopped = [], [], [], False
             analyses.append(analysis)
             lap_times.append(record.lap_time)
             incident.append(is_incident_lap(record, self.cmap or CornerMap([]), analysis))

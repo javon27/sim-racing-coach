@@ -1366,6 +1366,8 @@ def stint_consistency(analyses: "list[LapAnalysis]", lap_times: "list[float]") -
 # Same floor idea as `stint_consistency`: fewer laps than this and a slope is
 # noise, not a trend.
 _MIN_TIRE_TREND_LAPS = 3
+# Laps at the start of a stint that are tire warm-up, not a temperature trend.
+_WARMUP_LAPS = 2
 
 
 def stint_tire_trend(analyses: "list[LapAnalysis]", lap_times: "list[float]",
@@ -1415,12 +1417,18 @@ def stint_tire_trend(analyses: "list[LapAnalysis]", lap_times: "list[float]",
         return out
 
     temp_slope, temp_mean, press_slope, wear_pct_per_lap, wear_end = {}, {}, {}, {}, {}
+    temp_slope_settled = {}
     for w in _WHEELS:
         txy = _series(lambda a, w=w: (a.tire_means or {}).get(w))
         if len(txy) >= _MIN_TIRE_TREND_LAPS:
             xs, ys = zip(*txy)
             temp_slope[w] = float(np.polyfit(xs, ys, 1)[0])
             temp_mean[w] = float(np.mean(ys))
+            # The same slope past the warm-up laps: a tire coming up to temperature
+            # early in a stint is not a tire overheating (#161 red-team).
+            settled = [(x, y) for x, y in txy if x >= _WARMUP_LAPS]
+            if len(settled) >= _MIN_TIRE_TREND_LAPS:
+                temp_slope_settled[w] = float(np.polyfit(*zip(*settled), 1)[0])
 
         pxy = _series(lambda a, w=w: (a.wheels or {}).get("tire_press_mean", {}).get(w))
         if len(pxy) >= _MIN_TIRE_TREND_LAPS:
@@ -1428,6 +1436,11 @@ def stint_tire_trend(analyses: "list[LapAnalysis]", lap_times: "list[float]",
             press_slope[w] = float(np.polyfit(xs, ys, 1)[0])
 
         wxy = _series(lambda a, w=w: (a.wheels or {}).get("tire_wear_end", {}).get(w))
+        # Tread only goes down on one tyre: a rise is a new tyre (a change the pit flag
+        # missed), so the series restarts there (#161 red-team, Le Mans "-0.4 %/lap").
+        rises = [k for k in range(1, len(wxy)) if wxy[k][1] > wxy[k - 1][1]]
+        if rises:
+            wxy = wxy[rises[-1]:]
         if len(wxy) >= _MIN_TIRE_TREND_LAPS:
             xs, ys = zip(*wxy)
             wear_pct_per_lap[w] = float(-100.0 * np.polyfit(xs, ys, 1)[0])
@@ -1446,6 +1459,7 @@ def stint_tire_trend(analyses: "list[LapAnalysis]", lap_times: "list[float]",
         "n": n,
         "temp_slope": temp_slope,
         "temp_mean": temp_mean,
+        "temp_slope_settled": temp_slope_settled,
         "press_slope": press_slope,
         "wear_pct_per_lap": wear_pct_per_lap,
         "pace_slope_s": pace_slope_s,

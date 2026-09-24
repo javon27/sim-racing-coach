@@ -2076,3 +2076,25 @@ def test_stint_tire_trend_no_pace_slope_with_too_few_incident_free_laps():
     analyses, lap_times = _trend_stint(n=4)
     res = stint_tire_trend(analyses, lap_times, [True, True, False, False])
     assert res["ok"] is True and res["pace_slope_s"] is None and res["pace_laps"] == 2
+
+
+def test_stint_tire_trend_restarts_the_wear_series_at_a_new_tyre():
+    """#161 red-team, Le Mans laps 7423-7461: a tyre change the pit flag missed made
+    tread go UP mid-series and printed 'wear -0.4%/lap'. Tread only falls on one tyre."""
+    from simcoach.analysis import stint_tire_trend
+    analyses, lap_times = _trend_stint(n=6, wear_fall=0.0)
+    tread = [0.950, 0.946, 0.942, 0.990, 0.986, 0.982]      # new set after lap 3
+    for a, t in zip(analyses, tread):
+        a.wheels["tire_wear_end"]["fr"] = t
+    res = stint_tire_trend(analyses, lap_times)
+    assert abs(res["wear_pct_per_lap"]["fr"] - 0.4) < 1e-6
+
+
+def test_stint_tire_trend_warm_up_laps_are_not_a_temperature_trend():
+    from simcoach.analysis import stint_tire_trend
+    analyses, lap_times = _trend_stint(n=6, temp_rise=0.0)
+    for a, t in zip(analyses, (60.0, 75.0, 85.0, 85.2, 85.1, 85.3)):   # out of the pits
+        a.tire_means["rl"] = t
+    res = stint_tire_trend(analyses, lap_times)
+    assert res["temp_slope"]["rl"] > 1.0                  # the raw fit sees the warm-up
+    assert abs(res["temp_slope_settled"]["rl"]) < 1.0     # the settled one does not
