@@ -45,3 +45,40 @@ def test_turn_215_is_discarded_and_a_tool_forced(tmp_path):
     assert "outside my data" not in text
     assert model.forced == [False, True]
     assert [c["name"] for c in ctx.tool_calls] == ["get_track_notes"]
+
+
+# Turn #224, verbatim: a PTT answer (spoken only after `done`, per the sidecar log --
+# so voice='ptt', VOICE_PTT in the system prompt) that ran to four paragraphs.
+TURN_224_PRE = "Let me pull that up."
+TURN_224 = (
+    "As of race lap 11: you're not making it to the flag on this stint — energy's the "
+    "tighter constraint, 18.9 laps of range on 64% left against 31 laps to go, so you're "
+    "about 12 laps short on energy (fuel's short too, by about 9 laps, but energy runs "
+    "out first).\n\nYour pit window is laps 13 to 29 — that's earliest-to-latest, set by "
+    "energy on the late end. Tires aren't a factor at all, front-left's only at 93% "
+    "tread and good for well over 100 laps.\n\nGiven you're this far short, one stop "
+    "won't be enough to run dry-to-dry on saving alone — you'll want to fill for the "
+    "rest of the race when you stop.")
+
+
+def _turn_224(tmp_path, voice):
+    # Streamed in 7-char deltas, so a sentence end lands mid-chunk as it does live.
+    deltas = [("text", TURN_224[i:i + 7]) for i in range(0, len(TURN_224), 7)]
+    model = FakeModel(stream_script=[("text", TURN_224_PRE), ("tool", "get_strategy", {}),
+                                     *deltas])
+    events = list(Coach(model).ask_agentic_stream(
+        _ctx(tmp_path), "You should have enough laps for fuel strategy.", car="C",
+        voice=voice))
+    return "".join(e["text"] for e in events if e["type"] == "text"), events
+
+
+def test_a_ptt_answer_is_cut_to_three_sentences_in_code(tmp_path):
+    text, events = _turn_224(tmp_path, "ptt")
+    assert text == (TURN_224_PRE + "\n\n" + TURN_224.split(" Tires aren't")[0])
+    assert "one stop won't be enough" not in text
+    assert [e["name"] for e in events if e["type"] == "tool"] == ["get_strategy"]
+
+
+def test_conversation_and_typed_answers_are_not_cut(tmp_path):
+    for voice in ("conversation", None):
+        assert _turn_224(tmp_path, voice)[0].endswith("when you stop."), voice

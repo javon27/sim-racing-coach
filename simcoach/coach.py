@@ -345,13 +345,24 @@ AGENTIC_SYSTEM_PROMPT = (
 VOICE_PTT = (
     "VOICE (push-to-talk): the driver asked by push-to-talk from the headset, mid-session, "
     "hands on the wheel, and will HEAR this answer in full -- there is no longer text on "
-    "screen. Answer in 2-3 plain spoken sentences: one cue, one action. No markdown, no "
+    "screen. Answer in 2-3 plain spoken sentences: one cue, one action -- this overrides "
+    "the on-screen length and formatting rules above, and anything past the third "
+    "sentence is cut unheard, so lead with the answer and never announce a lookup. No "
+    "markdown, no "
     "lists, no headings, no numbers they can't hold in their head. Apart from a corner "
     "locator's own numbers, at most one figure in the whole answer. Locate a corner the way "
     "the corner tools do under 'Locate it:' -- 'Turn N' plus the descriptor ('Turn 10, "
     "sector 2, the fast left after the long straight'); add the corner's name only if the "
     "driver has used it themselves in this chat."
 )
+
+# #162: VOICE_PTT alone did not hold -- Road Atlanta 2026-09-23 turns #223-#225 were
+# PTT (spoken only after `done`) yet ran to 3-4 paragraphs, the base prompt's on-screen
+# "short paragraphs / bullet list" rules winning. So the length is enforced in code: a PTT
+# answer ends after this many sentences (Coach._capped).
+PTT_MAX_SENTENCES = 3
+# A sentence ends at terminal punctuation followed by whitespace ("8.4" is not an end).
+_SENTENCE_END = re.compile(r"[.!?]+(?=\s)")
 
 VOICE_CONVERSATION = (
     "VOICE (conversation): the driver asked out loud at the desk and will HEAR the whole "
@@ -596,8 +607,11 @@ class Coach:
             held: list[dict] = []
             pend: str | None = None     # set once a tool ran: text not yet emitted
             text = out = ""
-            for ev in self._separated(self.model.run_stream(
-                    system, messages, TOOLS, context.dispatch, force_tool=force)):
+            stream = self._separated(self.model.run_stream(
+                system, messages, TOOLS, context.dispatch, force_tool=force))
+            if voice == "ptt":
+                stream = self._capped(stream, PTT_MAX_SENTENCES)
+            for ev in stream:
                 if ev["type"] == "text":
                     text += ev["text"]
                     if pend is None:
@@ -648,6 +662,24 @@ class Coach:
         if fixed.strip() == UNCONFIRMED and out.rstrip().endswith(UNCONFIRMED):
             return ""
         return fixed
+
+    @staticmethod
+    def _capped(stream, n: int):
+        """#162: the model's text cut after its `n`th sentence; tool and usage events
+        still pass (the rest of the turn is still run and billed, just never said)."""
+        said = ""
+        for ev in stream:
+            if ev["type"] != "text":
+                yield ev
+            elif said is not None:
+                ends = [m.end() for m in _SENTENCE_END.finditer(said + ev["text"])]
+                if len(ends) < n:
+                    said += ev["text"]
+                    yield ev
+                    continue
+                if (cut := ends[n - 1] - len(said)) > 0:
+                    yield {**ev, "text": ev["text"][:cut]}
+                said = None
 
     @staticmethod
     def _separated(stream):
