@@ -1368,7 +1368,8 @@ def stint_consistency(analyses: "list[LapAnalysis]", lap_times: "list[float]") -
 _MIN_TIRE_TREND_LAPS = 3
 
 
-def stint_tire_trend(analyses: "list[LapAnalysis]", lap_times: "list[float]") -> dict:
+def stint_tire_trend(analyses: "list[LapAnalysis]", lap_times: "list[float]",
+                     incident: "list[bool] | None" = None) -> dict:
     """Per-wheel tire temp/pressure/wear slope (per lap) and lap-time (pace)
     drift across one stint's laps, in order (caller has already scoped
     `analyses`/`lap_times` exactly the way `stint_consistency` does: one
@@ -1390,9 +1391,11 @@ def stint_tire_trend(analyses: "list[LapAnalysis]", lap_times: "list[float]") ->
             (wear is stored as a REMAINING fraction, 1.0 = new, so this is
             `-100 * slope` of that fraction -- see `_wheel_summary`), same
             gating,
-        pace_slope_s: s/lap least-squares slope of `lap_times` (always
-            computable once the top-level `n` gate passes -- lap time is
-            captured for every lap),
+        pace_slope_s: s/lap least-squares slope of `lap_times` over the laps
+            NOT flagged in `incident` (#161: a spin/off/contact lap is slow for
+            a reason that is not the tires), fitted at their stint positions;
+            None when fewer than `_MIN_TIRE_TREND_LAPS` incident-free laps,
+        pace_laps / incident_laps: how many laps the pace fit used / left out,
         hottest: wheel with the highest mean temp over the stint, or None,
         most_worn: wheel with the lowest final remaining wear, or None.
 
@@ -1430,7 +1433,11 @@ def stint_tire_trend(analyses: "list[LapAnalysis]", lap_times: "list[float]") ->
             wear_pct_per_lap[w] = float(-100.0 * np.polyfit(xs, ys, 1)[0])
             wear_end[w] = ys[-1]
 
-    pace_slope_s = float(np.polyfit(range(n), [float(t) for t in lap_times], 1)[0])
+    # Wear/temps keep every lap (the tire wore on the spin lap too); pace does not.
+    pace = [(i, float(t)) for i, t in enumerate(lap_times)
+            if not (incident and incident[i])]
+    pace_slope_s = (float(np.polyfit(*zip(*pace), 1)[0])
+                    if len(pace) >= _MIN_TIRE_TREND_LAPS else None)
     hottest = max(temp_mean, key=temp_mean.get) if temp_mean else None
     most_worn = min(wear_end, key=wear_end.get) if wear_end else None
 
@@ -1442,6 +1449,8 @@ def stint_tire_trend(analyses: "list[LapAnalysis]", lap_times: "list[float]") ->
         "press_slope": press_slope,
         "wear_pct_per_lap": wear_pct_per_lap,
         "pace_slope_s": pace_slope_s,
+        "pace_laps": len(pace),
+        "incident_laps": n - len(pace),
         "hottest": hottest,
         "most_worn": most_worn,
     }
@@ -1646,6 +1655,15 @@ def lap_events(record: LapRecord, cmap: CornerMap, analysis: "LapAnalysis | None
     events.sort(key=lambda e: (e["lap_distance"] if math.isfinite(e["lap_distance"])
                                else math.inf))
     return events
+
+
+def is_incident_lap(record: LapRecord, cmap: CornerMap,
+                    analysis: "LapAnalysis | None") -> bool:
+    """#161: a lap slowed by a spin, an off or contact -- the same detection
+    get_stint_events reports -- so its lap time says nothing about the tires.
+    Lockups/wheelspin are corner-level and don't cost a lap on their own."""
+    return bool(damage_events(record.channels)) or any(
+        e["kind"] in ("spin", "off") for e in lap_events(record, cmap, analysis))
 
 
 # #143: a hit's side/end label is read off local-vehicle mLastImpactPos, per the

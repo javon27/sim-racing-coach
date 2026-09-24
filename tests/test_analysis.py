@@ -2052,3 +2052,27 @@ def test_corner_tag_accepts_a_raw_map_corner():
     c2 = Corner(number=16, name="Kemmel", direction="left",
                 start_dist=0.0, apex_dist=0.0, end_dist=0.0)
     assert corner_tag(c2) == "T16 Kemmel"
+
+
+def test_stint_tire_trend_leaves_incident_laps_out_of_the_pace_slope():
+    """#161 (Road Atlanta 2026-09-23): spins on two laps of the window read as a
+    3.5 s/lap 'degradation' slope. The pace fit drops incident laps; wear and
+    temps still use every lap (the tire wore on them too)."""
+    from simcoach.analysis import stint_tire_trend
+    analyses, lap_times = _trend_stint(n=6, temp_rise=0.0, wear_fall=0.006, pace_rise=0.0)
+    lap_times[3] += 14.0            # a spin
+    lap_times[5] += 12.0            # another
+    incident = [False, False, False, True, False, True]
+    raw = stint_tire_trend(analyses, lap_times)
+    assert raw["pace_slope_s"] > 1.5          # the bug: spins read as a pace trend
+    res = stint_tire_trend(analyses, lap_times, incident)
+    assert abs(res["pace_slope_s"]) < 1e-6
+    assert res["pace_laps"] == 4 and res["incident_laps"] == 2
+    assert abs(res["wear_pct_per_lap"]["rl"] - 0.6) < 1e-6   # wear fit unchanged
+
+
+def test_stint_tire_trend_no_pace_slope_with_too_few_incident_free_laps():
+    from simcoach.analysis import stint_tire_trend
+    analyses, lap_times = _trend_stint(n=4)
+    res = stint_tire_trend(analyses, lap_times, [True, True, False, False])
+    assert res["ok"] is True and res["pace_slope_s"] is None and res["pace_laps"] == 2

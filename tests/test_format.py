@@ -252,7 +252,8 @@ def test_format_tire_trend_not_tire_limited_when_wear_steady():
     out = format_tire_trend(_trend_result(
         temp_slope={}, temp_mean={}, wear_pct_per_lap={}, hottest=None, most_worn=None))
     assert "temps and wear steady" in out
-    assert out.endswith("not tire-limited")
+    assert out.endswith("pace dropped, but wear/temps don't show degradation "
+                        "(likely incidents/traffic)")
 
 
 def test_format_tire_trend_silent_suffix_when_pace_steady():
@@ -623,3 +624,34 @@ def test_corner_descriptor_mid_gap_reads_after_the_straight():
          "start_dist": 340, "apex_dist": 360, "end_dist": 380},
     ]})
     assert "after the straight" in corner_descriptor(cmap, 2)
+
+
+def test_format_tire_trend_road_atlanta_pace_drop_is_not_called_degradation():
+    """#161: the race read 'deg-limited, 3.53 s/lap' off spin laps at 0.6 %/lap wear
+    and 93 % tread. A pace drop wear/temps don't corroborate is not degradation."""
+    from simcoach.format import format_tire_trend
+    out = format_tire_trend(_trend_result(
+        pace_slope_s=3.53, wear_pct_per_lap={"fl": 0.6, "fr": 0.6, "rl": 0.5, "rr": 0.5},
+        temp_slope={"fl": 0.2}, temp_mean={"fl": 85.0}, hottest="fl", most_worn="fl"))
+    assert "deg-limited" not in out and "degradation" in out
+    assert "pace dropped, but wear/temps don't show degradation" in out
+    assert "likely incidents/traffic" in out
+
+
+def test_format_tire_trend_names_the_incident_laps_left_out():
+    from simcoach.format import format_tire_trend
+    out = format_tire_trend(_trend_result(incident_laps=2, pace_laps=6))
+    assert "2 incident laps (spin/off/contact) left out of the pace trend" in out
+
+
+def test_format_tire_trend_says_so_when_no_pace_trend_is_readable():
+    from simcoach.format import format_tire_trend
+    out = format_tire_trend(_trend_result(pace_slope_s=None, pace_laps=2, incident_laps=3))
+    assert "pace steady" not in out and "deg-limited" not in out
+    assert "pace: not enough incident-free laps" in out
+
+
+def test_format_tire_trend_pace_improving_is_never_degradation():
+    from simcoach.format import format_tire_trend
+    out = format_tire_trend(_trend_result(pace_slope_s=-0.3))
+    assert "deg-limited" not in out and "degradation" not in out

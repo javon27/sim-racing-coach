@@ -437,6 +437,10 @@ def format_wheel_report(analysis, units: str = "metric") -> str | None:
 # ponytail: tuning knobs -- a rig read across a real stint settles them.
 _TREND_WEAR_PCT = 0.3    # %/lap
 _TREND_PACE_S = 0.05     # s/lap
+# #161: wear this fast (%/lap, any wheel) is enough to call a pace loss degradation.
+# ponytail: a judgement, PENDING RIG -- the real signal is grip vs tread, which LMU
+# doesn't expose (mGripFract is dead); tune against a long stint that truly fell off.
+_DEG_WEAR_PCT = 1.0
 _TREND_TEMP_C = 1.0      # °C/lap
 _TREND_PRESS_KPA = 1.0   # kPa/lap
 
@@ -455,7 +459,8 @@ def format_tire_trend(result: dict, units: str = "metric") -> str:
 
     pace = result.get("pace_slope_s")
     pace_trending = pace is not None and abs(pace) >= _TREND_PACE_S
-    pace_txt = f"pace {pace:+.2f} s/lap" if pace_trending else "pace steady"
+    pace_txt = (f"pace {pace:+.2f} s/lap" if pace_trending else "pace steady"
+                if pace is not None else "pace: not enough incident-free laps for a trend")
 
     wear = result.get("wear_pct_per_lap") or {}
     most_worn = result.get("most_worn")
@@ -480,11 +485,19 @@ def format_tire_trend(result: dict, units: str = "metric") -> str:
     press_txt = ", ".join(press_bits) if press_bits else "pressures steady"
 
     out = f"Over {result['n']} laps: {pace_txt}; {wear_txt}; {press_txt}."
-    wear_trending = any(abs(v) >= _TREND_WEAR_PCT for v in wear.values())
-    if pace_trending and wear_trending:
-        out += " — deg-limited"
-    elif pace_trending and not wear_trending:
-        out += " — not tire-limited"
+    # #161: a pace LOSS is called degradation only when the tires show it -- wear
+    # fast enough to cost time, or a tire heating lap on lap. 0.6 %/lap at 93 %
+    # tread (Road Atlanta) is not that; its "3.53 s/lap" was two spins.
+    tires_show_it = (any(v >= _DEG_WEAR_PCT for v in wear.values())
+                     or any(v >= _TREND_TEMP_C for v in temp_slope.values()))
+    if pace_trending and pace > 0:
+        out += (" — deg-limited" if tires_show_it else
+                " — pace dropped, but wear/temps don't show degradation "
+                "(likely incidents/traffic)")
+    k = result.get("incident_laps") or 0
+    if k:
+        out += (f" {k} incident lap{'s' if k != 1 else ''} (spin/off/contact) left out "
+                "of the pace trend.")
     return out
 
 

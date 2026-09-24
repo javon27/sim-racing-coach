@@ -23,6 +23,7 @@ from simcoach.analysis import (
     damage_state,
     geometry_clause,
     grip_envelope,
+    is_incident_lap,
     lap_events,
     stint_consistency,
     stint_tire_trend,
@@ -1246,13 +1247,14 @@ class CoachContext:
         return identity + "\n" + format_time_loss(buckets, ref_label)
 
     def _stint_analyses(self, phase=None, need_corners=True):
-        """(analyses, lap_times) for one stint -- session + phase, valid laps only,
-        telemetry-backed laps only, in lap order. Shared by `get_consistency` and
-        `get_tire_trend`, which only differ in which pure function they feed it to."""
+        """(analyses, lap_times, incident) for one stint -- session + phase, valid laps
+        only, telemetry-backed laps only, in lap order. Shared by `get_consistency` and
+        `get_tire_trend`, which only differ in which pure function they feed it to.
+        `incident[i]` flags a spin/off/contact lap (#161: kept out of the pace trend)."""
         if phase is None:
             cur_rec, _ = self._current_lap()
             phase = cur_rec.phase if cur_rec is not None else None
-        analyses, lap_times = [], []
+        analyses, lap_times, incident = [], [], []
         for row in self.store.session_laps(self.session_id):
             # Mapping laps (#154) are boundary weaves, not driving: out of the stint, as
             # they were when capture stamped them phase='mapping'.
@@ -1276,7 +1278,8 @@ class CoachContext:
                 continue
             analyses.append(analysis)
             lap_times.append(record.lap_time)
-        return analyses, lap_times
+            incident.append(is_incident_lap(record, self.cmap or CornerMap([]), analysis))
+        return analyses, lap_times, incident
 
     def get_stint_events(self, laps=10):
         """Incidents over the last N laps of this session, grouped by lap.
@@ -1337,14 +1340,14 @@ class CoachContext:
             return "No active session — no stint to measure consistency across."
         if self.cmap is None:
             return "No corner map for this track yet — can't break laps into corners."
-        analyses, lap_times = self._stint_analyses(phase)
+        analyses, lap_times, _ = self._stint_analyses(phase)
         return format_consistency(stint_consistency(analyses, lap_times), self.units)
 
     def get_tire_trend(self, phase=None):
         if not self.session_id:
             return "No active session — no stint to measure tire trend across."
-        analyses, lap_times = self._stint_analyses(phase, need_corners=False)
-        return format_tire_trend(stint_tire_trend(analyses, lap_times), self.units)
+        analyses, lap_times, incident = self._stint_analyses(phase, need_corners=False)
+        return format_tire_trend(stint_tire_trend(analyses, lap_times, incident), self.units)
 
     def get_handling(self, which="latest"):
         record, lap_id = self._resolve_lap(which)
@@ -1523,7 +1526,7 @@ class CoachContext:
         with no gear_min, <3 comparable laps (`_stint_analyses`), or agreement."""
         if cm.gear_min is None:
             return None
-        analyses, _ = self._stint_analyses()
+        analyses, _, _ = self._stint_analyses()
         if len(analyses) < 3:
             return None
         counts = Counter(other.gear_min for a in analyses for other in a.corners

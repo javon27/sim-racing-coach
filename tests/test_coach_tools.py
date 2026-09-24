@@ -2001,7 +2001,7 @@ def test_consistency_and_time_loss_refuse_partial_laps(tmp_path, synthetic_lap):
     `_stint_analyses` drops them with no change), and a partial can never be
     compared against a reference."""
     ctx, _, _ = _partial_session(tmp_path, synthetic_lap)
-    analyses, lap_times = ctx._stint_analyses()
+    analyses, lap_times, _ = ctx._stint_analyses()
     assert lap_times == [95.0, 92.0]
     assert len(analyses) == 2
     assert "can't be compared" in ctx.get_time_loss("practice lap 4")
@@ -2397,3 +2397,34 @@ def test_get_battle_reads_the_cached_battle_and_takes_a_named_rival(tmp_path, sy
                               battle_note="there is no corner map for this track")
     assert ctx.dispatch("get_battle", {}) == (
         "As of lap 12. No battle read for lap 12: there is no corner map for this track.")
+
+
+# --- #161: incident laps stay out of the tire trend's pace slope ----------------
+
+def test_get_tire_trend_leaves_contact_laps_out_of_the_pace_trend(tmp_path, synthetic_lap):
+    """Road Atlanta 2026-09-23: two slow incident laps in the window read as 'deg-limited'.
+    A lap with an impact (the #143 rising edge get_stint_events reports) is left out."""
+    import dataclasses
+
+    import numpy as np
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    n = len(synthetic_lap.channels["lap_distance"])
+    ids = []
+    for i in range(6):
+        ch = dict(synthetic_lap.channels)
+        t = 90.0
+        if i in (3, 5):
+            t += 12.0
+            et = np.zeros(n)
+            et[n // 2:] = 500.0 + i          # one hit mid-lap
+            ch.update(last_impact_et=et, last_impact_mag=np.full(n, 900.0),
+                      last_impact_x=np.zeros(n), last_impact_z=np.ones(n))
+        lap = dataclasses.replace(synthetic_lap, channels=ch, lap_time=t,
+                                  session_id="s1", phase="race", timestamp=90.0 + i)
+        ids.append(store.save(lap))
+    ctx = CoachContext(store, cmap=cmap, track=synthetic_lap.track, car=synthetic_lap.car,
+                       session_id="s1", on_track=True)
+    out = ctx.dispatch("get_tire_trend", {})
+    assert "deg-limited" not in out and "pace +" not in out, out
+    assert "2 incident laps (spin/off/contact) left out of the pace trend" in out
