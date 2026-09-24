@@ -345,7 +345,7 @@ def format_battle(b: Battle | None, as_of_lap: int, units: str = "metric",
         if not hits and rival_matches([me], rival):
             return f"{head} {rival} is you, not a rival."
         if not hits:
-            field_txt = "; ".join(f"P{o.class_position} {o.driver} ({o.model or o.car})"
+            field_txt = "; ".join(f"{o.driver} ({o.model or o.car}), P{o.class_position} in class"
                                   for o in sorted(others, key=lambda o: o.class_position))
             return (f"{head} No car in your class matches {rival!r}. In your class: "
                     f"{field_txt or 'nobody else was recorded'}.")

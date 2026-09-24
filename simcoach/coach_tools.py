@@ -587,7 +587,8 @@ def race_result_text(store, session_id) -> str:
     lines = []
     if rr:
         if rr["grid_position"] is not None:
-            grid = f"Started P{rr['grid_position']} on the grid"
+            # #162: every position says whether it is overall or in class.
+            grid = f"Started P{rr['grid_position']} overall on the grid"
             if (rr["class_grid_position"] is not None
                     and rr["class_grid_position"] != rr["grid_position"]):
                 grid += f" (P{rr['class_grid_position']} in class)"
@@ -614,8 +615,8 @@ def race_result_text(store, session_id) -> str:
         # happened to record, which is already underway (issue #67 reported a P9
         # start as P18 this way). The grid slot only ever comes from the result log.
         line = (f"Live per-lap positions over {arc['laps']} captured lap(s): "
-                f"P{arc['start']} on the first captured lap, as low as "
-                f"P{arc['worst']}, P{arc['last']} on the most recent.")
+                f"P{arc['start']} overall on the first captured lap, as low as "
+                f"P{arc['worst']} overall, P{arc['last']} overall on the most recent.")
         if not (rr and rr["grid_position"] is not None):
             line += (" The grid position was not captured, so the first captured lap "
                      "is NOT the starting position -- do not report a start.")
@@ -918,9 +919,9 @@ class CoachContext:
                 prev_pos = next((r["position"] for r in reversed(sess_laps[:idx])
                                  if r.get("phase") == "race" and r.get("position") is not None),
                                 None)
-                pos_txt = f"position P{cur_pos}"
+                pos_txt = f"position P{cur_pos} overall"   # laps.position is mPlace
                 if prev_pos is not None:
-                    pos_txt += f" (from P{prev_pos})"
+                    pos_txt += f" (from P{prev_pos} overall)"
                 tail_bits.append(pos_txt)
         return (f"Lap: {head}" + (f" ({', '.join(parts)})" if parts else "")
                 + (f" — {'; '.join(tail_bits)}" if tail_bits else ""))
@@ -1146,8 +1147,8 @@ class CoachContext:
                 self.session_id, phase="race",
                 since=cur_race["start_ts"] if cur_race else None)
             if arc:
-                pos_txt = (f" | Position: P{arc['last']} (started P{arc['start']}, "
-                           f"low P{arc['worst']})")
+                pos_txt = (f" | Position: P{arc['last']} overall (started "
+                           f"P{arc['start']} overall, low P{arc['worst']} overall)")
         # #136: how many races this one session id covers, and which one is current.
         races_txt = ""
         if len(self._race_windows()) > 1:
@@ -1183,7 +1184,7 @@ class CoachContext:
                 f"lap {r['lap_id']}" + (f" [{r['phase']}]" if r["phase"] else "")
             )
             # #134: race-phase position, appended when the column is set.
-            pos = (f" P{r['position']}" if r.get("phase") == "race"
+            pos = (f" P{r['position']} overall" if r.get("phase") == "race"
                    and r.get("position") is not None else "")
             pit = " (pit)" if r.get("pit") else ""
             if r.get("mapping"):
@@ -2048,7 +2049,7 @@ class CoachContext:
             kind = "online" if "online" in sid else ("offline" if "offline" in sid else "session")
             best = format_laptime(r["best"]) if r["best"] is not None else "no valid lap"
             rr = self.store.race_session(r["session_id"])
-            result = f", finished P{rr['position']}" if rr and rr.get("position") is not None else ""
+            result = f", finished P{rr['position']} overall" if rr and rr.get("position") is not None else ""
             out.append(f"{date} ({kind}, {r['laps']} laps, best {best}{result})")
         return f"Recent sessions at {track} / {car}:\n" + "\n".join(out)
 

@@ -136,7 +136,7 @@ def test_distill_never_calls_a_captured_lap_a_starting_position(tmp_path, monkey
     prompt = _distill_prompt(c, store)
     assert "started P" not in prompt, "the digest asserted a starting position it cannot know"
     assert "P2" not in prompt, "the arc leaked the qualifying phase into the race arc"
-    assert "P9 on the first captured lap" in prompt
+    assert "P9 overall on the first captured lap" in prompt
     assert "is NOT the starting position" in prompt
 
 
@@ -157,7 +157,7 @@ def test_distill_reports_the_real_grid_slot_when_the_result_log_has_one(tmp_path
         online=False, laps=[], incidents=[], penalties=[]), session_id="sess-1")
 
     prompt = _distill_prompt(c, store)
-    assert "Started P9 on the grid" in prompt
+    assert "Started P9 overall on the grid" in prompt
     assert "Finished P18 overall" in prompt
     assert "is NOT the starting position" not in prompt
 

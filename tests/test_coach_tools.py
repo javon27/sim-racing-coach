@@ -295,14 +295,14 @@ def test_race_position_in_recent_laps_lap_line_and_status(tmp_path, synthetic_la
     listing = ctx.list_recent_laps()
     for label, pos in zip(("race lap 1", "race lap 2", "race lap 3", "race lap 4"), positions):
         line = next(l for l in listing.splitlines() if l.startswith(label + ":"))
-        assert line.endswith(f"P{pos}"), line
+        assert line.endswith(f"P{pos} overall"), line  # #162: never a bare P
 
     # The spin's cost: lap 3 (P20) shown against the previous race lap's position (P25).
     lap_line = ctx.get_lap_summary("race lap 3").splitlines()[0]
-    assert "position P20 (from P25)" in lap_line
+    assert "position P20 overall (from P25 overall)" in lap_line
 
     status = ctx.get_session_status()
-    assert "Position: P11 (started P8, low P25)" in status
+    assert "Position: P11 overall (started P8 overall, low P25 overall)" in status
 
 
 def test_practice_session_shows_no_position(tmp_path, synthetic_lap):
@@ -526,7 +526,8 @@ def test_get_race_result_arc_is_race_phase_only(tmp_path, synthetic_lap):
         store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "arc-1",
                                 "timestamp": float(i), "position": place, "phase": "race"}))
     out = ctx.get_race_result()
-    assert "P5 on the first captured lap" in out and "as low as P10" in out and "P3" in out
+    assert "P5 overall on the first captured lap" in out and "as low as P10 overall" in out
+    assert "P3 overall on the most recent" in out
     assert "P14" not in out  # practice position excluded
     # With no result log there is no grid slot, and the first lap capture happened to
     # record is NOT one -- the tool must not offer it as a start (issue #67).
@@ -570,7 +571,7 @@ def test_get_race_result_for_a_live_session_reports_the_real_arc(tmp_path, synth
     ctx = CoachContext(store, track=track, car=car, session_id=live_sid, on_track=True)
     out = ctx.get_race_result()
 
-    assert "Started P9 on the grid" in out
+    assert "Started P9 overall on the grid" in out
     assert "P18 overall" in out and "Finished Normally" in out
     assert "Incidents (1)" in out and "contact" in out
     # The first captured lap ran P18; that is not a start position and must not be sold
@@ -618,7 +619,8 @@ def test_get_race_result_is_honest_while_a_second_race_is_running(tmp_path, synt
     assert "Finished P6" not in out and "Finished Normally" not in out
     # And the arc covers race 2's three laps only, not all eleven.
     assert "over 3 captured lap(s)" in out
-    assert "P18 on the first captured lap" in out and "P16 on the most recent" in out
+    assert "P18 overall on the first captured lap" in out
+    assert "P16 overall on the most recent" in out
     assert "grid position was not captured" in out
 
 
@@ -1226,7 +1228,7 @@ def test_list_past_sessions_excludes_current_and_shows_result(tmp_path, syntheti
     ctx = CoachContext(store, track=synthetic_lap.track, car=synthetic_lap.car,
                        session_id="current--online")
     out = ctx.dispatch("list_past_sessions", {})
-    assert "P4" in out
+    assert "finished P4 overall" in out
     assert "1:35.000" in out
     assert "1:32.000" not in out  # current session excluded
 
@@ -2185,7 +2187,7 @@ def test_get_session_status_counts_the_races_and_scopes_the_race_to_this_one(
     out = ctx.get_session_status()
     assert f"Races this session: 2 (current: race 2, started {_hhmm(_T0 + 400)})" in out
     assert "this race: 2," in out          # race 2's two laps, not all four
-    assert "Position: P6 (started P5, low P6)" in out   # race 2's places only
+    assert "Position: P6 overall (started P5 overall, low P6 overall)" in out   # race 2's places only
 
 
 def test_get_race_result_names_which_race_of_the_sitting_it_reports(
@@ -2201,7 +2203,8 @@ def test_get_race_result_names_which_race_of_the_sitting_it_reports(
     assert f"Race 2 of this session (started {_hhmm(_T0 + 400)}, 2 laps)." in out
     # And the figures under that heading are race 2's, not all four laps'.
     assert "over 2 captured lap(s)" in out
-    assert "P5 on the first captured lap" in out and "P6 on the most recent" in out
+    assert "P5 overall on the first captured lap" in out
+    assert "P6 overall on the most recent" in out
 
 
 def test_get_race_result_says_nothing_about_races_in_a_single_race_session(

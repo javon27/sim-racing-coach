@@ -215,7 +215,7 @@ def test_format_battle_units_named_rival_and_the_no_read_cases():
     assert "Rival (the car you named): A. Rival (Ferrari 296 GT3), P2 in class." in named
     assert format_battle(b, 12, rival="McLaren") == (
         "As of lap 12. No car in your class matches 'McLaren'. In your class: "
-        "P2 A. Rival (Ferrari 296 GT3).")
+        "A. Rival (Ferrari 296 GT3), P2 in class.")
     assert format_battle(None, 12).startswith("As of lap 12. No battle read")
     lonely = build_battle([ME, _lap(4, {1: 60.0, 2: 70.0})], [T1, T2])
     assert "Nobody in your class was within 2 s of you on lap 12" in format_battle(lonely, 12)
