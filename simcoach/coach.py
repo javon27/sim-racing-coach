@@ -359,10 +359,14 @@ VOICE_PTT = (
 # #162: VOICE_PTT alone did not hold -- Road Atlanta 2026-09-23 turns #223-#225 were
 # PTT (spoken only after `done`) yet ran to 3-4 paragraphs, the base prompt's on-screen
 # "short paragraphs / bullet list" rules winning. So the length is enforced in code: a PTT
-# answer ends after this many sentences (Coach._capped).
+# answer is the text after its last tool call, cut after this many sentences
+# (Coach._capped).
 PTT_MAX_SENTENCES = 3
-# A sentence ends at terminal punctuation followed by whitespace ("8.4" is not an end).
-_SENTENCE_END = re.compile(r"[.!?]+(?=\s)")
+# A sentence ends at terminal punctuation (plus any closing quote/bracket) followed by
+# whitespace or the end: not "8.4", not "e.g." / "i.e.", not an ellipsis "...".
+_SENTENCE_END = re.compile(
+    r"(?<!\.)(?<!\be\.g)(?<!\bi\.e)(?!\.\.)[.!?]+[\"'”’)]*(?=\s|$)",
+    re.IGNORECASE)
 
 VOICE_CONVERSATION = (
     "VOICE (conversation): the driver asked out loud at the desk and will HEAR the whole "
@@ -396,10 +400,14 @@ _LOOKUP = re.compile(
 # something I have loaded -- that's outside my data", turn #215, no tool called; the
 # track notes carried reference times). ponytail: keyed on a negation near a
 # loaded/on-file/reference/benchmark/"my data" word; other absence wordings slip through.
+# Advice is not a claim: a bare "don't" is an imperative ("Don't chase the benchmarks",
+# "You don't need the reference lap") -- only "I/we don't" counts -- and "loaded" needs
+# a have/is verb ("the car loaded on the brakes" is weight, not data).
 _ABSENCE = re.compile(
-    r"\b(?:no|not|isn't|aren't|don't|doesn't|haven't|hasn't|without|outside)\b"
-    r"[^.!?\n]{0,50}?\b(?:(?<!-)loaded|on file|reference (?:times?|laps?)|benchmarks?|"
-    r"(?:my|the|any) data)\b", re.IGNORECASE)
+    r"(?:\b(?:no|not|isn't|aren't|haven't|hasn't|without|outside)\b"
+    r"|\b(?:I|we)\s+(?:don't|do not)\b)"
+    r"[^.!?\n]{0,50}?\b(?:(?:have|has|got|is|are|been|not)\s+loaded|on file|"
+    r"reference (?:times?|laps?)|benchmarks?|(?:my|the|any) data)\b", re.IGNORECASE)
 _UNIT = (r"(?:s/lap|s|secs?|seconds?|tenths?|hundredths?|laps?|°\s?[CF]|deg(?:rees)?|"
          r"psi|kpa|bar|%|percent|km/h|kph|mph|m|meters?|metres?|l|litres?|liters?|kg|"
          r"kw|mj|rpm|mm)")
@@ -665,21 +673,24 @@ class Coach:
 
     @staticmethod
     def _capped(stream, n: int):
-        """#162: the model's text cut after its `n`th sentence; tool and usage events
-        still pass (the rest of the turn is still run and billed, just never said)."""
-        said = ""
+        """#162: a PTT answer is only the text after the model's LAST tool call, cut
+        after its `n`th sentence, emitted once the model is done. Narration before a
+        tool ("Copy that. Let me check.") is dropped -- it would eat the answer's
+        sentences. Tool and usage events pass as they come (the whole turn still runs
+        and is billed). PTT speaks only on `done`, so holding the text costs nothing
+        heard; the screen just gets it in one piece."""
+        text = ""
         for ev in stream:
-            if ev["type"] != "text":
-                yield ev
-            elif said is not None:
-                ends = [m.end() for m in _SENTENCE_END.finditer(said + ev["text"])]
-                if len(ends) < n:
-                    said += ev["text"]
-                    yield ev
-                    continue
-                if (cut := ends[n - 1] - len(said)) > 0:
-                    yield {**ev, "text": ev["text"][:cut]}
-                said = None
+            if ev["type"] == "text":
+                text += ev["text"]
+                continue
+            if ev["type"] == "tool":
+                text = ""
+            yield ev
+        text = text.strip()
+        ends = [m.end() for m in _SENTENCE_END.finditer(text)]
+        if text:
+            yield {"type": "text", "text": text[:ends[n - 1]] if len(ends) >= n else text}
 
     @staticmethod
     def _separated(stream):

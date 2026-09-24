@@ -1,6 +1,8 @@
 """#162: Road Atlanta, 2026-09-23 (chat-20260923T205800-210b5a). Turn #215 said no
 reference time was loaded without calling get_track_notes; turns #223-#225 were PTT
 answers of several paragraphs."""
+import pytest
+
 from simcoach.coach import Coach, states_data
 from simcoach.coach_tools import CoachContext
 from simcoach.model.fake import FakeModel
@@ -30,7 +32,11 @@ def test_advice_with_a_negation_is_not_an_absence_claim():
     for text in ("Don't brake so late into Turn 1.",
                  "No need to change the setup yet.",
                  "It's a corner that's entry-loaded, not exit-loaded.",   # turn #223
-                 "Give me a direction and I'll pull the data."):
+                 "Give me a direction and I'll pull the data.",
+                 # red-team round 1: imperative advice
+                 "Don't turn in with the car loaded on the brakes.",
+                 "Don't chase the benchmarks yet.",
+                 "You don't need the reference lap to see it."):
         assert not states_data(text, known=""), text
 
 
@@ -61,24 +67,58 @@ TURN_224 = (
     "rest of the race when you stop.")
 
 
-def _turn_224(tmp_path, voice):
+def _turn_224(tmp_path, voice, pre=TURN_224_PRE, forced=False):
     # Streamed in 7-char deltas, so a sentence end lands mid-chunk as it does live.
     deltas = [("text", TURN_224[i:i + 7]) for i in range(0, len(TURN_224), 7)]
-    model = FakeModel(stream_script=[("text", TURN_224_PRE), ("tool", "get_strategy", {}),
-                                     *deltas])
+    script = [("text", pre), ("tool", "get_strategy", {}), *deltas]
+    model = (FakeModel(stream_script=[("text", "You're P7 in class.")],   # ungrounded
+                       forced_stream_script=script) if forced
+             else FakeModel(stream_script=script))
     events = list(Coach(model).ask_agentic_stream(
         _ctx(tmp_path), "You should have enough laps for fuel strategy.", car="C",
         voice=voice))
     return "".join(e["text"] for e in events if e["type"] == "text"), events
 
 
-def test_a_ptt_answer_is_cut_to_three_sentences_in_code(tmp_path):
-    text, events = _turn_224(tmp_path, "ptt")
-    assert text == (TURN_224_PRE + "\n\n" + TURN_224.split(" Tires aren't")[0])
+# The answer's first three sentences: what PTT says, whatever came before the tool.
+ANSWER_3 = TURN_224.split("\n\nGiven")[0]
+
+
+@pytest.mark.parametrize("pre", ["Let me pull that up.",
+                                 "Copy that. Let me check.",
+                                 "Copy that. I hear you. Let me check."])   # red-team repro
+def test_ptt_says_the_answer_after_the_tool_cut_to_three_sentences(tmp_path, pre):
+    text, events = _turn_224(tmp_path, "ptt", pre=pre)
+    assert text == ANSWER_3
     assert "one stop won't be enough" not in text
     assert [e["name"] for e in events if e["type"] == "tool"] == ["get_strategy"]
 
 
+def test_ptt_cut_holds_on_the_forced_159_round(tmp_path):
+    text, _ = _turn_224(tmp_path, "ptt", pre="Copy that. I hear you. Let me check.",
+                             forced=True)
+    assert text == ANSWER_3
+
+
+def test_ptt_tool_free_answer_is_cut_too(tmp_path):
+    model = FakeModel(reply="Brake earlier. Release it slowly. Then trust the front. And "
+                            "breathe.")
+    events = list(Coach(model).ask_agentic_stream(_ctx(tmp_path), "T1 tips?", car="C",
+                                                  voice="ptt"))
+    assert "".join(e["text"] for e in events if e["type"] == "text") == (
+        "Brake earlier. Release it slowly. Then trust the front.")
+
+
+def test_sentence_end_skips_abbreviations_and_ellipses_but_takes_a_closing_quote():
+    from simcoach.coach import _SENTENCE_END
+    ends = lambda t: len(_SENTENCE_END.findall(t))
+    assert ends("Use the kerb, e.g. at Turn 5, i.e. the left. Then go.") == 2
+    assert ends("Well... hold on. Then go.") == 2
+    assert ends('He said "box now." Then go.') == 2
+    assert ends("You did 1:23.720 and 8.4 s. Good.") == 2
+
+
 def test_conversation_and_typed_answers_are_not_cut(tmp_path):
     for voice in ("conversation", None):
-        assert _turn_224(tmp_path, voice)[0].endswith("when you stop."), voice
+        text = _turn_224(tmp_path, voice)[0]
+        assert text.startswith(TURN_224_PRE) and text.endswith("when you stop."), voice
