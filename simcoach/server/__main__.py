@@ -59,6 +59,7 @@ def build_app():
 
     app.state.capture_thread = threading.Thread(target=_capture_forever, daemon=True)
     app.state.capture_thread.start()
+    threading.Thread(target=app.state.live_lap.run, name="live-lap", daemon=True).start()
 
     return app
 

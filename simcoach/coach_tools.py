@@ -12,9 +12,11 @@ from __future__ import annotations
 import re
 import time
 from collections import Counter
+from types import SimpleNamespace
 
 from simcoach.analysis import (
     _ENVELOPE_MIN_LAPS,
+    CornerMetrics,
     analyze_lap,
     corner_tag,
     damage_events,
@@ -46,6 +48,7 @@ from simcoach.format import (
     ordinal,
 )
 from simcoach.fuel import laps_remaining
+from simcoach.livelap import impact_text
 from simcoach.race import format_race_state, format_strategy, lap_facts, picked_up_mid_lap
 from simcoach.track_lookup import load_track_knowledge, note_key_binds
 
@@ -120,7 +123,8 @@ TOOLS = [
                        "spots), each with lap and corner. Call this when the driver "
                        "mentions a spin, an off, a moment, a flat spot, or asks what "
                        "happened a few laps ago; never assume the latest lap is the one "
-                       "they mean.",
+                       "they mean. It ends with THIS LAP SO FAR: the incidents on the lap "
+                       "being driven, corner by corner as each is completed (provisional).",
         "input_schema": {
             "type": "object",
             "properties": {"laps": {"type": "integer",
@@ -198,8 +202,11 @@ TOOLS = [
             "properties": {
                 "corner": {"type": "string", "description": "Corner number or name."},
                 "which": {"type": "string",
-                          "description": "Which lap: 'latest' (default), 'best', or an "
-                                         "in-session lap number like 'lap 2'."},
+                          "description": "Which lap: 'latest' (default, the last COMPLETED "
+                                         "lap), 'best', an in-session lap number like "
+                                         "'lap 2', or 'this lap' -- the lap being driven "
+                                         "now, readable corner by corner as each is "
+                                         "completed (provisional)."},
             },
             "required": ["corner"],
         },
@@ -263,6 +270,16 @@ TOOLS = [
         "description": "The race outcome + racecraft context for this session — finishing "
                        "position, incidents, penalties. Call this for questions about the "
                        "race/result/how it went overall.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_car_status",
+        "description": "LIVE SESSION ONLY. The car right now, read live from the game: "
+                       "impacts since the start of THIS lap (where, which side, how hard), "
+                       "bodywork dent severity, detached parts or wheels, flat tires, engine "
+                       "overheating, and whether the car is on track, in the pit lane or in "
+                       "the garage. Use for 'check my car', 'am I damaged', 'did I just hit "
+                       "something', 'is a wheel off'.",
         "input_schema": {"type": "object", "properties": {}},
     },
     {
@@ -593,6 +610,10 @@ def _lap_age(ts: float) -> str:
     return time.strftime("%Y-%m-%d", time.localtime(ts))
 
 
+# #160: how the driver (and so the model) names the lap being driven.
+_THIS_LAP = frozenset(("this lap", "current lap", "this lap so far", "the current lap",
+                       "lap in progress", "in progress"))
+
 # #154: appended to a mapping-mode lap's identity line and lap-list row.
 _MAPPING_NOTE = "mapping capture lap (boundary weave, not a timed attempt)"
 
@@ -604,7 +625,7 @@ class CoachContext:
                  setup=None, track=None, car=None, on_track=None,
                  allowed_adjustments=None, session_id=None,
                  car_notes=None, setup_concepts=None, car_class=None, race=None,
-                 race_note=None):
+                 race_note=None, live_lap=None, car_status=None):
         self.store = store
         self.units = units
         self.record = record
@@ -621,6 +642,11 @@ class CoachContext:
         self.race = race
         # What to say instead when a live race has no snapshot for THIS race yet.
         self.race_note = race_note
+        # #160: the lap being driven now (LmuSource meta: session_id, phase, lap_no,
+        # start_ts) and the car's live status text, read when the question came in.
+        # Both None off track.
+        self.live_lap = live_lap
+        self.car_status = car_status
         self.on_track = on_track
         self.allowed_adjustments = allowed_adjustments
         # Authored car knowledge (merged shipped+overlay `notes` dict) and the shared
@@ -1258,10 +1284,13 @@ class CoachContext:
         Deliberately NOT filtered to valid laps -- a lap with a spin or an off is
         usually the INVALID one, which is exactly the lap the driver is asking
         about."""
-        if not self.session_id:
+        if not self.session_id and not self.on_track:
             return "No active session — no stint to scan for incidents."
         if self.cmap is None:
             return "No corner map for this track yet — can't place incidents on corners."
+        this_lap = self._this_lap_events()
+        if not self.session_id:
+            return this_lap or "No active session — no stint to scan for incidents."
         try:
             n = int(laps or 10)
         except (TypeError, ValueError):
@@ -1285,7 +1314,7 @@ class CoachContext:
             if record is not None:
                 loaded.append((record, row["id"]))
         if not loaded:
-            return "No telemetry-backed laps in this session yet — nothing to scan."
+            return this_lap or "No telemetry-backed laps in this session yet — nothing to scan."
         baseline = stint_wear_baseline([rec for rec, _ in loaded])
         out = []
         for record, lap_id in loaded:
@@ -1299,6 +1328,8 @@ class CoachContext:
                                              damage_state(record.channels))
             if damage_line:
                 out.append(f"  {damage_line}")
+        if this_lap:
+            out.append(this_lap)
         return "\n".join(out)
 
     def get_consistency(self, phase=None):
@@ -1360,7 +1391,77 @@ class CoachContext:
         return (f"Corners for {self.track or 'this track'} ({len(parts)}), from the saved map:\n"
                 + "\n".join(parts))
 
+    def _provisional(self) -> tuple[dict | None, list[dict], str]:
+        """#160: (lap meta, provisional corner rows, identity line) for 'this lap'. On
+        track that is ONLY the lap being driven -- never an older lap's rows; off track,
+        the newest lap of this session that never completed (a crash, a retirement)."""
+        if self.on_track:
+            m = self.live_lap
+            if m is None:
+                return None, [], "No lap in progress: nothing on this lap is captured yet."
+            _, rows = self.store.live_lap_corners(m["session_id"], m["lap_no"],
+                                                  m["start_ts"])
+            return m, rows, (f"Lap: game lap {m['lap_no']} so far "
+                             f"(this lap so far, provisional -- lap in progress)")
+        m, rows = (self.store.live_lap_corners(self.session_id) if self.session_id
+                   else (None, []))
+        if m is None:
+            return None, [], ("No unfinished lap in this session: 'this lap' is read live, "
+                              "only while you're on track.")
+        when = time.strftime("%H:%M:%S", time.localtime(m["start_ts"]))
+        return m, rows, (f"Lap: game lap {m['lap_no']} ({m['phase'] or 'session'}), started "
+                         f"{when} -- never completed (provisional, the corners driven "
+                         f"before it stopped)")
+
+    def _row_incidents(self, row) -> list[str]:
+        facts = row["facts"]
+        return (format_events(facts.get("events", []), self.cmap, self.units)
+                + [impact_text(e, self.cmap) for e in facts.get("impacts", [])])
+
+    def _this_lap_corner(self, corner) -> str:
+        m, rows, head = self._provisional()
+        if m is None:
+            return head
+        if self.cmap is None:
+            return "No corner map for this track yet — can't break the lap into corners."
+        cms = [CornerMetrics(**r["facts"]["metrics"]) for r in rows]
+        cm = find_corner(SimpleNamespace(corners=cms), corner)
+        if cm is None:
+            done = ", ".join(corner_tag(c) for c in cms) or "none yet"
+            return (f"{head}\n{corner!r} is not captured on this lap yet — corners "
+                    f"completed so far: {done}.")
+        row = rows[cms.index(cm)]
+        line = format_corner_line(cm, self.units, envelope_formed=False)
+        incidents = self._row_incidents(row)
+        if incidents:
+            line += "\nIncidents here: " + "; ".join(incidents)
+        return f"{head}\n{line}"
+
+    def _this_lap_events(self) -> str | None:
+        """#160: get_stint_events' closing block -- the lap being driven, or an
+        unfinished one, corner by corner; None when there is neither."""
+        m, rows, head = self._provisional()
+        if m is None:
+            return None
+        out = [f"THIS LAP SO FAR — {head.removeprefix('Lap: ')}"]
+        if not rows:
+            return out[0] + "\n  no corner completed yet"
+        tags = ", ".join(corner_tag(CornerMetrics(**r["facts"]["metrics"])) for r in rows)
+        out.append(f"  corners completed: {tags}")
+        incidents = [line for r in rows for line in self._row_incidents(r)]
+        out.extend(f"  {line}" for line in (incidents or ["no incidents so far"]))
+        return "\n".join(out)
+
+    def get_car_status(self):
+        """#160: the live car, gated like the race tools to the live session."""
+        if not self.on_track or self.car_status is None:
+            return ("No live session: car status is read live from the game, only while "
+                    "you're in a session with a lap under way.")
+        return self.car_status
+
     def get_corner(self, corner, which="latest"):
+        if (which or "").strip().lower() in _THIS_LAP:
+            return self._this_lap_corner(corner)
         record, lap_id = self._resolve_lap(which)
         if record is None:
             return self._no_lap_msg(which)
@@ -1799,6 +1900,7 @@ class CoachContext:
             "get_race_state": lambda: self.get_race_state(),
             "get_strategy": lambda: self.get_strategy(),
             "get_battle": lambda: self.get_battle(args.get("rival")),
+            "get_car_status": lambda: self.get_car_status(),
             "get_setup": lambda: self.get_setup(),
             "record_driver_learning": lambda: self.record_driver_learning(
                 args.get("text", ""), args.get("track"), args.get("car"), args.get("replaces")),

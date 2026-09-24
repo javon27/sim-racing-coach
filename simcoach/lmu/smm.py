@@ -784,6 +784,10 @@ class LmuSource:
         self._trace_key: tuple | None = None
         self._trace_laps: int | None = None
         self._trace_warned = False
+        # #160: (meta, the in-progress lap's OWN channel dict), set once per lap on its
+        # first sample -- never copied per poll. livelap.LiveLap reads it off this thread;
+        # the lists only ever grow, and a wrap swaps in a new dict rather than clearing.
+        self.live_lap: tuple[dict, dict] | None = None
 
     def _feed_trace(self, scoring, player, vt) -> None:
         """Feed the battle trace from the scoring frame already in hand -- no second
@@ -923,10 +927,22 @@ class LmuSource:
         # PENDING LIVE VALIDATION: mPathLateral/mTrackEdge units + sign.
         sample["path_lateral"] = player.mPathLateral
         sample["track_edge"] = player.mTrackEdge
-        if self._pit_at_lap_start is None:
+        first = self._pit_at_lap_start is None
+        if first:
             self._pit_at_lap_start = bool(player.mInPits)
         for k, v in sample.items():
             self._channels.setdefault(k, []).append(v)
+        if first:
+            # #160: published AFTER the first append, so every key already exists.
+            # mTotalLaps counts FINISHED laps (a commit's lap_no), so this one is +1.
+            track = vt.mTrackName.decode(errors="replace")
+            car = vt.mVehicleName.decode(errors="replace")
+            self.live_lap = ({
+                "track": track, "car": car,
+                "phase": session_phase(scoring.mScoringInfo.mSession),
+                "session_id": session_id_for(track, car, _is_online(scoring)),
+                "lap_no": int(player.mTotalLaps) + 1, "start_ts": self._now(),
+            }, self._channels)
         self._prev_dist = dist
         # mCurrentSector lives on the TELEM struct (vt), not scoring.
         self._sector_seq.append(int(vt.mCurrentSector))  # parallel to lap_distance

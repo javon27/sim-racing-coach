@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from fastapi import FastAPI
 
 from .. import config
+from ..livelap import LiveLap
 from ..race import RaceTracker
 from . import (
     coach_ws,
@@ -75,6 +76,10 @@ def _capture_loop(source, store, app_state) -> None:
     Returns when `source.laps()` is exhausted or raises -- the caller
     (build_app) wraps this in a retry loop so a real LMU source reconnects
     after a drop."""
+    live = getattr(app_state, "live_lap", None)
+    if live is not None:
+        # #160: the worker reads this source's in-progress lap; capture never calls it.
+        live.source = source
     for lap in source.laps():
         if getattr(app_state, "mapping", False):
             # #154 safety net: mapping belongs to the session it was started in. A phase
@@ -180,6 +185,8 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     core.register(app, deps)
     trackfile.register(app, deps)
     maps.register(app, deps)
+    # #160: the lap in progress, corner by corner (its thread is started by __main__).
+    app.state.live_lap = LiveLap(store, deps._cmap_for_map)
     security.install(app)      # before any route; see the order note inside install()
     status_routes.register(app, deps)
     reads.register(app, deps)

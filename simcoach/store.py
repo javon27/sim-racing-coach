@@ -92,7 +92,7 @@ def _session_base(sid: str) -> str:
     """The (track, car, mode) base of a session id, dropping any ~<instance> suffix."""
     return sid.split(_SESSION_SEP, 1)[0]
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
@@ -193,6 +193,37 @@ CREATE TABLE IF NOT EXISTS battle_laps (
 );
 """
 
+# #160: the lap IN PROGRESS, one row per corner as the car leaves it (livelap.py):
+# that corner's metrics + incidents as JSON, keyed to the deterministic base session
+# id, phase, the game's lap number and the wall time the lap began. PROVISIONAL: the
+# stored lap's own analysis is authoritative, so a row is superseded (hidden, then
+# deleted) by a committed lap it matches -- see _LIVE_SUPERSEDED. A lap that never
+# commits (a crash, a retirement) keeps its rows.
+_LIVE_CORNERS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS live_corners (
+    session_id TEXT,
+    phase TEXT,
+    lap_no INTEGER,
+    start_ts REAL,
+    label TEXT,
+    corner_no INTEGER,
+    ts REAL,
+    facts TEXT,
+    UNIQUE (session_id, lap_no, start_ts, label)
+);
+"""
+# A committed lap of the same base session, phase and game lap number, stored after
+# the provisional lap began. ponytail: the 30 min bound only stops a much later lap
+# that reuses the number (mTotalLaps across a restart) from hiding a crashed lap;
+# a lap is never that long, so widen it only if a red flag ever straddles it.
+_LIVE_SUPERSEDED = (
+    "EXISTS (SELECT 1 FROM laps l WHERE l.lap_no = live_corners.lap_no "
+    "AND l.phase IS live_corners.phase "
+    "AND (l.session_id = live_corners.session_id "
+    "     OR substr(l.session_id, 1, length(live_corners.session_id) + 1) "
+    "        = live_corners.session_id || '~') "
+    "AND l.ts >= live_corners.start_ts AND l.ts <= live_corners.start_ts + 1800)")
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS laps (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -262,7 +293,7 @@ CREATE TABLE IF NOT EXISTS race_sessions (
     mode TEXT,
     logged_ts REAL
 );
-""" + _COACH_CHAT_SCHEMA + _PROFILE_SCHEMA + _BATTLE_SCHEMA
+""" + _COACH_CHAT_SCHEMA + _PROFILE_SCHEMA + _BATTLE_SCHEMA + _LIVE_CORNERS_SCHEMA
 
 
 def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
@@ -728,6 +759,10 @@ class LapStore:
                     if "mapping" not in cols:
                         _add_column(self.conn, "laps", "mapping INTEGER DEFAULT 0")
                     self.conn.execute("UPDATE laps SET mapping = 1 WHERE phase = 'mapping'")
+            if current_version < 24:
+                # v23 -> v24: provisional per-corner rows for the lap in progress (#160).
+                # A new table, nothing to backfill.
+                self.conn.executescript(_LIVE_CORNERS_SCHEMA)
         if current_version != stamp:
             self.conn.execute(f"PRAGMA user_version = {stamp}")
         self.conn.commit()
@@ -925,6 +960,48 @@ class LapStore:
                               model=model or "",
                               pit=[tuple(span) for span in x.get("pit", [])]))
         return out
+
+    def save_live_corner(self, meta: dict, label: str, corner_no: int, facts: dict) -> None:
+        """#160: one corner of the lap in progress (livelap.py), replacing any earlier
+        write of the same corner."""
+        with self._lock, self.conn:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO live_corners (session_id, phase, lap_no, start_ts, "
+                "label, corner_no, ts, facts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (meta["session_id"], meta["phase"], meta["lap_no"], meta["start_ts"],
+                 label, corner_no, time.time(), json.dumps(facts)))
+
+    def drop_superseded_live_corners(self) -> None:
+        """#160: delete provisional rows whose lap has since been stored."""
+        with self._lock, self.conn:
+            self.conn.execute(f"DELETE FROM live_corners WHERE {_LIVE_SUPERSEDED}")
+
+    def live_lap_corners(self, session_id: str, lap_no: int | None = None,
+                         start_ts: float | None = None) -> tuple[dict | None, list[dict]]:
+        """#160: (lap meta, corner rows in along-lap order) for one provisional lap of
+        this session -- the named one, else the newest -- never a lap already stored.
+        `session_id` may be an instance id; rows are keyed to its base."""
+        base = _session_base(session_id or "")
+        with self._lock:
+            if lap_no is None:
+                row = self.conn.execute(
+                    f"SELECT lap_no, start_ts FROM live_corners WHERE session_id = ? "
+                    f"AND NOT {_LIVE_SUPERSEDED} ORDER BY start_ts DESC LIMIT 1",
+                    (base,)).fetchone()
+                if row is None:
+                    return None, []
+                lap_no, start_ts = row
+            rows = self.conn.execute(
+                f"SELECT phase, label, corner_no, ts, facts FROM live_corners "
+                f"WHERE session_id = ? AND lap_no = ? AND start_ts = ? "
+                f"AND NOT {_LIVE_SUPERSEDED} ORDER BY corner_no", (base, lap_no, start_ts)
+            ).fetchall()
+        if not rows:
+            return None, []
+        meta = {"session_id": base, "phase": rows[0][0], "lap_no": lap_no,
+                "start_ts": start_ts}
+        return meta, [{"label": r[1], "corner_no": r[2], "ts": r[3],
+                       "facts": json.loads(r[4])} for r in rows]
 
     def load(self, lap_id: int) -> LapRecord:
         with self._lock:
@@ -1508,7 +1585,7 @@ class LapStore:
             present = {r[0] for r in self.conn.execute(
                 "SELECT name FROM sqlite_master WHERE type = 'table'")}
             for t in ("corner_metrics", "coach_chat", "laps", "setups",
-                      "race_sessions", "ingested_files", "battle_laps"):
+                      "race_sessions", "ingested_files", "battle_laps", "live_corners"):
                 if t in present:
                     self.conn.execute(f"DELETE FROM {t}")
             self.conn.commit()

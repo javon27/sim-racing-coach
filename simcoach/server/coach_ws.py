@@ -110,9 +110,17 @@ def register(app, deps) -> None:
             except Exception:
                 live = None
             race_snap = race_note = None
+            live_meta = car_status = None
             if live:
                 on_track = True
                 track, vehicle = live
+                try:
+                    # #160: the lap being driven and the car's live status, for the
+                    # "this lap" reads and get_car_status. Never fails the turn.
+                    from ..lmu.smm import read_live_status
+                    live_meta, car_status = app.state.live_lap.now(read_live_status())
+                except Exception:
+                    live_meta = car_status = None
                 try:
                     # #152: only THIS race's snapshot -- never the last race's, from the
                     # garage or the next race's formation lap.
@@ -189,7 +197,8 @@ def register(app, deps) -> None:
                                setup_concepts=load_setup_concepts(),
                                car_class=car_class,
                                # #152: only the race being driven now (live_race).
-                               race=race_snap, race_note=race_note)
+                               race=race_snap, race_note=race_note,
+                               live_lap=live_meta, car_status=car_status)
             car = ctx.car or "car"
 
             # Concise always-on profile tier: static prefs from settings + the active
