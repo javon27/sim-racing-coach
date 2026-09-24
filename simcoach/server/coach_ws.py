@@ -212,6 +212,7 @@ def register(app, deps) -> None:
             # instead of treating each question standalone (the system prompt tells it
             # "the messages above are what you and the driver already said").
             history: list[dict] = []
+            prior_results = ""
             last_chat_ts: float | None = None   # #131: this chat's last-turn timestamp
             chat_id_in = req.get("chat_id")
             if chat_id_in:
@@ -249,8 +250,15 @@ def register(app, deps) -> None:
                                                                       row["ts"],
                                                                       row.get("track"))})
                         last_chat_ts = messages[-1]["ts"] if messages else None
+                        # #159: what earlier turns' tools measured (not what the coach
+                        # said) -- a figure repeated verbatim from these is grounded.
+                        prior_results = "\n".join(
+                            str(c.get("result", "")) for row in messages
+                            if isinstance(row.get("tool_calls"), list)
+                            for c in row["tool_calls"] if isinstance(c, dict))
                     except Exception:
                         history = []
+                        prior_results = ""
 
             # #131: "that lap"/"how was that" should resolve to a lap that landed
             # after this chat's last turn without the coach asking which one. Only
@@ -296,7 +304,7 @@ def register(app, deps) -> None:
                            app.state.coach.ask_agentic_stream(
                         ctx, model_question, car=car, input_device=req.get("input_device"),
                         history=history, units=ctx.units, driver_profile=driver_profile,
-                        voice=voice)):
+                        voice=voice, prior_results=prior_results)):
                     if ev["type"] == "usage":
                         # Keep the per-turn breakdown server-side (noise on the wire);
                         # the client gets one cumulative figure on `done`. The model id

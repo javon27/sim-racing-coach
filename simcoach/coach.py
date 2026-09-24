@@ -375,7 +375,8 @@ _FIGURE = re.compile(
     r"|\b\d+:\d{2}(?:\.\d+)?\b"                        # 1:18.402
     r"|\bP\d+\b|\blap \d+\b"                           # P4, lap 37
     rf"|\b{_NUMWORD}[\s-]+(?:\w+\s+)?(?:tenths?|seconds?|laps?|degrees|psi|percent)\b"
-    rf"|\b{_ORDINAL}\s+(?:place|in class|overall|position)\b"      # fifth place
+    rf"|(?<!the )\b{_ORDINAL}\s+(?:place|in class|overall|position)\b"  # fifth place,
+    # not the idiom "in the first place" (replay #195)
     rf"|\b{_NUMWORD}(?:[\s-]+{_NUMWORD})*\s+point\s+{_NUMWORD}\b"  # one twenty-three point four
     rf"|\ba minute(?:\s+and)?\s+{_NUMWORD}\b",                     # a minute twenty-three
     re.IGNORECASE)
@@ -517,9 +518,14 @@ class Coach:
         input_device: str | None = None,
         units: str = "metric",
         voice: str | None = None,
+        prior_results: str = "",
     ):
         """Like `ask_agentic`, but yields tool/text events as they occur instead of
         returning a final string. Does not persist or emit done/error — the caller does.
+
+        `prior_results`: the stored tool RESULTS of this chat's earlier turns. A figure
+        found there verbatim is a measured value the answer may refer back to without
+        a new tool call; a drifted one (138 °F then 141 °F) matches nothing.
 
         #159: a turn that called no tool and whose draft states data (`states_data`)
         is discarded unseen and re-asked once with `force_tool`; if that still reads
@@ -542,15 +548,15 @@ class Coach:
             system += " " + VOICE_CONVERSATION
         messages = list(history) if history else []
         messages.append({"role": "user", "content": question})
-        # #159: what an answer may state without a tool this turn -- the driver's own
-        # words (the user turn also carries the injected CURRENT RACE / NEW SINCE
-        # facts), the track/car and the per-driver system additions. NOT the static
-        # prompt (its examples say "lap 12") and NOT earlier coach answers: re-stating
-        # those is the bug.
+        # #159: what an answer may state without a tool this turn -- every question the
+        # driver asked in this chat (this turn's also carries the injected CURRENT
+        # RACE / NEW SINCE facts), earlier turns' tool results, the track/car and the
+        # per-driver system additions. NOT the static prompt (its examples say "lap
+        # 12") and NOT earlier coach answers: that would launder a past fabrication.
         said = [m["content"] for m in messages
                 if m.get("role") == "user" and isinstance(m.get("content"), str)]
         known = "\n".join([system[len(static):], context.track or "", context.car or "",
-                           *said])
+                           prior_results, *said])
         start = len(context.tool_calls)
         for force in (False, True):
             if force and not getattr(self.model, "can_force_tool", True):

@@ -360,3 +360,50 @@ def test_claude_default_sends_no_tool_choice():
         "sys", [{"role": "user", "content": "q"}], [{"name": "get_race_state"}],
         lambda n, i: "r"))
     assert all("tool_choice" not in kw for kw in client.calls)
+
+
+# --- coordinator round 2: earlier turns' stored tool RESULTS count as known --------
+
+def _chat_with_result(tmp_path, result, reply):
+    store = _store(tmp_path)
+    store.save_chat("c1", "s1", "T", "C", None, "how are my brakes?",
+                    "ABS is busy into Turn 10.",   # an ANSWER: never known on its own
+                    [{"name": "get_handling", "input": {}, "result": result}])
+    model = FakeModel(reply=reply, forced_stream_script=[("tool", "get_handling", {}),
+                                                         ("text", "Re-read.")])
+    client = TestClient(create_app(store, Coach(model)), base_url="http://127.0.0.1")
+    events = _ask(client, {"question": "why is that?", "session_id": "s1", "chat_id": "c1"})
+    return model, events
+
+
+def test_a_figure_from_an_earlier_turns_tool_result_is_known(tmp_path):
+    model, events = _chat_with_result(
+        tmp_path, "Turn 10: ABS active 50% of the braking zone; fronts 138 °F.",
+        "That 50% ABS spike is the blind crest.")
+    assert model.forced == [False]
+    assert events[-1]["answer"] == "That 50% ABS spike is the blind crest."
+
+
+def test_a_drifted_figure_still_forces_a_re_read(tmp_path):
+    # #234's shape: the earlier tool said 138 °F; restating it as 141 °F is a new claim.
+    model, events = _chat_with_result(
+        tmp_path, "Turn 10: ABS active 50% of the braking zone; fronts 138 °F.",
+        "Fronts are sitting at 141°F now.")
+    assert model.forced == [False, True]
+    assert events[-1]["answer"] == "Re-read."
+
+
+def test_an_earlier_answers_figure_is_not_known(tmp_path):
+    store = _store(tmp_path)
+    store.save_chat("c1", "s1", "T", "C", None, "tires?", "Fronts at 138 °F.", None)
+    model = FakeModel(reply="Still 138 °F up front.",
+                      forced_stream_script=[("tool", "get_tire_report", {}), ("text", "ok")])
+    client = TestClient(create_app(store, Coach(model)), base_url="http://127.0.0.1")
+    _ask(client, {"question": "and now?", "session_id": "s1", "chat_id": "c1"})
+    assert model.forced == [False, True]      # no laundering a past answer
+
+
+def test_in_the_first_place_is_not_a_position():
+    # replay #195: the idiom, not a race position
+    assert not states_data("That's why the sawing started in the first place.", known="")
+    assert states_data("You're up to first place.", known="")
