@@ -1013,8 +1013,8 @@ class CoachContext:
         return self._envelope
 
     def _analysis_for(self, record, lap_id):
-        if self.cmap is None:
-            return None
+        # #157: no corner map still gets the lap-level reads (tires, wheels, lap-time
+        # spread) -- just no corners. Per-corner tools guard `self.cmap` themselves.
         key = lap_id if lap_id is not None else id(record)
         if key not in self._analysis_cache:
             # Prefer this session's best (fair same-phase comparison — a race lap vs
@@ -1026,7 +1026,8 @@ class CoachContext:
             if ref is None:
                 ref = self.store.best_lap(record.track, record.car, exclude_lap_id=lap_id)
             envelope = self._grip_envelope(ref)
-            self._analysis_cache[key] = analyze_lap(record, self.cmap, reference=ref,
+            self._analysis_cache[key] = analyze_lap(record, self.cmap or CornerMap([]),
+                                                     reference=ref,
                                                      envelope=envelope,
                                                      envelope_laps=self._envelope_laps)
         return self._analysis_cache[key]
@@ -1281,7 +1282,7 @@ class CoachContext:
         identity = f"{self._lap_line(record, lap_id)} vs {ref_word}: {ref_line}"
         return identity + "\n" + format_time_loss(buckets, ref_label)
 
-    def _stint_analyses(self, phase=None, need_corners=True):
+    def _stint_analyses(self, phase=None):
         """(analyses, lap_times, incident) for one stint -- session + phase, valid laps
         only, telemetry-backed laps only, in lap order. Shared by `get_consistency` and
         `get_tire_trend`, which only differ in which pure function they feed it to.
@@ -1313,15 +1314,7 @@ class CoachContext:
                 record = None   # a result-log row with no telemetry file -- nothing to analyse
             if record is None:
                 continue
-            if self.cmap is None and not need_corners:
-                # Lap-level reads (tires) don't need a corner map; a track with no map
-                # still gets its stint trend. Not cached -- _analysis_for's cache is
-                # keyed on the corner map this context has.
-                analysis = analyze_lap(record, CornerMap([]))
-            else:
-                analysis = self._analysis_for(record, row["id"])
-            if analysis is None:
-                continue
+            analysis = self._analysis_for(record, row["id"])
             if stopped:
                 analyses, lap_times, incident, stopped = [], [], [], False
             analyses.append(analysis)
@@ -1386,15 +1379,16 @@ class CoachContext:
     def get_consistency(self, phase=None):
         if not self.session_id:
             return "No active session — no stint to measure consistency across."
-        if self.cmap is None:
-            return "No corner map for this track yet — can't break laps into corners."
         analyses, lap_times, _ = self._stint_analyses(phase)
-        return format_consistency(stint_consistency(analyses, lap_times), self.units)
+        out = format_consistency(stint_consistency(analyses, lap_times), self.units)
+        if self.cmap is None:
+            out += " Per-corner consistency needs a corner map for this track (none yet)."
+        return out
 
     def get_tire_trend(self, phase=None):
         if not self.session_id:
             return "No active session — no stint to measure tire trend across."
-        analyses, lap_times, incident = self._stint_analyses(phase, need_corners=False)
+        analyses, lap_times, incident = self._stint_analyses(phase)
         return format_tire_trend(stint_tire_trend(analyses, lap_times, incident), self.units)
 
     def get_handling(self, which="latest"):
@@ -1422,8 +1416,8 @@ class CoachContext:
         return lap_line + "\n" + "\n".join(lines)
 
     def _latest_analysis(self):
-        """This session's current/latest lap's analysis, or None with no lap or
-        no corner map -- used to seed `list_track_corners`' spoken locators with
+        """This session's current/latest lap's analysis, or None with no lap --
+        used to seed `list_track_corners`' spoken locators with
         real measured speeds rather than geometry alone."""
         record, lap_id = self._current_lap()
         if record is None:
@@ -1702,23 +1696,26 @@ class CoachContext:
 
     def get_tire_report(self):
         record, lap_id = self._current_lap()
-        analysis = self._analysis_for(record, lap_id) if record is not None else None
-        if analysis is None:
-            return "No lap captured yet (or no corner map for this track)."
+        if record is None:
+            return "No lap captured yet."
+        analysis = self._analysis_for(record, lap_id)
         report = format_tire_report(analysis, self.units)
         return (self._lap_line(record, lap_id) + "\n"
                 + (report or "No tire-temperature data was captured for this lap."))
 
     def get_wheel_report(self):
         record, lap_id = self._current_lap()
-        analysis = self._analysis_for(record, lap_id) if record is not None else None
-        if analysis is None:
-            return "No lap captured yet (or no corner map for this track)."
+        if record is None:
+            return "No lap captured yet."
+        analysis = self._analysis_for(record, lap_id)
         report = format_wheel_report(analysis, self.units)
         # #108: a wear STEP on one lap at one corner is a flat spot, not deg. The
         # wear line above reads the same number as a stint slope and gets blamed on
         # cornering load, so name the step next to it.
         steps = [line for line in self._events_for(record, lap_id) if "wear step" in line]
+        if self.cmap is None:
+            steps = [("Per-corner wear steps (flat spots) need a corner map for this track "
+                      "(none yet) — not checked.")]
         return (self._lap_line(record, lap_id) + "\n"
                 + (report or "No brake/wear data was captured for this lap (older capture).")
                 + ("\n" + "\n".join(steps) if steps else ""))

@@ -2716,3 +2716,46 @@ def test_an_old_weekend_chat_as_newest_activity_never_serves_the_old_race(
                        live_lap={"session_id": base, "lap_no": 5, "start_ts": T + 1200},
                        live_session=_live("qualifying"))
     assert "5.00" not in pre.dispatch("get_strategy", {"race_laps": 14})
+
+
+# --- #157: lap-level reports don't need a corner map --------------------------
+
+def _no_map_ctx(tmp_path, lap):
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    lap_id = store.save(lap)
+    return CoachContext(store, record=lap, lap_id=lap_id, cmap=None,
+                        track=lap.track, car=lap.car, on_track=True)
+
+
+def test_tire_and_wheel_reports_answer_without_a_corner_map(tmp_path, synthetic_lap):
+    ctx = _no_map_ctx(tmp_path, synthetic_lap)
+    tire = ctx.get_tire_report()
+    assert tire.startswith("Lap: ") and "Tire temps" in tire
+    wheel = ctx.get_wheel_report()
+    assert wheel.startswith("Lap: ")
+    assert "Brake temps" in wheel and "Tire wear remaining" in wheel
+    # the per-corner part is named as needing a map, not silently dropped
+    assert "corner map" in wheel
+    for out in (tire, wheel):
+        assert "No lap captured" not in out
+
+
+def test_tire_and_wheel_reports_no_lap_is_not_a_map_problem(tmp_path):
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    for cmap in (None, CornerMap.load("simcoach/tracks/test_track.json")):
+        ctx = CoachContext(store, cmap=cmap, track="Nowhere", car="GT3", on_track=True)
+        for out in (ctx.get_tire_report(), ctx.get_wheel_report()):
+            assert out == "No lap captured yet."
+
+
+def test_get_consistency_reads_lap_times_without_a_corner_map(tmp_path, synthetic_lap):
+    import dataclasses
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    for i in range(3):
+        store.save(dataclasses.replace(synthetic_lap, lap_time=90.0 + i, session_id="s1",
+                                       phase="practice", timestamp=90.0 + i))
+    ctx = CoachContext(store, cmap=None, track=synthetic_lap.track, car=synthetic_lap.car,
+                       session_id="s1", on_track=True)
+    out = ctx.get_consistency()
+    assert "Lap time" in out and "over 3 laps" in out
+    assert "corner map" in out and "Least consistent" not in out
