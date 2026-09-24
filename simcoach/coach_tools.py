@@ -1785,17 +1785,24 @@ class CoachContext:
         if not self.on_track:
             return self._no_live_race()
         if self.race is not None and self.race.strategy.note is None:
-            return format_strategy(self.race, *self._race_lap_damage())
+            rec = self._race_lap_record()
+            return format_strategy(self.race, *((damage_state(rec.channels), rec.lap_no)
+                                                if rec is not None else (None, None)))
         return self._provisional_strategy(race_laps, race_minutes)
 
-    def _race_lap_damage(self) -> tuple:
-        """(damage_state, lap_no) of the live race's latest committed lap, or (None, None)
-        -- a practice lap's damage was repaired in the garage, so it never counts."""
-        rec, _ = self._current_lap()
-        if (self.race is None or rec is None or rec.phase != "race"
-                or rec.lap_no != self.race.as_of_lap):
-            return None, None
-        return damage_state(rec.channels), rec.lap_no
+    def _race_lap_record(self):
+        """The stored lap the live race snapshot is as of (the newest race row of the
+        live session with that lap number), or None. A practice lap never stands in:
+        its damage was repaired in the garage and its fuel is not what is on board."""
+        if self.race is None:
+            return None
+        sid = (self.live_lap or {}).get("session_id") or self.session_id
+        rows = [r for r in (self.store.session_laps(sid) if sid else [])
+                if r.get("phase") == "race" and r.get("lap_no") == self.race.as_of_lap]
+        try:
+            return self.store.load(rows[-1]["id"]) if rows else None
+        except Exception:
+            return None
 
     def _provisional_strategy(self, race_laps, race_minutes) -> str:
         """#161: before the race stint has MIN_STINT_LAPS clean laps -- on the grid, in
@@ -1840,10 +1847,14 @@ class CoachContext:
         recent = practice[-PACE_LAPS:]
         pace = sum(f.lap_time for f in recent) / len(recent)
         at_pace = f"at your practice pace of {format_laptime(pace)}"
-        start, lap_no = None, 0
-        damage, damage_lap = self._race_lap_damage()
-        if damage_lap is not None:
-            start, lap_no = lap_facts(self._current_lap()[0]), damage_lap
+        start, lap_no, damage, damage_lap = None, 0, None, None
+        if self.race is not None:
+            # A race lap is done: plan from what was on board at ITS line, never lap 0.
+            rec = self._race_lap_record()
+            if rec is None:
+                return no(f"race lap {self.race.as_of_lap} isn't readable from the store")
+            start, lap_no = lap_facts(rec), rec.lap_no
+            damage, damage_lap = damage_state(rec.channels), rec.lap_no
         if race_laps is not None or race_minutes is not None:
             try:
                 if isinstance(race_laps, bool) or isinstance(race_minutes, bool):

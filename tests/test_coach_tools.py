@@ -2591,3 +2591,33 @@ def test_get_strategy_rejects_a_bool_or_fractional_race_length(tmp_path, synthet
         assert "must be a positive number" in ctx.dispatch("get_strategy", bad), bad
     assert "about 1 lap)" not in ctx.dispatch("get_strategy", {"race_minutes": 0.5})
     assert "= about 1 lap." in ctx.dispatch("get_strategy", {"race_minutes": 0.5})
+
+
+def test_provisional_plan_mid_race_starts_from_the_snapshots_own_race_lap(tmp_path,
+                                                                          synthetic_lap):
+    """#161 red-team (t4, Road Atlanta race laps 1/20/21): with a snapshot whose lap was
+    not the newest stored lap (a commit in flight), the plan fell back to 'Assumes you
+    start on 100%' from lap 0. It must start from what was on board at THAT lap's line."""
+    import dataclasses
+
+    import numpy as np
+
+    from simcoach.race import LapFacts, build_snapshot
+    store = _weekend(tmp_path, synthetic_lap)
+    n = len(synthetic_lap.channels["lap_distance"])
+    for lap, fuel, ve in ((1, 73.8, 1.0), (2, 71.5, 0.966)):   # real race-lap-1 shape
+        ch = dict(synthetic_lap.channels)
+        ch.update(fuel=np.linspace(fuel, fuel - 2.3, n), fuel_capacity=np.full(n, 100.0),
+                  virtual_energy=np.linspace(ve, ve - 0.034, n))
+        store.save(dataclasses.replace(synthetic_lap, channels=ch, lap_time=95.0,
+                                       session_id="s1", phase="race", lap_no=lap,
+                                       timestamp=50.0 + lap))
+    snap = build_snapshot([LapFacts(lap_no=1, lap_time=95.0, clean=False)], "s1")
+    assert snap.strategy.note is not None                 # 1 lap: no race projection yet
+    ctx = CoachContext(store, track=synthetic_lap.track, car=synthetic_lap.car,
+                       session_id="s1", on_track=True, race=snap,
+                       live_session=_live(max_laps=14, current_lap=3))
+    out = ctx.dispatch("get_strategy", {})
+    assert "As of race lap 1: what was on board at the line" in out, out
+    assert "Assumes" not in out
+    assert "71.5 L on board" in out                        # lap 1's line: 73.8 - 2.3
