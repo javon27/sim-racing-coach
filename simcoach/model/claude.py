@@ -19,6 +19,15 @@ class ClaudeModel:
         self.thinking = thinking
         self.client = anthropic.Anthropic(api_key=api_key)
 
+    @property
+    def can_force_tool(self) -> bool:
+        """#159: whether `run_stream(force_tool=True)` can be honoured. Forcing sends
+        tool_choice any with thinking disabled; Claude Opus 5.5 and Fable 5.1 / Mythos
+        5.1 400 on forced tool_choice, and every Fable/Mythos (plus Opus 5.5) 400s on
+        thinking disabled -- so those never get a forced round (the coach answers
+        UNCONFIRMED instead). Opus 5 accepts disabled thinking at the default effort."""
+        return not self.model.startswith(("claude-opus-5-5", "claude-fable-", "claude-mythos-"))
+
     def _thinking_param(self):
         # sonnet-5 accepts {"type": "disabled"}; budget_tokens is rejected (400).
         return {"type": "adaptive"} if self.thinking else {"type": "disabled"}

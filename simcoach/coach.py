@@ -1,3 +1,4 @@
+import logging
 import re
 
 import numpy as np
@@ -350,20 +351,38 @@ VOICE_CONVERSATION = (
 # tool, is not accepted. Deliberately cheap, deterministic regexes over the answer
 # text: a false positive only costs one forced tool round, so they lean inclusive.
 UNCONFIRMED = "I can't confirm that from the data."
+_log = logging.getLogger(__name__)
 
+# A lookup announced NOW ("let me pull…", "I'm checking…"). A future offer ("call me
+# back and I'll dig in", "say the word and I'll pull it") is not a claim: not matched.
 _LOOKUP = re.compile(
-    r"\b(?:let me|lemme|i'll|i will|i'm going to)\s+(?:quickly\s+|just\s+)?"
-    r"(?:pull|check|look|grab|get|fetch|read|see|dig)\b", re.IGNORECASE)
+    r"\b(?:let me|lemme)\s+(?:quickly\s+|just\s+)?"
+    r"(?:pull|check|look|grab|get|fetch|read|see|dig)\b"
+    r"|\bI'?m\s+(?:pulling|checking|looking|grabbing|fetching|digging)\b",  # not
+    # "reading": "I'm reading you fine" is radio talk (replay #119)
+    re.IGNORECASE)
 _UNIT = (r"(?:s/lap|s|secs?|seconds?|tenths?|hundredths?|laps?|°\s?[CF]|deg(?:rees)?|"
          r"psi|kpa|bar|%|percent|km/h|kph|mph|m|meters?|metres?|l|litres?|liters?|kg|"
          r"kw|mj|rpm|mm)")
+# Spoken figures (VOICE_CONVERSATION says numbers as words).
 _NUMWORD = (r"(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
-            r"fifteen|twenty|thirty|forty|fifty|hundred|half)")
+            r"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|"
+            r"thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|half)")
+_ORDINAL = (r"(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|"
+            r"eleventh|twelfth|\w+teenth|twentieth|thirtieth)")
 _FIGURE = re.compile(
     rf"\d+(?:[.,]\d+)?\s*{_UNIT}(?![A-Za-z])"          # 8.4 s, 141 °F, 3.36 s/lap
     r"|\b\d+:\d{2}(?:\.\d+)?\b"                        # 1:18.402
     r"|\bP\d+\b|\blap \d+\b"                           # P4, lap 37
-    rf"|\b{_NUMWORD}[\s-]+(?:\w+\s+)?(?:tenths?|seconds?|laps?|degrees|psi|percent)\b",
+    rf"|\b{_NUMWORD}[\s-]+(?:\w+\s+)?(?:tenths?|seconds?|laps?|degrees|psi|percent)\b"
+    rf"|\b{_ORDINAL}\s+(?:place|in class|overall|position)\b"      # fifth place
+    rf"|\b{_NUMWORD}(?:[\s-]+{_NUMWORD})*\s+point\s+{_NUMWORD}\b"  # one twenty-three point four
+    rf"|\ba minute(?:\s+and)?\s+{_NUMWORD}\b",                     # a minute twenty-three
+    re.IGNORECASE)
+# A bare "say again": answered by replaying the last answer, with no model call.
+_REPEAT = re.compile(
+    r"(?:(?:(?:can|could) you\s+)?(?:please\s+)?(?:repeat(?: that| it)?|say (?:that |it )?"
+    r"again|come again|what|sorry|pardon(?: me)?|hello|huh)(?:\s+please)?[\s?.!,]*)+",
     re.IGNORECASE)
 # A capitalised First Last pair in a sentence with a race-relative cue reads as
 # another driver. ponytail: a heuristic -- a single name ("Kevin is behind"), an
@@ -375,6 +394,9 @@ _NOT_A_FIRST_NAME = {"The", "This", "That", "Your", "Turn", "Lap", "Sector", "As
 _RIVAL_CUE = re.compile(
     r"\b(?:behind|ahead|gap|closing|catch\w*|pass\w*|rival|in front|leader|leads?|"
     r"pit\w*|chasing|P\d+)\b", re.IGNORECASE)
+# Where a streamed chunk may be released: after terminal punctuation followed by
+# whitespace (not "8." of "8.4"), or a newline.
+_BOUNDARY = re.compile(r"[.!?]+(?=\s)|\n")
 # One sentence: terminal punctuation counts only when whitespace/end follows ("8.4").
 _SENTENCE = re.compile(r"[^\s.!?](?:[^.!?\n]|[.!?](?=\S))*[.!?]*")
 
@@ -404,12 +426,25 @@ def ground_names(text: str, known: str) -> tuple[str, list[str]]:
     return re.sub(rf"(?:{dup}\s+)+{dup}", UNCONFIRMED, out), names
 
 
-def states_data(text: str, known: str) -> bool:
-    """True when an answer announces a lookup or states a race/lap/telemetry fact --
-    a figure with a unit, a lap time, a position, a lap number, or another driver's
-    name absent from `known`. Such an answer needs a tool call in its turn."""
-    return bool(_LOOKUP.search(text) or _FIGURE.search(text)
-                or ground_names(text, known)[1])
+def states_data(text: str, known: str) -> str:
+    """Why an answer needs a tool call in its turn, or "" when it doesn't: it
+    announces a lookup, or states a race/lap/telemetry fact -- a figure with a unit, a
+    lap time, a position, a lap number (one `known` already holds, e.g. the driver's
+    own words or the injected CURRENT RACE line, doesn't count), or another driver's
+    name absent from `known`."""
+    if m := _LOOKUP.search(text):
+        return f"lookup {m.group(0)!r}"
+    for m in _FIGURE.finditer(text):
+        if not re.search(rf"(?<!\w){re.escape(m.group(0))}(?!\w)", known, re.IGNORECASE):
+            return f"figure {m.group(0)!r}"
+    names = ground_names(text, known)[1]
+    return f"name {names[0]!r}" if names else ""
+
+
+def is_repeat_request(question: str) -> bool:
+    """A bare "repeat that" / "what?" / "say again" / "hello?" -- nothing else asked."""
+    q = question.replace("\N{MICROPHONE}", "").strip()
+    return bool(q) and _REPEAT.fullmatch(q) is not None
 
 
 class Coach:
@@ -488,15 +523,18 @@ class Coach:
 
         #159: a turn that called no tool and whose draft states data (`states_data`)
         is discarded unseen and re-asked once with `force_tool`; if that still reads
-        nothing, the answer is UNCONFIRMED. After a tool ran, a sentence naming a
-        driver no tool result named is cut, sent as a final {"type": "replace",
-        "text"} event: the whole corrected answer, which the caller persists and
-        sends on `done` in place of the streamed text."""
+        nothing (or the model can't be forced), the answer is UNCONFIRMED. So a
+        tool-free answer does NOT stream: it arrives whole once the model finishes --
+        the cost is the held-draft time (small talk and technique answers are short).
+        After a tool ran, text streams sentence by sentence, each checked first: a
+        sentence naming a driver no tool result named is replaced by UNCONFIRMED
+        before it is emitted, so it is never shown or spoken. Every discarded draft
+        and every cut sentence is logged (INFO) with its reason."""
         from simcoach.coach_tools import TOOLS
         _, _, spd_u, temp_u = unit_fns(units)
+        static = AGENTIC_SYSTEM_PROMPT.format(car=car, speed_unit=spd_u, temp_unit=temp_u)
         system = self._augment_system(
-            AGENTIC_SYSTEM_PROMPT.format(car=car, speed_unit=spd_u, temp_unit=temp_u),
-            context.allowed_adjustments, driver_profile, input_device,
+            static, context.allowed_adjustments, driver_profile, input_device,
         )
         if voice == "ptt":
             system += " " + VOICE_PTT
@@ -504,43 +542,76 @@ class Coach:
             system += " " + VOICE_CONVERSATION
         messages = list(history) if history else []
         messages.append({"role": "user", "content": question})
-        # #159: what an answer may name without a tool this turn -- the system context
-        # and the driver's own words. NOT earlier coach answers: re-stating those is
-        # the bug.
+        # #159: what an answer may state without a tool this turn -- the driver's own
+        # words (the user turn also carries the injected CURRENT RACE / NEW SINCE
+        # facts), the track/car and the per-driver system additions. NOT the static
+        # prompt (its examples say "lap 12") and NOT earlier coach answers: re-stating
+        # those is the bug.
         said = [m["content"] for m in messages
                 if m.get("role") == "user" and isinstance(m.get("content"), str)]
-        known = "\n".join([system, context.track or "", context.car or "", *said])
+        known = "\n".join([system[len(static):], context.track or "", context.car or "",
+                           *said])
         start = len(context.tool_calls)
         for force in (False, True):
+            if force and not getattr(self.model, "can_force_tool", True):
+                break      # this model 400s on a forced tool: answer UNCONFIRMED instead
             # Text is HELD until a tool call proves this turn read data; a tool-free
             # draft is released only if it states no data (small talk, technique).
-            held: list[dict] | None = []
-            text = ""
+            held: list[dict] = []
+            pend: str | None = None     # set once a tool ran: text not yet emitted
+            text = out = ""
             for ev in self._separated(self.model.run_stream(
                     system, messages, TOOLS, context.dispatch, force_tool=force)):
                 if ev["type"] == "text":
                     text += ev["text"]
-                if held is not None and ev["type"] == "tool":
-                    yield from held
-                    held = None
-                if held is not None and ev["type"] == "text":
-                    held.append(ev)
-                else:
-                    yield ev
-            if held is None:
-                # A tool ran. Names are the one claim checked against its results;
-                # the corrected answer replaces the streamed one on `done`.
-                results = "\n".join(str(c.get("result", ""))
-                                    for c in context.tool_calls[start:])
-                fixed, names = ground_names(text, known + "\n" + results)
-                if names:
-                    yield {"type": "replace", "text": fixed}
+                    if pend is None:
+                        held.append(ev)
+                        continue
+                    pend += ev["text"]
+                    # After a tool: emit whole sentences only, each name-checked first,
+                    # so a fabricated sentence is never streamed (or spoken).
+                    cut = max((m.end() for m in _BOUNDARY.finditer(pend)), default=0)
+                    if cut:
+                        if chunk := self._grounded(pend[:cut], context, start, known, out):
+                            out += chunk
+                            yield {"type": "text", "text": chunk}
+                        pend = pend[cut:]
+                    continue
+                if ev["type"] == "tool" and pend is None:
+                    pend = "".join(e["text"] for e in held)
+                    if chunk := self._grounded(pend, context, start, known, out):
+                        out += chunk
+                        yield {"type": "text", "text": chunk}
+                    pend = ""
+                yield ev
+            if pend is not None:
+                if chunk := self._grounded(pend, context, start, known, out):
+                    yield {"type": "text", "text": chunk}
                 return
-            if not states_data(text, known):
+            reason = states_data(text, known)
+            if not reason:
                 yield from held
                 return
             # Ungrounded draft: discarded unseen; re-ask once with a tool forced.
+            _log.info("coach #159: discarded a tool-free draft (%s, forced=%s): %r",
+                      reason, force, text[:300])
         yield {"type": "text", "text": UNCONFIRMED}
+
+    @staticmethod
+    def _grounded(chunk: str, context, start: int, known: str, out: str) -> str:
+        """`chunk` with every sentence naming a driver that neither `known`
+        nor this turn's tool results named replaced by UNCONFIRMED (and logged). `out`
+        is what was emitted before it, so consecutive cuts say UNCONFIRMED once."""
+        if not chunk:
+            return ""
+        results = "\n".join(str(c.get("result", "")) for c in context.tool_calls[start:])
+        fixed, names = ground_names(chunk, known + "\n" + results)
+        if names:
+            _log.info("coach #159: cut a sentence naming %s (not in this turn's tool "
+                      "results): %r", ", ".join(names), chunk[:300])
+        if fixed.strip() == UNCONFIRMED and out.rstrip().endswith(UNCONFIRMED):
+            return ""
+        return fixed
 
     @staticmethod
     def _separated(stream):

@@ -108,5 +108,7 @@ class Model(Protocol):
 
         `force_tool=True` (#159) makes the FIRST model turn call a tool (any tool --
         the model picks which) instead of answering; later turns are unconstrained.
-        The coach uses it to re-ask when a draft stated data without reading any."""
+        The coach uses it to re-ask when a draft stated data without reading any. A
+        model that cannot honour it sets `can_force_tool = False` (default: True when
+        absent) and the coach never asks."""
         ...

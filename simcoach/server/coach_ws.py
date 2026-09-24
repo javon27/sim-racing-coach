@@ -12,6 +12,7 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 from .. import config
 from ..car_lookup import resolve_car
 from ..car_notes import load_car_notes, load_setup_concepts
+from ..coach import is_repeat_request
 from ..coach_tools import (
     _PARTIAL_LIST_WORD,
     CoachContext,
@@ -284,11 +285,18 @@ def register(app, deps) -> None:
             # makes the ×N tool-loop re-send visible instead of invisible.
             turn_usage = TokenUsage()
             used_model: str | None = None
+            # #159: a bare "say again" / "what?" replays the last answer verbatim -- no
+            # model call, so no chance to re-word (or re-invent) a figure.
+            # (history is non-empty only when `messages` was read above; the stored
+            # answer, not the scrubbed history copy.)
+            last_answer = (messages[-1]["answer"] if history and history[-1]["role"] == "assistant"
+                           and is_repeat_request(question) else None)
             try:
-                for ev in app.state.coach.ask_agentic_stream(
+                for ev in ([{"type": "text", "text": last_answer}] if last_answer else
+                           app.state.coach.ask_agentic_stream(
                         ctx, model_question, car=car, input_device=req.get("input_device"),
                         history=history, units=ctx.units, driver_profile=driver_profile,
-                        voice=voice):
+                        voice=voice)):
                     if ev["type"] == "usage":
                         # Keep the per-turn breakdown server-side (noise on the wire);
                         # the client gets one cumulative figure on `done`. The model id
@@ -296,11 +304,6 @@ def register(app, deps) -> None:
                         # config, which may have changed since the model was resolved.
                         turn_usage = turn_usage + TokenUsage(**ev["usage"])
                         used_model = ev.get("model") or used_model
-                        continue
-                    if ev["type"] == "replace":
-                        # #159: an ungrounded claim was cut after streaming; `done`
-                        # carries the corrected answer (the UI and PTT voice use it).
-                        text = ev["text"]
                         continue
                     if ev["type"] == "text":
                         text += ev["text"]       # accumulate streamed deltas into the full answer

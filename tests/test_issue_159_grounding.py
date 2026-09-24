@@ -135,11 +135,127 @@ def test_forced_round_that_still_calls_no_tool_answers_unconfirmed(tmp_path):
     assert [e["text"] for e in events if e["type"] == "text"] == [UNCONFIRMED]
 
 
-def test_invented_rival_after_a_tool_is_replaced(tmp_path):
+def test_invented_rival_after_a_tool_is_never_streamed(tmp_path, caplog):
+    # Red-team MAJOR 1: conversation voice speaks each streamed sentence, so the cut
+    # must happen BEFORE a sentence is emitted, not as a correction afterwards.
     ctx = CoachContext(_store(tmp_path), track="T", car="C")
-    model = FakeModel(stream_script=[("tool", "get_race_state", {}), ("text", RIVAL)])
+    model = FakeModel(stream_script=[("tool", "get_race_state", {}),
+                                     ("text", "Good pace. Kevin Fischer is 8."),
+                                     ("text", "4 s behind. Keep"), ("text", " pushing!")])
+    with caplog.at_level("INFO", logger="simcoach.coach"):
+        events = list(Coach(model).ask_agentic_stream(ctx, "q", car="C"))
+    texts = [e["text"] for e in events if e["type"] == "text"]
+    assert not any("Kevin" in t for t in texts)
+    assert "".join(texts) == f"Good pace. {UNCONFIRMED} Keep pushing!"
+    assert texts[0] == "Good pace."          # a clean sentence goes out before the rest
+    assert not [e for e in events if e["type"] == "replace"]
+    assert "Kevin Fischer" in caplog.text     # every cut is logged with its reason
+
+
+def test_discarded_draft_is_logged(tmp_path, caplog):
+    ctx = CoachContext(_store(tmp_path), track="T", car="C")
+    model = FakeModel(stream_script=[("text", RIVAL)],
+                      forced_stream_script=[("tool", "get_race_state", {}), ("text", "ok")])
+    with caplog.at_level("INFO", logger="simcoach.coach"):
+        list(Coach(model).ask_agentic_stream(ctx, "q", car="C"))
+    assert "discarded" in caplog.text and "Let me pull" in caplog.text
+
+
+# --- red-team MAJOR 2: false positives from the 72 real tool-free answers --------
+
+# Real answers (coach_chat replay) that offered a FUTURE lookup -- not a claim.
+OFFERS = [
+    ("Copy that, radio check's good on my end too. What do you want to look at? Let me "
+    "know and I'll pull it up."),
+    "Give me a direction and I'll pull the data.",
+    ("Go get some laps in and let me know how it feels. I'll pull the corner data "
+    "whenever you want a check."),
+    ("I'll be here once you've got data; just call me back after a run or two and "
+    "I'll dig into corner times, tire warm-up, whatever you need."),
+    "Just say the word when you want a lap read, and I'll pull the live data.",
+    ("When you've got a couple of laps in, call me back and I'll dig into how it's "
+    "behaving."),
+    "Still with you -- I'm reading you fine on this end, no dropouts on my side.",
+]
+
+# The four incident turns (#229/#231/#233/#234), opening as they really did.
+INCIDENT = [
+    "Let me pull that lap 19 incident and the current strategy numbers together.",
+    "Let me get the current gap and trend as of that lap 23.",
+    "Let me pull that lap 25 and check the incident log for it.",
+    "Let me check the tire trend and confirm what's happening with that front-left.",
+]
+
+
+def test_future_offers_are_not_lookups():
+    for text in OFFERS:
+        assert not states_data(text, known=""), text
+
+
+def test_all_four_incident_turns_still_flag():
+    for text in INCIDENT:
+        assert states_data(text, known=""), text
+
+
+def test_a_figure_the_driver_or_context_gave_is_not_a_claim():
+    q = "It was the contact with Lynn in lap 2. We both went into the chicane."
+    a = "Got it: contact at the chicane on lap 2, front-left puncture, forced stop."
+    assert not states_data(a, known=q)
+    assert states_data(a, known="")
+    # the injected CURRENT RACE line rides in the user turn, so it's known too
+    assert not states_data("That's lap 12 of the race.",
+                           known="CURRENT RACE: race lap 12.\n\nhow far in am I?")
+
+
+def test_spoken_figures_flag():
+    for text in ("You're running fifth place.", "Thirteen laps to go.",
+                 "Your best is a one twenty-three point four.",
+                 "About a minute twenty-three a lap.", "You're sixteen seconds clear."):
+        assert states_data(text, known=""), text
+
+
+def test_repeat_requests():
+    from simcoach.coach import is_repeat_request
+    for q in ("Repeat that.", "What?", "Say again?", "Hello? Hello?", "come again",
+              "Sorry?", "Can you repeat that?", "say that again please"):
+        assert is_repeat_request(q), q
+    for q in ("What's my best?", "Hello, how's my pace?", "repeat the tire numbers",
+              "What happened at Turn 1?", ""):
+        assert not is_repeat_request(q), q
+
+
+def test_repeat_request_replays_the_last_answer_without_a_model_call(tmp_path):
+    store = _store(tmp_path)
+    store.save_chat("c1", "s1", "T", "C", None, "how are my tires?", "Fronts are hot.", None)
+    model = FakeModel(reply="SHOULD NOT RUN")
+    client = TestClient(create_app(store, Coach(model)), base_url="http://127.0.0.1")
+    events = _ask(client, {"question": "Say again?", "session_id": "s1", "chat_id": "c1",
+                           "voice": "ptt"})
+    assert events[-1]["type"] == "done" and events[-1]["answer"] == "Fronts are hot."
+    assert model.forced == []                       # no model call, nothing billed
+    assert store.chat_messages("c1")[-1]["answer"] == "Fronts are hot."
+
+
+# --- MINOR 3: models that 400 on a forced tool never get one ---------------------
+
+def test_claude_models_that_cannot_be_forced():
+    from simcoach.model.claude import ClaudeModel
+    for mid, ok in (("claude-sonnet-5", True), ("claude-opus-5", True),
+                    ("claude-haiku-4-5-20251001", True), ("claude-opus-5-5", False),
+                    ("claude-fable-5-1", False), ("claude-fable-5", False),
+                    ("claude-mythos-5-1", False)):
+        m = ClaudeModel.__new__(ClaudeModel)
+        m.model = mid
+        assert m.can_force_tool is ok, mid
+
+
+def test_unforceable_model_skips_the_forced_round(tmp_path):
+    ctx = CoachContext(_store(tmp_path), track="T", car="C")
+    model = FakeModel(stream_script=[("text", RIVAL)])
+    model.can_force_tool = False
     events = list(Coach(model).ask_agentic_stream(ctx, "q", car="C"))
-    assert events[-1] == {"type": "replace", "text": f"Let me pull the gaps. {UNCONFIRMED}"}
+    assert model.forced == [False]                  # no second (400-bound) call
+    assert [e["text"] for e in events if e["type"] == "text"] == [UNCONFIRMED]
 
 
 def test_prompt_forbids_restating_and_announcing_without_a_tool():
@@ -192,6 +308,8 @@ def test_incident_replay_forces_get_race_state_and_never_persists_the_rival(tmp_
 def test_incident_replay_rival_repeated_after_the_tool_is_cut(tmp_path):
     store, _, events = _incident(tmp_path, RIVAL)
     want = f"Let me pull the gaps. {UNCONFIRMED}"
+    assert not any("Kevin" in e.get("text", "") for e in events)   # never spoken
+    assert "".join(e["text"] for e in events if e["type"] == "text") == want
     assert events[-1]["answer"] == want
     assert store.chat_messages("c1")[-1]["answer"] == want
 

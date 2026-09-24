@@ -10,6 +10,8 @@ class FakeModel:
     """Fake model for testing. Records calls and returns a fixed reply. `run` and
     `run_stream` can be scripted with tool calls to exercise the agentic loop offline."""
 
+    can_force_tool = True      # see Model.run_stream(force_tool=)
+
     def __init__(self, reply: str = "ok", tool_script: list | None = None,
                  stream_script: list[tuple] | None = None,
                  forced_stream_script: list[tuple] | None = None):
