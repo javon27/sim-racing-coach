@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -19,7 +19,14 @@ from simcoach.battle import Battle, build_battle, car_laps
 from simcoach.car_lookup import resolve_car
 from simcoach.corners import CornerMap
 from simcoach.format import format_laptime
-from simcoach.fuel import SaveAdvice, laps_remaining, stint_save_advice, use_per_lap_from_channel
+from simcoach.fuel import (
+    SaveAdvice,
+    laps_remaining,
+    plan_stint,
+    ratio_balance,
+    stint_save_advice,
+    use_per_lap_from_channel,
+)
 from simcoach.lmu.live import FieldSnapshot, VehicleState
 from simcoach.model_types import LapRecord, RaceSample
 
@@ -187,6 +194,8 @@ class Strategy:
     tire_rate_pct: float | None  # % tread per lap on that tire
     tire_laps: float | None      # laps until it reaches WEAR_FLOOR_PCT
     window: PitWindow | None     # None = no stop needed on these rates
+    # #164: laps to WEAR_FLOOR_PCT per wheel that is wearing -- which tires to change.
+    tire_laps_by_wheel: dict[str, float] | None = None
 
 
 def is_clean(record: LapRecord) -> bool:
@@ -297,7 +306,7 @@ def strategy(stint: list[LapFacts], laps_to_go: int | None) -> Strategy:
                                    by["energy"].laps if "energy" in by else inf, laps_to_go)
         if not advice.make_it and advice.save_per_lap_fraction <= MAX_SAVE_FRACTION:
             save = advice.save_per_lap_fraction * by[advice.binding_resource].per_lap
-    wheel = rem = rate = tire_laps = None
+    wheel = rem = rate = tire_laps = by_wheel = None
     worn = [f for f in clean if f.wear_end]
     if len({f.lap_no for f in worn}) >= _MIN_TIRE_TREND_LAPS and latest.wear_end:
         # Fitted on LAP NUMBER, not sample index: a non-clean lap between two clean
@@ -309,6 +318,7 @@ def strategy(stint: list[LapFacts], laps_to_go: int | None) -> Strategy:
             if r > 0:
                 cands.append(((latest.wear_end[w] * 100 - WEAR_FLOOR_PCT) / r, w, r))
         if cands:
+            by_wheel = {w: laps_ for laps_, w, _ in cands}
             tire_laps, wheel, rate = min(cands)
             rem = latest.wear_end[wheel] * 100
     limits = [(r.name, r.laps, r.per_fill) for r in resources]
@@ -316,7 +326,26 @@ def strategy(stint: list[LapFacts], laps_to_go: int | None) -> Strategy:
         limits.append(("tires", max(tire_laps, 0.0), (100 - WEAR_FLOOR_PCT) / rate))
     window = pit_window(latest.lap_no, laps_to_go, limits) if limits else None
     return Strategy(None, laps_to_go, resources, advice, save, wheel, rem, rate, tire_laps,
-                    window)
+                    window, by_wheel)
+
+
+def provisional_strategy(practice: list[LapFacts], laps_to_go: int | None,
+                         start: LapFacts | None = None) -> Strategy:
+    """#161: a pre-race plan before the race stint has MIN_STINT_LAPS clean laps.
+
+    The same `strategy` math, on burn rates from `practice` (this session's clean
+    practice/qualifying laps) and the amounts on board in `start` -- the latest race
+    lap's, at the line -- or, before any race lap, a full fill (100% virtual energy and
+    a full tank; `format_provisional` says that is assumed). Tires are not projected:
+    practice runs span tire changes, so their wear says nothing about this set."""
+    rates = [replace(f, wear_end=None) for f in practice if f.clean]
+    if start is None:
+        cap = next((f.fuel_capacity for f in reversed(practice) if f.fuel_capacity), None)
+        start = LapFacts(lap_no=0, lap_time=None, clean=False, fuel_end=cap,
+                         fuel_capacity=cap, energy_end=1.0)
+    else:
+        start = replace(start, clean=False, wear_end=None)
+    return strategy(rates + [start], laps_to_go)
 
 
 _WHEEL_NAME = {"fl": "front-left", "fr": "front-right", "rl": "rear-left", "rr": "rear-right"}
@@ -564,13 +593,124 @@ def format_race_state(snap: RaceSnapshot) -> str:
     return "\n".join(lines)
 
 
-def format_strategy(snap: RaceSnapshot) -> str:
+def format_strategy(snap: RaceSnapshot, damage: dict | None = None,
+                    damage_lap: int | None = None) -> str:
+    """The race stint's projection plus the stop as pit-menu settings (#164).
+    `damage` is `analysis.damage_state` of lap `damage_lap` (None/{} = not captured)."""
     s = snap.strategy
     head = f"As of lap {snap.as_of_lap}."
     if s.note:
         return f"{head} No projection: {s.note}."
-    final = snap.as_of_lap + s.laps_to_go
-    lines = [head, f"Laps to go: {s.laps_to_go} (flag at the end of lap {final})."]
+    return "\n".join([head] + _strategy_lines(s, snap.as_of_lap)
+                     + _pit_menu_lines(s, snap.as_of_lap, damage, damage_lap, True))
+
+
+def format_provisional(s: Strategy, as_of_lap: int, basis: str, n_practice: int,
+                       damage: dict | None = None, damage_lap: int | None = None) -> str:
+    """#161: `provisional_strategy`'s plan, labelled as an estimate. `as_of_lap` 0 = no
+    race lap yet (a full fill is assumed); `basis` says where the race length came from."""
+    head = (f"PROVISIONAL — from your last {n_practice} clean practice/qualifying laps this "
+            f"session; firms up after {MIN_STINT_LAPS} clean race laps.")
+    if s.note:
+        return f"{head} No projection: {s.note}."
+    start = ("Assumes you start on a full fill (100% virtual energy, a full tank)."
+             if as_of_lap == 0 else
+             f"As of race lap {as_of_lap}: what was on board at the line, burned at your "
+             "practice/qualifying rates.")
+    # No fuel ratio read off an ASSUMED full fill: a full tank is not the ratio's fill.
+    return "\n".join([head, f"Race length: {basis}.", start]
+                     + _strategy_lines(s, as_of_lap)
+                     + _pit_menu_lines(s, as_of_lap, damage, damage_lap, as_of_lap > 0))
+
+
+# The refill margin -- the same 5% `fuel.plan_stint` plans with by default.
+REFILL_MARGIN = 0.05
+
+
+def _pit_menu_lines(s: Strategy, as_of_lap: int, damage: dict | None,
+                    damage_lap: int | None, ratio: bool) -> list[str]:
+    """#164: a stop as the PIT-MENU settings the driver makes before it -- LMU has no crew
+    radio. Every figure is computed here from the measured rates.
+
+    Virtual energy % is the level the stop fills to (research on #164: TinyPedal reads
+    the menu's "VIRTUAL ENERGY:" entry as the absolute refill). The fuel ratio is given as
+    a DIRECTION only (`ratio_balance`): its unit/formula is unconfirmed, so no number."""
+    w = s.window
+    if w is None:
+        return ["Pit menu: no stop needed on these rates — nothing to set."]
+    by = {r.name: r for r in s.resources}
+    lines = []
+    stop = max(w.latest, as_of_lap + 1)
+    after = as_of_lap + s.laps_to_go - stop
+    r = by.get("energy") or by.get("fuel")
+    what = "virtual energy" if r is not None and r.name == "energy" else "fuel"
+    if r is None:
+        lines.append("Pit menu: no fuel/energy burn measured — no refill figure.")
+    elif not w.one_stop:
+        lines.append(f"Pit menu: set {what} to "
+                     + ("100%" if r.name == "energy" else "a full tank")
+                     + " — one stop can't reach the flag from there.")
+    else:
+        cap = 1.0 if r.name == "energy" else (r.per_fill * r.per_lap if r.per_fill
+                                               else math.inf)
+        amt = plan_stint(r.per_lap, cap, 0.0, 1.0, margin=REFILL_MARGIN,
+                         laps_override=after, resource=r.name).start_amount
+        if r.name == "energy":
+            amount, step = f"{math.ceil(amt * 100 - 1e-9)}%", f"{r.per_lap * 100:.1f}%"
+        else:
+            amount, step = f"{math.ceil(amt - 1e-9)} L", f"{r.per_lap:.1f} L"
+        lines.append(f"Pit menu: set {what} to {amount} for a stop at the end of lap {stop} "
+                     f"(the {after} laps from there to the flag, +{REFILL_MARGIN:.0%} "
+                     f"margin); each lap earlier needs about {step} more.")
+    if "fuel" in by and "energy" in by:
+        if not ratio:
+            lines.append("Fuel ratio: not read before a race lap (needs the fuel and "
+                         "energy actually on board).")
+        else:
+            fuel, nrg = by["fuel"].laps, by["energy"].laps
+            ra = ratio_balance(fuel, nrg)
+            txt = f"Fuel ratio: fuel on board lasts {fuel:.1f} laps, virtual energy {nrg:.1f}"
+            if ra.shift_toward == "balanced":
+                txt += " — within half a lap: leave the ratio as it is."
+            elif ra.shift_toward == "fuel":
+                txt += (" — fuel runs out first: shift the ratio toward fuel (more fuel "
+                        "per % of virtual energy).")
+            else:
+                txt += (" — energy runs out first: shift the ratio toward energy (less "
+                        "fuel per % of virtual energy).")
+            lines.append(txt + " Direction only: the ratio's unit isn't confirmed, so no "
+                               "number.")
+    if s.tire_laps is None:
+        lines.append(f"Tyres: wear not measured in this race stint yet (needs "
+                     f"{_MIN_TIRE_TREND_LAPS} clean laps with wear data) — no call.")
+    else:
+        short = {k for k, v in (s.tire_laps_by_wheel or {}).items() if v < s.laps_to_go}
+        change = [k.upper() for k in _WHEELS if k in short]
+        keep = [k.upper() for k in _WHEELS if k not in short]
+        if change:
+            lines.append(f"Tyres: change {', '.join(change)} "
+                         f"({'it reaches' if len(change) == 1 else 'they reach'} the "
+                         f"{WEAR_FLOOR_PCT:.0f}% threshold before the flag on the measured "
+                         "wear)" + (f"; keep {', '.join(keep)}." if keep else "."))
+        else:
+            lines.append(f"Tyres: no change needed — every tire stays above the "
+                         f"{WEAR_FLOOR_PCT:.0f}% threshold to the flag on the measured wear.")
+    if not damage:
+        lines.append("Repairs: no damage data captured.")
+    elif (damage.get("dent_max", 0) > 0 or damage.get("detached")
+          or damage.get("wheels_flat") or damage.get("wheels_detached")):
+        lines.append(f"Repairs: damage measured on lap {damage_lap} (dent severity max "
+                     f"{damage.get('dent_max', 0):.0f}, raw 0\N{EN DASH}255 scale, panel "
+                     "unknown) — whether to set repairs on is your call; the time a repair "
+                     "adds isn't measured here.")
+    else:
+        lines.append(f"Repairs: none measured as of lap {damage_lap} — leave repairs off.")
+    return lines
+
+
+def _strategy_lines(s: Strategy, as_of_lap: int) -> list[str]:
+    final = as_of_lap + s.laps_to_go
+    lines = [f"Laps to go: {s.laps_to_go} (flag at the end of lap {final})."]
     binding = s.advice.binding_resource if s.advice and not s.advice.make_it else None
     for r in s.resources:
         if r.name == "fuel":
@@ -615,7 +755,7 @@ def format_strategy(snap: RaceSnapshot) -> str:
     if w is None:
         lines.append("Pit window: no stop needed on these rates"
                      + (" (tires not yet measured)." if s.tire_laps is None else "."))
-    elif w.latest <= snap.as_of_lap:
+    elif w.latest <= as_of_lap:
         now = (f"the {_WHEEL_NAME[s.tire_wheel]} tire is at or past the "
                f"{WEAR_FLOOR_PCT:.0f}% threshold" if w.binding == "tires"
                else f"{w.binding} has under a lap left")
@@ -633,4 +773,4 @@ def format_strategy(snap: RaceSnapshot) -> str:
                   else f"latest set by {w.binding}")
         lines.append(f"Pit window: laps {w.earliest} to {w.latest} ({set_by}; earliest is the first lap one full service reaches the "
                      "flag from).")
-    return "\n".join(lines)
+    return lines

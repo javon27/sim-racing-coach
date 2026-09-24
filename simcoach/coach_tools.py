@@ -50,7 +50,19 @@ from simcoach.format import (
 )
 from simcoach.fuel import laps_remaining
 from simcoach.livelap import impact_text, incident_lines
-from simcoach.race import format_race_state, format_strategy, lap_facts, picked_up_mid_lap
+from simcoach.race import (
+    MIN_STINT_LAPS,
+    PACE_LAPS,
+    RATE_LAPS,
+    _clock,
+    format_provisional,
+    format_race_state,
+    format_strategy,
+    lap_facts,
+    laps_left,
+    picked_up_mid_lap,
+    provisional_strategy,
+)
 from simcoach.track_lookup import load_track_knowledge, note_key_binds
 
 # ponytail: hard cap on an incident scan. Each lap past the cache costs a telemetry
@@ -295,12 +307,22 @@ TOOLS = [
     },
     {
         "name": "get_strategy",
-        "description": "LIVE RACE ONLY. Fuel and virtual energy to the flag (makes it or not, "
-                       "margin in laps, per-lap save target), the pit window (earliest/latest "
-                       "lap and what sets it), and tire life to a named wear threshold, as of "
-                       "the last completed lap. Use for 'will I make it', 'when do I pit', "
+        "description": "IN A LIVE SESSION. Fuel and virtual energy to the flag (makes it or "
+                       "not, margin in laps, per-lap save target), the pit window (earliest/"
+                       "latest lap and what sets it), tire life to a named wear threshold, "
+                       "and the stop as PIT-MENU settings (virtual energy %, fuel ratio "
+                       "direction, tyres, repairs), as of the last completed lap. Before 2 "
+                       "clean race laps (grid, practice, qualifying, race lap 1) it returns a "
+                       "PROVISIONAL plan from this session's practice/qualifying burn rates. "
+                       "Use for 'will I make it', 'when do I pit', 'how much do I refuel', "
                        "'how long will the tires last'. One call answers it.",
-        "input_schema": {"type": "object", "properties": {}},
+        "input_schema": {"type": "object", "properties": {
+            "race_laps": {"type": "integer",
+                          "description": "Race length in laps, ONLY as the driver stated it "
+                                         "(outside a live race the game doesn't report it)."},
+            "race_minutes": {"type": "number",
+                             "description": "Race length in minutes, ONLY as the driver "
+                                            "stated it."}}},
     },
     {
         "name": "get_battle",
@@ -626,7 +648,7 @@ class CoachContext:
                  setup=None, track=None, car=None, on_track=None,
                  allowed_adjustments=None, session_id=None,
                  car_notes=None, setup_concepts=None, car_class=None, race=None,
-                 race_note=None, live_lap=None, car_status=None):
+                 race_note=None, live_lap=None, car_status=None, live_session=None):
         self.store = store
         self.units = units
         self.record = record
@@ -648,6 +670,9 @@ class CoachContext:
         # Both None off track.
         self.live_lap = live_lap
         self.car_status = car_status
+        # #161: the live session (lmu.live.SessionState: phase, max_laps, clock) when
+        # the question came in -- the race length for a provisional pre-race plan.
+        self.live_session = live_session
         self.on_track = on_track
         self.allowed_adjustments = allowed_adjustments
         # Authored car knowledge (merged shipped+overlay `notes` dict) and the shared
@@ -1742,8 +1767,83 @@ class CoachContext:
     def get_race_state(self):
         return self._no_live_race() or format_race_state(self.race)
 
-    def get_strategy(self):
-        return self._no_live_race() or format_strategy(self.race)
+    def get_strategy(self, race_laps=None, race_minutes=None):
+        if not self.on_track:
+            return self._no_live_race()
+        if self.race is not None and self.race.strategy.note is None:
+            return format_strategy(self.race, *self._race_lap_damage())
+        return self._provisional_strategy(race_laps, race_minutes)
+
+    def _race_lap_damage(self) -> tuple:
+        """(damage_state, lap_no) of the live race's latest committed lap, or (None, None)
+        -- a practice lap's damage was repaired in the garage, so it never counts."""
+        rec, _ = self._current_lap()
+        if (self.race is None or rec is None or rec.phase != "race"
+                or rec.lap_no != self.race.as_of_lap):
+            return None, None
+        return damage_state(rec.channels), rec.lap_no
+
+    def _provisional_strategy(self, race_laps, race_minutes) -> str:
+        """#161: before the race stint has MIN_STINT_LAPS clean laps -- on the grid, in
+        practice/qualifying, or race lap 1 -- plan from this session's clean practice/
+        qualifying burn rates and the race length (the live race's, or the one the driver
+        gave). Every figure is computed in race.py; this only gathers the inputs."""
+        def no(why):
+            return (f"No live race projection yet (it needs {MIN_STINT_LAPS} clean race "
+                    f"laps in this stint), and no provisional plan: {why}.")
+        if not self.session_id:
+            return no("no session to read practice/qualifying laps from")
+        practice = []
+        for row in self.store.session_laps(self.session_id):
+            if row.get("phase") == "race" or row.get("mapping"):
+                continue
+            try:
+                rec = self.store.load(row["id"])
+            except Exception:
+                rec = None   # a result-log row with no telemetry
+            if rec is None:
+                continue
+            f = lap_facts(rec)
+            if f.clean and (f.fuel_used or f.energy_used):
+                practice.append(f)
+        practice = practice[-RATE_LAPS:]
+        if len(practice) < MIN_STINT_LAPS:
+            return no(f"it needs {MIN_STINT_LAPS} clean practice/qualifying laps with a "
+                      f"measured fuel/energy burn in this session (found {len(practice)})")
+        recent = practice[-PACE_LAPS:]
+        pace = sum(f.lap_time for f in recent) / len(recent)
+        at_pace = f"at your practice pace of {format_laptime(pace)}"
+        start, lap_no = None, 0
+        damage, damage_lap = self._race_lap_damage()
+        if damage_lap is not None:
+            start, lap_no = lap_facts(self._current_lap()[0]), damage_lap
+        sess = self.live_session
+        if race_laps is not None or race_minutes is not None:
+            try:
+                total = (int(race_laps) if race_laps is not None
+                         else laps_left(0, None, float(race_minutes) * 60, pace))
+                if not 0 < total <= 1000:
+                    raise ValueError
+            except (TypeError, ValueError, OverflowError):
+                return no("race_laps / race_minutes must be a positive number")
+            to_go = max(total - lap_no, 0)
+            basis = (f"{total} laps (as you said)" if race_laps is not None else
+                     f"{float(race_minutes):g} minutes (as you said) {at_pace} = about "
+                     f"{total} laps")
+        elif sess is not None and sess.phase == "race":
+            clock = (sess.end_time - sess.elapsed) if sess.end_time > 0 else None
+            to_go = laps_left(lap_no, sess.max_laps, clock, pace)
+            by_laps = sess.max_laps and to_go == max(sess.max_laps - lap_no, 0)
+            basis = (f"{sess.max_laps} laps (the live race's lap count)" if by_laps else
+                     f"{_clock(clock)} on the clock {at_pace} = about {to_go} laps to go"
+                     if clock is not None else None)
+        else:
+            to_go = basis = None
+        if to_go is None or basis is None:
+            return no("race length unknown. Ask the driver how long the race is, then "
+                      "call get_strategy again with race_laps or race_minutes")
+        return format_provisional(provisional_strategy(practice, to_go, start), lap_no,
+                                  basis, len(practice), damage, damage_lap)
 
     def get_battle(self, rival=None):
         return self._no_live_race() or format_battle(self.race.battle, self.race.as_of_lap,
@@ -1924,7 +2024,8 @@ class CoachContext:
             "get_energy_report": lambda: self.get_energy_report(),
             "get_race_result": lambda: self.get_race_result(),
             "get_race_state": lambda: self.get_race_state(),
-            "get_strategy": lambda: self.get_strategy(),
+            "get_strategy": lambda: self.get_strategy(args.get("race_laps"),
+                                                      args.get("race_minutes")),
             "get_battle": lambda: self.get_battle(args.get("rival")),
             "get_car_status": lambda: self.get_car_status(),
             "get_setup": lambda: self.get_setup(),

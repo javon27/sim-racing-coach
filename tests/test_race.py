@@ -11,8 +11,10 @@ from simcoach.race import (
     LapFacts,
     PitWindow,
     RaceTracker,
+    build_snapshot,
     catch_lap,
     class_neighbours,
+    format_provisional,
     format_race_state,
     format_strategy,
     gap_slope,
@@ -21,6 +23,7 @@ from simcoach.race import (
     laps_left,
     live_race,
     pit_window,
+    provisional_strategy,
     race_sample,
     strategy,
 )
@@ -462,3 +465,81 @@ def test_a_lap_picked_up_mid_lap_keeps_its_line_amounts_but_not_its_burn(synthet
     assert f.fuel_used is None and f.energy_used is None
     assert f.fuel_end == pytest.approx(float(ch["fuel"][-1]))
     assert f.wear_end is not None
+
+
+# --- #161 provisional pre-race plan / #164 stops as pit-menu settings ----------------
+
+def _practice(n=3, energy=0.125, fuel=2.5, cap=100.0):
+    return [LapFacts(lap_no=i, lap_time=101.0, clean=True, fuel_used=fuel,
+                     fuel_end=cap - fuel * i, fuel_capacity=cap, energy_used=energy,
+                     energy_end=1.0 - energy * i,
+                     wear_end={w: 0.99 - 0.01 * i for w in _W})
+            for i in range(1, n + 1)]
+
+
+def test_provisional_plan_before_any_race_lap_assumes_a_full_fill():
+    s = provisional_strategy(_practice(), laps_to_go=15)
+    assert s.note is None
+    by = {r.name: r for r in s.resources}
+    assert by["energy"].laps == pytest.approx(8.0) and by["fuel"].laps == pytest.approx(40.0)
+    assert s.window == PitWindow(8, 7, "energy", True)
+    assert s.tire_laps is None           # practice wear spans tire changes: not projected
+
+
+def test_provisional_plan_needs_practice_laps_and_a_race_length():
+    assert provisional_strategy(_practice(n=1), 15).note.startswith("not enough laps yet")
+    assert provisional_strategy(_practice(), None).note.startswith("race length unknown")
+
+
+def test_provisional_plan_mid_race_starts_from_the_race_lap_on_board():
+    lap1 = LapFacts(lap_no=1, lap_time=None, clean=False, fuel_end=97.0,
+                    fuel_capacity=100.0, energy_end=0.88)
+    s = provisional_strategy(_practice(), 14, start=lap1)
+    assert {r.name: r.on_board for r in s.resources} == {"fuel": 97.0, "energy": 0.88}
+    assert s.window.latest == 1 + 7                    # floor(0.88 / 0.125)
+
+
+def test_format_provisional_is_labelled_and_states_the_stop_as_pit_menu_settings():
+    s = provisional_strategy(_practice(), laps_to_go=15)
+    text = format_provisional(s, as_of_lap=0, basis="15 laps (the live race's lap count)",
+                              n_practice=3)
+    assert text.startswith("PROVISIONAL — from your last 3 clean practice/qualifying laps "
+                           "this session; firms up after 2 clean race laps.")
+    assert "Race length: 15 laps (the live race's lap count)." in text
+    assert "Assumes you start on a full fill (100% virtual energy, a full tank)." in text
+    assert "Pit window: laps 7 to 8" in text
+    # 7 laps from a stop at the end of lap 8, 12.5 %/lap, +5 % margin = 91.9 -> 92 %.
+    assert ("Pit menu: set virtual energy to 92% for a stop at the end of lap 8 "
+            "(the 7 laps from there to the flag, +5% margin); each lap earlier needs "
+            "about 12.5% more.") in text
+    assert "Fuel ratio: not read before a race lap" in text
+    assert "Tyres: wear not measured in this race stint yet" in text
+    assert "crew" not in text.lower()
+
+
+def test_format_strategy_pit_menu_fuel_ratio_direction_tyres_and_repairs():
+    stint = [dataclasses.replace(f, energy_used=0.1, energy_end=e)
+             for f, e in zip(STINT, (0.9, 0.8, 0.75))]     # 7.5 laps of energy vs 10 of fuel
+    # 30 to go: the FL (76 %, 2 %/lap -> 23 laps to 30 %) can't make it, the rest (88 %,
+    # 1 %/lap -> 58 laps) can.
+    snap = dataclasses.replace(build_snapshot(stint, "s"), strategy=strategy(stint, 30))
+    text = format_strategy(snap, damage={"dent_max": 2.0, "dent_total": 3.0, "detached": False,
+                                         "overheating": False, "wheels_flat": [],
+                                         "wheels_detached": []}, damage_lap=12)
+    assert "LMU has no crew radio" not in text      # that is the prompt's job, not the data
+    assert ("Fuel ratio: fuel on board lasts 10.0 laps, virtual energy 7.5 — energy runs "
+            "out first: shift the ratio toward energy (less fuel per % of virtual energy). "
+            "Direction only: the ratio's unit isn't confirmed, so no number.") in text
+    assert ("Tyres: change FL (it reaches the 30% threshold before the flag on the "
+            "measured wear); keep FR, RL, RR.") in text
+    assert "Repairs: damage measured on lap 12 (dent severity max 2" in text
+    assert "crew" not in text.lower()
+
+
+def test_format_strategy_fuel_only_car_sets_fuel_litres_and_keeps_tyres():
+    text = format_strategy(_tracker_at_lap_12().snapshot)
+    # 2 laps x 2.5 L x 1.05 = 5.25 -> 6 L.
+    assert ("Pit menu: set fuel to 6 L for a stop at the end of lap 22 (the 2 laps from "
+            "there to the flag, +5% margin); each lap earlier needs about 2.5 L more.") in text
+    assert "Tyres: no change needed" in text
+    assert "Repairs: no damage data captured" in text

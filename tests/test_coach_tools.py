@@ -2306,8 +2306,11 @@ def test_race_tools_say_the_race_note_when_a_live_race_has_no_fresh_snapshot(tmp
     store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
     ctx = CoachContext(store, on_track=True, race=None,
                        race_note="Not enough laps yet: x")
-    for tool in ("get_race_state", "get_strategy", "get_battle"):
+    for tool in ("get_race_state", "get_battle"):
         assert ctx.dispatch(tool, {}) == "Not enough laps yet: x"
+    # #161: get_strategy tries a provisional plan instead -- here there is nothing to
+    # plan from, and it says so rather than serving any other race's figures.
+    assert ctx.dispatch("get_strategy", {}).startswith("No live race projection yet")
 
 
 # --- issue #153: the energy report reads the session's latest complete lap -------
@@ -2428,3 +2431,74 @@ def test_get_tire_trend_leaves_contact_laps_out_of_the_pace_trend(tmp_path, synt
     out = ctx.dispatch("get_tire_trend", {})
     assert "deg-limited" not in out and "pace +" not in out, out
     assert "2 incident laps (spin/off/contact) left out of the pace trend" in out
+
+
+# --- #161 provisional pre-race plan / #164 pit-menu stops ------------------------
+
+def _live(phase="race", max_laps=None, elapsed=0.0, end_time=0.0):
+    from simcoach.lmu.live import SessionState
+    return SessionState(live=True, phase=phase, current_lap=1, max_laps=max_laps,
+                        track_len=3000.0, elapsed=elapsed, end_time=end_time, cur_s1=None,
+                        cur_s2=None, best_s1=None, best_s2=None, last_s1=None, last_s2=None,
+                        last_lap=None, best_lap=None)
+
+
+def _weekend(tmp_path, synthetic_lap, phases=("practice",) * 3 + ("qualifying",)):
+    """This session's practice/qualy laps: 2.5 L and 12.5 % virtual energy a lap, 101 s."""
+    import dataclasses
+
+    import numpy as np
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    n = len(synthetic_lap.channels["lap_distance"])
+    for i, ph in enumerate(phases):
+        ch = dict(synthetic_lap.channels)
+        ch.update(fuel=np.linspace(80.0 - 2.5 * i, 77.5 - 2.5 * i, n),
+                  fuel_capacity=np.full(n, 100.0),
+                  virtual_energy=np.linspace(1.0 - 0.125 * i, 0.875 - 0.125 * i, n))
+        store.save(dataclasses.replace(synthetic_lap, channels=ch, lap_time=101.0,
+                                       session_id="s1", phase=ph, timestamp=10.0 + i,
+                                       lap_no=i + 1))
+    return store
+
+
+def test_get_strategy_on_the_grid_gives_a_provisional_plan_not_a_refusal(tmp_path,
+                                                                        synthetic_lap):
+    """Road Atlanta 2026-09-23: 'when do I pit / how much to refuel' before the race got
+    'not enough laps yet' until lap 11."""
+    from simcoach.race import NO_RACE_LAP_YET
+    store = _weekend(tmp_path, synthetic_lap)
+    ctx = CoachContext(store, track=synthetic_lap.track, car=synthetic_lap.car,
+                       session_id="s1", on_track=True, race=None, race_note=NO_RACE_LAP_YET,
+                       live_session=_live(max_laps=15))
+    out = ctx.dispatch("get_strategy", {})
+    assert out.startswith("PROVISIONAL — from your last 4 clean practice/qualifying laps"), out
+    assert "Race length: 15 laps (the live race's lap count)." in out
+    assert "Pit menu: set virtual energy to 92% for a stop at the end of lap 8" in out
+    assert "crew" not in out.lower()
+
+
+def test_get_strategy_in_practice_plans_from_the_race_length_the_driver_gives(tmp_path,
+                                                                             synthetic_lap):
+    store = _weekend(tmp_path, synthetic_lap)
+    ctx = CoachContext(store, track=synthetic_lap.track, car=synthetic_lap.car,
+                       session_id="s1", on_track=True, live_session=_live("practice"))
+    ask = ctx.dispatch("get_strategy", {})
+    assert "race length" in ask.lower() and "race_minutes" in ask
+    out = ctx.dispatch("get_strategy", {"race_minutes": 25})
+    # 25 min at the 101.0 s practice pace -> ceil(1500 / 101) = 15 laps.
+    assert "Race length: 25 minutes (as you said) at your practice pace of 1:41.000 " \
+           "= about 15 laps." in out, out
+    assert "Pit window: laps 7 to 8" in out
+
+
+def test_get_strategy_provisional_needs_two_clean_practice_laps(tmp_path, synthetic_lap):
+    store = _weekend(tmp_path, synthetic_lap, phases=("practice",))
+    ctx = CoachContext(store, track=synthetic_lap.track, car=synthetic_lap.car,
+                       session_id="s1", on_track=True, live_session=_live(max_laps=15))
+    out = ctx.dispatch("get_strategy", {})
+    assert out.startswith("No live race projection yet") and "2 clean" in out, out
+
+
+def test_prompt_says_lmu_has_no_crew_radio(tmp_path, synthetic_lap):
+    from simcoach.coach import AGENTIC_SYSTEM_PROMPT as AGENTIC_SYSTEM
+    assert "no crew radio" in AGENTIC_SYSTEM and "never say 'tell the crew'" in AGENTIC_SYSTEM

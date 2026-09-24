@@ -109,7 +109,7 @@ def register(app, deps) -> None:
                 live = read_session_track_car()          # (track, vehicle) | None
             except Exception:
                 live = None
-            race_snap = race_note = None
+            race_snap = race_note = live_session = None
             live_meta = car_status = None
             if live:
                 on_track = True
@@ -129,7 +129,7 @@ def register(app, deps) -> None:
                     # #152: only THIS race's snapshot -- never the last race's, from the
                     # garage or the next race's formation lap.
                     from ..lmu.live import read_field_snapshot
-                    sess = read_field_snapshot().session
+                    sess = live_session = read_field_snapshot().session
                     race_snap, race_note = live_race(
                         app.state.race.snapshot, track=track, car=vehicle,
                         phase=sess.phase, current_lap=sess.current_lap)
@@ -202,7 +202,9 @@ def register(app, deps) -> None:
                                car_class=car_class,
                                # #152: only the race being driven now (live_race).
                                race=race_snap, race_note=race_note,
-                               live_lap=live_meta, car_status=car_status)
+                               live_lap=live_meta, car_status=car_status,
+                               # #161: the race length for a pre-race plan.
+                               live_session=live_session)
             car = ctx.car or "car"
 
             # Concise always-on profile tier: static prefs from settings + the active
