@@ -1399,8 +1399,12 @@ class CoachContext:
             m = self.live_lap
             if m is None:
                 return None, [], "No lap in progress: nothing on this lap is captured yet."
-            _, rows = self.store.live_lap_corners(m["session_id"], m["lap_no"],
-                                                  m["start_ts"])
+            stored, rows = self.store.live_lap_corners(m["session_id"], m["lap_no"],
+                                                       m["start_ts"])
+            if m.get("incidents") is None and stored is not None:
+                # No question-time scan (LiveLap.now not run / failed): the worker's
+                # stored lap-wide scan of this same lap is the next best, never nothing.
+                m = dict(m, incidents=stored["incidents"])
             return m, rows, (f"Lap: game lap {m['lap_no']} so far "
                              f"(this lap so far, provisional -- lap in progress)")
         m, rows = (self.store.live_lap_corners(self.session_id) if self.session_id

@@ -498,3 +498,23 @@ def test_poll_once_exposes_the_in_progress_lap_buffer():
     rec = src._poll_once(tn, sn)
     assert rec.partial == "partial" and rec.live_meta is fifth
     tmap.close(); smap.close()
+
+
+def test_a_between_window_spin_reaches_this_lap_from_the_stored_scan(tmp_path):
+    """The red-team repro's shape (real Laguna lap 7094): the lap fed sample by sample,
+    the worker ticking every 25 samples, and the coach context built from the raw lap
+    meta -- no question-time scan in hand. The worker's stored lap-wide scan must
+    still carry the spin between T1 and T2; it used to print 'not scanned'."""
+    spin = _spin_lap()
+    store = _store(tmp_path)
+    live = _worker(store)
+    live.source = src = _Source()
+    d = spin.channels["lap_distance"]
+    for i in range(0, d.size, 25):
+        src.drive(spin, float(d[min(i + 24, d.size - 1)]))
+        live.tick()
+    ctx = CoachContext(store, cmap=CornerMap.load(CMAP), track="test_track",
+                       car="test_car", on_track=True, session_id=BASE, live_lap=src.meta)
+    out = ctx.dispatch("get_stint_events", {})
+    assert "between T1 Left Hairpin and T2 Right Sweeper" in out
+    assert "not scanned" not in out
