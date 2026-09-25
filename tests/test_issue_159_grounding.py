@@ -2,6 +2,7 @@
 without calling a single tool. These pin the guard: tool results are persisted, a
 data-shaped answer with no tool this turn is discarded and re-asked with a forced tool,
 and a named other driver the data never mentioned is cut."""
+import pytest
 from fastapi.testclient import TestClient
 
 from simcoach.coach import (
@@ -307,7 +308,9 @@ def test_incident_replay_forces_get_race_state_and_never_persists_the_rival(tmp_
 
 def test_incident_replay_rival_repeated_after_the_tool_is_cut(tmp_path):
     store, _, events = _incident(tmp_path, RIVAL)
-    want = "Let me pull the gaps."   # #168: the rival sentence is dropped, not spliced
+    # #168: the rival sentence is dropped, not spliced -- and the narration left over is
+    # not an answer on its own (red-team round 1), so the whole answer is UNCONFIRMED.
+    want = UNCONFIRMED
     assert not any("Kevin" in e.get("text", "") for e in events)   # never spoken
     assert "".join(e["text"] for e in events if e["type"] == "text") == want
     assert events[-1]["answer"] == want
@@ -433,3 +436,56 @@ def test_168_every_sentence_cut_says_the_fallback_once(tmp_path):
 
 def test_168_the_stock_phrase_is_gone():
     assert "can't confirm" not in UNCONFIRMED.lower()
+
+
+# --- #168 red-team round 1 -----------------------------------------------------
+
+RIV168 = "Kevin Fischer is 8.4 s behind, closing 0.6 s/lap."
+
+
+def _say(tmp_path, script, voice=None):
+    ctx = CoachContext(_store(tmp_path), track="T", car="C")
+    events = list(Coach(FakeModel(stream_script=script)).ask_agentic_stream(
+        ctx, "who's behind?", car="C", voice=voice))
+    return "".join(e["text"] for e in events if e["type"] == "text")
+
+
+@pytest.mark.parametrize("voice", [None, "conversation", "ptt"])
+@pytest.mark.parametrize("script", [
+    [("tool", "get_race_state", {}), ("text", "Let me pull the gaps. " + RIV168)],
+    [("text", "Let me pull the gaps."), ("tool", "get_race_state", {}), ("text", RIV168)],
+    [("tool", "get_race_state", {}), ("text", "Copy that. " + RIV168)],
+    [("tool", "get_race_state", {}),
+     ("text", "Here is the field:\n\n- " + RIV168 + "\n- Momo Racer is ahead.")],
+])
+def test_leftover_narration_is_not_an_answer(tmp_path, script, voice):
+    assert _say(tmp_path, script, voice) == UNCONFIRMED
+
+
+@pytest.mark.parametrize("voice", [None, "conversation", "ptt"])
+def test_uncut_narration_and_short_answers_still_go_out(tmp_path, voice):
+    assert _say(tmp_path, [("tool", "get_race_state", {}), ("text", "Copy that.")],
+                voice) == "Copy that."
+    said = _say(tmp_path, [("text", "Let me check."), ("tool", "get_race_state", {}),
+                           ("text", "You're P3.")], voice)
+    assert said.endswith("You're P3.") and UNCONFIRMED not in said
+
+
+def test_a_cut_last_sentence_leaves_no_trailing_break(tmp_path):
+    said = _say(tmp_path, [("tool", "get_race_state", {}),
+                           ("text", "Keep pushing.\n\n" + RIV168)])
+    assert said == "Keep pushing."
+
+
+def test_a_cut_numbered_item_takes_its_marker(tmp_path):
+    said = _say(tmp_path, [("tool", "get_race_state", {}),
+                           ("text", "Two things:\n1. " + RIV168 + "\n2. Push on exit.")])
+    assert said == "Two things:\n2. Push on exit."
+    assert ground_names("Two things:\n1. " + RIV168 + "\n2. Push on exit.", "")[0] == (
+        "Two things:\n2. Push on exit.")
+
+
+def test_a_preposition_is_not_a_first_name():
+    for text in ("At Turn Seven the gap closes.", "On Lap Five you were ahead.",
+                 "After Big Bend you gain on the car behind."):
+        assert ground_names(text, "") == (text, []), text

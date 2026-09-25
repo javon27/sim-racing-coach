@@ -273,7 +273,7 @@ AGENTIC_SYSTEM_PROMPT = (
     "For a track's character, cues, or hazards — or how any corner drives — call "
     "get_track_notes and quote the authored notes over your own memory. If no notes "
     "exist, you MAY give general, well-known knowledge of the track -- its layout "
-    "character, what it's famous for, the usual tips for a first visit -- framed as "
+    "character (not its named corners) and the usual tips for a first visit -- framed as "
     "general ('from general knowledge of Long Beach, not your data'), never as measured, "
     "and still with no turn number, corner name or direction from memory; then coach "
     "from telemetry once there are laps. Never answer a first-visit 'any tips?' with "
@@ -454,16 +454,36 @@ _REPEAT = re.compile(
 # that no tool result spelled out is cut too. Upgrade: match the field's entry list.
 _WORD = r"[A-Z][a-z]+(?:[A-Z][a-z]+)?(?:['-][A-Z]?[a-z]+)?"
 _NAME = re.compile(rf"\b({_WORD})\s+({_WORD})\b")
-_NOT_A_FIRST_NAME = {"The", "This", "That", "Your", "Turn", "Lap", "Sector", "As", "In"}
+_NOT_A_FIRST_NAME = {"The", "This", "That", "Your", "Turn", "Lap", "Sector", "As", "In",
+                     "At", "On", "From", "After", "Before"}   # "At Turn 7 ... gap"
 _RIVAL_CUE = re.compile(
     r"\b(?:behind|ahead|gap|closing|catch\w*|pass\w*|rival|in front|leader|leads?|"
     r"pit\w*|chasing|P\d+)\b", re.IGNORECASE)
 # Where a streamed chunk may be released: after terminal punctuation followed by
-# whitespace (not "8." of "8.4"), or a newline.
-_BOUNDARY = re.compile(r"[.!?]+(?=\s)|\n")
+# whitespace (not "8." of "8.4", not a line-leading list marker "1."), or a newline.
+_BOUNDARY = re.compile(r"(?<!^\d)(?<!\n\d)(?<!^\d\d)(?<!\n\d\d)[.!?]+(?=\s)|\n")
 # One sentence: terminal punctuation counts only when whitespace/end follows ("8.4").
 _SENTENCE = re.compile(r"[^\s.!?](?:[^.!?\n]|[.!?](?=\S))*[.!?]*")
-_LEAD_SENTENCE = re.compile(rf"(\s*)({_SENTENCE.pattern})")   # + the space before it
+# A sentence with the space around it and a numbered-list marker, which goes with it.
+_LEAD_SENTENCE = re.compile(rf"(\s*)((?:\d{{1,2}}[.)]\s+)?{_SENTENCE.pattern})(\s*)")
+# Not an answer on its own: an acknowledgement, a lookup, a lead-in ending in ':'.
+_ACK = re.compile(r"(?:ok(?:ay)?|alright|all right|right|sure|yeah|yep|copy(?: that)?|"
+                  r"roger(?: that)?|got it|understood|fair enough|good question|on it|"
+                  r"i hear you)[\s,.!]*", re.IGNORECASE)
+
+
+def _glue(a: str, b: str) -> str:
+    """`a` + `b` with ONE gap where they meet: the one with more line breaks (at most a
+    paragraph break), so held and cut-around whitespace never doubles up."""
+    a_body, b_body = a.rstrip(), b.lstrip()
+    ga, gb = a[len(a_body):], b[:len(b) - len(b_body)]
+    gap = ga if ga.count("\n") > gb.count("\n") else gb
+    return a_body + re.sub(r"\n{3,}", "\n\n", gap) + b_body
+
+
+def _is_filler(chunk: str) -> bool:
+    return all(_LOOKUP.search(s) or s.rstrip().endswith(":") or _ACK.fullmatch(s)
+               for s in _SENTENCE.findall(chunk))
 
 
 def _ungrounded_names(sentence: str, known: str) -> list[str]:
@@ -476,21 +496,20 @@ def _ungrounded_names(sentence: str, known: str) -> list[str]:
 def ground_names(text: str, known: str) -> tuple[str, list[str]]:
     """Drop every sentence naming another driver that `known` (this turn's tool
     results + the driver's own words + the system context) never mentions. #168: the
-    sentence goes with the space before it and nothing is spliced in its place (a
-    paragraph break before it is kept). Returns (text, the ungrounded names). Limits:
-    see _NAME."""
+    sentence goes with its list marker and the space after it (the break before it
+    stays, for the text that follows), and nothing is spliced in its place. Returns (text, the ungrounded names). Limits: see
+    _NAME."""
     known = known.lower()
     names: list[str] = []
 
     def cut(m):
         bad = _ungrounded_names(m.group(2), known)
         names.extend(bad)
-        return (m.group(1) if "\n" in m.group(1) else "") if bad else m.group(0)
+        return m.group(1) if bad else m.group(0)
 
-    out = _LEAD_SENTENCE.sub(cut, text)
-    if names:   # tidy what a cut left: an indented line, a doubled paragraph break
-        out = re.sub(r"\n{3,}", "\n\n", re.sub(r"\n[ \t]+", "\n", out))
-    return out, names
+    # A break a cut LAST sentence leaves is trimmed by the stream (it holds trailing
+    # whitespace until more text follows), not here: here it may precede the next chunk.
+    return _LEAD_SENTENCE.sub(cut, text), names
 
 
 def states_data(text: str, known: str) -> str:
@@ -634,7 +653,35 @@ class Coach:
             # draft is released only if it states no data (small talk, technique).
             held: list[dict] = []
             pend: str | None = None     # set once a tool ran: text not yet emitted
-            text = out = ""
+            text = ""
+            # After a tool: `out` is what was emitted; `filler` is held narration
+            # (a lookup, an acknowledgement, a "here's the field:" lead-in) released
+            # only in front of a real sentence -- if a cut took every real sentence,
+            # it is not an answer on its own (#168 red-team round 1).
+            # `ws`: trailing whitespace held until more text follows, so a cut last
+            # sentence never leaves a dangling paragraph break.
+            state = {"out": "", "filler": "", "ws": "", "cut": False}
+
+            def release(raw, state=state):   # this round's state
+                chunk, was_cut = self._grounded(
+                    raw, context, start, known, state["out"] + state["filler"])
+                state["cut"] |= was_cut
+                if not chunk.strip():   # (a cut keeps the break in front of it)
+                    key = "filler" if state["filler"] else "ws"
+                    state[key] = _glue(state[key], chunk)
+                    return ""
+                if _is_filler(chunk):
+                    state["filler"] = _glue(_glue(state["filler"], state["ws"]), chunk)
+                    state["ws"] = ""
+                    return ""
+                chunk = _glue(_glue(state["filler"], state["ws"]), chunk)
+                if not state["out"]:
+                    chunk = chunk.lstrip()
+                body = chunk.rstrip()
+                state["filler"], state["ws"] = "", chunk[len(body):]
+                state["out"] += body
+                return body
+
             stream = self._separated(self.model.run_stream(
                 system, messages, TOOLS, context.dispatch, force_tool=force))
             if voice == "ptt":
@@ -650,23 +697,23 @@ class Coach:
                     # so a fabricated sentence is never streamed (or spoken).
                     cut = max((m.end() for m in _BOUNDARY.finditer(pend)), default=0)
                     if cut:
-                        if chunk := self._grounded(pend[:cut], context, start, known, out):
-                            out += chunk
+                        if chunk := release(pend[:cut]):
                             yield {"type": "text", "text": chunk}
                         pend = pend[cut:]
                     continue
                 if ev["type"] == "tool" and pend is None:
-                    pend = "".join(e["text"] for e in held)
-                    if chunk := self._grounded(pend, context, start, known, out):
-                        out += chunk
+                    if chunk := release("".join(e["text"] for e in held)):
                         yield {"type": "text", "text": chunk}
                     pend = ""
                 yield ev
             if pend is not None:
-                if chunk := self._grounded(pend, context, start, known, out):
-                    out += chunk
+                if chunk := release(pend):
                     yield {"type": "text", "text": chunk}
-                if not out.strip():       # every sentence was dropped: say so, once
+                if state["filler"].strip() and not state["cut"]:   # a short answer, uncut
+                    filler = state["filler"].rstrip()   # already carries its lead space
+                    state["out"] += filler
+                    yield {"type": "text", "text": filler}
+                if not state["out"].strip():   # nothing real survived: say so, once
                     yield {"type": "text", "text": UNCONFIRMED}
                 return
             reason = states_data(text, known)
@@ -679,20 +726,22 @@ class Coach:
         yield {"type": "text", "text": UNCONFIRMED}
 
     @staticmethod
-    def _grounded(chunk: str, context, start: int, known: str, out: str) -> str:
-        """`chunk` with every sentence naming a driver that neither `known`
-        nor this turn's tool results named dropped (and logged). `out` is what was
-        emitted before it: an answer never starts with the space a cut left."""
+    def _grounded(chunk: str, context, start: int, known: str, out: str) -> tuple[str, bool]:
+        """(`chunk` with every sentence naming a driver that neither `known` nor this
+        turn's tool results named dropped (and logged), whether one was). `out` is what
+        was emitted before it: an answer never starts with the space a cut left."""
         if not chunk:
-            return ""
+            return "", False
         results = "\n".join(str(c.get("result", "")) for c in context.tool_calls[start:])
         fixed, names = ground_names(chunk, known + "\n" + results)
         if names:
             _log.info("coach #159: cut a sentence naming %s (not in this turn's tool "
                       "results): %r", ", ".join(names), chunk[:300])
         if not out:
-            return fixed.lstrip()
-        return fixed.lstrip(" \t") if out.endswith("\n") else fixed
+            fixed = fixed.lstrip()
+        elif out.endswith("\n"):
+            fixed = fixed.lstrip(" \t")
+        return fixed, bool(names)
 
     @staticmethod
     def _final_answer(stream):

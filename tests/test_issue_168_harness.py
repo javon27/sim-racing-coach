@@ -30,6 +30,7 @@ def test_empty_track_notes_license_framed_general_knowledge(tmp_path):
     p = AGENTIC_SYSTEM_PROMPT
     assert "you MAY give general, well-known knowledge of the track" in p
     assert "NEVER recall corner names, numbers, or directions" in p   # still owned data
+    assert "(not its named corners)" in p and "famous" not in p
 
 
 def _race(tmp_path, synthetic_lap, logged):

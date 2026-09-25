@@ -51,7 +51,9 @@ def test_stream_inserts_separator_between_text_blocks_around_a_tool_round(tmp_pa
     ])
     events = list(Coach(model).ask_agentic_stream(ctx, "q", car="C"))
     texts = [e["text"] for e in events if e["type"] == "text"]
-    assert texts == ["A.", "\n\n", "B"]
+    # #168: trailing whitespace is held until more text follows (a cut last sentence
+    # must not leave a dangling break), so the break rides with the next text.
+    assert texts == ["A.", "\n\nB"]
     assert "".join(texts) == "A.\n\nB"
 
 
@@ -64,7 +66,7 @@ def test_stream_no_extra_separator_when_text_already_ends_in_whitespace(tmp_path
     ])
     events = list(Coach(model).ask_agentic_stream(ctx, "q", car="C"))
     texts = [e["text"] for e in events if e["type"] == "text"]
-    assert texts == ["A.\n\n", "B"]
+    assert texts == ["A.", "\n\nB"]   # #168: held trailing break, see above
 
 
 def test_stream_unchanged_with_no_tool_round(tmp_path):
