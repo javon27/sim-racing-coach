@@ -386,9 +386,9 @@ engineer-grade spec's Phase 0.
 the agent reasons before it answers. The coach should get the same, dynamically: a quick
 path for answers that must come at once (on-track cues over PTT) and a deliberate path
 for answers that deserve thought (post-session analysis, "analyze the race in detail",
-setup questions). The `Model` seam already carries a thinking budget; the routing would
-be by question class and voice mode, with the budget stated in the answer's latency
-expectation. Candidate for slice 2; needs its own short design.
+setup questions). The `Model` seam has only an on/off thinking flag today (off by
+default on sonnet-5; a token budget is rejected), so the routing is a new parameter by
+question class and voice mode. Designed separately: `2026-09-25-coach-thinking-design.md`.
 
 ### Original questions (for the record)
 
