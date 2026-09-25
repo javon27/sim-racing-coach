@@ -12,6 +12,8 @@ import {
   getSetup,
   getChats,
   getSessionChats,
+  getChatMessages,
+  getChatUsage,
   getCurrentMap,
 } from "./api";
 import { eventFeed } from "./events";
@@ -53,6 +55,8 @@ vi.mock("./api", async () => {
     getSetup: vi.fn(),
     getChats: vi.fn(),
     getSessionChats: vi.fn(),
+    getChatMessages: vi.fn(),
+    getChatUsage: vi.fn(),
     getCurrentMap: vi.fn(),
   };
 });
@@ -268,9 +272,20 @@ describe("Coach screen assembly", () => {
     expect(vi.mocked(getSessionChats)).toHaveBeenCalledWith("s1");
   });
 
-  it("#109: a new live session starting while a past session is pinned unpins the map/strip/chat to follow it", async () => {
-    // This used to wait out LapList's real 5 s poll; the new live session is now
-    // a status frame, so it lands immediately.
+  it("#109/#167: a new live session unpins the lap list to follow it but keeps the chat; New session clears it", async () => {
+    // #167: the chat used to reset here too -- an online server that read offline
+    // between races flipped the live session id and wiped the driver's thread.
+    vi.mocked(getSessionChats).mockResolvedValue([
+      { chat_id: "c1", started: 1, last: 2, message_count: 1, tracks: "Le Mans" },
+    ]);
+    vi.mocked(getChatMessages).mockResolvedValue([
+      { ts: 1, session_id: "s1", track: "Le Mans", car: "Corvette Z06", lap_id: 9,
+        question: "how was race 1?", answer: "Race 1 went well.", tool_calls: null },
+    ]);
+    vi.mocked(getChatUsage).mockResolvedValue({
+      usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, messages: 1 },
+      cost: 0, cost_complete: true,
+    } as never);
     const { container } = render(App);
     await screen.findByRole("navigation"); // shell mounts past the splash
     const nav = within(container.querySelector(".nav") as HTMLElement);
@@ -279,13 +294,13 @@ describe("Coach screen assembly", () => {
     const sessionRow = await screen.findByRole("button", { name: /Le Mans/i });
     await fireEvent.click(sessionRow);
 
-    // Pinned on the deep-linked session s1, as in the test above.
+    // Pinned on the deep-linked session s1, with its chat open.
     await waitFor(() =>
       expect(nav.getByText("Coach").closest(".nav-item")?.classList.contains("on")).toBe(true),
     );
     expect(await screen.findByText("Lap 1")).toBeTruthy();
     expect(vi.mocked(getSessionLaps)).toHaveBeenCalledWith("s1");
-    vi.mocked(getSessionChats).mockClear();
+    expect(await screen.findByText("Race 1 went well.")).toBeTruthy();
 
     // A new live session starts (s2), with a laps list distinguishable from s1's.
     vi.mocked(getSessionLaps).mockImplementation(async (sid: string) =>
@@ -298,10 +313,14 @@ describe("Coach screen assembly", () => {
     // The lap list followed the new live session...
     await screen.findByText("3:20.000");
     expect(vi.mocked(getSessionLaps)).toHaveBeenCalledWith("s2");
-    // ...and the panes unpinned: no re-fetch of s1's chat after the flip, and the
-    // chat composer is back to an empty new chat (not still showing s1's thread).
-    expect(vi.mocked(getSessionChats)).not.toHaveBeenCalledWith("s1");
-    expect(await screen.findByText(/new chat/i)).toBeTruthy();
+    // ...but the chat thread is still there (#167).
+    expect(screen.getByText("Race 1 went well.")).toBeTruthy();
+    expect(screen.queryByText(/new chat — ask a question/i)).toBeNull();
+
+    // The explicit New session button still starts an empty chat.
+    await fireEvent.click(screen.getByRole("button", { name: /new session/i }));
+    expect(await screen.findByText(/new chat — ask a question/i)).toBeTruthy();
+    expect(screen.queryByText("Race 1 went well.")).toBeNull();
   });
 
   it("#151: expanding the rail map widens the rail, never overlays the chat, and is remembered", async () => {

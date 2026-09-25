@@ -20,6 +20,7 @@ from ..coach_tools import (
     current_race_fact,
     race_turn_note,
     scrub_stored_answer,
+    session_turn_note,
 )
 from ..driver import DriverProfile
 from ..format import format_laptime
@@ -235,45 +236,54 @@ def register(app, deps) -> None:
                     messages = app.state.store.chat_messages(chat_id_in)
                 except Exception:
                     messages = []
-                last_session = messages[-1]["session_id"] if messages else None
-                if last_session and eff_session_id and last_session != eff_session_id:
-                    # This chat's last turn belongs to a different race session --
-                    # continuing it here would let one chat span sessions (#97, the
-                    # Monza WRT bug). Start a fresh chat instead, same as a request
-                    # that sent no chat_id at all -- history stays empty, and
-                    # save_chat below persists under the new id.
-                    chat_id_in = app.state.store.create_chat()
-                else:
-                    try:
-                        # #136: which race each earlier turn was about. A chat is meant
-                        # to span the races of a sitting (they share one session id), so
-                        # without this an answer about race 1 re-enters the context as
-                        # the model's own prior reasoning about the race being driven now.
-                        race_windows = ctx._race_windows()
-                        for row in messages:
-                            if row.get("question"):
-                                history.append({"role": "user", "content": row["question"]})
-                            if row.get("answer"):
-                                # scrub_stored_answer, not the raw row: an older answer can
-                                # assert a fabricated grip reading (#72) or a race start the
-                                # coach could not know (#67) as established fact, and
-                                # resuming the chat would re-feed it to the model as its own
-                                # prior reasoning.
-                                history.append({"role": "assistant",
-                                                "content": race_turn_note(row["ts"], race_windows)
-                                                + scrub_stored_answer(row["answer"],
-                                                                      row["ts"],
-                                                                      row.get("track"))})
-                        last_chat_ts = messages[-1]["ts"] if messages else None
-                        # #159: what earlier turns' tools measured (not what the coach
-                        # said) -- a figure repeated verbatim from these is grounded.
-                        prior_results = "\n".join(
-                            str(c.get("result", "")) for row in messages
-                            if isinstance(row.get("tool_calls"), list)
-                            for c in row["tool_calls"] if isinstance(c, dict))
-                    except Exception:
-                        history = []
-                        prior_results = ""
+                try:
+                    # #136: which race each earlier turn was about. A chat is meant
+                    # to span the races of a sitting (they share one session id), so
+                    # without this an answer about race 1 re-enters the context as
+                    # the model's own prior reasoning about the race being driven now.
+                    race_windows = ctx._race_windows()
+                    # #167: a chat also spans sessions, tracks and weekends (it only
+                    # ends on New chat) -- a turn from another session is labelled
+                    # with that session instead. One lap query per other session.
+                    # Unknown on either side (no session resolved, a pre-session
+                    # row): nothing to compare, treated as this session.
+                    def _other(row):
+                        sid = row.get("session_id")
+                        return bool(sid and eff_session_id and sid != eff_session_id)
+                    other_laps: dict[str, list[dict]] = {}
+                    for row in messages:
+                        sid = row.get("session_id")
+                        if _other(row):
+                            if sid not in other_laps:
+                                other_laps[sid] = app.state.store.session_laps(sid)
+                            note = session_turn_note(row, other_laps[sid])
+                        else:
+                            note = race_turn_note(row["ts"], race_windows)
+                        if row.get("question"):
+                            history.append({"role": "user", "content": row["question"]})
+                        if row.get("answer"):
+                            # scrub_stored_answer, not the raw row: an older answer can
+                            # assert a fabricated grip reading (#72) or a race start the
+                            # coach could not know (#67) as established fact, and
+                            # resuming the chat would re-feed it to the model as its own
+                            # prior reasoning.
+                            history.append({"role": "assistant",
+                                            "content": note
+                                            + scrub_stored_answer(row["answer"],
+                                                                  row["ts"],
+                                                                  row.get("track"))})
+                    last_chat_ts = messages[-1]["ts"] if messages else None
+                    # #159: what earlier turns' tools measured (not what the coach
+                    # said) -- a figure repeated verbatim from these is grounded.
+                    # Only THIS session's (#167): another session's tyre temps or
+                    # lap times are not a known figure for the race being driven now.
+                    prior_results = "\n".join(
+                        str(c.get("result", "")) for row in messages
+                        if not _other(row) and isinstance(row.get("tool_calls"), list)
+                        for c in row["tool_calls"] if isinstance(c, dict))
+                except Exception:
+                    history = []
+                    prior_results = ""
 
             # #131: "that lap"/"how was that" should resolve to a lap that landed
             # after this chat's last turn without the coach asking which one. Only

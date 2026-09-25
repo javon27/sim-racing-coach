@@ -814,40 +814,59 @@ def test_coach_ws_errored_turn_still_closes_clean(tmp_path, monkeypatch):
     assert "usage" not in frames[-1]          # nothing persisted, nothing to report
 
 
-def test_ws_coach_starts_a_new_chat_when_session_changes(tmp_path):
-    # #97: a chat must never span sessions. The Monza WRT bug -- a chat's last
-    # turn stamped session s1, continued (same chat_id) under session s2 -- must
-    # not append to the same chat: the sidecar mints a fresh chat id instead, the
-    # same way a chat_id-less request does.
+def test_ws_coach_continues_a_chat_across_sessions_and_labels_the_other_sessions_turns(
+        tmp_path, monkeypatch):
+    # #167 (replaces the #97 rule, which minted a new chat when the session id
+    # changed): at Algarve the practice server read offline between two online
+    # races, the id flipped --offline -> --online, and the driver's chat was wiped.
+    # A chat now continues until New chat; what #97 guarded -- an answer about
+    # another race read as the current one -- is covered by labelling each turn
+    # from another session with that session's track, car, mode and phase, and by
+    # keeping its tool results out of #159's known figures.
+    import time as time_mod
+
+    from simcoach.model_types import LapRecord
+    a, b = "algarve--test-car--offline", "algarve--test-car--online"
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    fake = FakeModel(reply="second answer")
-    app = create_app(store, Coach(fake))
-    client = TestClient(app, base_url="http://127.0.0.1")
+    now = time_mod.time()
+    lap_a = store.save(LapRecord("lmu", "Algarve", "test_car", 95.0, True, now - 3600,
+                                 {"lap_distance": [0.0]}, phase="practice",
+                                 session_id=a, lap_no=1))
+    cid = store.create_chat()
+    store.save_chat(cid, a, "Algarve", "Test Car", lap_a, "how are my tyres?",
+                    "Fronts at 88.8 C.", ts=now - 3500,
+                    tool_calls=[{"name": "get_tires", "input": {},
+                                 "result": "front 88.8 C (session A)"}])
+    store.save_chat(cid, b, "Algarve", "Test Car", None, "and now?",
+                    "Fronts at 91.1 C.", ts=now - 60,
+                    tool_calls=[{"name": "get_tires", "input": {},
+                                 "result": "front 91.1 C (session B)"}])
 
-    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
-        ws.send_json({"question": "first question", "session_id": "s1"})
-        while True:
-            ev1 = ws.receive_json()
-            if ev1["type"] in ("done", "error"):
-                break
-    chat_id_1 = ev1["chat_id"]
+    seen = {}
+    coach = Coach(FakeModel(reply="ok"))
+    real = coach.ask_agentic_stream
 
-    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
-        ws.send_json({"question": "second question", "session_id": "s2",
-                      "chat_id": chat_id_1})
-        while True:
-            ev2 = ws.receive_json()
-            if ev2["type"] in ("done", "error"):
-                break
-    chat_id_2 = ev2["chat_id"]
+    def spy(*args, **kwargs):
+        seen["prior_results"] = kwargs.get("prior_results")
+        return real(*args, **kwargs)
+    monkeypatch.setattr(coach, "ask_agentic_stream", spy)
+    client = TestClient(create_app(store, coach), base_url="http://127.0.0.1")
 
-    assert chat_id_2 != chat_id_1
-    # No history bleed: the second turn didn't see the first chat's Q&A.
-    assert [m["content"] for m in fake.last_messages] == ["second question"]
-    s1_chats = [c["chat_id"] for c in store.chats_for_session("s1")]
-    s2_chats = [c["chat_id"] for c in store.chats_for_session("s2")]
-    assert s1_chats == [chat_id_1]
-    assert s2_chats == [chat_id_2]
+    done = _ask(client, {"question": "qualifying tips?", "session_id": b, "chat_id": cid})[-1]
+
+    assert done["type"] == "done"
+    assert done["chat_id"] == cid                       # no new chat minted
+    msgs = coach.model.last_messages
+    assert [m["role"] for m in msgs] == ["user", "assistant", "user", "assistant", "user"]
+    assert msgs[1]["content"].startswith(
+        "[About an earlier session (Algarve, Test Car, offline, practice, ")
+    assert msgs[1]["content"].endswith("— not the current one.] Fronts at 88.8 C.")
+    assert msgs[3]["content"] == "Fronts at 91.1 C."    # this session's turn: no label
+    # #159: only this session's tool results are known figures.
+    assert "session B" in seen["prior_results"]
+    assert "session A" not in seen["prior_results"]
+    # Each turn keeps its OWN session stamp (the new one is B, not the chat's first).
+    assert [r["session_id"] for r in store.chat_messages(cid)] == [a, b, b]
 
 
 def _two_race_chat(tmp_path, now, races=2):

@@ -163,13 +163,20 @@
     draggingMap = false;
   }
 
-  // "New session": clear the selected session, laps, map and chat so the driver
-  // starts fresh (back to the live view with an empty chat).
-  async function handleNewSession() {
+  // A new live session (LapList's onlive): drop the pinned session, lap and map so
+  // the rail follows it -- but NOT the chat. A chat spans sessions, tracks and
+  // weekends until the driver presses New chat / New session (#167).
+  function followLive() {
     selectedLapId = undefined;
     selectedSessionId = undefined;
     activeSessionId = undefined;
     railOpen = false;
+  }
+
+  // "New session": clear the selected session, laps, map and chat so the driver
+  // starts fresh (back to the live view with an empty chat).
+  async function handleNewSession() {
+    followLive();
     // Clear-then-set so ChatPanel re-registers an empty chat even if it was
     // already on one (null = fresh empty chat, not "latest").
     activeChatId = undefined;
@@ -273,7 +280,7 @@
                 selectedLapId = detail.lap_id;
                 selectedSessionId = detail.session_id;
               }}
-              onlive={handleNewSession}
+              onlive={followLive}
             />
             <div
               class="rail-resizer"

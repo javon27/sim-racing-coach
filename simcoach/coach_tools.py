@@ -64,7 +64,7 @@ from simcoach.race import (
     picked_up_mid_lap,
     provisional_strategy,
 )
-from simcoach.store import _SESSION_GAP_S
+from simcoach.store import _SESSION_GAP_S, _session_base
 from simcoach.track_lookup import load_track_knowledge, note_key_binds
 
 # ponytail: hard cap on an incident scan. Each lap past the cache costs a telemetry
@@ -535,6 +535,26 @@ def race_turn_note(ts: float, windows: list[dict]) -> str:
     started = time.strftime("%H:%M", time.localtime(win["start_ts"]))
     return (f"[About an earlier race in this session (race {win['index']}, started "
             f"{started}) — not the current one.] ")
+
+
+def session_turn_note(row: dict, laps: list[dict]) -> str:
+    """Prefix marking a stored coach answer as being about a DIFFERENT session than
+    the one being asked about now (#167): its track, car, online/offline and the
+    phase it was written in. `laps` is that session's laps (store.session_laps).
+
+    #97 used to start a new chat instead, so an answer about another race never
+    re-entered the context; a chat now spans sessions and weekends, so each such turn
+    says what it was about. Same shape as race_turn_note: from stored data on READ,
+    never written to disk, no LLM, no tool call."""
+    mode = _session_base(row["session_id"]).rsplit("--", 1)[-1]
+    phase = None
+    for lap in laps:
+        if lap["ts"] <= row["ts"]:
+            phase = lap["phase"]
+    bits = [b for b in (row.get("track"), row.get("car"),
+                        mode if mode in ("online", "offline") else None, phase) if b]
+    when = time.strftime("%Y-%m-%d %H:%M", time.localtime(row["ts"]))
+    return f"[About an earlier session ({', '.join(bits + [when])}) — not the current one.] "
 
 
 def current_race_fact(windows: list[dict]) -> str:
