@@ -1800,6 +1800,21 @@ class CoachContext:
         # so an answer about race 3 can't be read as being about race 1.
         rr = self.store.race_session(self.session_id) if self.session_id else None
         head.append(self._race_line(rr.get("race_ts") if rr else None))
+        # #168: "How was that race?" after the flag got "now that you've pitted ... want
+        # me to check the strategy?" (turn #245): nothing said the race was over. A
+        # result row exists only once a race is finished (race_result_text drops it while
+        # a later race runs); with none, no live race means the arc's race is over too.
+        # ponytail: a live race before its first lap commits has no RaceTracker snapshot
+        # yet and would read as over -- a sub-lap window; gate on the game phase if it bites.
+        if rr:
+            text += ("\nThis race is FINISHED (the result log is written after the flag): "
+                     "talk about it as a finished race -- no pit-stop or strategy offers.")
+        elif not text.startswith("No race result") and (not self.on_track
+                                                        or self.race is None):
+            text += ("\nNo race is live now, so the race these positions describe is over "
+                     "(its result log isn't read yet): talk about it as a finished race -- "
+                     "a last lap into the pits is the cool-down after the flag, not a pit "
+                     "stop; no pit-stop or strategy offers.")
         return "\n".join([h for h in head if h] + [text])
 
     def _no_live_race(self) -> str | None:
