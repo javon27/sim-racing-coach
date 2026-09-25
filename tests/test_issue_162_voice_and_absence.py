@@ -80,42 +80,35 @@ def _turn_224(tmp_path, voice, pre=TURN_224_PRE, forced=False):
     return "".join(e["text"] for e in events if e["type"] == "text"), events
 
 
-# The answer's first three sentences: what PTT says, whatever came before the tool.
-ANSWER_3 = TURN_224.split("\n\nGiven")[0]
-
-
+# #168: PTT says the WHOLE answer after the last tool -- no sentence cap -- and still
+# drops the narration before the tool.
 @pytest.mark.parametrize("pre", ["Let me pull that up.",
                                  "Copy that. Let me check.",
                                  "Copy that. I hear you. Let me check."])   # red-team repro
-def test_ptt_says_the_answer_after_the_tool_cut_to_three_sentences(tmp_path, pre):
+def test_ptt_says_the_whole_answer_after_the_tool(tmp_path, pre):
     text, events = _turn_224(tmp_path, "ptt", pre=pre)
-    assert text == ANSWER_3
-    assert "one stop won't be enough" not in text
+    assert text == TURN_224
     assert [e["name"] for e in events if e["type"] == "tool"] == ["get_strategy"]
 
 
-def test_ptt_cut_holds_on_the_forced_159_round(tmp_path):
+def test_ptt_whole_answer_on_the_forced_159_round(tmp_path):
     text, _ = _turn_224(tmp_path, "ptt", pre="Copy that. I hear you. Let me check.",
                              forced=True)
-    assert text == ANSWER_3
+    assert text == TURN_224
 
 
-def test_ptt_tool_free_answer_is_cut_too(tmp_path):
-    model = FakeModel(reply="Brake earlier. Release it slowly. Then trust the front. And "
-                            "breathe.")
-    events = list(Coach(model).ask_agentic_stream(_ctx(tmp_path), "T1 tips?", car="C",
-                                                  voice="ptt"))
-    assert "".join(e["text"] for e in events if e["type"] == "text") == (
-        "Brake earlier. Release it slowly. Then trust the front.")
+def test_ptt_tool_free_answer_is_not_cut(tmp_path):
+    long = " ".join(f"Point {w}." for w in ("one", "two", "three", "four", "five", "six"))
+    model = FakeModel(reply=long)
+    events = list(Coach(model).ask_agentic_stream(_ctx(tmp_path), "T1 tips in detail?",
+                                                  car="C", voice="ptt"))
+    assert "".join(e["text"] for e in events if e["type"] == "text") == long
 
 
-def test_sentence_end_skips_abbreviations_and_ellipses_but_takes_a_closing_quote():
-    from simcoach.coach import _SENTENCE_END
-    ends = lambda t: len(_SENTENCE_END.findall(t))
-    assert ends("Use the kerb, e.g. at Turn 5, i.e. the left. Then go.") == 2
-    assert ends("Well... hold on. Then go.") == 2
-    assert ends('He said "box now." Then go.') == 2
-    assert ends("You did 1:23.720 and 8.4 s. Good.") == 2
+def test_ptt_prompt_makes_length_a_default_not_a_cap():
+    from simcoach.coach import VOICE_PTT
+    assert "2-3" in VOICE_PTT and "in detail" in VOICE_PTT and "cut you off" in VOICE_PTT
+    assert "is cut unheard" not in VOICE_PTT
 
 
 def test_conversation_and_typed_answers_are_not_cut(tmp_path):

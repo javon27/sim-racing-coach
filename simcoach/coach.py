@@ -344,30 +344,23 @@ AGENTIC_SYSTEM_PROMPT = (
 # [spoken] cue. The model controls LENGTH from the voice mode instead.
 VOICE_PTT = (
     "VOICE (push-to-talk): the driver asked by push-to-talk from the headset, mid-session, "
-    "hands on the wheel, and will HEAR this answer in full -- there is no longer text on "
-    "screen. Answer in 2-3 plain spoken sentences: one cue, one action -- this overrides "
-    "the on-screen length and formatting rules above, and anything past the third "
-    "sentence is cut unheard, so lead with the answer and never announce a lookup. No "
-    "markdown, no "
-    "lists, no headings, no numbers they can't hold in their head. Apart from a corner "
-    "locator's own numbers, at most one figure in the whole answer. Locate a corner the way "
-    "the corner tools do under 'Locate it:' -- 'Turn N' plus the descriptor ('Turn 10, "
-    "sector 2, the fast left after the long straight'); add the corner's name only if the "
-    "driver has used it themselves in this chat."
+    "hands on the wheel, and will HEAR this answer in full -- there is no text on screen. "
+    "This overrides the on-screen length and formatting rules above. By DEFAULT answer in "
+    "2-3 plain spoken sentences: one cue, one action, lead with the answer, never announce "
+    "a lookup, and at most one figure apart from a corner locator's own numbers. When the "
+    "driver asks for more -- 'in detail', 'analyze', 'walk me through', 'explain', "
+    "'everything', or a question that plainly needs a list -- give the FULL answer, as "
+    "long as it needs to be: he can cut you off. Either way it is heard, so plain spoken "
+    "prose in short paragraphs: no markdown, no bullet lists, no headings. Locate a corner "
+    "the way the corner tools do under 'Locate it:' -- 'Turn N' plus the descriptor "
+    "('Turn 10, sector 2, the fast left after the long straight'); add the corner's name "
+    "only if the driver has used it themselves in this chat."
 )
 
-# #162: VOICE_PTT alone did not hold -- Road Atlanta 2026-09-23 turns #223-#225 were
-# PTT (spoken only after `done`) yet ran to 3-4 paragraphs, the base prompt's on-screen
-# "short paragraphs / bullet list" rules winning. So the length is enforced in code: a PTT
-# answer is the text after its last tool call, cut after this many sentences
-# (Coach._capped).
-PTT_MAX_SENTENCES = 3
-# A sentence ends at terminal punctuation (plus any closing quote/bracket) followed by
-# whitespace or the end: not "8.4", not "e.g." / "i.e.", not an ellipsis "...".
-_SENTENCE_END = re.compile(
-    r"(?<!\.)(?<!\be\.g)(?<!\bi\.e)(?!\.\.)[.!?]+[\"'”’)]*(?=\s|$)",
-    re.IGNORECASE)
-
+# #162 enforced the PTT length in code (a hard 3-sentence cut). #168 dropped the cut:
+# "analyze the race, like in detail" (turn #247) was cut mid-list. The length is the
+# prompt's default now; Coach._final_answer still speaks only the text after the last
+# tool call.
 VOICE_CONVERSATION = (
     "VOICE (conversation): the driver asked out loud at the desk and will HEAR the whole "
     "answer -- it is spoken, not read. Answer in plain spoken prose, a few short paragraphs "
@@ -618,7 +611,7 @@ class Coach:
             stream = self._separated(self.model.run_stream(
                 system, messages, TOOLS, context.dispatch, force_tool=force))
             if voice == "ptt":
-                stream = self._capped(stream, PTT_MAX_SENTENCES)
+                stream = self._final_answer(stream)
             for ev in stream:
                 if ev["type"] == "text":
                     text += ev["text"]
@@ -672,13 +665,13 @@ class Coach:
         return fixed
 
     @staticmethod
-    def _capped(stream, n: int):
-        """#162: a PTT answer is only the text after the model's LAST tool call, cut
-        after its `n`th sentence, emitted once the model is done. Narration before a
-        tool ("Copy that. Let me check.") is dropped -- it would eat the answer's
-        sentences. Tool and usage events pass as they come (the whole turn still runs
-        and is billed). PTT speaks only on `done`, so holding the text costs nothing
-        heard; the screen just gets it in one piece."""
+    def _final_answer(stream):
+        """#162/#168: a PTT answer is only the text after the model's LAST tool call,
+        emitted once the model is done -- uncut (#168: the length is the prompt's call;
+        the driver can interrupt). Narration before a tool ("Copy that. Let me check.")
+        is dropped: it isn't the answer. Tool and usage events pass as they come. PTT
+        speaks only on `done`, so holding the text costs nothing heard; the screen just
+        gets it in one piece."""
         text = last = ""
         for ev in stream:
             if ev["type"] == "text":
@@ -689,10 +682,8 @@ class Coach:
                 # an empty stored row): keep the last non-empty segment as a fallback.
                 last, text = (text if text.strip() else last), ""
             yield ev
-        text = text.strip() or last.strip()
-        ends = [m.end() for m in _SENTENCE_END.finditer(text)]
-        if text:
-            yield {"type": "text", "text": text[:ends[n - 1]] if len(ends) >= n else text}
+        if text := text.strip() or last.strip():
+            yield {"type": "text", "text": text}
 
     @staticmethod
     def _separated(stream):
