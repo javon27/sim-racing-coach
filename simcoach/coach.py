@@ -378,7 +378,9 @@ VOICE_CONVERSATION = (
 # A draft that states race/lap/telemetry facts or announces a lookup, yet called no
 # tool, is not accepted. Deliberately cheap, deterministic regexes over the answer
 # text: a false positive only costs one forced tool round, so they lean inclusive.
-UNCONFIRMED = "I can't confirm that from the data."
+# #168: said ONLY as a whole answer (both rounds failed, or every sentence was cut) --
+# never spliced into an answer: an unverifiable sentence is dropped instead.
+UNCONFIRMED = "I didn't get a clean read on that. Ask me again."
 _log = logging.getLogger(__name__)
 
 # A lookup announced NOW ("let me pull…", "I'm checking…"). A future offer ("call me
@@ -440,6 +442,7 @@ _RIVAL_CUE = re.compile(
 _BOUNDARY = re.compile(r"[.!?]+(?=\s)|\n")
 # One sentence: terminal punctuation counts only when whitespace/end follows ("8.4").
 _SENTENCE = re.compile(r"[^\s.!?](?:[^.!?\n]|[.!?](?=\S))*[.!?]*")
+_LEAD_SENTENCE = re.compile(rf"(\s*)({_SENTENCE.pattern})")   # + the space before it
 
 
 def _ungrounded_names(sentence: str, known: str) -> list[str]:
@@ -450,21 +453,23 @@ def _ungrounded_names(sentence: str, known: str) -> list[str]:
 
 
 def ground_names(text: str, known: str) -> tuple[str, list[str]]:
-    """Cut every sentence naming another driver that `known` (this turn's tool
-    results + the driver's own words + the system context) never mentions, replacing
-    it with UNCONFIRMED. Returns (text, the ungrounded names). Limits: see _NAME."""
+    """Drop every sentence naming another driver that `known` (this turn's tool
+    results + the driver's own words + the system context) never mentions. #168: the
+    sentence goes with the space before it and nothing is spliced in its place (a
+    paragraph break before it is kept). Returns (text, the ungrounded names). Limits:
+    see _NAME."""
     known = known.lower()
     names: list[str] = []
 
     def cut(m):
-        bad = _ungrounded_names(m.group(0), known)
+        bad = _ungrounded_names(m.group(2), known)
         names.extend(bad)
-        return UNCONFIRMED if bad else m.group(0)
+        return (m.group(1) if "\n" in m.group(1) else "") if bad else m.group(0)
 
-    out = _SENTENCE.sub(cut, text)
-    # Adjacent cut sentences say it once.
-    dup = re.escape(UNCONFIRMED)
-    return re.sub(rf"(?:{dup}\s+)+{dup}", UNCONFIRMED, out), names
+    out = _LEAD_SENTENCE.sub(cut, text)
+    if names:   # tidy what a cut left: an indented line, a doubled paragraph break
+        out = re.sub(r"\n{3,}", "\n\n", re.sub(r"\n[ \t]+", "\n", out))
+    return out, names
 
 
 def states_data(text: str, known: str) -> str:
@@ -575,9 +580,10 @@ class Coach:
         tool-free answer does NOT stream: it arrives whole once the model finishes --
         the cost is the held-draft time (small talk and technique answers are short).
         After a tool ran, text streams sentence by sentence, each checked first: a
-        sentence naming a driver no tool result named is replaced by UNCONFIRMED
-        before it is emitted, so it is never shown or spoken. Every discarded draft
-        and every cut sentence is logged (INFO) with its reason."""
+        sentence naming a driver no tool result named is dropped (#168: not replaced)
+        before it is emitted, so it is never shown or spoken; if that leaves nothing,
+        the answer is UNCONFIRMED. Every discarded draft and every cut sentence is
+        logged (INFO) with its reason."""
         from simcoach.coach_tools import TOOLS
         _, _, spd_u, temp_u = unit_fns(units)
         static = AGENTIC_SYSTEM_PROMPT.format(car=car, speed_unit=spd_u, temp_unit=temp_u)
@@ -637,7 +643,10 @@ class Coach:
                 yield ev
             if pend is not None:
                 if chunk := self._grounded(pend, context, start, known, out):
+                    out += chunk
                     yield {"type": "text", "text": chunk}
+                if not out.strip():       # every sentence was dropped: say so, once
+                    yield {"type": "text", "text": UNCONFIRMED}
                 return
             reason = states_data(text, known)
             if not reason:
@@ -651,8 +660,8 @@ class Coach:
     @staticmethod
     def _grounded(chunk: str, context, start: int, known: str, out: str) -> str:
         """`chunk` with every sentence naming a driver that neither `known`
-        nor this turn's tool results named replaced by UNCONFIRMED (and logged). `out`
-        is what was emitted before it, so consecutive cuts say UNCONFIRMED once."""
+        nor this turn's tool results named dropped (and logged). `out` is what was
+        emitted before it: an answer never starts with the space a cut left."""
         if not chunk:
             return ""
         results = "\n".join(str(c.get("result", "")) for c in context.tool_calls[start:])
@@ -660,9 +669,9 @@ class Coach:
         if names:
             _log.info("coach #159: cut a sentence naming %s (not in this turn's tool "
                       "results): %r", ", ".join(names), chunk[:300])
-        if fixed.strip() == UNCONFIRMED and out.rstrip().endswith(UNCONFIRMED):
-            return ""
-        return fixed
+        if not out:
+            return fixed.lstrip()
+        return fixed.lstrip(" \t") if out.endswith("\n") else fixed
 
     @staticmethod
     def _final_answer(stream):

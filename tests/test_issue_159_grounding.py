@@ -61,7 +61,7 @@ def test_ground_names_cuts_only_the_ungrounded_sentence():
     out, names = ground_names(text, known="As of lap 30 (race). Position: P3")
     assert names == ["Kevin Fischer"]
     assert "Kevin" not in out
-    assert out == f"As of lap 30 you're P3.\n\n{UNCONFIRMED} Keep pushing!"
+    assert out == "As of lap 30 you're P3.\n\nKeep pushing!"   # #168: dropped, not spliced
 
 
 def test_ground_names_keeps_a_grounded_rival_and_corner_names():
@@ -146,7 +146,7 @@ def test_invented_rival_after_a_tool_is_never_streamed(tmp_path, caplog):
         events = list(Coach(model).ask_agentic_stream(ctx, "q", car="C"))
     texts = [e["text"] for e in events if e["type"] == "text"]
     assert not any("Kevin" in t for t in texts)
-    assert "".join(texts) == f"Good pace. {UNCONFIRMED} Keep pushing!"
+    assert "".join(texts) == "Good pace. Keep pushing!"   # #168: dropped, not spliced
     assert texts[0] == "Good pace."          # a clean sentence goes out before the rest
     assert not [e for e in events if e["type"] == "replace"]
     assert "Kevin Fischer" in caplog.text     # every cut is logged with its reason
@@ -307,7 +307,7 @@ def test_incident_replay_forces_get_race_state_and_never_persists_the_rival(tmp_
 
 def test_incident_replay_rival_repeated_after_the_tool_is_cut(tmp_path):
     store, _, events = _incident(tmp_path, RIVAL)
-    want = f"Let me pull the gaps. {UNCONFIRMED}"
+    want = "Let me pull the gaps."   # #168: the rival sentence is dropped, not spliced
     assert not any("Kevin" in e.get("text", "") for e in events)   # never spoken
     assert "".join(e["text"] for e in events if e["type"] == "text") == want
     assert events[-1]["answer"] == want
@@ -407,3 +407,29 @@ def test_in_the_first_place_is_not_a_position():
     # replay #195: the idiom, not a race position
     assert not states_data("That's why the sawing started in the first place.", known="")
     assert states_data("You're up to first place.", known="")
+
+
+# --- #168: an unverifiable sentence is dropped, never spliced -------------------
+
+def test_168_one_bad_sentence_loses_only_that_sentence(tmp_path):
+    ctx = CoachContext(_store(tmp_path), track="T", car="C")
+    answer = ("That confirms it, ignore that Turn 2 gain.\n\nKevin Fischer is closing "
+              "behind you. Get back to throttle earlier after the apex.")
+    model = FakeModel(stream_script=[("tool", "get_lap_summary", {}), ("text", answer)])
+    events = list(Coach(model).ask_agentic_stream(ctx, "q", car="C"))
+    text = "".join(e["text"] for e in events if e["type"] == "text")
+    assert text == ("That confirms it, ignore that Turn 2 gain.\n\n"
+                    "Get back to throttle earlier after the apex.")
+    assert "confirm that" not in text and "can't confirm" not in text
+
+
+def test_168_every_sentence_cut_says_the_fallback_once(tmp_path):
+    ctx = CoachContext(_store(tmp_path), track="T", car="C")
+    model = FakeModel(stream_script=[("tool", "get_race_state", {}),
+                                     ("text", "Kevin Fischer is behind. Momo Racer is ahead.")])
+    events = list(Coach(model).ask_agentic_stream(ctx, "q", car="C"))
+    assert [e["text"] for e in events if e["type"] == "text"] == [UNCONFIRMED]
+
+
+def test_168_the_stock_phrase_is_gone():
+    assert "can't confirm" not in UNCONFIRMED.lower()
