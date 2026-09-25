@@ -84,3 +84,55 @@ def test_race_result_during_a_live_race_is_not_called_finished(tmp_path, synthet
 
 def test_prompt_answers_a_finished_race_as_finished():
     assert "never 'now that you've pitted'" in AGENTIC_SYSTEM_PROMPT
+
+
+# --- red-team round 2: the stream never reshapes an answer it didn't cut ---------
+
+# Stored-answer shapes (#210, #247, #254 of the real chats): paragraphs, bullets,
+# bold, a triple break, list markers, figures.
+ANSWERS = [
+    ("That lap 21 was a pit stop lap — you rolled in and parked it, so that 1:53 is the "
+    "stop itself.\n\nZooming out on the whole run though, you should feel good.\n\n\n"
+    "There were a couple of moments worth knowing about — an off at Turn 4/Turn 5 back "
+    "on lap 6, and a spin on lap 20."),
+    ("That's a strong result — you started **P2 overall** and finished **P2 overall**.\n\n"
+    "Here's the fuller picture though:\n\n**The incidents.** There were 12 logged — "
+    "contact with Momo on laps 3 and 6.\n- Turn 3 (Lagos): oversteer.\n- Turn 11: "
+    "oversteer.\n\n1. Brake balance forward a click.\n2. TC slip down one."),
+    ("Given your best lap, the car's showing oversteer at **Turn 3 (Lagos)**.\n"
+    "\nI'd leave the ABS and TC maps alone for now... they're mid-range."),
+]
+
+
+def _joined(tmp_path, answer, deltas, voice):
+    from simcoach.coach import Coach
+    from simcoach.coach_tools import CoachContext
+    from simcoach.model.fake import FakeModel
+    from simcoach.store import LapStore
+    ctx = CoachContext(LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data")),
+                       track="T", car="C")
+    script = [("tool", "get_lap_summary", {})] + [("text", d) for d in deltas]
+    # The answer as the question: every name in it is "known", so nothing is cut.
+    events = Coach(FakeModel(stream_script=script)).ask_agentic_stream(
+        ctx, answer, car="C", voice=voice)
+    return "".join(e["text"] for e in events if e["type"] == "text")
+
+
+def test_uncut_answers_survive_every_chunking(tmp_path):
+    import random
+    rng = random.Random(168)
+    bad = []
+    for voice in (None, "conversation", "ptt"):
+        for answer in ANSWERS:
+            splits = [[answer[:i], answer[i:]] for i in range(1, len(answer))]
+            for _ in range(20):
+                deltas, i = [], 0
+                while i < len(answer):
+                    n = rng.randint(1, 12)
+                    deltas.append(answer[i:i + n])
+                    i += n
+                splits.append(deltas)
+            for deltas in splits:
+                if (got := _joined(tmp_path, answer, deltas, voice)) != answer.strip():
+                    bad.append((voice, [d for d in deltas][:3], got[:80]))
+    assert not bad, bad[:3]

@@ -472,17 +472,27 @@ _ACK = re.compile(r"(?:ok(?:ay)?|alright|all right|right|sure|yeah|yep|copy(?: t
                   r"i hear you)[\s,.!]*", re.IGNORECASE)
 
 
-def _glue(a: str, b: str) -> str:
-    """`a` + `b` with ONE gap where they meet: the one with more line breaks (at most a
-    paragraph break), so held and cut-around whitespace never doubles up."""
+def _glue(a: str, b: str, tidy: bool) -> str:
+    """`a` + `b`. Untouched text joins as is (a paragraph break split across deltas,
+    "x.\n" + "\ny", stays one -- red-team round 2). Where a cut was (`tidy`), the gap
+    is rebuilt: its line breaks add up to a paragraph break at most; with none, the
+    spaces collapse to one, so cut-around whitespace never doubles up."""
+    if not tidy:
+        return a + b
     a_body, b_body = a.rstrip(), b.lstrip()
-    ga, gb = a[len(a_body):], b[:len(b) - len(b_body)]
-    gap = ga if ga.count("\n") > gb.count("\n") else gb
-    return a_body + re.sub(r"\n{3,}", "\n\n", gap) + b_body
+    gap = a[len(a_body):] + b[:len(b) - len(b_body)]
+    n = gap.count("\n")
+    return a_body + ("\n" * min(n, 2) if n else " " if gap else "") + b_body
+
+
+# A WHOLE sentence that only announces a lookup ("Let me pull the gaps."), not one that
+# goes on to answer ("Let me see, you lost 0.3 s at Turn 5."). ponytail: no comma, no
+# digit, <= 40 chars after the phrase; a longer bare announcement counts as an answer.
+_LOOKUP_ONLY = re.compile(rf"(?:{_LOOKUP.pattern})[^,;:\d.!?]{{0,40}}[.!?]*", re.IGNORECASE)
 
 
 def _is_filler(chunk: str) -> bool:
-    return all(_LOOKUP.search(s) or s.rstrip().endswith(":") or _ACK.fullmatch(s)
+    return all(_LOOKUP_ONLY.fullmatch(s) or s.rstrip().endswith(":") or _ACK.fullmatch(s)
                for s in _SENTENCE.findall(chunk))
 
 
@@ -660,26 +670,34 @@ class Coach:
             # it is not an answer on its own (#168 red-team round 1).
             # `ws`: trailing whitespace held until more text follows, so a cut last
             # sentence never leaves a dangling paragraph break.
-            state = {"out": "", "filler": "", "ws": "", "cut": False}
+            # `real`: a sentence that is not filler went out.
+            # `tidy`: the held whitespace came out of a cut (see _glue).
+            state = {"out": "", "filler": "", "ws": "", "cut": False, "real": False,
+                     "tidy": False}
 
-            def release(raw, state=state):   # this round's state
+            def release(raw, hold=True, state=state):   # this round's state
                 chunk, was_cut = self._grounded(
                     raw, context, start, known, state["out"] + state["filler"])
                 state["cut"] |= was_cut
+                tidy = state["tidy"] = state["tidy"] or was_cut
                 if not chunk.strip():   # (a cut keeps the break in front of it)
                     key = "filler" if state["filler"] else "ws"
-                    state[key] = _glue(state[key], chunk)
+                    state[key] = _glue(state[key], chunk, tidy)
                     return ""
-                if _is_filler(chunk):
-                    state["filler"] = _glue(_glue(state["filler"], state["ws"]), chunk)
+                filler = _is_filler(chunk)
+                if filler and hold:
+                    state["filler"] = _glue(_glue(state["filler"], state["ws"], tidy),
+                                            chunk, tidy)
                     state["ws"] = ""
                     return ""
-                chunk = _glue(_glue(state["filler"], state["ws"]), chunk)
+                chunk = _glue(_glue(state["filler"], state["ws"], tidy), chunk, tidy)
+                state["tidy"] = was_cut   # the trailing space held below came out of it
                 if not state["out"]:
                     chunk = chunk.lstrip()
                 body = chunk.rstrip()
                 state["filler"], state["ws"] = "", chunk[len(body):]
                 state["out"] += body
+                state["real"] |= not filler
                 return body
 
             stream = self._separated(self.model.run_stream(
@@ -702,7 +720,9 @@ class Coach:
                         pend = pend[cut:]
                     continue
                 if ev["type"] == "tool" and pend is None:
-                    if chunk := release("".join(e["text"] for e in held)):
+                    # Narration before the tool goes out now (not held): the tool
+                    # round can take seconds. (PTT never has any: _final_answer.)
+                    if chunk := release("".join(e["text"] for e in held), hold=False):
                         yield {"type": "text", "text": chunk}
                     pend = ""
                 yield ev
@@ -713,8 +733,10 @@ class Coach:
                     filler = state["filler"].rstrip()   # already carries its lead space
                     state["out"] += filler
                     yield {"type": "text", "text": filler}
-                if not state["out"].strip():   # nothing real survived: say so, once
+                if not state["out"].strip():   # nothing survived: say so, once
                     yield {"type": "text", "text": UNCONFIRMED}
+                elif state["cut"] and not state["real"]:   # only narration survived
+                    yield {"type": "text", "text": "\n\n" + UNCONFIRMED}
                 return
             reason = states_data(text, known)
             if not reason:

@@ -453,7 +453,6 @@ def _say(tmp_path, script, voice=None):
 @pytest.mark.parametrize("voice", [None, "conversation", "ptt"])
 @pytest.mark.parametrize("script", [
     [("tool", "get_race_state", {}), ("text", "Let me pull the gaps. " + RIV168)],
-    [("text", "Let me pull the gaps."), ("tool", "get_race_state", {}), ("text", RIV168)],
     [("tool", "get_race_state", {}), ("text", "Copy that. " + RIV168)],
     [("tool", "get_race_state", {}),
      ("text", "Here is the field:\n\n- " + RIV168 + "\n- Momo Racer is ahead.")],
@@ -489,3 +488,47 @@ def test_a_preposition_is_not_a_first_name():
     for text in ("At Turn Seven the gap closes.", "On Lap Five you were ahead.",
                  "After Big Bend you gain on the car behind."):
         assert ground_names(text, "") == (text, []), text
+
+
+# --- #168 red-team round 2 -----------------------------------------------------
+
+@pytest.mark.parametrize("voice", [None, "conversation"])
+def test_narration_before_the_tool_goes_out_when_the_tool_starts(tmp_path, voice):
+    """Not held through the tool round (silence while it runs); if every sentence
+    after it is cut, the fallback follows it rather than standing in for it."""
+    ctx = CoachContext(_store(tmp_path), track="T", car="C")
+    model = FakeModel(stream_script=[("text", "Let me pull the gaps."),
+                                     ("tool", "get_race_state", {}), ("text", RIV168)])
+    events = list(Coach(model).ask_agentic_stream(ctx, "who's behind?", car="C",
+                                                  voice=voice))
+    kinds = [e["type"] for e in events if e["type"] in ("text", "tool")]
+    assert kinds[:2] == ["text", "tool"]
+    assert "".join(e["text"] for e in events if e["type"] == "text") == (
+        "Let me pull the gaps.\n\n" + UNCONFIRMED)
+
+
+def test_ptt_narration_before_the_tool_is_never_the_answer(tmp_path):
+    said = _say(tmp_path, [("text", "Let me pull the gaps."),
+                           ("tool", "get_race_state", {}), ("text", RIV168)], "ptt")
+    assert said == UNCONFIRMED
+
+
+@pytest.mark.parametrize("voice", [None, "conversation", "ptt"])
+def test_a_lookup_phrase_that_goes_on_to_answer_is_not_filler(tmp_path, voice):
+    said = _say(tmp_path, [("tool", "get_lap_summary", {}),
+                           ("text", "Brake later. " + RIV168
+                            + " Let me see, you lost 0.3 s at Turn 5.")], voice)
+    assert said == "Brake later. Let me see, you lost 0.3 s at Turn 5."
+    said = _say(tmp_path, [("tool", "get_lap_summary", {}),
+                           ("text", RIV168 + " Let me see, you lost 0.3 s at Turn 5.")],
+                voice)
+    assert said == "Let me see, you lost 0.3 s at Turn 5."
+
+
+@pytest.mark.parametrize("voice", [None, "conversation", "ptt"])
+def test_a_cut_numbered_item_keeps_the_next_item(tmp_path, voice):
+    said = _say(tmp_path, [("tool", "get_race_state", {}),
+                           ("text", "Two things:\n1. " + RIV168 + "\n2. Push on exit.")],
+                voice)
+    assert said.endswith("Push on exit.") and "Kevin" not in said
+    assert "1." not in said and UNCONFIRMED not in said
