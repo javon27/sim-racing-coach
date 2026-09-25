@@ -13,3 +13,20 @@ def test_prompt_takes_the_drivers_word_as_given():
     assert "If the driver says it was a race, it was" in p
     # ...while the coach still never invents its own figures.
     assert "YOU introduce comes from a tool you called THIS turn -- never invent one" in p
+
+
+def test_empty_track_notes_license_framed_general_knowledge(tmp_path):
+    # #236: "first time at Long Beach, any tips?" -> "I've got nothing loaded".
+    from simcoach.coach_tools import CoachContext
+    from simcoach.store import LapStore
+    ctx = CoachContext(LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data")),
+                       track="Nowhere Street Circuit", car="C")
+    notes = ctx.dispatch("get_track_notes", {})
+    assert notes.startswith("No notes on file for Nowhere Street Circuit")
+    assert "general knowledge of the track is fine" in notes
+    assert "no turn numbers, names or directions from memory" in notes
+    assert "General knowledge of the track's character is fine" in ctx.dispatch(
+        "list_track_corners", {})
+    p = AGENTIC_SYSTEM_PROMPT
+    assert "you MAY give general, well-known knowledge of the track" in p
+    assert "NEVER recall corner names, numbers, or directions" in p   # still owned data

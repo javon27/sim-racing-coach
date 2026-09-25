@@ -1447,7 +1447,9 @@ class CoachContext:
 
     def list_track_corners(self):
         if self.cmap is None or not self.cmap.corners:
-            return "No corner map for this track yet — no corner list available."
+            return ("No corner map for this track yet — no corner list available. General "
+                    "knowledge of the track's character is fine (say it's general, not "
+                    "the driver's data); no turn numbers, names or directions from memory.")
         analysis = self._latest_analysis()
         parts = []
         for c in self.cmap.corners:
@@ -1651,8 +1653,13 @@ class CoachContext:
             # No notes on the map file (or no map file at all) — fall back to the
             # authored `knowledge/<slug>.md` prose note. Verbatim: the coach states
             # these as owned fact, so reaching them must not reformat them.
+            # #168: an empty result read as "say nothing" ("I've got nothing loaded for
+            # Long Beach yet", turn #236) -- the hint licenses framed general knowledge.
             return (load_track_knowledge(self.track)
-                    or f"No authored notes for {self.track or 'this track'} yet.")
+                    or f"No notes on file for {self.track or 'this track'} — general "
+                       "knowledge of the track is fine: say it's general, not the "
+                       "driver's data, with no turn numbers, names or directions from "
+                       "memory.")
         lines = []
         if overview:
             lines.append(overview)

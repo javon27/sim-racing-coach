@@ -689,7 +689,7 @@ def test_get_track_notes_single_corner():
 
 def test_get_track_notes_empty():
     ctx = _ctx_with_notes({})
-    assert "no authored notes" in ctx.get_track_notes().lower()
+    assert "no notes on file" in ctx.get_track_notes().lower()
 
 
 def test_get_track_notes_includes_reference_times():
@@ -749,7 +749,7 @@ def test_map_notes_win_over_knowledge_file():
 def test_get_track_notes_with_neither_map_nor_knowledge_file():
     # Guard (green before and after): no map, no note -> the plain "none yet" answer.
     ctx = CoachContext(store=None, cmap=None, track="Nowhere Circuit", car="GT3")
-    assert "no authored notes" in ctx.get_track_notes().lower()
+    assert "no notes on file" in ctx.get_track_notes().lower()
 
 
 def test_record_driver_learning_writes_pending(tmp_path, synthetic_lap):
