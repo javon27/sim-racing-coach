@@ -21,6 +21,15 @@ Two gaps in the agentic coach:
 
 ## Decision — keep it simple: chat is scoped to the session
 
+> **Superseded by #167 (2026-09-25).** A chat is no longer bound to a session: it
+> continues across sessions, tracks and race weekends until the driver presses **New
+> chat** (or **New session**). A live-session change (e.g. an online server reading
+> offline between races) never resets it. In the history the model sees, each earlier
+> answer from a *different* session is labelled with that session's track, car,
+> online/offline and phase, and its tool results do not count as known figures for the
+> current race (#159). The long-chat soft nudge (`chat_token_soft_limit`) is the only
+> length signal. The per-session text below is kept as the original record.
+
 **One chat per session**, where session = `(track, car, online|offline)` (the existing
 stable id — [[session-chat-model]]). A session is finite (a practice / qualy / race
 stint), so its chat **naturally bounds history** — there is no cross-session transcript to
@@ -83,8 +92,9 @@ SQLite `coach_chat`; `.npz` untouched).
 - **Usage accounting** sums across tool-loop iterations (fake model) — not just the last
   call.
 - **Cost estimate** table lookup + arithmetic golden per model.
-- **Per-session reset**: starting a new session yields a fresh chat with a zeroed counter;
-  the prior chat persists in the store.
+- **Chat continuity (#167, replaces the per-session reset)**: a question from a new
+  session continues the same chat (same chat id, other-session turns labelled); only New
+  chat / New session starts a fresh chat with a zeroed counter.
 - **Meter + nudge**: cumulative usage is surfaced; the soft nudge fires past the threshold.
 
 ## Build order

@@ -255,7 +255,12 @@ def register(app, deps) -> None:
                         sid = row.get("session_id")
                         if _other(row):
                             if sid not in other_laps:
-                                other_laps[sid] = app.state.store.session_laps(sid)
+                                # A failed lap read costs that label its phase, never
+                                # the rest of the history.
+                                try:
+                                    other_laps[sid] = app.state.store.session_laps(sid)
+                                except Exception:
+                                    other_laps[sid] = []
                             note = session_turn_note(row, other_laps[sid])
                         else:
                             note = race_turn_note(row["ts"], race_windows)

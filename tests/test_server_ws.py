@@ -859,7 +859,7 @@ def test_ws_coach_continues_a_chat_across_sessions_and_labels_the_other_sessions
     msgs = coach.model.last_messages
     assert [m["role"] for m in msgs] == ["user", "assistant", "user", "assistant", "user"]
     assert msgs[1]["content"].startswith(
-        "[About an earlier session (Algarve, Test Car, offline, practice, ")
+        "[About a different session (Algarve, Test Car, offline, practice, ")
     assert msgs[1]["content"].endswith("— not the current one.] Fronts at 88.8 C.")
     assert msgs[3]["content"] == "Fronts at 91.1 C."    # this session's turn: no label
     # #159: only this session's tool results are known figures.
@@ -917,6 +917,56 @@ def test_ws_coach_marks_an_earlier_races_turn_in_the_history(tmp_path):
     assert "not the current one.] You spun on lap 2" in prior[0]["content"]
     # The stored row is untouched -- the annotation exists only in the model's copy.
     assert store.chat_messages(cid)[0]["answer"] == "You spun on lap 2 and lost four places."
+
+
+def _mixed_session_chat(tmp_path, now):
+    """_two_race_chat (session s1) plus one earlier turn from another weekend's
+    instance-suffixed session id, with a race lap before it (#167)."""
+    from simcoach.model_types import LapRecord
+    other = "algarve--test-car--online~20260920T1930"
+    store, cid = _two_race_chat(tmp_path, now)
+    store.save(LapRecord("lmu", "Algarve", "test_car", 95.0, True, now - 9500,
+                         {"lap_distance": [0.0]}, phase="race", session_id=other, lap_no=1))
+    store.save_chat(cid, other, "Algarve", "Test Car", None, "how was Algarve?",
+                    "P4 at Algarve.", ts=now - 9000)
+    return store, cid, other
+
+
+def _prior_answers(store, cid):
+    model = FakeModel(reply="ok")
+    client = TestClient(create_app(store, Coach(model)), base_url="http://127.0.0.1")
+    done = _ask(client, {"question": "how am I doing?", "session_id": "s1", "chat_id": cid})[-1]
+    assert done["chat_id"] == cid
+    return [m["content"] for m in model.last_messages if m["role"] == "assistant"]
+
+
+def test_ws_coach_labels_same_and_other_session_turns_in_one_history(tmp_path):
+    """#167: in one history, the same-session race-1 turn keeps #136's race note and
+    the other weekend's turn (a ~YYYYMMDDTHHMM instance id) gets the session note."""
+    import time as time_mod
+    store, cid, _ = _mixed_session_chat(tmp_path, time_mod.time())
+    algarve, race1 = _prior_answers(store, cid)
+    assert algarve.startswith("[About a different session (Algarve, Test Car, online, race, ")
+    assert algarve.endswith("— not the current one.] P4 at Algarve.")
+    assert race1.startswith("[About an earlier race in this session (race 1, started ")
+    assert race1.endswith("You spun on lap 2 and lost four places.")
+
+
+def test_ws_coach_a_failed_lap_read_costs_only_the_phase(tmp_path, monkeypatch):
+    """#167 red-team: session_laps raising for the other session must not wipe the
+    history -- that turn is still labelled (no phase), the rest threads as usual."""
+    import time as time_mod
+    store, cid, other = _mixed_session_chat(tmp_path, time_mod.time())
+    real = store.session_laps
+
+    def flaky(sid):
+        if sid == other:
+            raise RuntimeError("db hiccup")
+        return real(sid)
+    monkeypatch.setattr(store, "session_laps", flaky)
+    algarve, race1 = _prior_answers(store, cid)
+    assert algarve.startswith("[About a different session (Algarve, Test Car, online, 20")
+    assert race1.startswith("[About an earlier race in this session (race 1, started ")
 
 
 def test_ws_coach_leaves_history_alone_in_a_single_race_session(tmp_path):

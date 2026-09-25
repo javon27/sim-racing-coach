@@ -554,7 +554,8 @@ def session_turn_note(row: dict, laps: list[dict]) -> str:
     bits = [b for b in (row.get("track"), row.get("car"),
                         mode if mode in ("online", "offline") else None, phase) if b]
     when = time.strftime("%Y-%m-%d %H:%M", time.localtime(row["ts"]))
-    return f"[About an earlier session ({', '.join(bits + [when])}) — not the current one.] "
+    # "different", not "earlier": viewing a past session, the other turns may be later.
+    return f"[About a different session ({', '.join(bits + [when])}) — not the current one.] "
 
 
 def current_race_fact(windows: list[dict]) -> str:
