@@ -244,8 +244,8 @@ export class VoiceLoop {
       });
       return;
     }
-    // PTT: waits for `done` before speaking (the answer is 2-3 sentences now,
-    // not a long text with a separate short cue) -- speaks the WHOLE answer.
+    // PTT: waits for `done` before speaking -- speaks the WHOLE answer, however
+    // long (#168: 2-3 sentences is the prompt's default, not a cap).
     if (this.state !== "asking") return;
     void this.#speakThen(stripForSpeech(answer), () => {
       this.mode = null; this.#set("idle");
@@ -267,12 +267,13 @@ export class VoiceLoop {
     }
   }
   // #159 backstop, conversation mode only: the answer changed after part of it was
-  // voiced. Drop the not-yet-spoken fragment of the old text and say so once --
-  // never splice the new text onto the old. (PTT speaks only the final answer.)
-  onRevised(): void {
+  // voiced. Drop the not-yet-spoken fragment of the old text and say the revised
+  // answer once, as a correction -- never splice the new text onto the old, never a
+  // stock phrase (#168). (PTT speaks only the final answer.)
+  onRevised(answer: string): void {
     if (this.mode !== "conversation" || (this.state !== "asking" && this.state !== "speaking")) return;
     this.#textBuf = "";
-    this.onText("Correction: I can't confirm that. ");
+    this.onText(`Correction: ${answer}`);
   }
   onError(message: string): void {
     if (this.state !== "asking") return;

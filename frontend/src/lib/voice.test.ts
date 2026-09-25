@@ -232,17 +232,18 @@ describe("VoiceLoop conversation", () => {
     // listening resumes (rig: a quick "yes" was rejected as "longer than 30 s").
     expect(recorder.cleared).toEqual([0]);
   });
-  it("onRevised drops the unspoken fragment and says a correction once (#159)", async () => {
+  it("onRevised drops the unspoken fragment and says the revised answer once (#159, #168)", async () => {
     const { loop, recorder, speaker } = make();
     loop.toggleConversation(); await flush();
     recorder.frame(0.2); for (let i = 0; i < 20; i++) recorder.frame(0); await flush(); await flush();
     loop.onText("Good pace. Kevin Fischer is eight sec"); await flush();
-    loop.onRevised(); loop.onAnswer("Good pace. I can't confirm that from the data."); await flush();
-    expect(speaker.enqueued).toEqual(["Good pace.", "Correction: I can't confirm that."]);
+    loop.onRevised("Good pace. Keep pushing."); loop.onAnswer("Good pace. Keep pushing."); await flush();
+    expect(speaker.enqueued).toEqual(["Good pace.", "Correction: Good pace.", "Keep pushing."]);
+    expect(speaker.enqueued.join(" ")).not.toMatch(/Kevin|can't confirm/);
   });
   it("onRevised is a no-op in PTT (it speaks only the final answer)", async () => {
     const { loop, speaker } = make();
-    loop.onRevised(); await flush();
+    loop.onRevised("Good pace."); await flush();
     expect(speaker.enqueued).toEqual([]);
   });
   it("barge-in keeps the interrupting burst when it clears the buffer", async () => {

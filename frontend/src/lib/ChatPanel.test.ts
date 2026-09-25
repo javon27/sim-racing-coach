@@ -675,10 +675,10 @@ describe("ChatPanel", () => {
     await waitFor(() => expect(speaker.enqueued).toEqual(["Good pace."]));
 
     // The server's final answer differs from what streamed: the old prefix length
-    // would slice this into "om the data." -- instead drop the fragment, say so once.
-    stream.emit({ phase: "done", answer: "Good pace. I can't confirm that from the data." });
-    await waitFor(() => expect(speaker.enqueued).toEqual(["Good pace.", "Correction: I can't confirm that."]));
-    expect(speaker.enqueued.join(" ")).not.toMatch(/Kevin|om the data/);
+    // would splice onto "eight sec" -- instead drop the fragment, say the new one once.
+    stream.emit({ phase: "done", answer: "Good pace. Keep pushing." });
+    await waitFor(() => expect(speaker.enqueued).toEqual(["Good pace.", "Correction: Good pace.", "Keep pushing."]));
+    expect(speaker.enqueued.join(" ")).not.toMatch(/Kevin|can't confirm/);
   });
 
   it("composer: voice enabled + empty box shows the mic, no Send button", async () => {

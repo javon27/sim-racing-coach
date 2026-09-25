@@ -490,7 +490,7 @@
         // onto the old ("...eight secthe data."): restart from the new answer
         // and let the loop say it once instead.
         voiced = snap.answer;
-        activeVoice?.onRevised();
+        activeVoice?.onRevised(snap.answer);
       } else if (snap.answer.length > voiced.length) {
         const delta = snap.answer.slice(voiced.length);
         voiced = snap.answer;
