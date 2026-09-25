@@ -70,8 +70,15 @@ def test_race_result_after_the_flag_before_the_log_is_finished_too(tmp_path, syn
 
 
 def test_race_result_during_a_live_race_is_not_called_finished(tmp_path, synthetic_lap):
-    ctx = _race(tmp_path, synthetic_lap, logged=False)(on_track=True, race=object())
+    # Red-team round 1: a live race-phase session with no fresh snapshot (before the
+    # first lap commits, or a sidecar restart mid-race) has race=None + race_note.
+    from simcoach.race import NO_RACE_LAP_YET
+    ctx = _race(tmp_path, synthetic_lap, logged=False)(on_track=True, race=None,
+                                                         race_note=NO_RACE_LAP_YET)
     assert FINISHED not in ctx.get_race_result()
+    # The same session with no note and no snapshot (not a race phase) is over.
+    ctx = _race(tmp_path, synthetic_lap, logged=False)(on_track=True, race=None)
+    assert FINISHED in ctx.get_race_result()
 
 
 def test_prompt_answers_a_finished_race_as_finished():
