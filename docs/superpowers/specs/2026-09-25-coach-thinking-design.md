@@ -1,9 +1,12 @@
-# Coach thinking: reason before answering, dynamically — design (2026-09-25)
+# Coach thinking: reason before answering, dynamically — design (2026-09-25, rev 2)
 
 Status: DRAFT for the driver's review. No code, no issue yet.
 Origin: the driver, 2026-09-25 — "what makes Claude Code and other coding harnesses great is
 the ability for the agent to reason and think before responding … It would need to be a bit
 dynamic. Some responses should be delivered right away, while others require more thought."
+Rev 2 after review: the tier is chosen by a hybrid of code gates and a small classifier
+model; both the classifier and "thinking" sit behind the `Model` seam so nothing couples the
+harness to one provider (CLAUDE.md: swappable model).
 Companion to `2026-09-25-coaching-insight-design.md` (#169), which fixes *what the tools
 compute*; this fixes *how much the model deliberates over it*.
 
@@ -17,9 +20,9 @@ compute*; this fixes *how much the model deliberates over it*.
   coach always thinks and can never take a #159 forced tool round (`claude.py:23-29`).
 - The tool loop (`coach.py` `ask_agentic_stream`) is one model call per tool round with no
   notion of "how hard to think"; latency is whatever the round takes.
-- The two chats that prompted #168/#169 show the cost of no deliberation: the model called
-  one tool and narrated its largest number (#244/#250); it answered "how was that race?" from
-  a mid-race frame (#245); it did not plan the multi-tool answer "analyze the race in detail"
+- The two chats behind #168/#169 show the cost of no deliberation: the model called one tool
+  and narrated its largest number (#244/#250); it answered "how was that race?" from a
+  mid-race frame (#245); it did not plan the multi-tool answer "analyze the race in detail"
   deserved (#247 called four tools, then wrote a list it had not reasoned over).
 
 ## What thinking is for here (and what it is not)
@@ -40,95 +43,161 @@ quality of narration and tool use, never the source of facts.
 
 ## Design
 
-### 1. Three tiers, chosen by code, per question
+### 1. Three tiers
 
-| Tier | When | Thinking | Latency target |
-|---|---|---|---|
-| **Quick** | On track and moving (live snapshot: on_track, speed above a floor), PTT, no detail request | disabled | first spoken word ≤ ~3 s |
-| **Standard** | Everything else by default: garage, typed, conversation mode, a finished race | adaptive | ≤ ~8 s to first text |
-| **Deep** | Explicit: "in detail", "analyze", "walk me through", "explain", "think about it", "everything"; setup questions; post-race review ("how was that race", "where could I have passed"); a question with ≥ 2 sub-questions | adaptive + the provider's highest effort where supported, higher `max_tokens` | acknowledged at once; answer when ready |
+| Tier | Meaning | Latency target |
+|---|---|---|
+| **Quick** | No deliberation. The on-track cue: one corner, one change. | first spoken word ≤ ~3 s |
+| **Standard** | The model may think as much as it judges the question needs. | ≤ ~8 s to first text |
+| **Deep** | Think hard; plan a multi-tool answer; a longer answer is expected. | acknowledged at once; answer when ready |
 
-- **The router is deterministic code**, not a model call: `coach.thinking_tier(question,
-  voice, live) -> "quick" | "standard" | "deep"`, a pure function next to the #168
-  detail-word list (`VOICE_PTT`), tested like any other extractor. *Reason:* a model call to
-  decide how much to think is itself latency and cost; the signals are all already in hand.
-- **Quick ≠ dumb.** Quick answers are the on-track cues (#162/#168): one corner, one change.
-  The tools already did the analysis; the model only picks words. Disabling thinking there
-  is what keeps the first word inside 3 s over PTT.
-- **Deep may be slower than the driver expects**, so it says so first (§3).
+The tier is the only thinking concept the harness knows. What it means for a given model is
+the adapter's business (§4).
 
-### 2. The Model seam carries the tier
+### 2. Choosing the tier: code gates first, then a classifier, with a code floor
+
+```
+question, voice mode, live state
+   │
+   ├─ hard gates (code, 0 ms) ──────────────────────────────┐
+   │   on track AND moving (live snapshot)      → quick     │
+   │   driver override "quick answer"           → quick     │  decided
+   │   driver override "think about it" /       → deep      │
+   │     "take your time"                                   │
+   │   coach.thinking = "off" / "always"        → as set    │
+   │                                                        │
+   └─ otherwise: classifier model (≤ 800 ms, JSON) ─────────┤
+        {tier: standard|deep, intent, entities}             │
+        on timeout / error / bad JSON                       │
+            └─ keyword rules (code)             → tier ─────┘
+```
+
+- **Hard gates are code** so the latency-critical path (a PTT cue while driving) never
+  waits on a model call, and the driver's own words always win.
+- **The classifier is a second `Model` behind the same seam** (`coach.classifier`), not a
+  named vendor model. Its contract: input = the question, the last two turns, and a one-line
+  state summary (`garage | on track, stationary | on track, moving`, session phase, race live
+  / finished, voice mode, laps this session); output = one JSON object
+  `{"tier": "standard"|"deep", "intent": <enum>, "corner": str|null, "lap": str|null,
+  "rival": str|null, "wants_detail": bool}`. Any model that can return that JSON qualifies:
+  a small hosted model today, a local small model later, or the coach's own model. It is
+  configured independently of the coach model (`coach.classifier_model`, default = the
+  cheapest hosted model the provider offers; `"none"` disables it and the keyword rules
+  decide).
+- **Why a classifier and not only rules:** rules only see wording. "Why does the rear keep
+  stepping out?" is a deep setup question with no keyword in it; "how was that race" is a
+  post-race review only if the race is finished. The classifier reads intent and state
+  together.
+- **Why the classifier earns more than a tier:** its `intent`/entities steer the tools too
+  ("where's the time" → `get_time_on_table`; "how was that race" + race finished → the
+  finished-race read), which today relies on prompt rules the coach model sometimes ignores.
+  The intent is passed to the coach as one line of context, never as a tool call it must
+  obey — the coach model still chooses its tools.
+- **Bounded harm:** a wrong tier is a slower or shallower answer, never a wrong fact. A wrong
+  intent is one line of context the coach can ignore. The driver overrides by voice.
+- **Graded, not trusted:** every classification is logged with the question and the tier
+  actually used; the eval (§6) reports agreement with the driver's grading.
+
+### 3. The `Model` seam carries the tier
 
 - `Model.run_stream(..., thinking: str = "standard")` (`model/base.py:94`), threaded from
   `ask_agentic_stream`. `FakeModel` records it per call (like `forced`), so tests assert the
   router's choice end to end.
-- `ClaudeModel` maps tiers to the API per model family:
-  - quick → `{"type": "disabled"}`; on families that reject disabled, adaptive at the lowest
-    effort the API accepts (PENDING: confirm the effort knob and its name in the installed
-    SDK — `claude.py:28` mentions "default effort" for Opus 5, so one exists; do not guess).
-  - standard → `{"type": "adaptive"}`.
-  - deep → adaptive + highest effort where the family supports it, `max_tokens` raised
-    (e.g. 4096 → 8192) so a long spoken answer plus thinking fits.
-- **#159 constraint:** a forced tool round must run with thinking disabled (`claude.py:82-86`).
-  So a deep answer that needs a forced round runs that one round quick; the tier applies
-  to the other rounds. On families that cannot disable thinking nothing changes (#159
-  already answers UNCONFIRMED there).
-- Thinking blocks are never shown to the driver by default and never stored in
-  `coach_chat.answer`. They are logged at INFO with the chat/turn id for tuning (§5).
+- `Model.classify(prompt: str, schema: dict) -> dict | None` for the classifier role: one
+  short call, JSON out, `None` on any failure. `FakeModel` returns a scripted dict.
+- **#159 constraint** (Anthropic-specific, stays inside the adapter): a forced tool round
+  runs with thinking disabled. A deep answer that needs a forced round runs that one round
+  quick; the tier applies to the other rounds.
+- Thinking text is never shown by default and never stored in `coach_chat.answer`. It is
+  logged at INFO with the chat/turn id for tuning (§6).
 
-### 3. What the driver hears and sees
+### 4. Provider mapping (all inside the adapters — nothing provider-specific leaves them)
+
+| Tier | Anthropic (`ClaudeModel`) | A provider with a reasoning-effort setting | A model with no thinking mode (most local models) |
+|---|---|---|---|
+| quick | `{"type": "disabled"}`; on families that reject disabled, adaptive at the lowest effort the API accepts (PENDING: confirm the effort knob in the installed SDK; `claude.py:28` implies one exists — do not guess) | effort low | plain call |
+| standard | `{"type": "adaptive"}` | effort medium | plain call |
+| deep | adaptive + highest effort; `max_tokens` raised (4096 → 8192) | effort high; longer output limit | **an explicit planning turn in prose**: the adapter runs one extra call that returns a scratchpad ("what the tools say, what contradicts, the one thing to say"), feeds it to the answer call as a hidden assistant note, and strips it before anything is shown or spoken |
+
+The last column is what keeps the feature honest about local models: deep tier exists on
+every model, slower where the model has no native thinking. The scratchpad text is subject
+to the same rule as native thinking — it is never a source of figures, and the #159 checks
+run on the spoken answer, not on it.
+
+### 5. What the driver hears and sees
 
 - **Deep tier acknowledges first**, then thinks: one short spoken/typed line chosen by code
-  from the tier ("Give me a moment — going through the race lap by lap."), emitted before
-  the model call so it is not model narration and not subject to #168's pre-tool-narration
-  drop. Standard and quick tiers say nothing extra.
+  from the tier and intent ("Give me a moment — going through the race lap by lap."),
+  emitted before the model call so it is not model narration and not subject to #168's
+  pre-tool-narration drop. Standard and quick tiers say nothing extra.
 - **Chat panel:** a "thinking…" state on the pending answer (the existing streaming
-  indicator with a different label), and the usage/cost meter counts thinking tokens
-  (they are billed output tokens; `_usage_of` already sums output).
-- **Optional reasoning view (setting, off by default):** show the thinking text collapsed
-  under the answer, the way a coding harness shows its reasoning. *Why:* the driver tunes
-  the coach by reading why it said what it said — the same review that found #173. It is
-  raw model text, so it is labelled as such and never spoken.
+  indicator with a different label), and the usage/cost meter counts thinking tokens and the
+  classifier call (both billed).
+- **Optional reasoning view (setting, off by default):** show the thinking text (or the
+  planning scratchpad) collapsed under the answer, the way a coding harness shows its
+  reasoning. *Why:* the driver tunes the coach by reading why it said what it said — the
+  same review that found #173. It is raw model text, labelled as such, never spoken.
 
-### 4. Settings
-
-`coach.thinking`: `"auto"` (default, the router) | `"off"` (always quick) | `"always"`
-(standard everywhere, deep on request). Plus the spoken override "think about it" /
-"take your time" → deep for that question; "quick answer" → quick.
-
-### 5. Evaluation (the part that makes it worth doing)
+### 6. Evaluation (the part that makes it worth doing)
 
 Prompt and thinking changes cannot be replayed offline. Add `scripts/eval_thinking.py`:
-re-ask N stored questions (from `coach_chat`, with their session context and the same
-tool results the original turn saw, replayed through the tool layer) with thinking
-off / standard / deep against the real model, write the three answers side by side to
-`docs/research/eval-thinking-<date>.md` for the driver to grade, and record tokens and
-wall-clock per tier. Run it on the Long Beach and Algarve chats first. *Reason:* the
-driver's grading is the only ground truth for "insight"; the script makes it cheap to
-repeat after every prompt change.
+re-ask N stored questions (from `coach_chat`, with their session context and the same tool
+results the original turn saw, replayed through the tool layer) with quick / standard /
+deep against the configured model, write the answers side by side to
+`docs/research/eval-thinking-<date>.md` for the driver to grade, and record tokens,
+wall-clock and the classifier's tier per question. Run it on the Long Beach and Algarve
+chats first. *Reason:* the driver's grading is the only ground truth for "insight"; the
+script makes it cheap to repeat after every prompt change, and it works for any model
+behind the seam.
 
-### 6. Cost and latency (estimate, to measure with §5)
+### 7. Settings
 
-Adaptive thinking on Sonnet 5 is usually a few hundred tokens on a simple question and
-2–8k on a multi-tool review; billed as output. Deep tier on a full race review: on the
-order of $0.05–0.15 and 10–30 s before the first word. The meter shows it; the driver
-decides. Quick tier costs nothing extra.
+- `coach.thinking`: `"auto"` (default, the router) | `"off"` (always quick) | `"always"`
+  (standard everywhere, deep on request).
+- `coach.classifier_model`: a model id, or `"none"` (keyword rules only).
+- Spoken overrides: "think about it" / "take your time" → deep; "quick answer" → quick.
+
+### 8. Cost and latency (estimate, to measure with §6)
+
+Classifier: ~0.3–0.6 s and a fraction of a cent per garage question; never on the on-track
+path. Adaptive thinking on a hosted mid-size model: a few hundred tokens on a simple
+question, 2–8k on a multi-tool review, billed as output. Deep tier on a full race review: on
+the order of $0.05–0.15 and 10–30 s before the first word. A local model's deep tier is one
+extra call, so roughly double its answer time. The meter shows it; the driver decides. Quick
+tier costs nothing extra.
 
 ## Scope
 
-**Slice 1 (one overnight run, no rig):** `thinking_tier()` + tests; the `run_stream`
-parameter through base/fake/factory/claude; the deep-tier acknowledgement line; the
-`coach.thinking` setting; the chat-panel "thinking…" label; INFO logging of thinking text.
-**Slice 2:** `eval_thinking.py` and the first graded run; the optional reasoning view.
+**Slice 1 (one overnight run, no rig):** the tier on `run_stream` through base/fake/factory/
+claude; the hard gates + keyword floor (`thinking_tier()`) with tests; `Model.classify` on
+the seam with the JSON schema, wired for the Anthropic adapter and `FakeModel`; the router
+using it with the 800 ms timeout and fallback; the deep-tier acknowledgement line; the
+settings; the chat-panel "thinking…" label; INFO logging of thinking text and every
+classification.
+**Slice 2:** `eval_thinking.py` and the first graded run; the optional reasoning view; the
+prose-planning deep tier for models without native thinking (when a second provider or a
+local model is wired in — not before).
 **Rig:** first-word latency on quick tier over PTT; whether standard tier in the garage
-feels slow.
+feels slow; whether the classifier's tiers match what the driver would have chosen.
+
+## Invariants preserved
+
+- **Swappable model:** tiers, the classifier contract and the eval are model-agnostic;
+  adapters map them. No vendor name outside `simcoach/model/`.
+- **Measured only / code extracts:** thinking and the planning scratchpad never produce a
+  figure; the #159 checks run on the spoken answer.
+- **Owned corners:** the classifier's `corner` entity is matched to the map by code before
+  it reaches the coach; an unmatched name is dropped, not passed through.
 
 ## Open questions for the driver
 
-1. **Standard by default in the garage?** Adaptive thinking on every typed/conversation
-   question adds a second or two and some cost; or keep the garage quick and think only on
-   request/deep triggers?
-2. **Reasoning view:** do you want to see the coach's thinking in the chat (collapsed,
-   off by default), or keep it log-only?
-3. **Deep on post-race questions automatically**, or only when you ask for detail?
-4. **Spend cap:** a per-answer thinking cap (tokens) or none?
+1. **Standard by default in the garage?** Thinking on every typed/conversation question adds
+   a second or two and some cost; or keep the garage quick and think only when the
+   classifier says deep?
+2. **Reasoning view:** see the coach's thinking in the chat (collapsed, off by default), or
+   keep it log-only?
+3. **Deep on post-race questions automatically** (classifier's call), or only when you ask
+   for detail?
+4. **Spend cap:** a per-answer thinking cap or none?
+5. **Classifier default:** the cheapest hosted model, or the coach's own model (simpler, one
+   config, slower and dearer per question)?
