@@ -372,7 +372,25 @@ engineer-grade spec's Phase 0.
 - The prompt, via a scripted fake-model tool call: "on my best lap where's 3 tenths"
   routes to `get_time_on_table`.
 
-## 5. Open questions for the driver
+## 5. Open questions for the driver — DECIDED 2026-09-25
+
+1. **Headline number:** game-sector optimal lap. Summed corners are never a headline.
+2. **Which laps count:** the whole session, each cited lap's phase named.
+3. **Session vs all-time:** this session first; all-time as one line.
+4. **Voice:** one corner per PTT answer (locator, phase, the one change).
+5. **At the limit everywhere:** say so, then name the next step (benchmark gap + one
+   direction). Never an invented fix.
+6. **Post-race rival read:** its own issue, scheduled next after slice 1.
+
+**Driver idea to fold in (not yet designed):** what makes coding harnesses good is that
+the agent reasons before it answers. The coach should get the same, dynamically: a quick
+path for answers that must come at once (on-track cues over PTT) and a deliberate path
+for answers that deserve thought (post-session analysis, "analyze the race in detail",
+setup questions). The `Model` seam already carries a thinking budget; the routing would
+be by question class and voice mode, with the budget stated in the answer's latency
+expectation. Candidate for slice 2; needs its own short design.
+
+### Original questions (for the record)
 
 1. **Headline number:** is the game-sector optimal lap (Algarve: 0.27 s) the right "time
    on the table", or do you want the bigger summed-corner figure (0.9-1.5 s) with a
