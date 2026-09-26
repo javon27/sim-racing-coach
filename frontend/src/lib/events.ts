@@ -39,11 +39,17 @@ export class Topic<T> {
   }
 }
 
-/** `laps` frame: the lap rows of the live session (`session_id: null` = no session).
-    `optimal`: #176's headline optimal-lap figure, same as GET /sessions/{sid}/laps. */
+/** `laps` frame: the lap rows of the live session (`session_id: null` = no session). */
 export interface LapsFrame {
   session_id: string | null;
   laps: LapRow[];
+}
+
+/** `optimal` frame (#176 fix round 1): pushed only once the server's background
+    compute for `session_id` has a fresh value -- never rides the `laps` frame, so it
+    never delays it. */
+export interface OptimalFrame {
+  session_id: string | null;
   optimal: number | null;
 }
 
@@ -60,6 +66,7 @@ export type MapFrame = TrackMap | Record<string, never>;
 export class EventFeed {
   readonly status = new Topic<StatusResponse | null>(null);
   readonly laps = new Topic<LapsFrame | null>(null);
+  readonly optimal = new Topic<OptimalFrame | null>(null);
   readonly map = new Topic<MapFrame | null>(null);
   readonly mapcapture = new Topic<MapCaptureFrame | null>(null);
   readonly voiceSetup = new Topic<VoiceStatus | null>(null);
@@ -97,6 +104,9 @@ export class EventFeed {
         break;
       case "laps":
         this.laps.set(data as LapsFrame);
+        break;
+      case "optimal":
+        this.optimal.set(data as OptimalFrame);
         break;
       case "map":
         this.map.set(data as MapFrame);

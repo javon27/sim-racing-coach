@@ -111,18 +111,14 @@ def test_sessions_summary(tmp_path, synthetic_lap):
 
 def test_session_laps(tmp_path, synthetic_lap):
     app, lap_id, _cid = _app(tmp_path, synthetic_lap)
-    body = _tc(app).get("/sessions/s1/laps").json()
-    assert body["laps"] == [{"id": lap_id, "lap_time": synthetic_lap.lap_time,
-                             "valid": 1, "ts": synthetic_lap.timestamp,
-                             "s1": None, "s2": None, "s3": None, "phase": None,
-                             "track": synthetic_lap.track, "car": synthetic_lap.car,
-                             "car_model": synthetic_lap.car,  # unknown entry -> raw name
-                             "lap_no": None, "pit": None, "partial": None, "position": None,
-                             "mapping": False,
-                             "race_index": None}]  # #142: non-race lap (phase None) -> null
-    # #176: no corner map in this test app -> no optimal (get_time_on_table itself
-    # refuses without one too).
-    assert body["optimal"] is None
+    rows = _tc(app).get("/sessions/s1/laps").json()
+    assert rows == [{"id": lap_id, "lap_time": synthetic_lap.lap_time,
+                     "valid": 1, "ts": synthetic_lap.timestamp,
+                     "s1": None, "s2": None, "s3": None, "phase": None,
+                     "track": synthetic_lap.track, "car": synthetic_lap.car,
+                     "car_model": synthetic_lap.car,  # unknown entry -> raw name
+                     "lap_no": None, "pit": None, "partial": None, "position": None, "mapping": False,
+                     "race_index": None}]  # #142: non-race lap (phase None) -> null
 
 
 def test_analysis_404_without_cmap(tmp_path, synthetic_lap):

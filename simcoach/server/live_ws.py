@@ -24,7 +24,7 @@ def register(app, deps) -> None:
     _status_view = deps._status_view
     _map_payload = deps._map_payload
     _live_map_key = deps._live_map_key
-    _session_optimal = deps._session_optimal
+    _ensure_optimal = deps._ensure_optimal
     mapcapture_status = deps.mapcapture_status
 
     _LIVE_PERIOD = 0.25  # ~4 Hz; the rail map doesn't need capture-rate updates
@@ -110,10 +110,7 @@ def register(app, deps) -> None:
                 sig = (sid, len(laps), laps[-1]["id"] if laps else None)
                 if last.get("_laps_sig", _MISSING) != sig:
                     last["_laps_sig"] = sig
-                    # #176: same headline the tool/endpoint compute, cached by
-                    # `_session_optimal` on this same signal.
-                    frames.append(("laps", {"session_id": sid, "laps": laps,
-                                            "optimal": _session_optimal(sid, laps)}))
+                    frames.append(("laps", {"session_id": sid, "laps": laps}))
             except Exception:
                 log.warning("events: laps tick failed", exc_info=True)
 
@@ -169,6 +166,32 @@ def register(app, deps) -> None:
                         last[installing_key] = vs_data.get("installing")
                 except Exception:
                     log.warning("events: voice_setup tick failed", exc_info=True)
+
+            try:
+                # #176 fix round 1: the Optimal figure never rides on the laps tick --
+                # it's a background compute (`analyze_lap` per comparable lap, ~85 ms/
+                # lap measured) that must never delay `status`/`laps`/anything else on
+                # this loop, and it's checked LAST so a slow/raising compute can never
+                # push those other frames back either. `_ensure_optimal` only ever
+                # SCHEDULES a recompute and returns instantly; it's called here only
+                # when something that could change the answer actually changed (a lap
+                # landing or a map arriving/being resaved), not every tick.
+                gate = (sid, len(laps), laps[-1]["id"] if laps else None, app.state.map_rev)
+                if last.get("_optimal_gate", _MISSING) != gate:
+                    last["_optimal_gate"] = gate
+                    _ensure_optimal(sid, laps)   # schedule-only; result read below
+                # Checked every tick regardless of the gate (a cheap cache read) so a
+                # background compute that finishes between gate changes still reaches
+                # this connection on its very next tick, not just the one that
+                # triggered it.
+                cached = app.state.optimal_cache.get(sid) if sid else None
+                opt = cached[1] if cached is not None else None
+                opt_sig = (sid, opt)
+                if last.get("_optimal_sig", _MISSING) != opt_sig:
+                    last["_optimal_sig"] = opt_sig
+                    frames.append(("optimal", {"session_id": sid, "optimal": opt}))
+            except Exception:
+                log.warning("events: optimal tick failed", exc_info=True)
 
             return frames
 

@@ -46,7 +46,7 @@ def test_events_initial_frames_order_no_game_no_laps(tmp_path, monkeypatch):
         f2 = ws.receive_json()
         f3 = ws.receive_json()
     assert f1["topic"] == "status" and f1["data"]["track"] is None
-    assert f2 == {"topic": "laps", "data": {"session_id": None, "laps": [], "optimal": None}}
+    assert f2 == {"topic": "laps", "data": {"session_id": None, "laps": []}}
     assert f3 == {"topic": "map", "data": {}}
 
 

@@ -2,6 +2,7 @@
 paths, cache invalidation, the rate-capped LMU REST probe, the live track/session reads."""
 from __future__ import annotations
 
+import logging
 import sys
 import time
 from pathlib import Path
@@ -16,6 +17,10 @@ REST_PROBE_TTL = 2.0  # s: liveness probe rate cap so /status polling can't hamm
 # re-blocks the next tick before this one's failure is even cached (#1). LmuRest's
 # normal request timeout (4.0s) is for real setup reads, not this probe.
 REST_PROBE_TIMEOUT = 1.5
+# #176 fix round 1: bounded LRU for the background optimal-lap cache (one entry per
+# session id ever asked about), so a long-running sidecar reviewing many past
+# sessions doesn't grow this unbounded.
+_OPTIMAL_CACHE_MAX = 32
 
 
 def _in(base: Path, slug: str) -> Path:
@@ -194,30 +199,73 @@ def register(app, deps) -> None:
             base = None
         return store.resolve_current_instance(base) if base else None
 
-    def _session_optimal(sid: str | None, laps: list[dict]) -> float | None:
-        """#176: the lap rail's Optimal figure for a session -- the same headline
-        `get_time_on_table` states for its best lap, computed the same way
-        (`CoachContext.get_optimal_seconds`, sharing every rule with the coach tool
-        rather than re-deriving them). Cached per session, keyed on the same
-        (count, last id) signal /events' laps frame already uses to invalidate --
-        analyze_lap runs once per comparable lap, so this is only redone when a lap
-        actually lands, never on every poll."""
+    def _optimal_sig(laps: list[dict]) -> tuple:
+        """The cache key for #176's background optimal compute. Recomputes on: a lap
+        landing (count + last id), a corner map appearing or being re-saved (map_rev
+        -- the same signal #155 already bumps for /events' map frame), and a
+        result-log import backfilling sectors onto EXISTING rows without adding one
+        (the count of laps with all three sectors set -- `save_result_session`'s
+        `_BACKFILL_SECTORS_SQL` only ever fills previously-NULL sectors, never
+        overwrites a set one, so this count strictly increases on a real backfill and
+        is cheap: `laps` is already fetched, no extra query).
+
+        Not covered, undocumented gap accepted (#176 fix round 1): a stored sector
+        edited or cleared some OTHER way. Nothing in this codebase does that today --
+        every write path only ever inserts a lap or fills a previously-NULL sector."""
+        sectors_filled = sum(1 for r in laps if r.get("s1") is not None
+                             and r.get("s2") is not None and r.get("s3") is not None)
+        return (len(laps), laps[-1]["id"], app.state.map_rev, sectors_filled)
+
+    def _compute_optimal(sid: str, sig: tuple, laps: list[dict]) -> None:
+        # Runs on app.state.optimal_pool's single worker thread -- never the request
+        # thread, never the /events tick. Any failure here must surface as a log line
+        # only: a bad lap or an analysis bug must never take down the lap rail or the
+        # /events loop that carries it (#176 fix round 1's raise probe).
+        value = None
+        try:
+            track = next((r["track"] for r in laps if r.get("track")), None)
+            car = next((r["car"] for r in laps if r.get("car")), None)
+            cmap = _map_for(track) if track else None
+            if track and car and cmap is not None:
+                value = CoachContext(store, cmap=cmap, track=track, car=car,
+                                     session_id=sid).get_optimal_seconds()
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "#176 optimal compute failed for session %r", sid, exc_info=True)
+            value = None
+        with app.state.optimal_lock:
+            app.state.optimal_cache[sid] = (sig, value)
+            app.state.optimal_cache.move_to_end(sid)
+            while len(app.state.optimal_cache) > _OPTIMAL_CACHE_MAX:
+                app.state.optimal_cache.popitem(last=False)
+            app.state.optimal_inflight.pop(sid, None)
+
+    def _ensure_optimal(sid: str | None, laps: list[dict]) -> float | None:
+        """#176 fix round 1: the lap rail's Optimal figure for a session, computed the
+        same way the coach's get_time_on_table does (`CoachContext.get_optimal_seconds`,
+        sharing every rule -- see `_compute_optimal`) but NEVER on the caller's thread.
+
+        Schedules a background recompute when the cache is stale for this session
+        (single-flight: at most one in-flight compute per session id, and at most one
+        compute running at all at any moment, since `optimal_pool` has exactly one
+        worker -- so a driver's PTT question and a lap landing never contend for more
+        than one extra core between them), then returns whatever is cached RIGHT NOW
+        -- None the first time a session is asked about, or a value that may be one
+        compute behind the very latest lap. Never blocks: the REST endpoint that calls
+        this returns instantly, and the /events tick that also calls this (to decide
+        whether to push a fresh 'optimal' frame once the compute lands) never awaits
+        it either."""
         if not sid or not laps:
             return None
-        sig = (len(laps), laps[-1]["id"])
-        cached = app.state.optimal_cache.get(sid)
-        if cached is not None and cached[0] == sig:
-            return cached[1]
-        track = next((r["track"] for r in laps if r.get("track")), None)
-        car = next((r["car"] for r in laps if r.get("car")), None)
-        cmap = _map_for(track) if track else None
-        value = None
-        if track and car and cmap is not None:
-            value = CoachContext(store, cmap=cmap, track=track, car=car,
-                                 session_id=sid).get_optimal_seconds()
-        app.state.optimal_cache[sid] = (sig, value)
-        return value
+        sig = _optimal_sig(laps)
+        with app.state.optimal_lock:
+            cached = app.state.optimal_cache.get(sid)
+            fresh = cached is not None and cached[0] == sig
+            if not fresh and sid not in app.state.optimal_inflight:
+                fut = app.state.optimal_pool.submit(_compute_optimal, sid, sig, laps)
+                app.state.optimal_inflight[sid] = fut
+            return cached[1] if cached is not None else None
 
     export(deps, _map_for, _curating, _map_dirs, _capture_path, _newest_capture,
            _invalidate_canon, _fresh, _ensure_rest, _live_track, _live_session_id,
-           _session_optimal)
+           _ensure_optimal)

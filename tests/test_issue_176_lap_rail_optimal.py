@@ -1,8 +1,12 @@
-"""#176: the lap rail's Optimal row under Best. `GET /sessions/{sid}/laps` must state
-the exact same headline figure `CoachContext.get_optimal_seconds` (the coach's own
-`get_time_on_table`) states for the session's best lap -- never a naive min-of-sectors,
-which an off-track sector would understate."""
+"""#176 fix round 1 (red-team ACCEPT-WITH-FIXES): the lap rail's Optimal row must
+never sit inside the lap-list read path. `GET /sessions/{sid}/laps` stays the bare
+array it always was; `GET /sessions/{sid}/optimal` is new and always returns
+instantly, scheduling `CoachContext.get_optimal_seconds` (the coach's own
+get_time_on_table headline) on a single background worker (core._ensure_optimal) and
+handing back whatever is cached right now. `/events` pushes a same-named "optimal"
+topic once the background compute lands, decoupled from the "laps" topic."""
 import dataclasses
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,6 +16,7 @@ from simcoach.coach_tools import CoachContext
 from simcoach.corners import CornerMap
 from simcoach.model.fake import FakeModel
 from simcoach.server import core as core_mod
+from simcoach.server import live_ws as live_ws_mod
 from simcoach.server.app import create_app
 from simcoach.store import LapStore
 
@@ -30,13 +35,16 @@ def _save(store, lap, lap_time, ts, lap_no, sid="s1", **kw):
 def _seed_session(store, synthetic_lap, sid="s1"):
     """One session: the subject (fastest, 92.7 s) plus a lap whose S1 (30.20) is the
     fastest of all -- but it ran off at T1 (800-1200 m), so the naive min-of-sectors
-    total would use it and the real one (30.60 from the subject's own lap) must not."""
+    total would use it and the real one (30.40, from a clean comparable lap) must
+    not. That clean lap's S1 IS a real 0.20 s gain over the subject's own 30.60, so
+    the headline is a real GAIN below 92.7 -- a row the rail would actually display,
+    not merely "not the naive value" (#176 fix round 1 red-team finding)."""
     bounds = [1500.0, 2600.0]
     off = _variant(synthetic_lap)
     off.channels["track_edge"][(off.channels["lap_distance"] >= 800.0)
                                & (off.channels["lap_distance"] <= 1200.0)] = 1.0
     _save(store, off, 93.5, 1, 1, sid=sid, sectors=[30.20, 31.40, 31.20], sector_bounds=bounds)
-    _save(store, synthetic_lap, 92.9, 2, 2, sid=sid, sectors=[30.60, 31.20, 31.10],
+    _save(store, synthetic_lap, 92.8, 2, 2, sid=sid, sectors=[30.40, 31.30, 31.10],
          sector_bounds=bounds)
     return _save(store, synthetic_lap, 92.7, 3, 3, sid=sid, sectors=[30.60, 31.00, 31.10],
                 sector_bounds=bounds)   # the session best
@@ -52,63 +60,245 @@ def _tc(app):
     return TestClient(app, base_url="http://127.0.0.1")
 
 
-def test_endpoint_optimal_matches_the_coach_tools_headline(tmp_path, synthetic_lap):
+def _wait_inflight(app, sid, timeout=5.0):
+    """Block until the background compute `_ensure_optimal` scheduled for `sid` (if
+    any) has finished -- the deterministic way to observe an async result in a test,
+    used instead of a sleep-and-hope poll."""
+    fut = app.state.optimal_inflight.get(sid)
+    if fut is not None:
+        fut.result(timeout=timeout)
+
+
+def _drain(ws, topic, limit=50):
+    for _ in range(limit):
+        f = ws.receive_json()
+        if f["topic"] == topic:
+            return f
+    return None
+
+
+# --- the lap list never touches analysis again --------------------------------------
+
+def test_laps_endpoint_is_the_bare_array_again(tmp_path, synthetic_lap):
+    app, store = _app(tmp_path)
+    lap_id = _seed_session(store, synthetic_lap)
+    body = _tc(app).get("/sessions/s1/laps").json()
+    assert isinstance(body, list)
+    assert lap_id in [r["id"] for r in body]
+    assert app.state.optimal_inflight == {}   # GET /laps schedules nothing
+
+
+# --- GET /sessions/{sid}/optimal: instant, matches the coach tool, recomputes -------
+
+def test_optimal_endpoint_matches_coach_tool_and_recomputes_on_a_new_lap(tmp_path, synthetic_lap):
     app, store = _app(tmp_path)
     _seed_session(store, synthetic_lap)
+    c = _tc(app)
+
+    t0 = time.perf_counter()
+    first = c.get("/sessions/s1/optimal").json()
+    assert time.perf_counter() - t0 < 0.5   # never blocks on analyze_lap
+    assert first == {"optimal": None}        # nothing cached yet; a compute was scheduled
+    _wait_inflight(app, "s1")
+
+    body = c.get("/sessions/s1/optimal").json()
     expected = CoachContext(store, cmap=CornerMap.load(CMAP), track="test_track",
                             car="test_car", session_id="s1").get_optimal_seconds()
     assert expected is not None
-    body = _tc(app).get("/sessions/s1/laps").json()
     assert body["optimal"] == pytest.approx(expected, abs=1e-9)
+    assert body["optimal"] == pytest.approx(92.50, abs=1e-6)   # 92.70 - 0.20 s gained on S1
+    assert body["optimal"] < 92.7 - 0.005     # a real, displayable gain under the best
     # Never the naive min-of-sectors total, which would count the off lap's 30.20 S1.
     naive = 30.20 + 31.00 + 31.10
     assert body["optimal"] != pytest.approx(naive, abs=1e-6)
 
+    # A new comparable lap lands, with a real S2/S3 gain of its own (slower overall,
+    # 93.0 s, so it never displaces the session best) -> the cached signature is
+    # stale -> recomputes to a materially different, lower headline.
+    _save(store, synthetic_lap, 93.0, 4, 4, sid="s1", sectors=[31.5, 30.8, 30.7],
+         sector_bounds=[1500.0, 2600.0])
+    c.get("/sessions/s1/optimal")
+    _wait_inflight(app, "s1")
+    after = c.get("/sessions/s1/optimal").json()["optimal"]
+    expected_after = CoachContext(store, cmap=CornerMap.load(CMAP), track="test_track",
+                                  car="test_car", session_id="s1").get_optimal_seconds()
+    assert after == pytest.approx(expected_after, abs=1e-9)
+    assert after == pytest.approx(91.90, abs=1e-6)
+    assert after != pytest.approx(body["optimal"], abs=1e-9)   # actually recomputed, not stale
 
-def test_endpoint_optimal_none_with_no_such_session(tmp_path):
+
+def test_optimal_endpoint_none_with_no_such_session(tmp_path):
     app, _store = _app(tmp_path)
-    body = _tc(app).get("/sessions/absent/laps").json()
-    assert body == {"laps": [], "optimal": None}
+    assert _tc(app).get("/sessions/absent/optimal").json() == {"optimal": None}
 
 
-def test_endpoint_optimal_none_without_a_comparable_lap(tmp_path, synthetic_lap):
+def test_optimal_endpoint_none_without_a_comparable_lap(tmp_path, synthetic_lap):
     app, store = _app(tmp_path)
     _save(store, synthetic_lap, 90.0, 1, 1)   # the only lap this session
-    body = _tc(app).get("/sessions/s1/laps").json()
-    assert len(body["laps"]) == 1
-    assert body["optimal"] is None
+    c = _tc(app)
+    c.get("/sessions/s1/optimal")
+    _wait_inflight(app, "s1")
+    assert c.get("/sessions/s1/optimal").json() == {"optimal": None}
 
 
-def test_endpoint_optimal_none_without_a_corner_map(tmp_path, synthetic_lap):
+def test_optimal_endpoint_none_without_a_corner_map(tmp_path, synthetic_lap):
     # get_time_on_table itself refuses without a corner map -- #176 can't do better.
     app, store = _app(tmp_path, cmap=None)
     _seed_session(store, synthetic_lap)
-    body = _tc(app).get("/sessions/s1/laps").json()
-    assert len(body["laps"]) == 3
-    assert body["optimal"] is None
+    c = _tc(app)
+    c.get("/sessions/s1/optimal")
+    _wait_inflight(app, "s1")
+    assert c.get("/sessions/s1/optimal").json() == {"optimal": None}
 
 
-def test_endpoint_optimal_cache_invalidates_when_a_lap_lands(tmp_path, synthetic_lap, monkeypatch):
+# --- map_rev invalidation ------------------------------------------------------------
+
+def test_map_rev_bump_invalidates_the_cache_and_a_real_value_appears(tmp_path, synthetic_lap):
+    app, store = _app(tmp_path, cmap=None)   # no corner map yet
+    bounds = [1500.0, 2600.0]
+    _save(store, synthetic_lap, 92.9, 1, 1, sectors=[30.6, 31.2, 31.1], sector_bounds=bounds)
+    _save(store, synthetic_lap, 92.7, 2, 2, sectors=[30.7, 30.9, 31.1], sector_bounds=bounds)
+    c = _tc(app)
+    c.get("/sessions/s1/optimal")
+    _wait_inflight(app, "s1")
+    assert c.get("/sessions/s1/optimal").json() == {"optimal": None}
+
+    # A map now exists (the same invalidation _invalidate_canon applies on a save, #155).
+    app.state.cmap = CornerMap.load(CMAP)
+    app.state.map_rev += 1
+
+    # Right after the bump: the endpoint is still instant and hands back the STALE
+    # (None) cached value -- it schedules, it never blocks.
+    t0 = time.perf_counter()
+    right_after = c.get("/sessions/s1/optimal").json()
+    assert time.perf_counter() - t0 < 0.5
+    assert right_after == {"optimal": None}
+
+    _wait_inflight(app, "s1")
+    fresh = c.get("/sessions/s1/optimal").json()["optimal"]
+    assert fresh is not None
+
+
+# --- single-flight: two concurrent requests, one compute -----------------------------
+
+def test_two_concurrent_requests_run_one_compute(tmp_path, synthetic_lap, monkeypatch):
+    import threading
+
     app, store = _app(tmp_path)
     _seed_session(store, synthetic_lap)
     calls = []
     real = core_mod.CoachContext.get_optimal_seconds
 
-    def _counted(self, which="best"):
+    def _slow(self, which="best"):
         calls.append(1)
+        time.sleep(0.2)   # widen the race window so both requests really overlap
         return real(self, which)
-    monkeypatch.setattr(core_mod.CoachContext, "get_optimal_seconds", _counted)
+    monkeypatch.setattr(core_mod.CoachContext, "get_optimal_seconds", _slow)
 
-    client = _tc(app)
-    first = client.get("/sessions/s1/laps").json()["optimal"]
+    c = _tc(app)
+    results = []
+
+    def _hit():
+        results.append(c.get("/sessions/s1/optimal").json())
+    threads = [threading.Thread(target=_hit) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    _wait_inflight(app, "s1")
+
+    assert len(calls) == 1   # single-flight: the second request never re-schedules
+    assert len(results) == 2
+
+
+# --- the /events laps frame is never delayed by a slow compute -----------------------
+
+def test_events_laps_frame_is_not_delayed_by_a_slow_optimal_compute(
+        tmp_path, synthetic_lap, monkeypatch):
+    from simcoach.lmu import smm
+    monkeypatch.setattr(smm, "read_live_status", lambda: None)
+    monkeypatch.setattr(live_ws_mod, "_EVENTS_PERIOD", 0.01)
+
+    app, store = _app(tmp_path)
+    lap_id = _seed_session(store, synthetic_lap)
+    rec = store.load(lap_id)
+    app.state.latest = {"record": rec, "lap_id": lap_id}
+
+    def _slow(self, which="best"):
+        time.sleep(0.3)
+        return 90.0
+    monkeypatch.setattr(core_mod.CoachContext, "get_optimal_seconds", _slow)
+
+    c = _tc(app)
+    with c.websocket_connect("/events", headers={"host": "127.0.0.1"}) as ws:
+        t0 = time.perf_counter()
+        f_laps = _drain(ws, "laps", limit=50)
+        t_laps = time.perf_counter() - t0
+        # The FIRST "optimal" frame is pushed the same tick the compute is merely
+        # SCHEDULED (nothing cached yet: {"optimal": None}) -- proving that push
+        # itself never waits on the compute either.
+        f_opt1 = _drain(ws, "optimal", limit=50)
+        t_opt1 = time.perf_counter() - t0
+        # The SECOND is the real value, only once the slow compute actually finishes.
+        f_opt2 = _drain(ws, "optimal", limit=500)
+        t_opt2 = time.perf_counter() - t0
+
+    assert f_laps is not None and f_laps["data"]["laps"]
+    assert t_laps < 0.15                  # laps arrives fast, well inside the 0.3s sleep
+    assert f_opt1 is not None and f_opt1["data"]["optimal"] is None
+    assert t_opt1 < 0.15                   # the "nothing yet" push doesn't wait either
+    assert f_opt2 is not None and f_opt2["data"]["optimal"] == 90.0
+    assert t_opt2 >= 0.25                  # the real value only after the compute finished
+
+
+# --- failure isolation: a raising compute never breaks laps or /events ---------------
+
+def test_raising_compute_never_breaks_laps_or_events(tmp_path, synthetic_lap, monkeypatch, caplog):
+    from simcoach.lmu import smm
+    monkeypatch.setattr(smm, "read_live_status", lambda: None)
+    monkeypatch.setattr(live_ws_mod, "_EVENTS_PERIOD", 0.01)
+
+    app, store = _app(tmp_path)
+    lap_id = _seed_session(store, synthetic_lap)
+    rec = store.load(lap_id)
+    app.state.latest = {"record": rec, "lap_id": lap_id}
+
+    calls = []
+
+    def _boom(self, which="best"):
+        calls.append(1)
+        raise ValueError("analysis blew up")
+    monkeypatch.setattr(core_mod.CoachContext, "get_optimal_seconds", _boom)
+
+    c = _tc(app)
+    # The bare lap list must arrive untouched.
+    laps = c.get("/sessions/s1/laps").json()
+    assert isinstance(laps, list) and laps
+
+    with caplog.at_level("WARNING"):
+        body = c.get("/sessions/s1/optimal").json()
+        assert body == {"optimal": None}
+        _wait_inflight(app, "s1")
     assert len(calls) == 1
-    # Same lap set: served from the cache, not recomputed (the ~2.3s-cold cost #176
-    # flagged must not repeat on every poll).
-    second = client.get("/sessions/s1/laps").json()["optimal"]
-    assert second == first
-    assert len(calls) == 1
-    # A new lap lands -> the (count, last id) signature changes -> recomputed.
-    _save(store, synthetic_lap, 92.75, 4, 4, sectors=[30.55, 31.00, 31.10],
-         sector_bounds=[1500.0, 2600.0])
-    client.get("/sessions/s1/laps").json()
-    assert len(calls) == 2
+    assert app.state.optimal_cache["s1"][1] is None
+    assert any("optimal compute failed" in r.message for r in caplog.records)
+
+    # /events: status + laps frames still arrive; the connection never dies.
+    with c.websocket_connect("/events", headers={"host": "127.0.0.1"}) as ws:
+        f_status = _drain(ws, "status")
+        f_laps = _drain(ws, "laps")
+    assert f_status is not None
+    assert f_laps is not None and f_laps["data"]["laps"]
+
+
+# --- bounded cache --------------------------------------------------------------------
+
+def test_optimal_cache_is_bounded(tmp_path, synthetic_lap):
+    app, store = _app(tmp_path)
+    c = _tc(app)
+    for i in range(core_mod._OPTIMAL_CACHE_MAX + 10):
+        sid = f"s{i}"
+        _save(store, synthetic_lap, 90.0, i + 1, 1, sid=sid)
+        c.get(f"/sessions/{sid}/optimal")
+        _wait_inflight(app, sid)
+    assert len(app.state.optimal_cache) <= core_mod._OPTIMAL_CACHE_MAX

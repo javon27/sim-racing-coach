@@ -15,16 +15,10 @@ import {
   getChatMessages,
   getChatUsage,
   getCurrentMap,
-  type LapRow,
+  getSessionOptimal,
 } from "./api";
 import { eventFeed } from "./events";
 import App from "./App.svelte";
-
-/** #176: getSessionLaps now resolves { laps, optimal } -- these fixtures only
-    care about the rows, so `optimal` defaults to null (no Optimal row). */
-function withOpt(laps: LapRow[]) {
-  return { laps, optimal: null as number | null };
-}
 
 const LIVE_STATUS = {
   track: "Le Mans",
@@ -57,6 +51,7 @@ vi.mock("./api", async () => {
     getSessions: vi.fn(),
     getSessionsSummary: vi.fn(),
     getSessionLaps: vi.fn(),
+    getSessionOptimal: vi.fn(),
     getLapAnalysis: vi.fn(),
     getLapInputs: vi.fn(),
     getSetup: vi.fn(),
@@ -146,7 +141,8 @@ describe("Coach screen assembly", () => {
       improvement: null,
       series: [],
     });
-    vi.mocked(getSessionLaps).mockResolvedValue(withOpt([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]));
+    vi.mocked(getSessionLaps).mockResolvedValue([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
+    vi.mocked(getSessionOptimal).mockResolvedValue({ optimal: null });
     vi.mocked(getLapAnalysis).mockResolvedValue({ lap_time: 216.0, corners: [] });
     vi.mocked(getLapInputs).mockResolvedValue({ lap: {}, best: null, corners: [] });
     vi.mocked(getSetup).mockResolvedValue({});
@@ -311,9 +307,9 @@ describe("Coach screen assembly", () => {
 
     // A new live session starts (s2), with a laps list distinguishable from s1's.
     vi.mocked(getSessionLaps).mockImplementation(async (sid: string) =>
-      withOpt(sid === "s2"
+      sid === "s2"
         ? [{ id: 20, lap_time: 200.0, valid: 1, ts: 500 }]
-        : [{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]),
+        : [{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }],
     );
     eventFeed.push("status", { ...LIVE_STATUS, on_track: true, session_id: "s2", lap_id: 7 });
 

@@ -6,6 +6,8 @@ in the sibling modules; create_app wires them (#113)."""
 from __future__ import annotations
 
 import logging
+import threading
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -170,7 +172,16 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     app.state.map_resolver = map_resolver  # (track) -> CornerMap | None
     app.state.rest_factory = rest_factory  # () -> LmuRest (probed on first use)
     app.state.cmaps = {}             # per-track CornerMap cache (only non-None cached)
-    app.state.optimal_cache = {}     # sid -> ((count, last id), optimal seconds|None), #176
+    # #176 fix round 1: the lap rail's Optimal figure is computed off the request/
+    # /events thread entirely, on its own single-worker pool (never contends with
+    # more than one extra core, even under a PTT question). `optimal_cache` is an
+    # LRU (OrderedDict, bounded by core._OPTIMAL_CACHE_MAX) of
+    # sid -> (sig, optimal seconds|None); `optimal_inflight` is sid -> Future, for
+    # single-flight de-duplication; `optimal_lock` guards both together.
+    app.state.optimal_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="optimal-calc")
+    app.state.optimal_cache: OrderedDict = OrderedDict()
+    app.state.optimal_inflight: dict = {}
+    app.state.optimal_lock = threading.Lock()
     app.state.canon = {}             # per-(track,car) canonical map payload cache
     app.state.live_cmap = None       # (live track, CornerMap|None) for /live's next corner
     app.state.map_rev = 0            # bumped on every map save; /events re-pushes the map (#155)
