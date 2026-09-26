@@ -641,25 +641,36 @@ def format_time_on_table(*, lap_time, sectors, optimal, all_time, benchmark, for
     headline: the only headline number is the game-sector optimal lap."""
     out = []
     names = _sector_names(cmap, bounds)
+    # #169: this lap's own sectors are the baseline every gain is measured from; one
+    # it spun or ran off in is only kept out as a DONOR (see `optimal_sectors`).
+    own_out = sorted(i for i, _, key in (optimal or {}).get("dropped", []) if key == "this")
+    gained = []
     if not sectors or optimal is None:
-        out.append("No optimal lap: the game's sector times aren't stored for this lap"
+        out.append("No optimal lap: the game's sector times aren't stored for this lap."
                    if not sectors else
                    "No optimal lap: not every sector has a clean time on a comparable lap.")
     else:
-        gains = sorted(((sectors[i] - t, i, key) for i, (t, key) in enumerate(optimal["best"])),
-                       key=lambda g: -g[0])
-        under = lap_time - optimal["total"]
-        parts = [f"{names[i]} {g:.2f} s on {label_of(key)}" for g, i, key in gains if g >= 0.005]
+        gained = sorted(((sectors[i] - t, i, key) for i, (t, key) in enumerate(optimal["best"])
+                         if sectors[i] - t >= 0.005), key=lambda g: -g[0])
+        under = sum(g for g, _, _ in gained)   # never negative: only real gains count
+        parts = [f"{names[i]} {g:.2f} s on {label_of(key)}" for g, i, key in gained]
         if parts:
             out.append(f"Optimal lap from your best sectors this session: "
-                       f"{format_laptime(optimal['total'])}, {under:.2f} s under this lap:\n  "
+                       f"{format_laptime(lap_time - under)}, {under:.2f} s under this lap:\n  "
                        + "; ".join(parts) + ".")
+        elif own_out:
+            out.append("Optimal lap from your best sectors this session: no clean sector "
+                       "of yours beat this lap's.")
         else:
             out.append("Optimal lap from your best sectors this session: this lap "
                        "(every sector is your best).")
+        if own_out:
+            out.append(f"  This lap's own {' and '.join(names[i] for i in own_out)} had a "
+                       "spin or an off: not counted as a best sector.")
         by_sector: dict = {}
         for i, _, key in optimal["dropped"]:
-            by_sector.setdefault(i, []).append(label_of(key))
+            if key != "this":
+                by_sector.setdefault(i, []).append(label_of(key))
         for i, labels in sorted(by_sector.items()):
             out.append(f"  Quicker {names[i]} on {' and '.join(labels)} doesn't count: "
                        "a spin or an off in that sector.")
@@ -692,7 +703,7 @@ def format_time_on_table(*, lap_time, sectors, optimal, all_time, benchmark, for
             if r["spread"] >= _FORM_SPREAD_S:
                 line += f"; varies \N{PLUS-MINUS SIGN}{r['spread']:.2f} s"
             out.append(line + ".")
-    elif optimal is not None and sectors and lap_time - optimal["total"] < 0.005:
+    elif optimal is not None and sectors and not gained and not own_out:
         out.append(f"No corner where another lap of yours was measurably quicker "
                    f"({_FORM_FLOOR_S:.2f} s): this lap is at your own limit everywhere. "
                    "Next step: the class benchmark gap, a setup change, or more laps.")

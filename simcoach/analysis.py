@@ -29,12 +29,13 @@ class CornerMetrics:
     brake_point: float | None
     throttle_point: float | None
     trailbrake_overlap: float
-    # Max brake input (0..1) over the braking run `brake_point` walked (#169: the
-    # window alone read "@ 0% peak" for a corner braked before turn-in); the
-    # window's max only when there is no brake point.
+    # Max brake input (0..1) in the braking zone (#169: the window alone read "@ 0%
+    # peak" for a corner braked before turn-in); else over the run `brake_point`
+    # walked; the window's max only when neither exists.
     peak_brake: float = 0.0
     # #169: the braking ZONE -- first brake >= 0.1 after the last throttle >= 0.8
-    # before the apex (same 250 m look-back), so a mid-zone pressure dip doesn't
+    # before the apex (same 250 m look-back, never back past the previous corner's
+    # end), so a mid-zone pressure dip doesn't
     # move it the way it moves `brake_point` -- and the peak brake inside it. None
     # with no braking in the zone. Not stored in corner_metrics: computed on read.
     brake_zone_start: float | None = None
@@ -1054,7 +1055,10 @@ def input_shape(win_dist, win_brake, win_throttle, win_steering) -> dict:
 def _metrics_for_corner(
     record: LapRecord, corner: Corner, length: float | None = None,
     envelope: float | None = None, rpm_max_lap: float | None = None,
+    prev_end: float | None = None,
 ) -> CornerMetrics:
+    """`prev_end` (see `prev_corner_end`): the previous corner's end, which the
+    braking zone never reaches back past (#169)."""
     dist = _interp_lap_distance(record)
     speed = record.channels["speed"]
     brake = record.channels["brake"]
@@ -1163,10 +1167,15 @@ def _metrics_for_corner(
             brake_point = d0 - lap_len if d0 > corner.apex_dist else d0
             run_peak = float(np.nanmax(brake[order[j:k + 1]]))
         # #169: the zone runs from the last full-throttle sample before the apex (the
-        # whole look-back when there is none) to the apex; its start is the braking
-        # sample furthest back inside it -- the same wrap shift as brake_point.
-        thr = np.flatnonzero(throttle[order] >= 0.8)
-        zone = order[:thr[0]] if thr.size else order
+        # whole look-back when there is none) to the apex, and never back past the
+        # previous corner's end -- a corner that never sees full throttle before the
+        # next must not hand it its own braking. Its start is the braking sample
+        # furthest back inside it -- the same wrap shift as brake_point.
+        zone = order
+        if prev_end is not None:
+            zone = zone[back[zone] <= (corner.apex_dist - prev_end) % lap_len]
+        thr = np.flatnonzero(throttle[zone] >= 0.8)
+        zone = zone[:thr[0]] if thr.size else zone
         zb = np.flatnonzero(brake[zone] >= 0.1)
         if zb.size:
             dz = float(dist[zone[zb[-1]]])
@@ -1191,7 +1200,10 @@ def _metrics_for_corner(
             throttle_point = d1 if d1 >= corner.apex_dist else d1 + lap_len
 
     trailbrake_overlap = float(np.mean((win_brake > 0.1) & (np.abs(win_steering) > 0.1)))
-    peak_brake = (run_peak if run_peak is not None
+    # #169: the zone's peak survives a modulated run (released under 0.1, re-applied:
+    # the run is then only the re-application -- "@ 11% peak" on an 82% stop).
+    peak_brake = (brake_zone_peak if brake_zone_peak is not None
+                  else run_peak if run_peak is not None
                   else float(np.nanmax(win_brake)) if win_brake.size else 0.0)
     win_lat_g = record.channels.get("lat_g")
     peak_lat_g = (
@@ -1331,6 +1343,15 @@ def _metrics_for_corner(
     )
 
 
+def prev_corner_end(cmap: CornerMap, corner: Corner) -> float | None:
+    """The end of the corner before `corner` in track order (the last corner's for
+    the first -- across S/F), or None on a one-corner map."""
+    cs = sorted(cmap.corners, key=lambda c: c.start_dist)
+    if len(cs) < 2:
+        return None
+    return cs[cs.index(corner) - 1].end_dist
+
+
 def tag_sections(corners, cmap) -> None:
     """Tag each corner with the named section its apex falls in (e.g. "The Corkscrew")."""
     for cm in corners:
@@ -1373,14 +1394,17 @@ def analyze_lap(
     if rpm_ch is not None:
         peak = float(np.nanmax(rpm_ch))
         rpm_max_lap = peak if math.isfinite(peak) else None
-    corners = [_metrics_for_corner(record, corner, length, envelope, rpm_max_lap)
+    corners = [_metrics_for_corner(record, corner, length, envelope, rpm_max_lap,
+                                   prev_corner_end(cmap, corner))
               for corner in cmap.corners]
 
     tag_sections(corners, cmap)
 
     has_reference = reference is not None
     if has_reference:
-        ref_metrics = {c.number: _metrics_for_corner(reference, c, length) for c in cmap.corners}
+        ref_metrics = {c.number: _metrics_for_corner(reference, c, length,
+                                                     prev_end=prev_corner_end(cmap, c))
+                       for c in cmap.corners}
         for cm in corners:
             ref = ref_metrics.get(cm.corner_no)
             if ref is None:

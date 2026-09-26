@@ -185,20 +185,134 @@ def test_brake_zone_start_survives_a_mid_zone_pressure_dip(synthetic_lap):
     assert dipped.brake_zone_peak == pytest.approx(clean.brake_zone_peak)
 
 
+def test_peak_brake_survives_a_modulated_run(synthetic_lap):
+    # Real lap 7590 T10: 82% stop, released under 0.1 before the apex, re-applied at
+    # 11% -- the run brake_point walks is only the re-application ("@ 11% peak").
+    cmap = CornerMap.load(CMAP)
+    lap = _variant(synthetic_lap)
+    d, brake = lap.channels["lap_distance"], lap.channels["brake"]
+    lap.channels["throttle"][(d >= 880.0) & (d <= 1000.0)] = 0.0   # one braking zone
+    brake[(d >= 880.0) & (d < 960.0)] = 0.82
+    brake[(d >= 960.0) & (d < 985.0)] = 0.07
+    brake[(d >= 985.0) & (d <= 1200.0)] = np.minimum(brake[(d >= 985.0) & (d <= 1200.0)], 0.11)
+    cm = analyze_lap(lap, cmap).corners[0]
+    assert cm.apex_dist - cm.brake_point < 20          # the run is the re-application
+    assert cm.peak_brake == pytest.approx(0.82) and cm.brake_zone_peak == pytest.approx(0.82)
+    assert "@ 82% peak" in format_corner_line(cm)
+
+
+def test_brake_zone_never_reaches_back_into_the_previous_corner(synthetic_lap):
+    # Real Algarve lap 7625 T8 "braking from 209 m", Laguna T9 at 175 m: throttle never
+    # reached 0.8 between two corners, so the zone ran back into the previous one's stop.
+    lap = _variant(synthetic_lap)
+    d = lap.channels["lap_distance"]
+    between = (d >= 1000.0) & (d <= 1300.0)
+    lap.channels["throttle"][between] = np.minimum(lap.channels["throttle"][between], 0.5)
+    own = (d >= 1260.0) & (d <= 1290.0)
+    lap.channels["brake"][own] = 0.6
+    lap.channels["throttle"][own] = 0.0
+    cmap = CornerMap([
+        Corner(number=1, name="", direction="left", start_dist=800.0, apex_dist=1000.0,
+               end_dist=1200.0),
+        Corner(number=2, name="", direction="left", start_dist=1250.0, apex_dist=1300.0,
+               end_dist=1400.0)])
+    cm = analyze_lap(lap, cmap).corners[1]
+    assert cm.brake_zone_start >= 1200.0                 # not T1's stop at ~1000 m
+    assert cm.brake_zone_peak == pytest.approx(0.6)      # not T1's ~97%
+    assert cm.peak_brake == pytest.approx(0.6)
+
+
 # --- reference honesty (through the store) ------------------------------------------
 
 def _store(tmp_path):
     return LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
 
 
-def _ctx(store, **kw):
-    return CoachContext(store, cmap=CornerMap.load(CMAP), track="test_track", car="test_car",
-                        session_id=SID, on_track=False, **kw)
+def _ctx(store, cmap=None, sid=SID, **kw):
+    return CoachContext(store, cmap=cmap or CornerMap.load(CMAP), track="test_track",
+                        car="test_car", session_id=sid, on_track=False, **kw)
 
 
-def _save(store, lap, lap_time, ts, lap_no, phase="practice", **kw):
+def _save(store, lap, lap_time, ts, lap_no, phase="practice", sid=SID, **kw):
     return store.save(dataclasses.replace(lap, lap_time=lap_time, timestamp=float(ts),
-                                          session_id=SID, phase=phase, lap_no=lap_no, **kw))
+                                          session_id=sid, phase=phase, lap_no=lap_no, **kw))
+
+
+def test_best_is_this_sessions_best_not_the_all_time_best(tmp_path, synthetic_lap):
+    # Red-team probe1/probe6 A: 'best' was the all-time best, a lap from ANOTHER
+    # session printed as "Lap: this lap (...)" with its sectors "not stored".
+    store = _store(tmp_path)
+    other = _save(store, synthetic_lap, 88.0, 1, 1, sid="OTHER",
+                  sectors=[29.0, 29.5, 29.5])                                  # all-time best
+    _save(store, _variant(synthetic_lap, [(900.0, 1100.0, 0.9)]), 91.0, 10, 1)
+    _save(store, synthetic_lap, 90.0, 11, 2)                                   # session best
+    ctx = _ctx(store)
+    assert ctx.get_time_on_table("best").startswith("Lap: practice lap 2 ")
+    out = ctx.get_lap_summary("best")
+    assert out.startswith("Lap: practice lap 2 ")
+    assert "This is your best lap this session: get_time_on_table finds the time" in out
+    # A session with no valid timed lap of its own falls back to the all-time best --
+    # named as a lap from another session, never "this lap", and with its sectors.
+    _save(store, synthetic_lap, 87.0, 20, 1, sid="EMPTY", valid=False)
+    ctx = _ctx(store, sid="EMPTY")
+    record, lap_id = ctx._resolve_lap("best")
+    assert lap_id == other and record.sectors == [29.0, 29.5, 29.5]
+    line = ctx.get_time_on_table("best").splitlines()[0]
+    assert line.startswith("Lap: a lap from another session (game lap 1, 19") and \
+        "this lap" not in line
+
+
+def test_an_invalid_fastest_lap_is_never_called_your_best(tmp_path, synthetic_lap):
+    # probe6 B: an invalid 89.0 against a valid 92.0 was "your best lap".
+    store = _store(tmp_path)
+    _save(store, _variant(synthetic_lap, [(900.0, 1100.0, 0.9)]), 92.0, 1, 1)
+    _save(store, synthetic_lap, 89.0, 2, 2, valid=False)
+    out = _ctx(store).get_lap_summary("latest")
+    assert "This is your best lap" not in out and "next-best" not in out
+    assert "vs your session best" in out
+
+
+def test_no_comparable_wording_names_what_is_slower(tmp_path, synthetic_lap):
+    # probe6 C: the fastest lap was told "your all-time best is 16% slower".
+    store = _store(tmp_path)
+    _save(store, _variant(synthetic_lap, [(900.0, 1100.0, 0.5)]), 104.0, 1, 1, sid="OTHER")
+    _save(store, synthetic_lap, 90.0, 2, 1)
+    assert _ctx(store).get_time_loss() == \
+        "No comparable lap yet (your other laps here are 16%+ slower)."
+
+
+def test_race_start_as_the_only_other_lap_says_so(tmp_path, synthetic_lap):
+    # probe6 D: "you need a second valid lap" with race lap 1 sitting right there.
+    store = _store(tmp_path)
+    _save(store, synthetic_lap, 89.0, 1, 1, phase="race")
+    _save(store, _variant(synthetic_lap, [(900.0, 1100.0, 0.95)]), 91.0, 2, 2, phase="race")
+    assert _ctx(store).get_time_loss() == (
+        "No comparable lap yet (the only other lap is the race start, race lap 1, which "
+        "isn't a fair comparison).")
+
+
+def test_get_corner_names_the_reference_its_deltas_are_against(tmp_path, synthetic_lap):
+    store = _store(tmp_path)
+    _save(store, synthetic_lap, 90.0, 1, 1)
+    _save(store, _variant(synthetic_lap, [(900.0, 1100.0, 0.9)]), 92.0, 2, 2)
+    out = _ctx(store).get_corner("1", "best")
+    assert "min vs best" in out
+    assert "Deltas ('vs best') are vs your next-best lap (practice lap 2, +2.00 s)." in out
+
+
+@pytest.mark.parametrize("cls, refs, want", [
+    ("LMP2_ELMS", {"LMP2": "1:32.936"}, None),           # not a substring match
+    ("GT3", {"LMGT3": "1:42.879", "GTE": "1:41.489"}, "LMGT3"),
+    ("GT3", {"GT3": "1:42.000", "LMGT3": "1:42.879"}, "GT3"),    # exact wins
+    ("Hyper", {"Hypercar": "1:31.878"}, "Hypercar"),
+    ("LMP2", {"LMP2": "1:32.936", "LMP3": "1:39.100"}, "LMP2"),
+    ("lm gt3", {"LMGT3": "1:42.879"}, "LMGT3"),
+])
+def test_class_benchmark_matches_the_class_not_a_substring(tmp_path, cls, refs, want):
+    ctx = _ctx(_store(tmp_path), car_class=cls)
+    ctx.cmap.notes = {"reference_times": refs}
+    got = ctx._class_benchmark()
+    assert (got[0] if got else None) == want
 
 
 def test_lap_summary_best_is_never_compared_with_itself(tmp_path, synthetic_lap):
@@ -297,13 +411,26 @@ def test_get_time_on_table_finds_the_time_on_the_best_lap(tmp_path, synthetic_la
 
 
 def test_get_time_on_table_detail_diagnoses_more_corners(tmp_path, synthetic_lap):
-    store = _session(tmp_path, synthetic_lap)
-    short = _ctx(store).get_time_on_table()
-    long = _ctx(store).dispatch("get_time_on_table", {"detail": True})
-    n_listed = short.count("s+ quicker")   # the listed rows bound the diagnoses
-    assert n_listed >= 1
-    assert short.count(" of it ") == min(2, n_listed)
-    assert long.count(" of it ") == min(3, n_listed)
+    # Four corners, and the subject loses time in every one of them to two laps: four
+    # listed segments, so the 2-vs-3 cap is what decides how many get a diagnosis.
+    cmap = CornerMap([Corner(number=n, name="", direction="left", start_dist=a,
+                             apex_dist=(a + b) / 2, end_dist=b)
+                      for n, (a, b) in enumerate(((300.0, 500.0), (800.0, 1200.0),
+                                                  (2000.0, 2400.0), (2600.0, 2800.0)), 1)])
+    slow = [(a + 20, b - 20, 0.98) for a, b in ((300, 500), (800, 1200), (2000, 2400),
+                                                 (2600, 2800))]
+    store = _store(tmp_path)
+    for i in range(2):
+        _save(store, synthetic_lap, 92.0 + i / 10, i + 1, i + 1)
+    for i in range(4):
+        _save(store, _variant(synthetic_lap, slow), 93.0 + i / 10, i + 3, i + 3)
+    _save(store, _variant(synthetic_lap, slow), 92.9, 7, 7)
+    short = _ctx(store, cmap=cmap).get_time_on_table("latest")
+    long = _ctx(store, cmap=cmap).dispatch("get_time_on_table",
+                                           {"which": "latest", "detail": True})
+    assert short.count("s+ quicker") == 4
+    assert short.count(" of it ") == 2
+    assert long.count(" of it ") == 3
 
 
 def test_get_time_on_table_needs_five_comparable_laps(tmp_path, synthetic_lap):
@@ -328,20 +455,64 @@ def test_nothing_measurable_says_so():
     assert "At your best on this lap (no other lap quicker by 0.03 s): T1, T2." in text
 
 
+def _table(lap_time, sectors, laps):
+    cmap = CornerMap.load(CMAP)
+    bounds = [1500.0, 2600.0]
+    return format_time_on_table(
+        lap_time=lap_time, sectors=sectors, optimal=optimal_sectors(laps, bounds),
+        all_time=None, benchmark=None, form={"ok": True, "n": 5, "listed": [], "at_best": []},
+        diagnoses=[], label_of=lambda k: "this lap" if k == "this" else f"lap {k}",
+        cmap=cmap, bounds=bounds)
+
+
+def test_own_sector_with_an_off_is_the_baseline_never_a_negative_gain():
+    # probe8: this lap's quickest S1 had an off. It said "every sector is your best",
+    # then "Quicker S1 on this lap doesn't count" -- or "-0.40 s under this lap".
+    text = _table(91.5, [29.5, 31.0, 31.0], [
+        {"key": "this", "sectors": [29.5, 31.0, 31.0], "incidents": [900.0]},
+        {"key": "A", "sectors": [30.0, 31.3, 31.4], "incidents": []},
+        {"key": "B", "sectors": [30.1, 31.2, 31.3], "incidents": []}])
+    assert "no clean sector of yours beat this lap's" in text
+    assert "This lap's own S1 (T1) had a spin or an off: not counted as a best sector." in text
+    assert "every sector is your best" not in text and "on this lap doesn't count" not in text
+    assert not re.search(r"-\d+\.\d\d s under", text)
+    assert "at your own limit everywhere" not in text
+    # A real gain elsewhere is measured from this lap's own times: S2 0.20 s.
+    text = _table(91.5, [29.5, 31.0, 31.0], [
+        {"key": "this", "sectors": [29.5, 31.0, 31.0], "incidents": [900.0]},
+        {"key": "A", "sectors": [30.0, 30.8, 31.4], "incidents": []}])
+    assert "1:31.300, 0.20 s under this lap:\n  S2 (T2) 0.20 s on lap A." in text
+    assert "This lap's own S1 (T1) had a spin or an off" in text
+
+
 # --- the prompt ----------------------------------------------------------------------
 
-def test_best_lap_tenths_question_routes_to_get_time_on_table(tmp_path, synthetic_lap):
+def test_prompt_and_tool_text_send_time_left_questions_to_get_time_on_table(
+        tmp_path, synthetic_lap):
+    # The fake model is scripted, so this does NOT prove a real model routes there: it
+    # proves the wiring (the tool is advertised and dispatches through the agentic
+    # loop) and that the text the real model routes on says so, without the
+    # get_lap_summary rule claiming the same questions.
     store = _session(tmp_path, synthetic_lap)
     model = FakeModel(reply="Turn 1: ...", tool_script=[("get_time_on_table", {})])
     Coach(model).ask_agentic(_ctx(store), "on my best lap where's 3 tenths", "test_car")
     name, _, result = model.dispatched[0]
     assert name == "get_time_on_table" and "Optimal lap from your best sectors" in result
-    # What the real model reads to make that call:
-    assert "'find me N tenths'" in model.last_system
-    assert "any question about the BEST lap → get_time_on_table FIRST" in model.last_system
-    assert "never say there is no reference" in model.last_system
+    assert any(t["name"] == "get_time_on_table" for t in model.last_tools)
+    p = model.last_system
+    assert "'find me N tenths'" in p and "'where am I losing time'" in p
+    assert "or about the BEST lap → get_time_on_table FIRST" in p
+    assert "'how was that lap' or 'why was that lap slower' → get_lap_summary FIRST" in p
+    summary_rule = p[p.index("'how was that lap'"):p.index("→ get_lap_summary FIRST")]
+    assert "losing time" not in summary_rule and "work on" not in summary_rule
+    # Never a flat "there is always a reference" that contradicts the tool's own
+    # "No comparable lap yet".
+    assert "never say there is no reference" not in p
+    assert "if it says there's no comparable lap, say that" in p
     spec = next(t for t in TOOLS if t["name"] == "get_time_on_table")
     assert "'find me N tenths'" in spec["description"]
+    loss = next(t for t in TOOLS if t["name"] == "get_time_loss")["description"]
+    assert "Call this FIRST for 'where am I losing time'" not in loss
 
 
 def test_prompt_leads_with_the_diagnosis_and_drops_apply_freely():

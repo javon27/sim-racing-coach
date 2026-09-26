@@ -1026,20 +1026,21 @@ class LapStore:
         with self._lock:
             row = self.conn.execute(
                 "SELECT ts, sim, track, car, lap_time, valid, telemetry_path, phase, session_id, "
-                "lap_no, pit, partial, mapping FROM laps WHERE id = ?",
+                "lap_no, pit, partial, mapping, s1, s2, s3 FROM laps WHERE id = ?",
                 (lap_id,),
             ).fetchone()
             if row is None:
                 raise KeyError(f"no lap with id {lap_id}")
             (ts, sim, track, car, lap_time, valid, telemetry_path, phase, session_id,
-             lap_no, pit, partial, mapping) = row
+             lap_no, pit, partial, mapping, *sectors) = row
             if telemetry_path is None:
                 raise FileNotFoundError(f"lap {lap_id} has no telemetry (imported from a result log)")
             with np.load(telemetry_path) as npz:
                 channels = {k: npz[k] for k in npz.files}
             return LapRecord(sim, track, car, lap_time, bool(valid), ts, channels, phase, session_id,
                               lap_no=lap_no, pit=(None if pit is None else bool(pit)),
-                              partial=partial, mapping=bool(mapping))
+                              partial=partial, mapping=bool(mapping),
+                              sectors=sectors if all(v is not None for v in sectors) else None)
 
     def best_lap(self, track: str, car: str, exclude_lap_id: int | None = None,
                  phase: str | None = None, session_id: str | None = None) -> LapRecord | None:
