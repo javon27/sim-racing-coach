@@ -124,6 +124,115 @@ def test_garage_chat_and_following_laps_share_one_instance(tmp_path, synthetic_l
     assert s.chats_for_session(inst)[0]["chat_id"] == "chat-1"
 
 
+def test_unsaved_instance_id_is_stable_across_polls_before_any_lap_or_chat(tmp_path, synthetic_lap):
+    """#177: with nothing persisted yet for a fresh weekend, two polls a minute apart
+    (e.g. two /status requests) must mint the SAME instance id, not a new one each
+    call -- else the frontend sees a new "live session" every minute and collapses
+    a pinned past-session review."""
+    from simcoach.store import LapStore
+
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    base = "laguna--bmw--online"
+    t0 = 1_000_000.0
+    s.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": base, "timestamp": t0}))
+
+    tg = t0 + 7 * 3600  # today, > 6h after the days-ago session -> a fresh weekend
+    first = s.resolve_current_instance(base, ts=tg)
+    second = s.resolve_current_instance(base, ts=tg + 60)  # a minute later
+    assert first.startswith(base + "~") and first != base
+    assert second == first
+
+
+def test_garage_chat_between_polls_lands_in_the_stable_pending_id(tmp_path, synthetic_lap):
+    """A garage chat asked between two polls (before any lap) is stamped with the
+    same pending id those polls reported -- not a third, different one."""
+    from simcoach.store import LapStore
+
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    base = "laguna--bmw--online"
+    t0 = 1_000_000.0
+    s.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": base, "timestamp": t0}))
+
+    tg = t0 + 7 * 3600
+    s.resolve_current_instance(base, ts=tg)  # poll 1 (e.g. /status)
+    chat_inst = s.resolve_current_instance(base, ts=tg + 30)  # a chat asked here
+    s.save_chat("chat-1", chat_inst, "Laguna", "BMW", None, "tips?", "sure", ts=tg + 30)
+    poll2 = s.resolve_current_instance(base, ts=tg + 60)  # poll 2, after the chat
+
+    assert poll2 == chat_inst
+
+
+def test_first_lap_after_garage_polling_lands_in_the_pending_id(tmp_path, synthetic_lap):
+    """The first lap saved after a run of pre-lap /status polls must land in the SAME
+    instance those polls reported -- not a second id minted from the lap's own
+    (slightly later) timestamp."""
+    from simcoach.store import LapStore
+
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    base = "laguna--bmw--online"
+    t0 = 1_000_000.0
+    s.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": base, "timestamp": t0}))
+
+    tg = t0 + 7 * 3600
+    s.resolve_current_instance(base, ts=tg)
+    pending = s.resolve_current_instance(base, ts=tg + 120)
+
+    lap = LapRecord(**{**synthetic_lap.__dict__, "session_id": base, "timestamp": tg + 300})
+    s.save(lap)
+    assert lap.session_id == pending
+
+
+def test_pending_instance_expires_after_the_gap_and_reminted_once(tmp_path, synthetic_lap):
+    """A driver who sits in the garage past the 6h gap (no lap or chat ever lands)
+    gets a fresh id once when the gap since the pending id's own first-seen time
+    expires -- then that new id stays stable too."""
+    from simcoach.store import LapStore
+
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    base = "laguna--bmw--online"
+    t0 = 1_000_000.0
+    s.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": base, "timestamp": t0}))
+
+    tg = t0 + 7 * 3600
+    first = s.resolve_current_instance(base, ts=tg)
+    still_first = s.resolve_current_instance(base, ts=tg + 6 * 3600)  # right at the gap edge
+    reminted = s.resolve_current_instance(base, ts=tg + 6 * 3600 + 1)  # gap exceeded
+    stable_again = s.resolve_current_instance(base, ts=tg + 6 * 3600 + 61)
+
+    assert still_first == first
+    assert reminted != first
+    assert stable_again == reminted
+
+
+def test_lap_that_mints_its_own_instance_makes_later_polls_follow_the_store(
+    tmp_path, synthetic_lap
+):
+    """If the capture path saves a lap that mints a DIFFERENT instance than an
+    earlier poll's pending id (e.g. the pending id's gap expired in between), the
+    next poll must follow what the store actually persisted, not the stale pending
+    guess."""
+    from simcoach.store import LapStore
+
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    base = "laguna--bmw--online"
+    t0 = 1_000_000.0
+    s.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": base, "timestamp": t0}))
+
+    tg = t0 + 7 * 3600
+    pending = s.resolve_current_instance(base, ts=tg)
+
+    # The lap lands long enough after `pending` was minted that ITS gap has also
+    # expired -> save() mints a second, different instance.
+    t_lap = tg + 6 * 3600 + 1
+    lap = LapRecord(**{**synthetic_lap.__dict__, "session_id": base, "timestamp": t_lap})
+    s.save(lap)
+    assert lap.session_id != pending
+
+    # A poll right after must report the STORE's instance, not the earlier pending one.
+    follow_up = s.resolve_current_instance(base, ts=t_lap + 60)
+    assert follow_up == lap.session_id
+
+
 def test_split_merged_sessions_migration(tmp_path):
     from simcoach.store import LapStore
     s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))

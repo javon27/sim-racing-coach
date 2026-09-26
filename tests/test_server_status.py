@@ -264,6 +264,36 @@ def test_track_map_with_frozen_outline_behaves_as_before(tmp_path, monkeypatch):
     assert m.get("path") and len(m["corners"]) == 1
 
 
+def test_status_polls_a_minute_apart_before_any_lap_report_the_same_session_id(
+    tmp_path, monkeypatch
+):
+    """#177: with LMU sitting in the garage and nothing persisted yet for this
+    weekend (a days-ago session for the same track/car/mode is > 6h old), two
+    /status polls a minute apart must NOT mint a new session_id each time -- the
+    frontend treats every session_id change as a new live session."""
+    from simcoach.lmu import smm
+
+    base = smm.session_id_for("spa", "gt3", True)
+    monkeypatch.setattr(smm, "read_live_status",
+                        lambda: {"track": "spa", "car": "gt3", "state": "garage"})
+    monkeypatch.setattr(smm, "read_live_session_id", lambda: base)
+
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    store.save(LapRecord("lmu", "spa", "gt3", 90.0, True, 1_000_000.0,
+                         {"lap_distance": np.zeros(2)}, session_id=base))
+    app = create_app(store, Coach(FakeModel()))
+    client = TestClient(app, base_url="http://127.0.0.1")
+
+    now = [1_000_000.0 + 7 * 3600]  # today, > 6h after the days-ago session above
+    monkeypatch.setattr(time, "time", lambda: now[0])
+    first = client.get("/status").json()["session_id"]
+    now[0] += 60
+    second = client.get("/status").json()["session_id"]
+
+    assert first is not None and first.startswith(base + "~")
+    assert second == first
+
+
 def test_status_probe_bounded_by_probe_timeout_not_a_full_hang(tmp_path, monkeypatch):
     # #1: LMU's REST port can accept and then never answer. The liveness probe
     # in _ensure_rest must be bounded by REST_PROBE_TIMEOUT (1.5s, < the 2s

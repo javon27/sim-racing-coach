@@ -506,6 +506,11 @@ class LapStore:
         # #160: provisional-lap keys already superseded by their commit, so a worker
         # write that lands after the commit is dropped (see save_live_corner).
         self._live_superseded: set[tuple] = set()
+        # #177: base -> (minted_instance_id, first_seen_ts) for a live session that
+        # hasn't persisted a lap or chat yet. Without this, every unsaved-instance
+        # resolve mints fresh from "now" (a new id each call, a minute apart) instead
+        # of holding still until something real lands. See _resolve_session_instance.
+        self._pending_instance: dict[str, tuple[str, float]] = {}
         current_version = self.conn.execute("PRAGMA user_version").fetchone()[0]
         # A FRESH db is version 0 AND empty. Version 0 with tables already present is a
         # db that lost its header -- `sqlite3 .dump` + restore does exactly this, since
@@ -848,8 +853,20 @@ class LapStore:
         if row is None:
             return base  # first ever for this combo
         if abs(ts - row[1]) <= _SESSION_GAP_S:
+            self._pending_instance.pop(base, None)  # a real row now speaks for this base
             return row[0]  # same weekend (or a sidecar restart) -> continue it
-        return f"{base}{_SESSION_SEP}{time.strftime('%Y%m%dT%H%M', time.localtime(ts))}"
+        # #177: last real activity is outside the gap, so this is a fresh weekend with
+        # nothing persisted for it yet. Minting straight from `ts` here would give a
+        # different id on every call (a poll a minute later, or the first lap's own
+        # save-time ts) -- reuse the id already minted for this base while it's still
+        # within the gap of when it was FIRST minted, so /status polls, a garage chat,
+        # and the first lap that follows all land on the same id.
+        pending = self._pending_instance.get(base)
+        if pending is not None and abs(ts - pending[1]) <= _SESSION_GAP_S:
+            return pending[0]
+        minted = f"{base}{_SESSION_SEP}{time.strftime('%Y%m%dT%H%M', time.localtime(ts))}"
+        self._pending_instance[base] = (minted, ts)
+        return minted
 
     def resolve_current_instance(self, base: str, ts: float | None = None) -> str:
         """The current session-instance id for a deterministic base
