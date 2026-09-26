@@ -118,9 +118,13 @@ def register(app, deps) -> None:
             if live:
                 on_track = True
                 track, vehicle = live
-                # #165: on track the chat belongs to the LIVE instance (resolved below),
-                # never the session picked in Sessions -- last weekend's, say.
-                eff_session_id = None
+                # #165: on track the chat belongs to the LIVE instance -- never the
+                # session picked in Sessions (last weekend's, say), nor a stale in-process
+                # latest lap: resolve(base, now) returns that lap's instance only within
+                # the gap. None (live id unreadable) falls to the latest-lap path below.
+                # So while LMU has a session loaded (even the garage), a past session
+                # can't be discussed with session-scoped tools until LMU is left.
+                eff_session_id = _live_session_id()
                 try:
                     # #160: the lap being driven and the car's live status, for the
                     # "this lap" reads and get_car_status. Never fails the turn.

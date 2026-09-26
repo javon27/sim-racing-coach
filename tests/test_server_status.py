@@ -129,12 +129,35 @@ def test_status_same_mode_keeps_latest_lap_instance(tmp_path, monkeypatch):
     monkeypatch.setattr(smm, "read_live_session_id",
                         lambda: smm.session_id_for("spa", "gt3", True))
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    rec = LapRecord("lmu", "spa", "gt3", 90.0, True, 0.0, {},
-                    session_id="spa--gt3--online~7")
+    t0 = time.time()
+    store.save(LapRecord("lmu", "spa", "gt3", 90.0, True, t0 - 3 * 86400,
+                         {"lap_distance": np.zeros(2)}, session_id="spa--gt3--online"))
+    rec = LapRecord("lmu", "spa", "gt3", 90.0, True, t0 - 60,
+                    {"lap_distance": np.zeros(2)}, session_id="spa--gt3--online")
+    lap_id = store.save(rec)                       # this weekend: a `~` instance
+    assert rec.session_id.startswith("spa--gt3--online~")
     app = create_app(store, Coach(FakeModel()))
-    app.state.latest = {"record": rec, "lap_id": 5}
+    app.state.latest = {"record": rec, "lap_id": lap_id}
     b = TestClient(app, base_url="http://127.0.0.1").get("/status").json()
-    assert b["session_id"] == "spa--gt3--online~7" and b["lap_id"] == 5
+    assert b["session_id"] == rec.session_id and b["lap_id"] == lap_id
+
+
+def test_status_stale_latest_same_base_reports_the_live_instance(tmp_path, monkeypatch):
+    # #165: the sidecar left up since last weekend -- the in-process latest lap has the
+    # live base but is > 6 h old. The session is this weekend's new instance, not it.
+    from simcoach.lmu import smm
+    monkeypatch.setattr(smm, "read_live_status",
+                        lambda: {"track": "spa", "car": "gt3", "state": "garage"})
+    monkeypatch.setattr(smm, "read_live_session_id",
+                        lambda: smm.session_id_for("spa", "gt3", True))
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    rec = LapRecord("lmu", "spa", "gt3", 90.0, True, time.time() - 3 * 86400,
+                    {"lap_distance": np.zeros(2)}, session_id="spa--gt3--online")
+    lap_id = store.save(rec)
+    app = create_app(store, Coach(FakeModel()))
+    app.state.latest = {"record": rec, "lap_id": lap_id}
+    b = TestClient(app, base_url="http://127.0.0.1").get("/status").json()
+    assert b["session_id"].startswith("spa--gt3--online~"), b["session_id"]
 
 
 def test_status_falls_back_to_track_car_when_live_id_unreadable(tmp_path, monkeypatch):

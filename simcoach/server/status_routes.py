@@ -37,7 +37,9 @@ def register(app, deps) -> None:
         if matches_live:
             record = latest["record"]
             track, car = record.track, record.car
-            session_id, lap_id = record.session_id, latest["lap_id"]
+            # #165: the live instance, not a stale latest lap's (sidecar left up > 6 h).
+            session_id = (_live_session_id(base) if base else None) or record.session_id
+            lap_id = latest["lap_id"]
         elif live:
             track, car = live["track"], live["car"]
             # The live track/car doesn't match the latest stored lap (a track

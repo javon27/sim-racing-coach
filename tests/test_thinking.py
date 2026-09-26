@@ -543,6 +543,7 @@ def _live_race_app(tmp_path, monkeypatch, synthetic_lap, *, phase, result):
     from simcoach.model_types import LapRecord, RaceSample
     from simcoach.race import LapFacts, build_snapshot
     monkeypatch.setattr(smm, "read_session_track_car", lambda: ("test_track", "test_car"))
+    monkeypatch.setattr(smm, "read_live_session_id", lambda: "s1")
     monkeypatch.setattr(smm, "read_live_status", lambda: {
         "track": "test_track", "car": "test_car", "state": "garage", "speed": 0.0})
     field = lmu_live.empty_snapshot()

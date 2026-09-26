@@ -92,7 +92,7 @@ def _session_base(sid: str) -> str:
     """The (track, car, mode) base of a session id, dropping any ~<instance> suffix."""
     return sid.split(_SESSION_SEP, 1)[0]
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
@@ -247,6 +247,7 @@ CREATE TABLE IF NOT EXISTS laps (
     max_laps INTEGER,
     mapping INTEGER DEFAULT 0
 );
+CREATE INDEX IF NOT EXISTS laps_session ON laps (session_id);
 CREATE TABLE IF NOT EXISTS ingested_files (
     path TEXT PRIMARY KEY,
     mtime REAL
@@ -759,6 +760,13 @@ class LapStore:
                 # v23 -> v24: provisional per-corner rows for the lap in progress (#160).
                 # A new table, nothing to backfill.
                 self.conn.executescript(_LIVE_CORNERS_SCHEMA)
+            # v24 -> v25: index laps.session_id -- session reads, and the #165 "does
+            # this chat's instance have laps" probe in the session resolve. Guarded
+            # like v18-v23 (a has-tables v0 db may lack laps).
+            if current_version < 25 and self.conn.execute(
+                    "PRAGMA table_info(laps)").fetchone():
+                self.conn.execute(
+                    "CREATE INDEX IF NOT EXISTS laps_session ON laps (session_id)")
         if current_version != stamp:
             self.conn.execute(f"PRAGMA user_version = {stamp}")
         self.conn.commit()

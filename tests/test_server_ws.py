@@ -645,6 +645,36 @@ def test_ws_coach_on_track_stamps_the_live_instance_not_the_selected_session(
     assert _next_lap_sid(store, synthetic_lap, base) == sid
 
 
+def test_ws_coach_on_track_ignores_a_stale_in_process_latest_lap(
+        tmp_path, synthetic_lap, monkeypatch):
+    # #165 red-team: the sidecar left up since last weekend -- app.state.latest is last
+    # weekend's lap (same base). In the garage now, no lap yet: the chat is this
+    # weekend's instance, not the stale lap's.
+    import time
+
+    from simcoach.lmu import smm
+    from simcoach.model_types import LapRecord
+    base = smm.session_id_for("spa", "gt3", True)
+    monkeypatch.setattr(smm, "read_session_track_car", lambda: ("spa", "gt3"))
+    monkeypatch.setattr(smm, "read_live_session_id", lambda: base)
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "d"))
+    rec = LapRecord(**{**synthetic_lap.__dict__, "track": "spa", "car": "gt3",
+                       "session_id": base, "timestamp": time.time() - 3 * 86400})
+    lid = store.save(rec)
+    app = create_app(store, Coach(FakeModel(reply="ok")))
+    app.state.latest = {"record": rec, "lap_id": lid}
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "how's my pace?"})
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"):
+                break
+    sid = store.chat_messages(ev["chat_id"])[0]["session_id"]
+    assert sid != rec.session_id and sid.startswith(base + "~"), sid
+    assert _next_lap_sid(store, synthetic_lap, base) == sid
+
+
 def test_ws_coach_off_track_keeps_the_selected_session(tmp_path, synthetic_lap, monkeypatch):
     # #165: reviewing last weekend at the desk, the chat stays on that session -- and
     # that fresh chat never drags the next weekend's laps back into it.

@@ -2623,3 +2623,18 @@ def test_saving_a_laps_battle_twice_replaces_it_never_duplicates(tmp_path, synth
     assert s.battle_laps(lid) == [me, b]
     with pytest.raises(sqlite3.IntegrityError):     # the table itself refuses a duplicate
         s.conn.execute("INSERT INTO battle_laps (lap_id, car_id) VALUES (?, 1)", (lid,))
+
+
+def test_v25_indexes_laps_session_id_on_an_existing_db(tmp_path):
+    # #165: the session resolve's per-chat "has laps?" probe needs laps(session_id)
+    # indexed -- on a db created before v25 too, not only a fresh one.
+    from simcoach.store import LapStore
+    db = str(tmp_path / "c.sqlite")
+    s = LapStore(db, str(tmp_path / "data"))
+    idx = "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'laps_session'"
+    assert s.conn.execute(idx).fetchone()
+    s.conn.execute("DROP INDEX laps_session")
+    s.conn.execute("PRAGMA user_version = 24")
+    s.conn.commit()
+    s.conn.close()
+    assert LapStore(db, str(tmp_path / "data")).conn.execute(idx).fetchone()
