@@ -2271,10 +2271,17 @@ class CoachContext:
             if win is None:
                 return ("No race in this session: battle reads are stored for race laps "
                         "only.")
+            # One entry per race lap as the driver counts them: a lap and its in-lap
+            # fragment share a label (the one with a read wins), and 'lap 0' rows are
+            # the grid/formation (mTotalLaps 0), not a race lap.
+            by_label: dict[str, object] = {}
+            for i in win["lap_ids"]:
+                name = label_by_id.get(i, f"lap id {i}")
+                if not name.endswith(" lap 0") and by_label.get(name) is None:
+                    by_label[name] = stored(i)
             head = self._race_line()
-            return format_race_battle(
-                [(label_by_id.get(i, f"lap id {i}"), stored(i)) for i in win["lap_ids"]],
-                self.units, rival, head=f"{head} " if head else "")
+            return format_race_battle(list(by_label.items()), self.units, rival,
+                                      head=f"{head} " if head else "")
         record, lap_id = self._resolve_lap(which)
         if record is None:
             return self._no_lap_msg(which)

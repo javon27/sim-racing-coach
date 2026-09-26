@@ -2457,6 +2457,11 @@ def _post_race(tmp_path, synthetic_lap, on_track=False):
     cmap = CornerMap([Corner(1, "La Source", "right", 200.0, 250.0, 300.0, label="1"),
                       Corner(2, "Eau Rouge", "left", 600.0, 650.0, 700.0, label="2")])
     deltas = {2: (0.05, 0.25, 0.30), 3: (0.05, 0.30, 0.40), 4: (0.60, 0.20, 0.20)}
+    # Not race laps of their own: a grid row (game lap 0) and lap 5's in-lap fragment.
+    for n, ts, kind in ((0, 1000.0, "partial"), (5, 1590.0, "in")):
+        store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1",
+                                "phase": "race", "lap_no": n, "timestamp": ts,
+                                "partial": kind, "lap_time": None, "valid": False}))
     for n in range(1, 6):
         lid = store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1",
                                       "phase": "race", "lap_no": n,
