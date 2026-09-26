@@ -118,6 +118,9 @@ def register(app, deps) -> None:
             if live:
                 on_track = True
                 track, vehicle = live
+                # #165: on track the chat belongs to the LIVE instance (resolved below),
+                # never the session picked in Sessions -- last weekend's, say.
+                eff_session_id = None
                 try:
                     # #160: the lap being driven and the car's live status, for the
                     # "this lap" reads and get_car_status. Never fails the turn.
@@ -193,8 +196,10 @@ def register(app, deps) -> None:
             # No lap captured yet (e.g. a question asked in the garage): stamp the
             # chat with the CURRENT live session so it isn't orphaned — the laps that
             # follow join the same instance and the chat stays resumable via Sessions.
+            # The live id unreadable: the client's session rather than none (#165: a
+            # chat on a session with laps no longer steers the store's resolve).
             if eff_session_id is None:
-                eff_session_id = _live_session_id()
+                eff_session_id = _live_session_id() or session_id
             cfg = config.load_config()
             ctx = CoachContext(app.state.store, record=None, lap_id=None, cmap=cmap,
                                units=cfg.get("units", "metric"),

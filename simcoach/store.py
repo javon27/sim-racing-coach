@@ -820,6 +820,10 @@ class LapStore:
         # instance must be joined by the laps that follow (within the gap), so the chat
         # stays linked to the session and resumable — else the first lap would mint a
         # second instance minutes later and orphan the chat.
+        # #165: only a chat on an instance with NO laps (that garage case) counts. A
+        # chat on an instance that has laps is a review of it (e.g. last weekend's,
+        # picked in Sessions); its laps already speak for it, and counting the chat's
+        # fresh ts would file this weekend's laps under last weekend.
         match = ("substr(session_id, 1, ?) = ? "
                  "AND (length(session_id) = ? OR substr(session_id, ?, 1) = ?)")
         args = (len(base), base, len(base), len(base) + 1, _SESSION_SEP)
@@ -827,7 +831,9 @@ class LapStore:
             f"SELECT session_id, ts FROM ("
             f"  SELECT session_id, ts FROM laps WHERE {match} "
             f"  UNION ALL "
-            f"  SELECT session_id, ts FROM coach_chat WHERE session_id IS NOT NULL AND {match} "
+            f"  SELECT session_id, ts FROM coach_chat c WHERE session_id IS NOT NULL "
+            f"  AND {match} AND NOT EXISTS "
+            f"  (SELECT 1 FROM laps l WHERE l.session_id = c.session_id)"
             f") ORDER BY ts DESC LIMIT 1",
             args + args,
         ).fetchone()

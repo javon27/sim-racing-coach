@@ -2887,15 +2887,18 @@ def test_provisional_pre_race_plan_reads_this_weekends_laps_from_the_bare_base(
 
 
 def test_an_old_weekend_chat_as_newest_activity_never_serves_the_old_race(
-        tmp_path, synthetic_lap):
+        tmp_path, synthetic_lap, monkeypatch):
     """#161 red-team round 3 (t15 POISON=1): a chat stamped under the OLD weekend's bare
-    id is the newest activity, so resolving the base returns the old weekend -- and its
+    id was the newest activity, so resolving the base returned the old weekend -- and its
     race lap 1 (a flat FL) was stated as this race's. Rows must fall inside the store's
-    session gap before the live lap started, whatever id they resolve under."""
+    session gap before the live lap started, whatever id they resolve under. #165 fixed
+    that resolve at the root; this stays as defense in depth, so the mis-resolve is
+    forced here."""
     from simcoach.race import LapFacts, build_snapshot
     store, base, inst, T = _repeat_weekend(tmp_path, synthetic_lap)
     store.save_chat("chat-old-selected", base, None, None, None, "q", "a", ts=T + 1150)
-    assert store.resolve_current_instance(base, T + 1200) == base      # the poison holds
+    assert store.resolve_current_instance(base, T + 1200) == inst      # #165: no poison
+    monkeypatch.setattr(store, "resolve_current_instance", lambda b, ts=None: base)
     snap = build_snapshot([LapFacts(lap_no=1, lap_time=95.0, clean=False)], inst)
     ctx = CoachContext(store, track=synthetic_lap.track, car=synthetic_lap.car,
                        session_id=inst, on_track=True, race=snap,

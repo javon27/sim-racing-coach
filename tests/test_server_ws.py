@@ -600,6 +600,60 @@ def test_ws_coach_mode_switch_uses_live_session_not_stale_latest_lap(
         assert sid.startswith(smm.session_id_for("spa", "gt3", live)), sid
 
 
+def _old_weekend_selected(tmp_path, synthetic_lap, monkeypatch, live):
+    """#165: last weekend's session (spa/gt3 online, 3 days ago, under the bare base) is
+    the one picked in Sessions; a question is asked now -- on track or at the desk.
+    Returns (store, base, the chat's session id)."""
+    import time
+
+    from simcoach.lmu import smm
+    from simcoach.model_types import LapRecord
+    base = smm.session_id_for("spa", "gt3", True)
+    monkeypatch.setattr(smm, "read_session_track_car",
+                        lambda: ("spa", "gt3") if live else None)
+    monkeypatch.setattr(smm, "read_live_session_id", lambda: base if live else None)
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "d"))
+    store.save(LapRecord(**{**synthetic_lap.__dict__, "track": "spa", "car": "gt3",
+                            "session_id": base, "timestamp": time.time() - 3 * 86400}))
+    app = create_app(store, Coach(FakeModel(reply="ok")))
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "how's my pace?", "session_id": base})
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"):
+                break
+    return store, base, store.chat_messages(ev["chat_id"])[0]["session_id"]
+
+
+def _next_lap_sid(store, synthetic_lap, base):
+    import time
+
+    from simcoach.model_types import LapRecord
+    rec = LapRecord(**{**synthetic_lap.__dict__, "track": "spa", "car": "gt3",
+                       "session_id": base, "timestamp": time.time() + 60})
+    store.save(rec)
+    return rec.session_id
+
+
+def test_ws_coach_on_track_stamps_the_live_instance_not_the_selected_session(
+        tmp_path, synthetic_lap, monkeypatch):
+    # #165: on track with LAST weekend's session selected, the chat is this weekend's
+    # (a fresh instance) -- and this weekend's next lap lands in it, not last weekend.
+    store, base, sid = _old_weekend_selected(tmp_path, synthetic_lap, monkeypatch, True)
+    assert sid != base and sid.startswith(base + "~"), sid
+    assert _next_lap_sid(store, synthetic_lap, base) == sid
+
+
+def test_ws_coach_off_track_keeps_the_selected_session(tmp_path, synthetic_lap, monkeypatch):
+    # #165: reviewing last weekend at the desk, the chat stays on that session -- and
+    # that fresh chat never drags the next weekend's laps back into it.
+    store, base, sid = _old_weekend_selected(tmp_path, synthetic_lap, monkeypatch, False)
+    assert sid == base
+    assert store.resolve_current_instance(base) != base
+    assert _next_lap_sid(store, synthetic_lap, base).startswith(base + "~")
+
+
 def test_ws_coach_respects_imperial_units(tmp_path, monkeypatch):
     # Regression: the coach's unit labels + tool data must follow the user's
     # config (imperial), not silently default to metric.
