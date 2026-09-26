@@ -2449,14 +2449,15 @@ def _post_race(tmp_path, synthetic_lap, on_track=False):
     his per-lap deltas (his time minus yours; + = you quicker) are:
       T1           +0.05, +0.05, +0.60   median 0.05 (a SUM, 0.70, would list it)
       T1 exit->T2  +0.25, +0.30, +0.20   median 0.25 -> you are quicker
-      T2           -0.30, -0.40, -0.20   median -0.30 -> he is quicker"""
+      T2           -0.30, -0.40, +0.50   median -0.30 -> he is quicker; lap 4 was
+                                         YOURS, so only laps 2-3 are named for him"""
     from simcoach.battle import CarLap
     from simcoach.corners import Corner
     from simcoach.model_types import LapRecord
     store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
     cmap = CornerMap([Corner(1, "La Source", "right", 200.0, 250.0, 300.0, label="1"),
                       Corner(2, "Eau Rouge", "left", 600.0, 650.0, 700.0, label="2")])
-    deltas = {2: (0.05, 0.25, 0.30), 3: (0.05, 0.30, 0.40), 4: (0.60, 0.20, 0.20)}
+    deltas = {2: (0.05, 0.25, 0.30), 3: (0.05, 0.30, 0.40), 4: (0.60, 0.20, -0.50)}
     # Not race laps of their own: a grid row (game lap 0) and lap 5's in-lap fragment.
     for n, ts, kind in ((0, 1000.0, "partial"), (5, 1590.0, "in")):
         store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1",
@@ -2491,7 +2492,7 @@ def test_post_race_battle_is_the_median_per_zone_over_the_race_laps(tmp_path, sy
         assert ("Compared on 3 of 5 race laps (race lap 2, race lap 3, race lap 4); skipped "
                 "1 with no stored battle read, 1 with him never within 2 s of you.") in out
         assert ("That car is quicker: Turn 2 (Eau Rouge) by 0.30 s (median over 3 laps; "
-                "beyond the noise on race lap 2, race lap 3, race lap 4).") in out
+                "beyond the noise on race lap 2, race lap 3).") in out
         assert ("You are quicker: Turn 1 (La Source) exit to Turn 2 (Eau Rouge) by 0.25 s "
                 "(median over 3 laps; beyond the noise on race lap 2, race lap 3, "
                 "race lap 4).") in out
@@ -2504,8 +2505,9 @@ def test_post_race_battle_for_one_stored_lap(tmp_path, synthetic_lap):
     ctx = _post_race(tmp_path, synthetic_lap)
     out = ctx.dispatch("get_battle", {"rival": "Momo", "which": "race lap 4"})
     assert out.startswith("Stored read for race lap 4.\nAs of lap 4.")
-    assert "You are quicker: Turn 1 (La Source) by 0.60 s; Turn 1 (La Source) exit" in out
-    assert "That car is quicker: Turn 2 (Eau Rouge) by 0.20 s." in out
+    assert ("You are quicker: Turn 1 (La Source) by 0.60 s; Turn 2 (Eau Rouge) by 0.50 s; "
+            "Turn 1 (La Source) exit to Turn 2 (Eau Rouge) by 0.20 s.") in out
+    assert "That car is quicker: nowhere by more than the timing noise." in out
     assert ctx.dispatch("get_battle", {"which": "race lap 1"}).startswith(
         "No battle read is stored for race lap 1:")
 
@@ -2537,12 +2539,92 @@ def test_a_live_race_still_reads_its_snapshot_and_a_new_race_its_note(tmp_path, 
                                 exit={1: 105.3})], [t1])
     ctx.race = build_snapshot([LapFacts(lap_no=12, lap_time=100.0, clean=True)], "s1",
                               battle=live)
-    assert ctx.dispatch("get_battle", {}).startswith("As of lap 12.\nRival (nearest to you "
-                                                     "on lap 12): Live Guy")
+    for which in ("latest", "last lap", "current", "last completed lap", None):
+        assert ctx.dispatch("get_battle", {"which": which}).startswith(
+            "As of lap 12.\nRival (nearest to you on lap 12): Live Guy"), which
     # An explicit stored lap / the whole race reads the store, even live.
     assert "Momo Rossi" in ctx.dispatch("get_battle", {"which": "race"})
     ctx.race, ctx.race_note = None, "Not enough laps yet: x"
     assert ctx.dispatch("get_battle", {}) == "Not enough laps yet: x"
+
+
+
+def _add_race(ctx, t0, rows):
+    """Another race window of session s1 (t0 > 20 min after the last): a grid row, then
+    race laps 1..len(rows), each stored with the battle rows `rows[i]` (None = none)."""
+    from simcoach.model_types import LapRecord
+    ctx.store.save(LapRecord(**{**ctx._syn.__dict__, "session_id": "s1", "phase": "race",
+                                "lap_no": 0, "timestamp": t0, "partial": "partial",
+                                "lap_time": None, "valid": False}))
+    for n, cars in enumerate(rows, start=1):
+        lid = ctx.store.save(LapRecord(**{**ctx._syn.__dict__, "session_id": "s1",
+                                          "phase": "race", "lap_no": n,
+                                          "timestamp": t0 + 100.0 * n}))
+        if cars:
+            ctx.store.save_battle(lid, cars)
+    return CoachContext(ctx.store, cmap=ctx.cmap, track=ctx.track, car=ctx.car,
+                        session_id="s1", on_track=False)
+
+
+def _race2(tmp_path, synthetic_lap):
+    """Race 1 = _post_race (Momo). Race 2, no Momo: lap 1 no rows; lap 2 Z. New 0.30 s
+    slower through T1; lap 3 Z. New in the pit lane the whole lap; lap 4 Z. New absent."""
+    from simcoach.battle import CarLap
+    ctx = _post_race(tmp_path, synthetic_lap)
+    ctx._syn = synthetic_lap
+    me = CarLap(1, "You", "E1", 4, True, entry={1: 10.0, 2: 20.0}, exit={1: 12.0, 2: 22.0})
+    new = CarLap(5, "Z. New", "E5", 2, False, entry={1: 10.5, 2: 20.5},
+                 exit={1: 12.8, 2: 22.5}, model="Aston Martin Vantage")
+    pitted = CarLap(5, "Z. New", "E5", 2, False, entry={1: 10.5, 2: 20.5},
+                    exit={1: 12.8, 2: 22.5}, model="Aston Martin Vantage",
+                    pit=[(0.0, 99.0)])
+    else_ = CarLap(6, "Q. Else", "E6", 5, False, entry={1: 50.0}, exit={1: 52.0})
+    out = _add_race(ctx, 5000.0, [None, [me, new], [me, pitted], [me, else_]])
+    out._syn = synthetic_lap
+    return out
+
+
+def test_a_named_rival_not_in_the_latest_race_is_read_from_his_last_race(tmp_path,
+                                                                        synthetic_lap):
+    ctx = _race2(tmp_path, synthetic_lap)
+    out = ctx.dispatch("get_battle", {"rival": "Momo"})
+    assert out.startswith("Race 1 of this session (started ")
+    assert ("'Momo' was not in race 2 (the latest with a battle read); this is race 1, the "
+            "most recent race he was in. Rival (the car you named): Momo Rossi") in out
+    assert "Compared on 3 of 5 race laps (race 1 lap 2, race 1 lap 3, race 1 lap 4)" in out
+    # With no rival named, the latest race is read, and nothing says 'was not in'.
+    latest = ctx.dispatch("get_battle", {})
+    assert latest.startswith("Race 2 of this session") and "was not in" not in latest
+    assert "Z. New" in latest
+
+
+def test_race_n_in_a_multi_race_session_is_that_whole_race(tmp_path, synthetic_lap):
+    ctx = _race2(tmp_path, synthetic_lap)
+    one = ctx.dispatch("get_battle", {"which": "race 1"})
+    assert one.startswith("Race 1 of this session") and "Momo Rossi" in one
+    assert "Compared on 3 of 5 race laps (race 1 lap 2, race 1 lap 3, race 1 lap 4)" in one
+    assert "was not in" not in one
+    two = ctx.dispatch("get_battle", {"rival": "Z. New", "which": "the race 2"})
+    assert ("Compared on 1 of 4 race laps (race 2 lap 2); skipped 1 with no stored battle "
+            "read, 1 with him not recorded, 1 with you or him in the pit lane.") in two
+    assert "You are quicker: Turn 1 (La Source) by 0.30 s" in two
+    # One lap of an earlier race still reads that lap.
+    assert ctx.dispatch("get_battle", {"which": "race 1 lap 4"}).startswith(
+        "Stored read for race 1 lap 4.\nAs of lap 4.")
+
+
+def test_a_grid_only_latest_race_falls_back_to_the_last_race_with_a_read(tmp_path,
+                                                                         synthetic_lap):
+    ctx = _add_race(_race2(tmp_path, synthetic_lap), 9000.0, [])   # race 3: grid row only
+    out = ctx.dispatch("get_battle", {})
+    assert out.startswith("Race 2 of this session") and "Z. New" in out
+
+
+def test_a_name_matching_several_cars_says_so_like_live(tmp_path, synthetic_lap):
+    ctx = _post_race(tmp_path, synthetic_lap)
+    out = ctx.dispatch("get_battle", {"rival": "GT3"})
+    assert ("Rival (2 cars in your class match 'GT3'; this is the one nearest you on the "
+            "most laps): Momo Rossi") in out
 
 
 # --- #161: incident laps stay out of the tire trend's pace slope ----------------

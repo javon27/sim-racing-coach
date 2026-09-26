@@ -34,7 +34,12 @@ from simcoach.analysis import (
     stint_wear_baseline,
     time_loss_buckets,
 )
-from simcoach.battle import build_battle, format_battle, format_race_battle
+from simcoach.battle import (
+    build_battle,
+    format_battle,
+    format_race_battle,
+    rival_matches,
+)
 from simcoach.coach import _setup_lines, live_electronics
 from simcoach.corners import CornerMap
 from simcoach.format import (
@@ -385,7 +390,9 @@ TOOLS = [
                 "which": {"type": "string",
                           "description": "Optional: 'race' for the whole most recent race, "
                                          "or one stored race lap by its in-session number "
-                                         "like 'race lap 7'. Omit for the default (live: "
+                                         "like 'race lap 7'; 'race 2' for the whole second "
+                                         "race of a multi-race session, 'race 1 lap 5' for "
+                                         "one lap of it. Omit for the default (live: "
                                          "the last completed lap; after the race: 'race')."},
             },
         },
@@ -2247,11 +2254,12 @@ class CoachContext:
         no race live -- or when the driver names a stored lap or 'race' -- the read is
         rebuilt from the battle_laps rows stored at each race lap's commit."""
         which = (which or "").strip().lower()
+        live = self._no_live_race()
+        if live is None and which in ("", "latest", "last lap", "current",
+                                      "last completed lap"):
+            return format_battle(self.race.battle, self.race.as_of_lap, self.units,
+                                 rival, note=self.race.battle_note)
         if which in ("", "latest"):
-            live = self._no_live_race()
-            if live is None:
-                return format_battle(self.race.battle, self.race.as_of_lap, self.units,
-                                     rival, note=self.race.battle_note)
             if self.on_track and self.race_note:
                 return live   # a race is live, its first lap not in: never the last race's
             if self._current_race() is None:
@@ -2260,17 +2268,35 @@ class CoachContext:
         corners = self.cmap.corners if self.cmap else []
         if not corners:
             return "No battle read: there is no corner map for this track."
+        windows = self._race_windows()
+        whole = re.fullmatch(r"(?:the )?race (\d+)", which) if len(windows) > 1 else None
+        target = next((w for w in windows if whole and w["index"] == int(whole[1])), None)
+        if target is not None or which in ("race", "the race", "this race", "last race",
+                                           "the whole race"):
+            return self._stored_race_battle(rival, target, corners)
         label_by_id, _ = self._lap_numbering()
+        record, lap_id = self._resolve_lap(which)
+        if record is None:
+            return self._no_lap_msg(which)
+        name = label_by_id.get(lap_id, f"lap id {lap_id}")
+        laps = self.store.battle_laps(lap_id)
+        b = build_battle(laps, corners) if laps else None
+        if b is None or record.lap_no is None:
+            return (f"No battle read is stored for {name}: none is stored for a lap outside "
+                    "a race, with a stop, an out-/in-lap, a partly captured lap, or a lap "
+                    "the field was not recorded on.")
+        return f"Stored read for {name}.\n" + format_battle(b, record.lap_no, self.units, rival)
 
-        def stored(lap_id):
-            laps = self.store.battle_laps(lap_id)
-            return build_battle(laps, corners) if laps else None
+    def _stored_race_battle(self, rival, target, corners):
+        """#174: a whole race's stored battle read -- `target` (a race window), or the
+        latest race with a stored read; a named rival who wasn't in it is looked for in
+        this session's earlier races, newest first."""
+        label_by_id, _ = self._lap_numbering()
+        windows = self._race_windows()
+        if not windows:
+            return "No race in this session: battle reads are stored for race laps only."
 
-        if which in ("race", "the race", "this race", "last race", "the whole race"):
-            win = self._current_race()
-            if win is None:
-                return ("No race in this session: battle reads are stored for race laps "
-                        "only.")
+        def race_laps(win):
             # One entry per race lap as the driver counts them: a lap and its in-lap
             # fragment share a label (the one with a read wins), and 'lap 0' rows are
             # the grid/formation (mTotalLaps 0), not a race lap.
@@ -2278,20 +2304,29 @@ class CoachContext:
             for i in win["lap_ids"]:
                 name = label_by_id.get(i, f"lap id {i}")
                 if not name.endswith(" lap 0") and by_label.get(name) is None:
-                    by_label[name] = stored(i)
-            head = self._race_line()
-            return format_race_battle(list(by_label.items()), self.units, rival,
-                                      head=f"{head} " if head else "")
-        record, lap_id = self._resolve_lap(which)
-        if record is None:
-            return self._no_lap_msg(which)
-        name = label_by_id.get(lap_id, f"lap id {lap_id}")
-        b = stored(lap_id)
-        if b is None or record.lap_no is None:
-            return (f"No battle read is stored for {name}: none is stored for a lap outside "
-                    "a race, with a stop, an out-/in-lap, a partly captured lap, or a lap "
-                    "the field was not recorded on.")
-        return f"Stored read for {name}.\n" + format_battle(b, record.lap_no, self.units, rival)
+                    laps = self.store.battle_laps(i)
+                    by_label[name] = build_battle(laps, corners) if laps else None
+            return list(by_label.items())
+
+        read = [] if target is not None else [
+            (w, laps) for w, laps in ((w, race_laps(w)) for w in reversed(windows))
+            if any(b for _, b in laps)]
+        # The latest race with a read; a named rival's most recent race if he wasn't in
+        # it (the driver is always in the field, so naming himself never moves on).
+        win, laps = (
+            (target, race_laps(target)) if target is not None else
+            next((r for r in read if not rival
+                  or any(rival_matches(b.laps, rival) for _, b in r[1] if b)), None)
+            or (read[0] if read else (windows[-1], race_laps(windows[-1]))))
+        head = ""
+        if len(windows) > 1:
+            started = time.strftime("%H:%M", time.localtime(win["start_ts"]))
+            head = f"Race {win['index']} of this session (started {started}). "
+        if read and win is not read[0][0]:
+            head += (f"{rival!r} was not in race {read[0][0]['index']} (the latest with a "
+                     f"battle read); this is race {win['index']}, the most recent race he "
+                     "was in. ")
+        return format_race_battle(laps, self.units, rival, head=head)
 
     def get_setup(self):
         if not self.setup:

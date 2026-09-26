@@ -10,6 +10,7 @@ tenths of a second apart: BATTLE_NOISE_FLOOR_S hides anything smaller than that 
 from __future__ import annotations
 
 import bisect
+import dataclasses
 import math
 import re
 import statistics
@@ -436,14 +437,17 @@ def format_race_battle(laps: list[tuple[str, Battle | None]], units: str = "metr
     for _, b in have:
         field_.update((ident(c), c) for c in b.laps if not c.is_player)
     if rival:
-        votes = Counter(ident(h[0]) for _, b in have
-                        if (h := rival_matches([c for c in b.laps if not c.is_player],
-                                               rival, me_of(b))))
+        hits = [rival_matches([c for c in b.laps if not c.is_player], rival, me_of(b))
+                for _, b in have]
+        votes = Counter(ident(h[0]) for h in hits if h)
         if not votes:
             if rival_matches([me_of(have[-1][1])], rival):
                 return f"{head}{rival} is you, not a rival."
             return head + _no_match(rival, list(field_.values()))
-        why = "the car you named"
+        n = len({ident(c) for h in hits for c in h})
+        why = ("the car you named" if n == 1 else
+               f"{n} cars in your class match {rival!r}; this is the one nearest you on the "
+               "most laps")
     else:
         votes = Counter(ident(b.rivals[0]) for _, b in have if b.rivals)
         if not votes:
@@ -454,12 +458,17 @@ def format_race_battle(laps: list[tuple[str, Battle | None]], units: str = "metr
     key = votes.most_common(1)[0][0]
     o = field_[key]
     per_zone: dict[str, list[tuple[str, Zone]]] = {}
-    compared, far, untimed = [], 0, 0
+    compared, far, untimed, absent, pitted = [], 0, 0, 0, 0
     for name, b in have:
         me = me_of(b)
         his = next((c for c in b.laps if not c.is_player and ident(c) == key), None)
         zones = zone_deltas(me, his, b.corners) if his is not None else []
-        if not zones:
+        if his is None:
+            absent += 1
+        elif not zones and zone_deltas(dataclasses.replace(me, pit=[]),
+                                       dataclasses.replace(his, pit=[]), b.corners):
+            pitted += 1     # timed for both, but every zone overlapped a pit-lane span
+        elif not zones:
             untimed += 1
         elif not _was_near(me, his):
             far += 1
@@ -469,6 +478,8 @@ def format_race_battle(laps: list[tuple[str, Battle | None]], units: str = "metr
                 per_zone.setdefault(z.label, []).append((name, z))
     skipped = [f"{n} {why_}" for n, why_ in (
         (len(laps) - len(have), "with no stored battle read"),
+        (absent, "with him not recorded"),
+        (pitted, "with you or him in the pit lane"),
         (far, f"with him never within {BATTLE_RANGE_S:.0f} s of you"),
         (untimed, "with no corner timed for both of you")) if n]
     lines = [(f"{head}Rival ({why}): {o.driver} ({o.model or o.car}), P{o.class_position} "
