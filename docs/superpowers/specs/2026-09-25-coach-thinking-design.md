@@ -1,6 +1,6 @@
 # Coach thinking: reason before answering, dynamically — design (2026-09-25, rev 2)
 
-Status: DRAFT for the driver's review. No code, no issue yet.
+Status: APPROVED 2026-09-25 (decisions at the end). Slice 1 tracked as a GitHub issue.
 Origin: the driver, 2026-09-25 — "what makes Claude Code and other coding harnesses great is
 the ability for the agent to reason and think before responding … It would need to be a bit
 dynamic. Some responses should be delivered right away, while others require more thought."
@@ -189,7 +189,18 @@ feels slow; whether the classifier's tiers match what the driver would have chos
 - **Owned corners:** the classifier's `corner` entity is matched to the map by code before
   it reaches the coach; an unmatched name is dropped, not passed through.
 
-## Open questions for the driver
+## Open questions for the driver — DECIDED 2026-09-25
+
+1. **Garage tier:** standard by default (adaptive thinking on every garage question).
+2. **Reasoning view:** collapsed block under the answer, off by default (a setting).
+3. **Post-race questions:** automatically deep (finished race + review question).
+4. **Spend cap:** none; thinking tokens show on the usage/cost meter.
+5. **Classifier default:** the cheapest hosted model, configured on its own
+   (`coach.classifier_model`), swappable like the coach model.
+
+Status: design APPROVED for slice 1. Tracked in the issue linked from the commit.
+
+### Original questions (for the record)
 
 1. **Standard by default in the garage?** Thinking on every typed/conversation question adds
    a second or two and some cost; or keep the garage quick and think only when the
