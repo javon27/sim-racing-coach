@@ -309,6 +309,19 @@ describe("TrackMapEditor", () => {
     await waitFor(() => expect(vi.mocked(saveLapMap).mock.lastCall![1].rev).toBe("r-new"));
   });
 
+  it("a reload that finds no layout says so instead of doing nothing", async () => {
+    vi.mocked(getLapMap)
+      .mockResolvedValueOnce({ ...fixture, rev: "r-old" })
+      .mockResolvedValueOnce({});
+    vi.mocked(saveLapMap).mockRejectedValueOnce(
+      new Error("API request failed: PUT /laps/7/map -> 409: this track's map changed on disk since it was loaded"));
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+    await fireEvent.click(screen.getByText("Save"));
+    await fireEvent.click(await screen.findByRole("button", { name: /reload map/i }));
+    expect(await screen.findByText(/couldn't reload/i)).toBeTruthy();
+  });
+
   it("Add sectors seeds the game's real boundaries when captured", async () => {
     vi.mocked(getLapMap).mockResolvedValueOnce({ ...fixture, sectors: [], detected_sectors: [150, 250] });
     render(TrackMapEditor, { props: { lapId: 7, open: true } });
@@ -791,6 +804,30 @@ describe("TrackMapEditor — rotation", () => {
     // The rotation rewrote the file, so the map save goes out with ITS rev (#166), not the
     // loaded one -- which the server would now refuse as stale.
     expect(body.rev).toBe("r-rot");
+  });
+
+  it("a retry after a failed map save skips the landed rotation and sends its rev (#166)", async () => {
+    // The rotation wrote the file, then the map PUT was refused (422). If the editor
+    // kept the pre-rotation map, the retry re-POSTed the rotation with the stale rev,
+    // got a 409 and told the driver the map "changed on disk" -- losing their edits.
+    vi.mocked(saveLapMap).mockReset()
+      .mockRejectedValueOnce(new Error("API request failed: PUT /laps/7/map -> 422: corner 1: apex_dist must be inside the window"))
+      .mockResolvedValue({ ...fixture, rotation: 40, rev: "r-map" });
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+    await fireEvent.input(screen.getAllByLabelText("Corner name")[0], { target: { value: "Zed" } });
+    await fireEvent.input(screen.getByLabelText("Rotation degrees"), { target: { value: "40" } });
+    await fireEvent.click(screen.getByText("Save"));
+    expect(await screen.findByText(/apex_dist must be inside the window/)).toBeTruthy();
+    expect((screen.getAllByLabelText("Corner name")[0] as HTMLInputElement).value).toBe("Zed");
+    expect((screen.getByLabelText("Rotation degrees") as HTMLInputElement).value).toBe("40");
+
+    await fireEvent.click(screen.getByText("Save"));
+    await waitFor(() => expect(saveLapMap).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(setMapRotation).mock.calls).toEqual([[7, 40, "r-load"]]);   // once
+    const [, retry] = vi.mocked(saveLapMap).mock.calls[1];
+    expect(retry.rev).toBe("r-rot");
+    expect(retry.corners[0].name).toBe("Zed");
   });
 
   it("does not persist rotation on Save when the angle is unchanged", async () => {

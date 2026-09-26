@@ -233,6 +233,10 @@ def test_a_map_held_across_an_on_disk_rewrite_is_refused_not_reverted(tmp_path):
                  {"corners": old}):                        # absent -> 428
         r = client.put(f"{_ALG}/map", json=body)
         assert r.status_code == (409 if "rev" in body else 428), r.text
+        if "rev" not in body:
+            # Only an app window cached from before #166 omits it, and it shows this
+            # detail verbatim: reopening the editor cannot fix that, a refresh does.
+            assert "F5" in r.json()["detail"]
         assert f.read_bytes() == before                    # nothing written
     # Rotation writes the same file, so it takes the same guard.
     for body in ({"degrees": 90, "rev": loaded["rev"]}, {"degrees": 90}):
@@ -244,6 +248,39 @@ def test_a_map_held_across_an_on_disk_rewrite_is_refused_not_reverted(tmp_path):
     assert fresh["rev"] != loaded["rev"]
     r = client.put(f"{_ALG}/map", json={"corners": old, "rev": fresh["rev"]})
     assert r.status_code == 200, r.text
+
+
+def test_a_rewrite_landing_mid_build_stamps_the_payload_with_the_old_rev(tmp_path, monkeypatch):
+    # The payload is built from several reads. A rewrite landing between them must leave
+    # the payload with the rev read BEFORE the build -- so a save made from that payload
+    # is refused -- never a stale corner list carrying the new file's rev.
+    from simcoach.server import maps
+    client, tracks_dir = _client_with_frozen_path(tmp_path)
+    f = tracks_dir / "algarve_international_circuit.json"
+    base = json.loads(f.read_text())
+    base["corners"] = [{"number": n, "label": str(n), "name": f"T{n}", "direction": "right",
+                        "start_dist": a - 5, "apex_dist": a, "end_dist": a + 5}
+                       for n, a in ((1, 20.0), (2, 60.0), (3, 90.0))]
+    f.write_text(json.dumps(base))
+    real = maps.build_track_map
+    fired = []
+
+    def rewrite_mid_build(channels, cmap, **kw):
+        if not fired:
+            fired.append(1)
+            f.write_text(json.dumps({**base, "corners": base["corners"][:2]}))  # 3 -> 2
+        return real(channels, cmap, **kw)
+
+    monkeypatch.setattr(maps, "build_track_map", rewrite_mid_build)
+    m = client.get(f"{_ALG}/map").json()
+    monkeypatch.setattr(maps, "build_track_map", real)
+    assert fired and len(m["corners"]) == 3            # the OLD map was served
+    before = f.read_bytes()
+    body = {"corners": [{k: c[k] for k in ("number", "label", "name", "apex_dist")}
+                        for c in m["corners"]], "rev": m["rev"]}
+    r = client.put(f"{_ALG}/map", json=body)
+    assert r.status_code == 409, r.text
+    assert f.read_bytes() == before                     # the 2-corner file survives
 
 
 def test_each_map_write_hands_back_the_rev_the_next_one_needs(tmp_path):

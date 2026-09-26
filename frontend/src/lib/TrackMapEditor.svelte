@@ -807,14 +807,19 @@
       // Rotation is a pending edit too: bake a changed angle in first so the saved
       // corners sit on the rebaked path, then persist the corner map (which
       // preserves the just-written rotation). Route by lap or by slug (Tracks screen).
-      // Each write goes out with the rev of the map it was made from (#166) -- the
-      // rotation's response carries the rev the map save then needs.
-      let rev = map?.rev;
+      // Each write goes out with the rev of the map it was made from (#166). The
+      // rotation's response IS the rebaked map with the file's new rev: hold it as `map`
+      // at once (not just in a local), so if the map save below fails a retry skips the
+      // rotation already on disk and sends the rev that matches it -- not the stale one,
+      // which the server would refuse as "changed on disk". Edits live in corners/
+      // sectors/sections, which this does not touch.
       if (map && angle !== (map.rotation ?? 0)) {
-        rev = (lapId != null
-          ? await setMapRotation(lapId, angle, rev)
-          : await setTrackMapRotation(slug!, angle, rev)).rev;
+        const rotated = lapId != null
+          ? await setMapRotation(lapId, angle, map.rev)
+          : await setTrackMapRotation(slug!, angle, map.rev);
+        map = { ...map, ...rotated };
       }
+      const rev = map?.rev;
       const payload = {
         corners: corners.map((c) => ({
           number: c.number,
@@ -853,7 +858,10 @@
   async function reloadMap() {
     try {
       const res = lapId != null ? await getLapMap(lapId) : await getTrackMap(slug!);
-      if (!("path" in res) || res.path.length === 0) return;
+      if (!("path" in res) || res.path.length === 0) {
+        error = "Couldn't reload: the track's map on disk has no layout now. Close the editor and reopen it.";
+        return;
+      }
       error = null;
       applyMap(res);
       onSaved?.();   // the parent's copy of the map is just as stale (#166)

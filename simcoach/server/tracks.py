@@ -77,7 +77,10 @@ def _check_map_rev(data: dict, body: dict) -> None:
     # ponytail: check-then-write, not atomic -- same stance as PUT /notes.
     rev = body.get("rev")
     if not isinstance(rev, str):
-        raise HTTPException(428, "map rev required: load the map first and send back its rev")
+        # Worded for the driver: an app window cached from before #166 shows this detail
+        # verbatim, and only a refresh (not reopening the editor) gets it the new code.
+        raise HTTPException(428, "this app window is out of date -- press F5 to refresh it, "
+                                 "then reopen the map (your edits here were not saved)")
     if rev != map_rev(data):
         raise HTTPException(409, "this track's map changed on disk since it was loaded; "
                                  "reload it before saving")
