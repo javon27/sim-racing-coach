@@ -154,8 +154,9 @@ def test_garage_chat_between_polls_lands_in_the_stable_pending_id(tmp_path, synt
     s.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": base, "timestamp": t0}))
 
     tg = t0 + 7 * 3600
-    s.resolve_current_instance(base, ts=tg)  # poll 1 (e.g. /status)
+    poll1 = s.resolve_current_instance(base, ts=tg)  # poll 1 (e.g. /status)
     chat_inst = s.resolve_current_instance(base, ts=tg + 30)  # a chat asked here
+    assert chat_inst == poll1  # the chat must land in what poll 1 already reported
     s.save_chat("chat-1", chat_inst, "Laguna", "BMW", None, "tips?", "sure", ts=tg + 30)
     poll2 = s.resolve_current_instance(base, ts=tg + 60)  # poll 2, after the chat
 
@@ -231,6 +232,36 @@ def test_lap_that_mints_its_own_instance_makes_later_polls_follow_the_store(
     # A poll right after must report the STORE's instance, not the earlier pending one.
     follow_up = s.resolve_current_instance(base, ts=t_lap + 60)
     assert follow_up == lap.session_id
+
+
+def test_earlier_ts_resolve_inside_the_old_gap_does_not_clear_a_newer_pending_mint(
+    tmp_path, synthetic_lap
+):
+    """#177 red-team round 1: a poll mints pending P at N (> 6h after the last real
+    row L). A DIFFERENT caller then resolves with an EARLIER ts than N -- e.g.
+    coach_tools._live_instance using the live lap's start_ts -- that still falls
+    inside L's OWN 6h gap. That call correctly returns L's row (the old instance),
+    but must NOT pop P: nothing new actually happened, it's the same stale row L
+    matched again via a smaller ts. Popping P here would make the next poll mint a
+    THIRD id instead of holding at P."""
+    from simcoach.store import LapStore
+
+    s = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    base = "laguna--bmw--online"
+    ell = 1_000_000.0  # last real activity (L)
+    s.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": base, "timestamp": ell}))
+
+    n = ell + 6 * 3600 + 300  # N: 6h05 after L -- past the gap, mints pending
+    pending = s.resolve_current_instance(base, ts=n)
+    assert pending.startswith(base + "~") and pending != base
+
+    # An earlier ts, still inside L's gap (e.g. a live lap's start_ts).
+    old = s.resolve_current_instance(base, ts=n - 600)
+    assert old == base  # L's own instance (the clean base id) -- unchanged behavior
+
+    # The pending mint must survive: the next poll stays on P, not a fresh third id.
+    next_poll = s.resolve_current_instance(base, ts=n + 60)
+    assert next_poll == pending
 
 
 def test_split_merged_sessions_migration(tmp_path):

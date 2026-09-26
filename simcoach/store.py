@@ -853,7 +853,16 @@ class LapStore:
         if row is None:
             return base  # first ever for this combo
         if abs(ts - row[1]) <= _SESSION_GAP_S:
-            self._pending_instance.pop(base, None)  # a real row now speaks for this base
+            # Only a row at least as new as the pending mint proves the mint is
+            # superseded. A caller can resolve with an EARLIER ts than "now" (e.g.
+            # coach_tools._live_instance's live-lap start_ts) that still falls inside
+            # this SAME old row's gap even after a later poll already minted a fresh
+            # pending id for the current weekend -- that's not new information, just
+            # the old row matched again, and must not erase a still-valid pending
+            # mint (else the next poll would mint yet another id -- #177 red-team).
+            pending = self._pending_instance.get(base)
+            if pending is None or row[1] >= pending[1]:
+                self._pending_instance.pop(base, None)  # a real row now speaks for this base
             return row[0]  # same weekend (or a sidecar restart) -> continue it
         # #177: last real activity is outside the gap, so this is a fresh weekend with
         # nothing persisted for it yet. Minting straight from `ts` here would give a
