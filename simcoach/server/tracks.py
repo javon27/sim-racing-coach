@@ -1,7 +1,6 @@
 """Track routes (#113): map saves from the editor, authored notes, rotation, the Tracks list."""
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 
@@ -11,6 +10,7 @@ from ..analysis import CORNER_GEOMETRY_KEYS, corner_geometry, geometry_clause, m
 from ..corners import in_window
 from ..track_lookup import corner_apex_key, fill_blank_labels, track_slug
 from ..trackmap import average_racing_line, direction_from_path
+from .trackfile import content_rev, map_rev
 
 # Bounds for `PUT /tracks/{slug}/notes`, the one endpoint on the notes path that had
 # none: every field there is free text that gets persisted verbatim into the track file
@@ -66,6 +66,21 @@ def _utf8(s: str, field: str) -> str:
     except UnicodeEncodeError:
         raise HTTPException(422, f"{field} is not valid Unicode text") from None
     return s
+
+
+def _check_map_rev(data: dict, body: dict) -> None:
+    # The map/rotation writers' stale guard (#166), the notes one's twin: the editor sends
+    # back the `rev` its map was loaded with. Without it, an editor held open across an
+    # on-disk rewrite (16 -> 13 corners) saved its old corner list and silently reverted
+    # the file. REQUIRED like the notes rev -- 428 absent, 409 stale -- so no client can
+    # write around it; the editor is the only caller of these routes.
+    # ponytail: check-then-write, not atomic -- same stance as PUT /notes.
+    rev = body.get("rev")
+    if not isinstance(rev, str):
+        raise HTTPException(428, "map rev required: load the map first and send back its rev")
+    if rev != map_rev(data):
+        raise HTTPException(409, "this track's map changed on disk since it was loaded; "
+                                 "reload it before saving")
 
 
 def register(app, deps) -> None:
@@ -312,6 +327,9 @@ def register(app, deps) -> None:
         })
         if name:
             out["name"] = name
+        # Last, so a bad body still gets its own 422; checked against `existing`, the dict
+        # this save was built from (#166).
+        _check_map_rev(existing, body)
         dropped = _write_track_json(track, out)
         # Invalidate cmap + canonical caches so the next GET returns the new
         # canonical map (now frozen into the file).
@@ -398,9 +416,7 @@ def register(app, deps) -> None:
         corners = data.get("corners")
         labels = [str(c.get("label") or c.get("number")) for c in corners
                   if isinstance(c, dict)] if isinstance(corners, list) else []
-        blob = json.dumps({"notes": data.get("notes"), "labels": labels},
-                          sort_keys=True, default=str)
-        return hashlib.sha256(blob.encode()).hexdigest()[:16]
+        return content_rev({"notes": data.get("notes"), "labels": labels})
 
     @app.put("/tracks/{slug}/notes")
     def save_notes(slug: str, body: dict = Body(...)):
@@ -557,6 +573,7 @@ def register(app, deps) -> None:
         if not math.isfinite(degrees):
             raise HTTPException(422, "degrees must be finite")
         data = _track_file_data(track)
+        _check_map_rev(data, body)   # before the mutations below (#166)
         if not data.get("corners"):
             # No per-track JSON yet: carry the RESOLVED corners (fallback cmap /
             # auto-detect) into the file so persisting rotation can't zero them.

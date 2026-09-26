@@ -109,13 +109,10 @@
     Object.hasOwn(notes.corners, key) ? notes.corners[key] : "";
   const setNote = (key: string, v: string) => { notes.corners = { ...notes.corners, [key]: v }; };
   const setRefTime = (cls: string, v: string) => { notes.reference_times = { ...notes.reference_times, [cls]: v }; };
-  // Seed a blank note for every per-corner row so binding + word count are safe and
-  // the row shows before it's written (range rows already exist as keys).
-  $effect(() => {
-    for (const row of cornerView.rows) {
-      if (!Object.hasOwn(notes.corners, row.key)) setNote(row.key, "");
-    }
-  });
+  // No blank-note seed (#166 F2): noteOf already reads a missing key as "", a row comes
+  // from the map not from a key, and setNote creates the key on the first keystroke. The
+  // seed wrote a blank key for every row of whatever map this pane HELD -- after an
+  // on-disk rewrite, keys for corners that no longer exist, saved back with the notes.
 
   $effect(() => {
     listTracks()
@@ -156,6 +153,7 @@
   function reloadNotes() {
     if (!selected) return;
     saveStatus = null;
+    reloadMap();   // the rows follow the map: a stale one lists corners that are gone (#166)
     loadNotes(selected.slug);
   }
 

@@ -1,6 +1,8 @@
 """Track JSON files (#113): the one validated writer (#65) and the merged shipped+overlay reads."""
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import math
 import os
@@ -12,6 +14,22 @@ from ..analysis import CORNER_GEOMETRY_KEYS, measurable_geometry
 from ..corners import validated_sections, validated_sectors
 from ..track_lookup import dump_track_json, guard_corner_notes, load_map_data, track_slug
 from .core import _in, export
+
+
+def content_rev(obj) -> str:
+    # THE revision hash for a client's copy of track-file data (notes #158, map #166):
+    # the server refuses a write whose base rev no longer matches the file. Always hash
+    # the dict the caller ALREADY read, never a re-read (#158).
+    blob = json.dumps(obj, sort_keys=True, default=str)
+    return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+
+def map_rev(data: dict) -> str:
+    # Rev of the map an editor holds (#166): the whole merged track file EXCEPT `notes`.
+    # A notes save leaves it alone -- every map writer carries the notes forward itself
+    # (_write_track_json's guard) -- while any other rewrite (another map save, rotation,
+    # a curation script) makes a copy loaded before it stale.
+    return content_rev({k: v for k, v in data.items() if k != "notes"})
 
 
 def register(app, deps) -> None:

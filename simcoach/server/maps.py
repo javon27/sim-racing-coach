@@ -13,6 +13,7 @@ from ..trackmap import average_racing_line, build_track_map
 from .captures import _POS_CHANNELS, _load_cloud, _usable_cloud
 from .core import export
 from .serialize import _clean
+from .trackfile import map_rev
 
 _CLEAN_LAP_RATIO = 1.07  # keep laps within +7% of the track/car best (drop in/out/off laps)
 
@@ -210,6 +211,10 @@ def register(app, deps) -> None:
         # A save that lands while this builds clears `canon` first; caching the payload
         # built from the OLD file would then undo that clear (#155).
         rev = app.state.map_rev
+        # The editor's save guard (#166), read BEFORE everything the payload is built
+        # from: a rewrite landing mid-build then stamps the payload with the OLDER rev, so
+        # a save from it 409s -- never a stale payload carrying the new file's rev.
+        file_rev = map_rev(_track_file_data(track))
         path, dist = _canonical_outline(track, car, force_avg=force)
         if not path:
             return {}  # no position data anywhere yet; don't cache (may appear later)
@@ -222,6 +227,7 @@ def register(app, deps) -> None:
         }
         payload = _clean(build_track_map(channels, cmap, sectors=sectors,
                                          rotation=_track_rotation(track)))
+        payload["rev"] = file_rev
         if not force and app.state.map_rev == rev:
             app.state.canon[(track, car)] = payload
         return payload

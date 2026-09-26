@@ -10,6 +10,7 @@ from simcoach.model.fake import FakeModel
 from simcoach.model_types import LapRecord
 from simcoach.server.app import create_app
 from simcoach.store import LapStore
+from tests.conftest import with_map_rev
 
 
 def _app(tmp_path, synthetic_lap, cmap=None):
@@ -334,8 +335,8 @@ def test_put_map_for_result_log_lap_with_no_telemetry(tmp_path):
     # Issue #28: editing an imported session's layout is a legitimate flow -- the
     # save only needs the lap's track/car, same as the read.
     app, lap_id, tracks = _result_log_app(tmp_path)
-    r = _tc(app).put(f"/laps/{lap_id}/map", json={
-        "corners": [{"number": 1, "name": "The Bend", "apex_dist": 200.0}]})
+    r = _tc(app).put(f"/laps/{lap_id}/map", json=with_map_rev(_tc(app), f"/laps/{lap_id}/map", {
+        "corners": [{"number": 1, "name": "The Bend", "apex_dist": 200.0}]}))
     assert r.status_code == 200, r.text
     written = json.loads((tracks / "curveland.json").read_text())
     assert [c["name"] for c in written["corners"]] == ["The Bend"]
@@ -344,7 +345,7 @@ def test_put_map_for_result_log_lap_with_no_telemetry(tmp_path):
 def test_rotation_for_result_log_lap_with_no_telemetry(tmp_path):
     # Issue #28: same for rotating an imported session's map.
     app, lap_id, tracks = _result_log_app(tmp_path)
-    r = _tc(app).post(f"/laps/{lap_id}/rotation", json={"degrees": 90})
+    r = _tc(app).post(f"/laps/{lap_id}/rotation", json=with_map_rev(_tc(app), f"/laps/{lap_id}/rotation", {"degrees": 90}))
     assert r.status_code == 200, r.text
     assert json.loads((tracks / "curveland.json").read_text())["rotation"] == 90.0
 
@@ -353,8 +354,8 @@ def test_map_routes_404_for_a_lap_id_that_does_not_exist(tmp_path):
     app, _, _ = _result_log_app(tmp_path)
     c = _tc(app)
     assert c.get("/laps/99999/map").status_code == 404
-    assert c.put("/laps/99999/map", json={"corners": []}).status_code == 404
-    assert c.post("/laps/99999/rotation", json={"degrees": 90}).status_code == 404
+    assert c.put("/laps/99999/map", json=with_map_rev(c, "/laps/99999/map", {"corners": []})).status_code == 404
+    assert c.post("/laps/99999/rotation", json=with_map_rev(c, "/laps/99999/rotation", {"degrees": 90})).status_code == 404
 
 
 def test_analysis_for_result_log_lap_says_no_telemetry(tmp_path):
@@ -371,7 +372,7 @@ def test_map_cache_invalidated_after_put(tmp_path):
     app, lap_id, _tracks = _curve_app(tmp_path)
     c = _tc(app)
     c.get(f"/laps/{lap_id}/map")  # populate the canonical cache
-    c.put(f"/laps/{lap_id}/map", json={"corners": [{"number": 1, "name": "Fresh", "apex_dist": 200.0}]})
+    c.put(f"/laps/{lap_id}/map", json=with_map_rev(c, f"/laps/{lap_id}/map", {"corners": [{"number": 1, "name": "Fresh", "apex_dist": 200.0}]}))
     after = c.get(f"/laps/{lap_id}/map").json()  # must reflect the save, not the cache
     assert [x["name"] for x in after["corners"]] == ["Fresh"]
 
@@ -391,11 +392,11 @@ def test_put_map_saves_and_direction_is_server_derived(tmp_path):
     c = _tc(app)
     # Client sends a WRONG direction; the server must ignore it and derive "left"
     # from the averaged path geometry (the corner turns +x -> +z at dist 200).
-    r = c.put(f"/laps/{lap_id}/map", json={
+    r = c.put(f"/laps/{lap_id}/map", json=with_map_rev(c, f"/laps/{lap_id}/map", {
         "corners": [{"number": 1, "name": "The Bend", "apex_dist": 200.0,
                      "direction": "right"}],
         "sectors": [150.0],
-    })
+    }))
     assert r.status_code == 200
     body = r.json()
     assert body["corners"][0]["direction"] == "left"
@@ -411,15 +412,35 @@ def test_put_map_saves_and_direction_is_server_derived(tmp_path):
     assert got["corners"][0]["name"] == "The Bend"
 
 
+def test_lap_route_map_and_rotation_refuse_a_stale_or_missing_rev(tmp_path):
+    # #166: the lap route writes the same track file as the slug route, so it takes the
+    # same guard -- a map loaded before an on-disk rewrite cannot put its copy back.
+    app, lap_id, tracks = _curve_app(tmp_path)
+    c = _tc(app)
+    body = {"corners": [{"number": 1, "name": "The Bend", "apex_dist": 200.0}]}
+    r0 = c.get(f"/laps/{lap_id}/map").json()["rev"]
+    assert c.put(f"/laps/{lap_id}/map", json={**body, "rev": r0}).status_code == 200
+    f = tracks / "curveland.json"
+    before = f.read_bytes()
+    for route, extra in (("map", body), ("rotation", {"degrees": 90})):
+        send = c.put if route == "map" else c.post
+        r = send(f"/laps/{lap_id}/{route}", json={**extra, "rev": r0})   # pre-save rev
+        assert r.status_code == 409, (route, r.text)
+        assert send(f"/laps/{lap_id}/{route}", json=extra).status_code == 428, route
+        assert f.read_bytes() == before, route
+    r1 = c.get(f"/laps/{lap_id}/map").json()["rev"]
+    assert c.post(f"/laps/{lap_id}/rotation", json={"degrees": 90, "rev": r1}).status_code == 200
+
+
 def test_put_map_persists_label_apexes_sections(tmp_path):
     app, lap_id, tracks = _curve_app(tmp_path)
     c = _tc(app)
-    r = c.put(f"/laps/{lap_id}/map", json={
+    r = c.put(f"/laps/{lap_id}/map", json=with_map_rev(c, f"/laps/{lap_id}/map", {
         "corners": [{"number": 1, "label": "8A", "name": "Bend", "apex_dist": 200.0,
                      "apexes": [190.0, 210.0], "start_dist": 150.0, "end_dist": 250.0}],
         "sectors": [150.0],
         "sections": [{"name": "The Esses", "kind": "complex", "start_dist": 100.0, "end_dist": 300.0}],
-    })
+    }))
     assert r.status_code == 200
     body = r.json()
     assert body["corners"][0]["label"] == "8A"
@@ -434,43 +455,43 @@ def test_put_map_persists_label_apexes_sections(tmp_path):
 
 def test_put_map_bad_section_span_is_422(tmp_path):
     app, lap_id, _ = _curve_app(tmp_path)
-    r = _tc(app).put(f"/laps/{lap_id}/map", json={
+    r = _tc(app).put(f"/laps/{lap_id}/map", json=with_map_rev(_tc(app), f"/laps/{lap_id}/map", {
         "corners": [{"number": 1, "apex_dist": 200.0}],
         "sections": [{"name": "x", "start_dist": 300.0, "end_dist": 100.0}],
-    })
+    }))
     assert r.status_code == 422
 
 
 def test_put_map_invalid_window_is_422(tmp_path):
     app, lap_id, tracks = _curve_app(tmp_path)
-    r = _tc(app).put(f"/laps/{lap_id}/map", json={
+    r = _tc(app).put(f"/laps/{lap_id}/map", json=with_map_rev(_tc(app), f"/laps/{lap_id}/map", {
         "corners": [{"number": 1, "apex_dist": 200.0, "start_dist": 250.0, "end_dist": 260.0}],
-    })
+    }))
     assert r.status_code == 422
     assert not (tracks / "curveland.json").exists()  # nothing written on validation failure
 
 
 def test_put_map_bad_sectors_is_422(tmp_path):
     app, lap_id, _ = _curve_app(tmp_path)
-    r = _tc(app).put(f"/laps/{lap_id}/map", json={
+    r = _tc(app).put(f"/laps/{lap_id}/map", json=with_map_rev(_tc(app), f"/laps/{lap_id}/map", {
         "corners": [{"number": 1, "apex_dist": 200.0}],
         "sectors": [300.0, 100.0],  # not increasing
-    })
+    }))
     assert r.status_code == 422
 
 
 def test_put_map_too_many_corners_is_422(tmp_path):
     app, lap_id, _ = _curve_app(tmp_path)
     corners = [{"number": i, "apex_dist": 100.0 + i} for i in range(101)]
-    r = _tc(app).put(f"/laps/{lap_id}/map", json={"corners": corners})
+    r = _tc(app).put(f"/laps/{lap_id}/map", json=with_map_rev(_tc(app), f"/laps/{lap_id}/map", {"corners": corners}))
     assert r.status_code == 422
 
 
 def test_put_map_caps_corner_name_length(tmp_path):
     app, lap_id, tracks = _curve_app(tmp_path)
-    r = _tc(app).put(f"/laps/{lap_id}/map", json={
+    r = _tc(app).put(f"/laps/{lap_id}/map", json=with_map_rev(_tc(app), f"/laps/{lap_id}/map", {
         "corners": [{"number": 1, "name": "X" * 500, "apex_dist": 200.0}],
-    })
+    }))
     assert r.status_code == 200
     saved = json.loads((tracks / "curveland.json").read_text())
     assert len(saved["corners"][0]["name"]) == 80
@@ -478,7 +499,7 @@ def test_put_map_caps_corner_name_length(tmp_path):
 
 def test_put_map_unknown_lap_is_404(tmp_path):
     app, *_ = _curve_app(tmp_path)
-    r = _tc(app).put("/laps/99999/map", json={"corners": [{"number": 1, "apex_dist": 200.0}]})
+    r = _tc(app).put("/laps/99999/map", json=with_map_rev(_tc(app), "/laps/99999/map", {"corners": [{"number": 1, "apex_dist": 200.0}]}))
     assert r.status_code == 404
 
 
@@ -491,7 +512,7 @@ def test_put_map_slug_cannot_escape_tracks_dir(tmp_path):
     coach = Coach(FakeModel())
     tracks = tmp_path / "tracks"
     app = create_app(store, coach, tracks_dir=str(tracks))
-    r = _tc(app).put(f"/laps/{lap_id}/map", json={"corners": [{"number": 1, "apex_dist": 200.0}]})
+    r = _tc(app).put(f"/laps/{lap_id}/map", json=with_map_rev(_tc(app), f"/laps/{lap_id}/map", {"corners": [{"number": 1, "apex_dist": 200.0}]}))
     assert r.status_code == 200
     written = list(tracks.glob("*.json"))
     assert written and all(p.parent == tracks for p in written)
@@ -505,7 +526,7 @@ def test_put_map_no_clean_laps_is_422(tmp_path):
                                   {"lap_distance": np.arange(5.0)}))
     coach = Coach(FakeModel())
     app = create_app(store, coach, tracks_dir=str(tmp_path / "tracks"))
-    r = _tc(app).put(f"/laps/{lap_id}/map", json={"corners": [{"number": 1, "apex_dist": 2.0}]})
+    r = _tc(app).put(f"/laps/{lap_id}/map", json=with_map_rev(_tc(app), f"/laps/{lap_id}/map", {"corners": [{"number": 1, "apex_dist": 2.0}]}))
     assert r.status_code == 422
 
 
@@ -871,7 +892,7 @@ def test_put_map_preserves_saved_ribbon(tmp_path):
     assert "ribbon" in saved
 
     lid = store.save(_edge("MapTrack", 1, 100.0))
-    r = c.put(f"/laps/{lid}/map", json={"corners": [{"number": 1, "name": "Edited", "apex_dist": 50.0}]})
+    r = c.put(f"/laps/{lid}/map", json=with_map_rev(c, f"/laps/{lid}/map", {"corners": [{"number": 1, "name": "Edited", "apex_dist": 50.0}]}))
     assert r.status_code == 200
     after = json.loads((tracks / "maptrack.json").read_text())
     assert "ribbon" in after                 # ribbon preserved across the edit
@@ -1144,9 +1165,9 @@ def test_a_lap_built_map_stays_rebuildable_after_an_editor_save(tmp_path):
     assert c.post("/mapcapture/save", json={}).json()["saved"] is True
     f = tmp_path / "tracks" / f"{slug}.json"
     length = json.loads(f.read_text())["length"]
-    r = c.put(f"/tracks/{slug}/map", json={"corners": [
+    r = c.put(f"/tracks/{slug}/map", json=with_map_rev(c, f"/tracks/{slug}/map", {"corners": [
         {"number": 1, "name": "Copse", "apex_dist": length / 2,
-         "start_dist": length * 0.3, "end_dist": length * 0.7}]})
+         "start_dist": length * 0.3, "end_dist": length * 0.7}]}))
     assert r.status_code == 200, r.text
     saved = json.loads(f.read_text())
     assert saved["corners"] and saved.get("built_from") == "live_laps"
@@ -1277,7 +1298,7 @@ def test_rotation_persists_and_reflected(tmp_path):
     c = _tc(create_app(store, coach, tracks_dir=str(tracks)))
     assert c.get(f"/laps/{lid}/map").json()["rotation"] == 0.0
     # 450 normalizes to 90; response is the refreshed rotated map.
-    assert c.post(f"/laps/{lid}/rotation", json={"degrees": 450}).json()["rotation"] == 90.0
+    assert c.post(f"/laps/{lid}/rotation", json=with_map_rev(c, f"/laps/{lid}/rotation", {"degrees": 450})).json()["rotation"] == 90.0
     assert json.loads((tracks / "rot.json").read_text())["rotation"] == 90.0
     assert c.get(f"/laps/{lid}/map").json()["rotation"] == 90.0  # cache invalidated
 
@@ -1295,7 +1316,7 @@ def test_rotation_preserves_resolved_corners_when_no_file(tmp_path):
     c = _tc(create_app(store, coach, tracks_dir=str(tracks), map_resolver=resolver))
     n = len(cmap.corners)
     assert n > 0
-    r = c.post(f"/laps/{lid}/rotation", json={"degrees": 90}).json()
+    r = c.post(f"/laps/{lid}/rotation", json=with_map_rev(c, f"/laps/{lid}/rotation", {"degrees": 90})).json()
     assert r["rotation"] == 90.0
     assert len(r["corners"]) == n  # corners survived the rotation write
     saved = json.loads((tracks / "test_track.json").read_text())
@@ -1308,8 +1329,8 @@ def test_rotation_csrf_and_validation(tmp_path):
     coach = Coach(FakeModel())
     c = _tc(create_app(store, coach, tracks_dir=str(tmp_path / "tracks")))
     assert c.post(f"/laps/{lid}/rotation").status_code == 422             # no body (CSRF)
-    assert c.post(f"/laps/{lid}/rotation", json={"degrees": "x"}).status_code == 422
-    assert c.post("/laps/99999/rotation", json={"degrees": 10}).status_code == 404
+    assert c.post(f"/laps/{lid}/rotation", json=with_map_rev(c, f"/laps/{lid}/rotation", {"degrees": "x"})).status_code == 422
+    assert c.post("/laps/99999/rotation", json=with_map_rev(c, "/laps/99999/rotation", {"degrees": 10})).status_code == 404
 
 
 def test_analysis_unanalyzable_is_422(tmp_path, synthetic_lap, monkeypatch):
@@ -1340,7 +1361,7 @@ def test_installed_build_writes_maps_to_appdata_not_bundle(tmp_path, monkeypatch
     monkeypatch.setattr(core_mod.sys, "frozen", True, raising=False)
     coach = Coach(FakeModel())
     c = _tc(create_app(store, coach, tracks_dir=str(bundled)))
-    assert c.post(f"/laps/{lid}/rotation", json={"degrees": 45}).status_code == 200
+    assert c.post(f"/laps/{lid}/rotation", json=with_map_rev(c, f"/laps/{lid}/rotation", {"degrees": 45})).status_code == 200
 
     slug = track_slug("Imola")
     assert (Path(store.data_dir) / "tracks" / f"{slug}.json").exists()  # app-data overlay
@@ -1358,5 +1379,5 @@ def test_dev_build_writes_maps_to_bundle(tmp_path, monkeypatch):
     monkeypatch.setattr(core_mod.sys, "frozen", False, raising=False)
     coach = Coach(FakeModel())
     c = _tc(create_app(store, coach, tracks_dir=str(bundled)))
-    assert c.post(f"/laps/{lid}/rotation", json={"degrees": 45}).status_code == 200
+    assert c.post(f"/laps/{lid}/rotation", json=with_map_rev(c, f"/laps/{lid}/rotation", {"degrees": 45})).status_code == 200
     assert (bundled / f"{track_slug('Imola')}.json").exists()

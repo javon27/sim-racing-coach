@@ -249,6 +249,9 @@
   let sections: Section[] = $state([]);
   let saving = $state(false);
   let error: string | null = $state(null);
+  // The save was refused because the track file changed on disk since this map loaded
+  // (#166, 409). Edits stay on screen; reloading discards them, so it is the driver's click.
+  let mapStale = $state(false);
   let svgEl: SVGSVGElement | null = $state(null);
 
   // View vs edit. The pane opens the modal enlarged in "view" (read-only map + corner
@@ -520,6 +523,7 @@
   });
 
   function applyMap(res: TrackMap) {
+    mapStale = false;
     map = res;
     corners = res.corners.map((c) => ({
       number: c.number,
@@ -803,9 +807,13 @@
       // Rotation is a pending edit too: bake a changed angle in first so the saved
       // corners sit on the rebaked path, then persist the corner map (which
       // preserves the just-written rotation). Route by lap or by slug (Tracks screen).
+      // Each write goes out with the rev of the map it was made from (#166) -- the
+      // rotation's response carries the rev the map save then needs.
+      let rev = map?.rev;
       if (map && angle !== (map.rotation ?? 0)) {
-        if (lapId != null) await setMapRotation(lapId, angle);
-        else await setTrackMapRotation(slug!, angle);
+        rev = (lapId != null
+          ? await setMapRotation(lapId, angle, rev)
+          : await setTrackMapRotation(slug!, angle, rev)).rev;
       }
       const payload = {
         corners: corners.map((c) => ({
@@ -820,17 +828,37 @@
         sectors,
         sections,
         ...(nameEditable && trackName.trim() ? { name: trackName.trim() } : {}),
+        rev,
       };
       const res = lapId != null ? await saveLapMap(lapId, payload) : await saveTrackMap(slug!, payload);
       applyMap(res);
       onSaved?.();
     } catch (e) {
+      const msg = String((e as Error)?.message ?? "");
+      if (/-> 409\b/.test(msg)) {
+        mapStale = true;
+        error = "Not saved: this track's map changed on disk since you opened it. Your edits are still shown; reload to get the current map (this discards them).";
+        return;
+      }
       // Surface the server's reason (e.g. "corners must be a non-empty list")
       // instead of a bare "Save failed" so the fix is obvious.
-      const m = /-> \d+: (.+)$/.exec(String((e as Error)?.message ?? ""));
+      const m = /-> \d+: (.+)$/.exec(msg);
       error = m ? `Save failed — ${m[1]}` : "Save failed.";
     } finally {
       saving = false;
+    }
+  }
+
+  // Only ever the driver's click after a stale save (#166): fetch what is on disk now.
+  async function reloadMap() {
+    try {
+      const res = lapId != null ? await getLapMap(lapId) : await getTrackMap(slug!);
+      if (!("path" in res) || res.path.length === 0) return;
+      error = null;
+      applyMap(res);
+      onSaved?.();   // the parent's copy of the map is just as stale (#166)
+    } catch {
+      error = "Failed to load the map.";
     }
   }
 
@@ -1164,6 +1192,9 @@
         {:else}
           <button type="button" onclick={close}>{editMode && map ? "Cancel" : "Close"}</button>
           {#if editMode && map}
+            {#if mapStale}
+              <button type="button" onclick={reloadMap}>Reload map (discards unsaved edits)</button>
+            {/if}
             <button type="button" class="primary" disabled={saving || !map} onclick={save}>
               {saving ? "Saving…" : "Save"}
             </button>

@@ -327,6 +327,7 @@ export interface TrackMap {
     end_dist: number;
   }[];
   rotation?: number; // baked orientation in degrees (server rotate-then-fit)
+  rev?: string; // the file revision this map was built from; send it back with a save (#166)
 }
 
 export function getLapMap(id: number, avg?: boolean): Promise<TrackMap | Record<string, never>> {
@@ -343,11 +344,13 @@ export function getTrackMap(slug: string): Promise<TrackMap | Record<string, nev
   return request<TrackMap | Record<string, never>>(`/tracks/${encodeURIComponent(slug)}/map`);
 }
 
-export function setMapRotation(id: number, degrees: number): Promise<TrackMap> {
+// Map writes carry the `rev` of the map being edited (#166): the server refuses a missing
+// one (428) and a stale one (409 -- the file changed on disk since the map was loaded).
+export function setMapRotation(id: number, degrees: number, rev?: string): Promise<TrackMap> {
   return request<TrackMap>(`/laps/${id}/rotation`, {
     method: "POST",
     headers: JSON_HEADERS,
-    body: JSON.stringify({ degrees }),
+    body: JSON.stringify({ degrees, rev }),
   });
 }
 
@@ -364,7 +367,7 @@ export interface CornerEdit {
 
 export function saveLapMap(
   id: number,
-  body: { corners: CornerEdit[]; sectors: number[]; sections: Section[]; name?: string },
+  body: { corners: CornerEdit[]; sectors: number[]; sections: Section[]; name?: string; rev?: string },
 ): Promise<TrackMap> {
   return request<TrackMap>(`/laps/${id}/map`, {
     method: "PUT",
@@ -376,7 +379,7 @@ export function saveLapMap(
 // Edit a track's owned map by slug (Tracks screen) — no driven lap needed.
 export function saveTrackMap(
   slug: string,
-  body: { corners: CornerEdit[]; sectors: number[]; sections: Section[]; name?: string },
+  body: { corners: CornerEdit[]; sectors: number[]; sections: Section[]; name?: string; rev?: string },
 ): Promise<TrackMap> {
   return request<TrackMap>(`/tracks/${encodeURIComponent(slug)}/map`, {
     method: "PUT",
@@ -385,11 +388,11 @@ export function saveTrackMap(
   });
 }
 
-export function setTrackMapRotation(slug: string, degrees: number): Promise<TrackMap> {
+export function setTrackMapRotation(slug: string, degrees: number, rev?: string): Promise<TrackMap> {
   return request<TrackMap>(`/tracks/${encodeURIComponent(slug)}/rotation`, {
     method: "POST",
     headers: JSON_HEADERS,
-    body: JSON.stringify({ degrees }),
+    body: JSON.stringify({ degrees, rev }),
   });
 }
 

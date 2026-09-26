@@ -10,6 +10,7 @@ from simcoach.server import live_ws as live_ws_mod
 from simcoach.server import maps as maps_mod
 from simcoach.server.app import create_app
 from simcoach.store import LapStore
+from tests.conftest import with_map_rev
 
 
 def _client(tmp_path):
@@ -221,7 +222,7 @@ def test_events_map_frame_resent_when_map_saved_mid_session(tmp_path, monkeypatc
         assert first["corners"]
         body = client.get(f"/tracks/{slug}/map").json()
         body["corners"][0]["name"] = "Renamed Mid-Session"
-        assert client.put(f"/tracks/{slug}/map", json=body).status_code == 200
+        assert client.put(f"/tracks/{slug}/map", json=with_map_rev(client, f"/tracks/{slug}/map", body)).status_code == 200
         again = _drain_until(ws, "map")["data"]
     assert again["corners"][0]["name"] == "Renamed Mid-Session"
 

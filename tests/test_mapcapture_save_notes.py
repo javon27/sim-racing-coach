@@ -19,6 +19,7 @@ from simcoach.corners import CornerMap
 from simcoach.model.fake import FakeModel
 from simcoach.server.app import create_app
 from simcoach.store import LapStore
+from tests.conftest import with_map_rev
 
 TRACK = "Algarve International Circuit"
 SLUG = "algarve_international_circuit"
@@ -195,9 +196,9 @@ def test_both_track_file_writers_agree_on_which_notes_survive(tmp_path):
     # Editor save (PUT .../map) -- main's block lives here.
     _, client_a, dir_a = _client(tmp_path / "editor", labels)
     assert _put_notes(client_a, prior).status_code == 200
-    r = client_a.put(f"/tracks/{SLUG}/map", json={
+    r = client_a.put(f"/tracks/{SLUG}/map", json=with_map_rev(client_a, f"/tracks/{SLUG}/map", {
         "corners": [{"number": i, "label": lab, "name": f"Turn {lab}",
-                     "apex_dist": 20.0 * i} for i, lab in enumerate(labels, 1)]})
+                     "apex_dist": 20.0 * i} for i, lab in enumerate(labels, 1)]}))
     assert r.status_code == 200, r.text
 
     # Ribbon save (POST /mapcapture/save) -- _carry_notes is wired here.
@@ -224,14 +225,14 @@ _PRIOR = {"1": "the hairpin at 20 m", "3-4": "the chicane at 60-80 m"}
 def _save_via(writer, app, client, labels):
     """Drive one of the FOUR writers of a track file (#65), by the route the app uses."""
     if writer == "editor":
-        return client.put(f"/tracks/{SLUG}/map", json={"corners": [
+        return client.put(f"/tracks/{SLUG}/map", json=with_map_rev(client, f"/tracks/{SLUG}/map", {"corners": [
             {"number": i, "label": lab, "name": f"Turn {lab}", "apex_dist": 20.0 * i}
-            for i, lab in enumerate(labels, 1)]})
+            for i, lab in enumerate(labels, 1)]}))
     if writer == "ribbon":
         app.state.last_ribbon = _ribbon(labels)
         return client.post("/mapcapture/save", json={})
     if writer == "rotation":
-        return client.post(f"/tracks/{SLUG}/rotation", json={"degrees": 90})
+        return client.post(f"/tracks/{SLUG}/rotation", json=with_map_rev(client, f"/tracks/{SLUG}/rotation", {"degrees": 90}))
     assert writer == "notes"
     # What the Tracks screen does: read the whole notes object, PUT it straight back.
     got = client.get(f"/tracks/{SLUG}/notes").json()
@@ -341,7 +342,7 @@ def test_a_seeded_writer_strips_unusable_geometry_and_writes_sectors_as_numbers(
     with pytest.raises((TypeError, ValueError)):
         geometry_clause(data["corners"][0], "right")          # the crash is real (banking "3")
 
-    assert client.post(f"/tracks/{SLUG}/rotation", json={"degrees": 90}).status_code == 200
+    assert client.post(f"/tracks/{SLUG}/rotation", json=with_map_rev(client, f"/tracks/{SLUG}/rotation", {"degrees": 90})).status_code == 200
 
     written = json.loads(_disk(tracks_dir).read_text())
     c0, c1 = written["corners"][0], written["corners"][1]

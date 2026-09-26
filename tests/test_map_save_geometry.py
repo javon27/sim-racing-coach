@@ -29,9 +29,11 @@ from simcoach.coach import Coach
 from simcoach.corners import CornerMap
 from simcoach.model.fake import FakeModel
 from simcoach.server.app import create_app
+from simcoach.server.trackfile import map_rev
 from simcoach.store import LapStore
 from simcoach.track_lookup import load_map_data
 from simcoach.trackmap import direction_from_path
+from tests.conftest import with_map_rev
 
 SHIPPED = Path(simcoach.__file__).resolve().parent / "tracks"
 IMOLA = "autodromo_enzo_e_dino_ferrari"
@@ -104,7 +106,7 @@ def _self_save(tmp_path: Path, slug: str) -> tuple[dict, dict]:
     client = TestClient(app, base_url="http://127.0.0.1")
     got = client.get(f"/tracks/{slug}/map")
     assert got.status_code == 200, got.text
-    saved = client.put(f"/tracks/{slug}/map", json=got.json())
+    saved = client.put(f"/tracks/{slug}/map", json=with_map_rev(client, f"/tracks/{slug}/map", got.json()))
     assert saved.status_code == 200, saved.text
     return before, json.loads(target.read_text(encoding="utf-8"))
 
@@ -241,7 +243,7 @@ def test_a_save_preserves_unknown_top_level_provenance_keys(tmp_path):
     client = TestClient(app, base_url="http://127.0.0.1")
     got = client.get(f"/tracks/{IMOLA}/map")
     assert got.status_code == 200, got.text
-    saved = client.put(f"/tracks/{IMOLA}/map", json=got.json())
+    saved = client.put(f"/tracks/{IMOLA}/map", json=with_map_rev(client, f"/tracks/{IMOLA}/map", got.json()))
     assert saved.status_code == 200, saved.text
     after = json.loads((tracks / f"{IMOLA}.json").read_text(encoding="utf-8"))
     assert after["_config_note"] == "curated; T2 driver-confirmed"
@@ -337,7 +339,10 @@ def test_a_corner_with_no_baked_geometry_still_gets_it_computed(tmp_path):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     app = create_app(store, Coach(FakeModel("{}")), tracks_dir=str(tracks))
     client = TestClient(app, base_url="http://127.0.0.1")
-    r = client.put(f"/tracks/{IMOLA}/map", json={"corners": [fresh]})
+    # The rev from the file itself: a direction-less corner makes GET /map raise, so the
+    # helper's GET can't supply it.
+    rev = map_rev(load_map_data(IMOLA, str(tracks), str(tmp_path / "data" / "tracks")))
+    r = client.put(f"/tracks/{IMOLA}/map", json={"corners": [fresh], "rev": rev})
     assert r.status_code == 200, r.text
     saved = json.loads((tracks / f"{IMOLA}.json").read_text(encoding="utf-8"))["corners"][0]
     # T13's window, so the computed value is T13's own 322.1 -- not absent, not inherited.
@@ -371,7 +376,7 @@ def _editor_save(tmp_path, slug, corners, strip_notes=True, on_disk=None):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     app = create_app(store, Coach(FakeModel("{}")), tracks_dir=str(tracks))
     client = TestClient(app, base_url="http://127.0.0.1")
-    r = client.put(f"/tracks/{slug}/map", json={"corners": corners})
+    r = client.put(f"/tracks/{slug}/map", json=with_map_rev(client, f"/tracks/{slug}/map", {"corners": corners}))
     assert r.status_code == 200, r.text
     return json.loads((tracks / f"{slug}.json").read_text(encoding="utf-8"))["corners"]
 
@@ -451,7 +456,7 @@ def test_a_stored_null_metric_is_computed_not_dropped(tmp_path):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     app = create_app(store, Coach(FakeModel("{}")), tracks_dir=str(tracks))
     client = TestClient(app, base_url="http://127.0.0.1")
-    r = client.put(f"/tracks/{IMOLA}/map", json={"corners": corners})
+    r = client.put(f"/tracks/{IMOLA}/map", json=with_map_rev(client, f"/tracks/{IMOLA}/map", {"corners": corners}))
     assert r.status_code == 200, r.text
     after = {str(c["label"]): c
              for c in json.loads((tracks / f"{IMOLA}.json").read_text("utf-8"))["corners"]}
@@ -491,7 +496,7 @@ def test_an_unmeasurable_stored_metric_is_replaced_not_preserved(tmp_path, bad, 
     app = create_app(store, Coach(FakeModel("{}")), tracks_dir=str(tracks))
     client = TestClient(app, base_url="http://127.0.0.1")
     sendable = [dict(c, radius_m=None) if str(c["label"]) == "13" else c for c in corners]
-    r = client.put(f"/tracks/{IMOLA}/map", json={"corners": sendable})
+    r = client.put(f"/tracks/{IMOLA}/map", json=with_map_rev(client, f"/tracks/{IMOLA}/map", {"corners": sendable}))
     assert r.status_code == 200, r.text          # a NaN on disk used to 500 here
     after = {str(c["label"]): c
              for c in json.loads((tracks / f"{IMOLA}.json").read_text("utf-8"))["corners"]}
@@ -523,7 +528,7 @@ def test_splitting_a_corner_keeps_its_note_on_the_dragged_corner(tmp_path):
     client = TestClient(create_app(LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data")),
                                    Coach(FakeModel("{}")), tracks_dir=str(tracks)),
                         base_url="http://127.0.0.1")
-    r = client.put(f"/tracks/{slug}/map", json={"corners": body})
+    r = client.put(f"/tracks/{slug}/map", json=with_map_rev(client, f"/tracks/{slug}/map", {"corners": body}))
     assert r.status_code == 200, r.text
     assert r.json()["dropped_notes"] == {}
     saved = json.loads((tracks / f"{slug}.json").read_text(encoding="utf-8"))
@@ -588,7 +593,7 @@ def test_a_legitimately_zero_banking_is_still_carried(tmp_path):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     app = create_app(store, Coach(FakeModel("{}")), tracks_dir=str(tracks))
     client = TestClient(app, base_url="http://127.0.0.1")
-    r = client.put(f"/tracks/{IMOLA}/map", json={"corners": corners})
+    r = client.put(f"/tracks/{IMOLA}/map", json=with_map_rev(client, f"/tracks/{IMOLA}/map", {"corners": corners}))
     assert r.status_code == 200, r.text
     after = {str(c["label"]): c
              for c in json.loads((tracks / f"{IMOLA}.json").read_text("utf-8"))["corners"]}
@@ -676,9 +681,9 @@ def test_an_installed_save_does_not_write_the_stale_bake_back(tmp_path, monkeypa
     if save == "editor":
         got = client.get(f"/tracks/{IMOLA}/map")
         assert got.status_code == 200, got.text
-        r = client.put(f"/tracks/{IMOLA}/map", json=got.json())
+        r = client.put(f"/tracks/{IMOLA}/map", json=with_map_rev(client, f"/tracks/{IMOLA}/map", got.json()))
     else:
-        r = client.post(f"/tracks/{IMOLA}/rotation", json={"degrees": 30})
+        r = client.post(f"/tracks/{IMOLA}/rotation", json=with_map_rev(client, f"/tracks/{IMOLA}/rotation", {"degrees": 30}))
     assert r.status_code == 200, r.text
     assert (bundled / f"{IMOLA}.json").read_bytes() == shipped_bytes, "premise: installed"
 

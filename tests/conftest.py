@@ -206,3 +206,13 @@ def mem_keyring():
     _keyring.set_keyring(kr)
     yield kr
     _keyring.set_keyring(prev)
+
+
+def with_map_rev(client, url, body):
+    # PUT .../map and POST .../rotation require the rev of the map they edit (#166): fetch
+    # it as the editor does, from the map GET beside the write route. A non-dict body (a
+    # shape test) or one that already names a rev goes out as given.
+    if not isinstance(body, dict) or "rev" in body:
+        return body
+    rev = client.get(url.rsplit("/", 1)[0] + "/map").json().get("rev")
+    return body if rev is None else {**body, "rev": rev}

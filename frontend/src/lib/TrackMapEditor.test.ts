@@ -269,6 +269,46 @@ describe("TrackMapEditor", () => {
     expect(await screen.findByText(/corners must be a non-empty list/i)).toBeTruthy();
   });
 
+  it("sends back the rev the map was loaded with (#166)", async () => {
+    vi.mocked(getLapMap).mockResolvedValueOnce({ ...fixture, rev: "r-load" });
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+    await fireEvent.click(screen.getByText("Save"));
+    await waitFor(() => expect(saveLapMap).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(saveLapMap).mock.lastCall![1].rev).toBe("r-load");
+  });
+
+  it("a stale save says the map changed on disk, keeps the edits, and reloads on request", async () => {
+    // #166: the file was rewritten on disk after this editor loaded it. The server
+    // refuses the save (409); the editor must say so without discarding what the
+    // driver changed, and the reload must really refetch and re-arm Save.
+    const onSaved = vi.fn();
+    vi.mocked(getLapMap)
+      .mockResolvedValueOnce({ ...fixture, rev: "r-old" })
+      .mockResolvedValueOnce({ ...fixture, rev: "r-new", corners: [{ ...fixture.corners[0], name: "Rewritten" }] });
+    vi.mocked(saveLapMap).mockRejectedValueOnce(
+      new Error("API request failed: PUT /laps/7/map -> 409: this track's map changed on disk since it was loaded"));
+    render(TrackMapEditor, { props: { lapId: 7, open: true, onSaved } });
+    await screen.findByText("First");
+    await fireEvent.input(screen.getAllByLabelText("Corner name")[0], { target: { value: "My edit" } });
+    await fireEvent.click(screen.getByText("Save"));
+
+    expect(await screen.findByText(/changed on disk since you opened it/i)).toBeTruthy();
+    expect((screen.getAllByLabelText("Corner name")[0] as HTMLInputElement).value).toBe("My edit");
+    expect(onSaved).not.toHaveBeenCalled();
+
+    await fireEvent.click(screen.getByRole("button", { name: /reload map/i }));
+    await waitFor(() =>
+      expect((screen.getAllByLabelText("Corner name")[0] as HTMLInputElement).value).toBe("Rewritten"));
+    expect(screen.queryByText(/changed on disk since you opened it/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /reload map/i })).toBeNull();
+    expect(onSaved).toHaveBeenCalledTimes(1);   // the parent's pane refetches too
+
+    vi.mocked(saveLapMap).mockResolvedValueOnce(fixture);
+    await fireEvent.click(screen.getByText("Save"));
+    await waitFor(() => expect(vi.mocked(saveLapMap).mock.lastCall![1].rev).toBe("r-new"));
+  });
+
   it("Add sectors seeds the game's real boundaries when captured", async () => {
     vi.mocked(getLapMap).mockResolvedValueOnce({ ...fixture, sectors: [], detected_sectors: [150, 250] });
     render(TrackMapEditor, { props: { lapId: 7, open: true } });
@@ -706,8 +746,8 @@ describe("TrackMapEditor — Tracks-screen (by-slug) binding", () => {
 
 describe("TrackMapEditor — rotation", () => {
   beforeEach(() => {
-    vi.mocked(getLapMap).mockReset().mockResolvedValue({ ...fixture, rotation: 0 });
-    vi.mocked(setMapRotation).mockReset().mockResolvedValue({ ...fixture, rotation: 40 });
+    vi.mocked(getLapMap).mockReset().mockResolvedValue({ ...fixture, rotation: 0, rev: "r-load" });
+    vi.mocked(setMapRotation).mockReset().mockResolvedValue({ ...fixture, rotation: 40, rev: "r-rot" });
     vi.mocked(saveLapMap).mockReset().mockResolvedValue({ ...fixture, rotation: 40 });
   });
   afterEach(cleanup);
@@ -732,7 +772,7 @@ describe("TrackMapEditor — rotation", () => {
     expect(setMapRotation).not.toHaveBeenCalled();
 
     await fireEvent.click(screen.getByText("Save"));
-    await waitFor(() => expect(setMapRotation).toHaveBeenCalledWith(7, 40)); // once, on Save
+    await waitFor(() => expect(setMapRotation).toHaveBeenCalledWith(7, 40, "r-load")); // once, on Save
     expect(vi.mocked(setMapRotation).mock.calls.length).toBe(1);
     expect(saveLapMap).toHaveBeenCalled();
   });
@@ -745,9 +785,12 @@ describe("TrackMapEditor — rotation", () => {
     await fireEvent.input(screen.getByLabelText("Rotation degrees"), { target: { value: "40" } });
     await fireEvent.click(screen.getByText("Save"));
 
-    await waitFor(() => expect(setMapRotation).toHaveBeenCalledWith(7, 40));
+    await waitFor(() => expect(setMapRotation).toHaveBeenCalledWith(7, 40, "r-load"));
     const [, body] = vi.mocked(saveLapMap).mock.calls[0];
     expect(body.corners[0].name).toBe("Zed"); // edited corner saved on the same Save
+    // The rotation rewrote the file, so the map save goes out with ITS rev (#166), not the
+    // loaded one -- which the server would now refuse as stale.
+    expect(body.rev).toBe("r-rot");
   });
 
   it("does not persist rotation on Save when the angle is unchanged", async () => {

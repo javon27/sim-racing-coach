@@ -20,6 +20,7 @@ from simcoach.model_types import LapRecord
 from simcoach.server.app import create_app
 from simcoach.store import LapStore
 from simcoach.track_lookup import dump_track_json, note_key_binds
+from tests.conftest import with_map_rev
 
 
 def _seed_track(tracks_dir: Path, slug: str = "algarve_international_circuit") -> None:
@@ -193,11 +194,11 @@ def _client_with_frozen_path(tmp_path):
 
 def test_save_track_map_by_slug_persists(tmp_path):
     client, tracks_dir = _client_with_frozen_path(tmp_path)
-    r = client.put("/tracks/algarve_international_circuit/map", json={
+    r = client.put("/tracks/algarve_international_circuit/map", json=with_map_rev(client, "/tracks/algarve_international_circuit/map", {
         "corners": [
             {"number": 1, "label": "1", "name": "Turn 1", "apex_dist": 50.0},
             {"number": 2, "label": "2", "name": "Turn 2", "apex_dist": 80.0},
-        ]})
+        ]}))
     assert r.status_code == 200, r.text
     written = json.loads((tracks_dir / "algarve_international_circuit.json").read_text())
     assert len(written["corners"]) == 2
@@ -210,6 +211,62 @@ def _written(tracks_dir):
     # on Windows.
     return json.loads((tracks_dir / "algarve_international_circuit.json").read_text(
         encoding="utf-8"))
+
+
+_ALG = "/tracks/algarve_international_circuit"
+
+
+def test_a_map_held_across_an_on_disk_rewrite_is_refused_not_reverted(tmp_path):
+    # #166 F3: the editor loaded the map, the file was then rewritten on disk (a curation
+    # script dropping corners), and Save sent the editor's OLD corner list back. The PUT
+    # accepted it and the file silently reverted. Now the rev it was loaded with is stale.
+    client, tracks_dir = _client_with_frozen_path(tmp_path)
+    f = tracks_dir / "algarve_international_circuit.json"
+    loaded = client.get(f"{_ALG}/map").json()
+    old = [{"number": c["number"], "label": c["label"], "name": c["name"],
+            "apex_dist": c["apex_dist"]} for c in loaded["corners"]]
+    rewritten = json.loads(f.read_text())
+    rewritten["corners"][0]["name"] = "Rewritten on disk"
+    f.write_text(json.dumps(rewritten))
+    before = f.read_bytes()
+    for body in ({"corners": old, "rev": loaded["rev"]},   # stale -> 409
+                 {"corners": old}):                        # absent -> 428
+        r = client.put(f"{_ALG}/map", json=body)
+        assert r.status_code == (409 if "rev" in body else 428), r.text
+        assert f.read_bytes() == before                    # nothing written
+    # Rotation writes the same file, so it takes the same guard.
+    for body in ({"degrees": 90, "rev": loaded["rev"]}, {"degrees": 90}):
+        r = client.post(f"{_ALG}/rotation", json=body)
+        assert r.status_code == (409 if "rev" in body else 428), r.text
+        assert f.read_bytes() == before
+    # Reloading is the way out: the fresh rev saves.
+    fresh = client.get(f"{_ALG}/map").json()
+    assert fresh["rev"] != loaded["rev"]
+    r = client.put(f"{_ALG}/map", json={"corners": old, "rev": fresh["rev"]})
+    assert r.status_code == 200, r.text
+
+
+def test_each_map_write_hands_back_the_rev_the_next_one_needs(tmp_path):
+    # The editor's Save is rotation THEN map: the map PUT must go out with the rev the
+    # rotation returned, and a rev from before either write is stale after it.
+    client, _ = _client_with_frozen_path(tmp_path)
+    corners = [{"number": 1, "label": "1", "name": "Turn 1", "apex_dist": 50.0}]
+    r0 = client.get(f"{_ALG}/map").json()["rev"]
+    r1 = client.post(f"{_ALG}/rotation", json={"degrees": 90, "rev": r0}).json()["rev"]
+    assert r1 != r0
+    assert client.put(f"{_ALG}/map", json={"corners": corners, "rev": r0}).status_code == 409
+    r2 = client.put(f"{_ALG}/map", json={"corners": corners, "name": "Renamed", "rev": r1})
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["rev"] == client.get(f"{_ALG}/map").json()["rev"]
+
+
+def test_a_notes_save_does_not_stale_the_map_rev(tmp_path):
+    # Every map writer carries the notes forward itself, so a notes save between loading
+    # the map and saving it is not a conflict -- only a change to the map is.
+    client, _ = _client_with_frozen_path(tmp_path)
+    before = client.get(f"{_ALG}/map").json()["rev"]
+    assert _put_notes(client, {"1": "brake late"}).status_code == 200
+    assert client.get(f"{_ALG}/map").json()["rev"] == before
 
 
 def _rev(client):
@@ -230,10 +287,10 @@ def test_save_track_map_by_slug_preserves_authored_notes(tmp_path):
     # corner count, same labels -> everything is carried across unchanged.
     client, tracks_dir = _client_with_frozen_path(tmp_path)
     _put_notes(client, {"1": "brake late"})
-    r = client.put("/tracks/algarve_international_circuit/map", json={
+    r = client.put("/tracks/algarve_international_circuit/map", json=with_map_rev(client, "/tracks/algarve_international_circuit/map", {
         "corners": [
             {"number": 1, "label": "1", "name": "Turn 1", "apex_dist": 50.0},
-        ]})
+        ]}))
     assert r.status_code == 200, r.text
     written = _written(tracks_dir)
     assert written["notes"]["overview"] == "rhythm track"
@@ -252,11 +309,11 @@ def test_save_track_map_drops_corner_notes_when_corner_count_changes(tmp_path, c
     client, tracks_dir = _client_with_frozen_path(tmp_path)
     _put_notes(client, {"1": "the slow left hairpin - huge patience"})
     with caplog.at_level(logging.WARNING, logger="simcoach.server.app"):
-        r = client.put("/tracks/algarve_international_circuit/map", json={
+        r = client.put("/tracks/algarve_international_circuit/map", json=with_map_rev(client, "/tracks/algarve_international_circuit/map", {
             "corners": [
                 {"number": 1, "label": "1", "name": "Turn 1", "apex_dist": 105.0},
                 {"number": 2, "label": "2", "name": "Turn 2", "apex_dist": 115.0},
-            ]})
+            ]}))
     assert r.status_code == 200, r.text
     # Not silent, and the dropped text is in the log so it can be recovered.
     assert "huge patience" in caplog.text
@@ -277,13 +334,13 @@ def test_save_track_map_moves_corner_notes_onto_relabelled_corners(tmp_path):
              {"number": 2, "label": "2", "name": "Turn 2", "apex_dist": 50.0},
              {"number": 3, "label": "3", "name": "Turn 3", "apex_dist": 80.0}]
     assert client.put("/tracks/algarve_international_circuit/map",
-                      json={"corners": three}).status_code == 200
+                      json=with_map_rev(client, "/tracks/algarve_international_circuit/map", {"corners": three})).status_code == 200
     _put_notes(client, {"1": "brake late", "2": "middle of the chicane", "3": "flat in 6th"})
-    r = client.put("/tracks/algarve_international_circuit/map", json={"corners": [
+    r = client.put("/tracks/algarve_international_circuit/map", json=with_map_rev(client, "/tracks/algarve_international_circuit/map", {"corners": [
         {"number": 1, "label": "1", "name": "Turn 1", "apex_dist": 20.0},
         {"number": 2, "label": "2A", "name": "Turn 2A", "apex_dist": 50.0},
         {"number": 3, "label": "2B", "name": "Turn 2B", "apex_dist": 80.0},
-    ]})
+    ]}))
     assert r.status_code == 200, r.text
     written = _written(tracks_dir)
     assert written["notes"]["corners"] == {
@@ -305,10 +362,10 @@ def test_save_track_map_keeps_range_keyed_notes(tmp_path):
     client, tracks_dir = _client_with_frozen_path(tmp_path)
     four = _four_corners()
     assert client.put("/tracks/algarve_international_circuit/map",
-                      json={"corners": four}).status_code == 200
+                      json=with_map_rev(client, "/tracks/algarve_international_circuit/map", {"corners": four})).status_code == 200
     _put_notes(client, {"1": "brake late", "2-4": "the fast left-right-left"})
     assert client.put("/tracks/algarve_international_circuit/map",
-                      json={"corners": four}).status_code == 200
+                      json=with_map_rev(client, "/tracks/algarve_international_circuit/map", {"corners": four})).status_code == 200
     assert _written(tracks_dir)["notes"]["corners"] == {
         "1": "brake late", "2-4": "the fast left-right-left"}
 
@@ -323,13 +380,13 @@ def test_save_track_map_keeps_range_note_when_only_some_of_its_corners_survive(t
     three = [{"number": n, "label": str(n), "name": f"Turn {n}", "apex_dist": 20.0 * n}
              for n in (1, 2, 3)]
     assert client.put("/tracks/algarve_international_circuit/map",
-                      json={"corners": three}).status_code == 200
+                      json=with_map_rev(client, "/tracks/algarve_international_circuit/map", {"corners": three})).status_code == 200
     _put_notes(client, {"1-3": "the downhill complex"})
-    r = client.put("/tracks/algarve_international_circuit/map", json={"corners": [
+    r = client.put("/tracks/algarve_international_circuit/map", json=with_map_rev(client, "/tracks/algarve_international_circuit/map", {"corners": [
         {"number": 1, "label": "1", "name": "Turn 1", "apex_dist": 20.0},
         {"number": 2, "label": "2A", "name": "Turn 2A", "apex_dist": 40.0},
         {"number": 3, "label": "3", "name": "Turn 3", "apex_dist": 60.0},
-    ]})
+    ]}))
     assert r.status_code == 200, r.text
     assert _written(tracks_dir)["notes"]["corners"] == {"1-3": "the downhill complex"}
 
@@ -343,13 +400,13 @@ def test_save_track_map_narrows_a_range_note_whose_corners_were_all_renamed(tmp_
     three = [{"number": n, "label": str(n), "name": f"Turn {n}", "apex_dist": 20.0 * n}
              for n in (1, 2, 3)]
     assert client.put("/tracks/algarve_international_circuit/map",
-                      json={"corners": three}).status_code == 200
+                      json=with_map_rev(client, "/tracks/algarve_international_circuit/map", {"corners": three})).status_code == 200
     _put_notes(client, {"2-3": "the chicane"})
-    r = client.put("/tracks/algarve_international_circuit/map", json={"corners": [
+    r = client.put("/tracks/algarve_international_circuit/map", json=with_map_rev(client, "/tracks/algarve_international_circuit/map", {"corners": [
         {"number": 1, "label": "1A", "name": "Turn 1A", "apex_dist": 20.0},
         {"number": 2, "label": "2A", "name": "Turn 2A", "apex_dist": 40.0},
         {"number": 3, "label": "3A", "name": "Turn 3A", "apex_dist": 60.0},
-    ]})
+    ]}))
     assert r.status_code == 200, r.text
     assert _written(tracks_dir)["notes"]["corners"] == {"2A": "the chicane"}
 
@@ -362,11 +419,11 @@ def test_save_track_map_drops_only_the_notes_of_a_deleted_corner(tmp_path, caplo
     client, tracks_dir = _client_with_frozen_path(tmp_path)
     four = _four_corners()
     assert client.put("/tracks/algarve_international_circuit/map",
-                      json={"corners": four}).status_code == 200
+                      json=with_map_rev(client, "/tracks/algarve_international_circuit/map", {"corners": four})).status_code == 200
     _put_notes(client, {"2-4": "the fast left-right-left", "4": "the last corner"})
     with caplog.at_level(logging.WARNING, logger="simcoach.track_lookup"):
         r = client.put("/tracks/algarve_international_circuit/map",
-                       json={"corners": four[:3]})
+                       json=with_map_rev(client, "/tracks/algarve_international_circuit/map", {"corners": four[:3]}))
     assert r.status_code == 200, r.text
     written = _written(tracks_dir)
     assert written["notes"]["corners"] == {"2-4": "the fast left-right-left"}
@@ -377,9 +434,9 @@ def test_save_track_map_drops_only_the_notes_of_a_deleted_corner(tmp_path, caplo
 
 def _put_map(client, pairs):
     """PUT the map as (label, apex) pairs, numbered in lap order -- the editor's shape."""
-    return client.put("/tracks/algarve_international_circuit/map", json={"corners": [
+    return client.put("/tracks/algarve_international_circuit/map", json=with_map_rev(client, "/tracks/algarve_international_circuit/map", {"corners": [
         {"number": i, "label": lab, "name": f"Turn {lab}", "apex_dist": apex}
-        for i, (lab, apex) in enumerate(pairs, 1)]})
+        for i, (lab, apex) in enumerate(pairs, 1)]}))
 
 
 def test_deleting_a_middle_corner_logs_its_note_when_the_renumber_reuses_its_label(
@@ -520,10 +577,10 @@ def test_a_label_less_resave_keeps_number_labels_and_their_notes(tmp_path):
     # labels would relabel every noted corner 'NA' and move every note.
     client, tracks_dir = _client_with_frozen_path(tmp_path)
     assert client.put("/tracks/algarve_international_circuit/map",
-                      json={"corners": _four_corners()}).status_code == 200
+                      json=with_map_rev(client, "/tracks/algarve_international_circuit/map", {"corners": _four_corners()})).status_code == 200
     _put_notes(client, {"1": "brake late", "2-4": "the fast left-right-left"})
     r = client.put("/tracks/algarve_international_circuit/map",
-                   json={"corners": [dict(c, label="") for c in _four_corners()]})
+                   json=with_map_rev(client, "/tracks/algarve_international_circuit/map", {"corners": [dict(c, label="") for c in _four_corners()]}))
     assert r.status_code == 200, r.text
     assert _labels(tracks_dir) == ["1", "2", "3", "4"]
     assert _written(tracks_dir)["notes"]["corners"] == {
@@ -553,16 +610,16 @@ def test_save_track_map_accepts_corner_labels_int_cannot_parse(tmp_path):
     odd = [{"number": n, "label": lab, "name": f"Turn {lab}", "apex_dist": 20.0 * n}
            for n, lab in ((1, "1"), (2, "2"), (3, "²"), (4, "₂"), (5, "⑥"))]
     assert client.put("/tracks/algarve_international_circuit/map",
-                      json={"corners": odd}).status_code == 200
+                      json=with_map_rev(client, "/tracks/algarve_international_circuit/map", {"corners": odd})).status_code == 200
     # A NON-binding range scans every label, so it always reaches the odd ones: the
     # deterministic 500. ('1-3' below instead short-circuits on ASCII '1' and saved a
     # 200, which is the worse half of the same bug -- which you got depended on `set`
     # iteration order.)
     _put_notes(client, {"90-95": "nothing here"})
-    r = client.put("/tracks/algarve_international_circuit/map", json={"corners": odd})
+    r = client.put("/tracks/algarve_international_circuit/map", json=with_map_rev(client, "/tracks/algarve_international_circuit/map", {"corners": odd}))
     assert r.status_code == 200, r.text
     _put_notes(client, {"1-3": "the opening complex", "²": "the squared one"})
-    r = client.put("/tracks/algarve_international_circuit/map", json={"corners": odd})
+    r = client.put("/tracks/algarve_international_circuit/map", json=with_map_rev(client, "/tracks/algarve_international_circuit/map", {"corners": odd}))
     assert r.status_code == 200, r.text
     assert _written(tracks_dir)["notes"]["corners"] == {
         "1-3": "the opening complex", "²": "the squared one"}
@@ -583,7 +640,7 @@ def test_save_track_map_survives_an_overlong_note_key_on_disk(tmp_path):
     client, tracks_dir = _client_with_frozen_path(tmp_path)
     four = _four_corners()
     assert client.put("/tracks/algarve_international_circuit/map",
-                      json={"corners": four}).status_code == 200
+                      json=with_map_rev(client, "/tracks/algarve_international_circuit/map", {"corners": four})).status_code == 200
     poison = "1-" + "9" * 5000          # well past the 4300-digit int() threshold
     assert _put_notes(client, {"1": "brake late"}).status_code == 200
     # ON DISK, behind the endpoint: `PUT /notes` rejects a key this long now (see
@@ -597,7 +654,7 @@ def test_save_track_map_survives_an_overlong_note_key_on_disk(tmp_path):
     data["notes"]["corners"]["88"] = 7
     data["notes"]["corners"]["89"] = ["x" * 10_000] * 1000
     (tracks_dir / "algarve_international_circuit.json").write_text(json.dumps(data))
-    r = client.put("/tracks/algarve_international_circuit/map", json={"corners": four})
+    r = client.put("/tracks/algarve_international_circuit/map", json=with_map_rev(client, "/tracks/algarve_international_circuit/map", {"corners": four}))
     assert r.status_code == 200, r.text
     # The poison key names nothing, so it is dropped; the real note is kept.
     assert _written(tracks_dir)["notes"]["corners"] == {"1": "brake late"}
@@ -622,9 +679,9 @@ def test_self_save_of_shipped_imola_keeps_every_authored_note(tmp_path):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     client = TestClient(create_app(store, Coach(FakeModel("{}")), tracks_dir=str(tracks_dir)),
                         base_url="http://127.0.0.1")
-    r = client.put(f"/tracks/{slug}/map", json={
+    r = client.put(f"/tracks/{slug}/map", json=with_map_rev(client, f"/tracks/{slug}/map", {
         "corners": before["corners"], "sectors": before.get("sectors") or [],
-        "sections": before.get("sections") or [], "name": before.get("name")})
+        "sections": before.get("sections") or [], "name": before.get("name")}))
     assert r.status_code == 200, r.text
     after = json.loads((tracks_dir / f"{slug}.json").read_text(encoding="utf-8"))
     assert after["notes"] == before["notes"]        # every authored note, verbatim
@@ -665,7 +722,7 @@ def test_editor_delete_and_blank_add_never_duplicates_a_label_on_shipped_maps(tm
             client = TestClient(create_app(store, Coach(FakeModel("{}")),
                                            tracks_dir=str(tracks_dir)),
                                 base_url="http://127.0.0.1")
-            r = client.put(f"/tracks/{src.stem}/map", json={"corners": sent})
+            r = client.put(f"/tracks/{src.stem}/map", json=with_map_rev(client, f"/tracks/{src.stem}/map", {"corners": sent}))
             assert r.status_code == 200, (src.stem, i, j, off, r.text)
             after = json.loads((tracks_dir / src.name).read_text(encoding="utf-8"))
             labels = [c["label"] for c in after["corners"]]
@@ -690,23 +747,23 @@ def test_save_track_map_has_notes_false_once_only_orphans_remained(tmp_path):
         "notes": {"overview": "", "corners": {"1": "brake late"}}}).status_code == 200
     assert client.get("/tracks").json()[0]["has_notes"] is True
     # Both new corners more than 50 m from the old apex (50 m), so '1' has no counterpart.
-    assert client.put("/tracks/algarve_international_circuit/map", json={"corners": [
+    assert client.put("/tracks/algarve_international_circuit/map", json=with_map_rev(client, "/tracks/algarve_international_circuit/map", {"corners": [
         {"number": 1, "label": "1", "name": "Turn 1", "apex_dist": 105.0},
         {"number": 2, "label": "2", "name": "Turn 2", "apex_dist": 115.0},
-    ]}).status_code == 200
+    ]})).status_code == 200
     assert client.get("/tracks").json()[0]["has_notes"] is False
     assert "notes" not in _written(tracks_dir)   # nothing authored left to keep
 
 
 def test_save_track_map_by_slug_rejects_empty_corners(tmp_path):
     client, _ = _client_with_frozen_path(tmp_path)
-    r = client.put("/tracks/algarve_international_circuit/map", json={"corners": []})
+    r = client.put("/tracks/algarve_international_circuit/map", json=with_map_rev(client, "/tracks/algarve_international_circuit/map", {"corners": []}))
     assert r.status_code == 422
 
 
 def test_track_rotation_by_slug_persists(tmp_path):
     client, tracks_dir = _client_with_frozen_path(tmp_path)
-    r = client.post("/tracks/algarve_international_circuit/rotation", json={"degrees": 90})
+    r = client.post("/tracks/algarve_international_circuit/rotation", json=with_map_rev(client, "/tracks/algarve_international_circuit/rotation", {"degrees": 90}))
     assert r.status_code == 200
     written = json.loads((tracks_dir / "algarve_international_circuit.json").read_text())
     assert written["rotation"] == 90.0
@@ -788,9 +845,9 @@ def test_save_track_map_bakes_geometry_and_digest_uses_it(tmp_path):
     app = create_app(store, Coach(fake), tracks_dir=str(tracks_dir))
     c = TestClient(app, base_url="http://127.0.0.1")
 
-    r = c.put(f"/tracks/{slug}/map", json={"corners": [
+    r = c.put(f"/tracks/{slug}/map", json=with_map_rev(c, f"/tracks/{slug}/map", {"corners": [
         {"number": 1, "label": "1", "name": "Turn 1",
-         "apex_dist": apex, "apexes": [apex], "start_dist": s, "end_dist": e}]})
+         "apex_dist": apex, "apexes": [apex], "start_dist": s, "end_dist": e}]}))
     assert r.status_code == 200, r.text
     cc = json.loads((tracks_dir / f"{slug}.json").read_text())["corners"][0]
     assert abs(cc["radius_m"] - R) < 8.0                 # radius from path curvature
@@ -913,7 +970,7 @@ def test_dropped_note_log_is_bounded(tmp_path, caplog):
     client, tracks_dir = _client_with_frozen_path(tmp_path)
     four = _four_corners()
     assert client.put("/tracks/algarve_international_circuit/map",
-                      json={"corners": four}).status_code == 200
+                      json=with_map_rev(client, "/tracks/algarve_international_circuit/map", {"corners": four})).status_code == 200
     # THE most PUT /notes accepts at ~2000 chars a note: 31 of them, ~62 KB, just inside the
     # 64,357-byte document cap (32 is refused). That is the ceiling on how much this one log
     # call can ever be asked to write from this path -- and the bound is structural anyway,
@@ -924,7 +981,7 @@ def test_dropped_note_log_is_bounded(tmp_path, caplog):
     # `guard_corner_notes`, which the promote script shares with this save path.
     with caplog.at_level(logging.WARNING, logger="simcoach.track_lookup"):
         r = client.put("/tracks/algarve_international_circuit/map",
-                       json={"corners": four[:3]})      # corner 4 deleted
+                       json=with_map_rev(client, "/tracks/algarve_international_circuit/map", {"corners": four[:3]}))      # corner 4 deleted
     assert r.status_code == 200, r.text
     # Corners 1-3 kept their apexes, so their notes stay, TEXT AND ALL (#64); '4'..'31'
     # name nothing that exists and all 28 are dropped -- well past the 20-key bound.
@@ -1316,8 +1373,8 @@ def _save_and_bake(client, tmp_path):
     assert client.post("/mapcapture/save", json={}).json()["saved"] is True
     f = tmp_path / "tracks" / f"{_SLUG}.json"
     ribbon = json.loads(f.read_text())["ribbon"]
-    r = client.put(f"/tracks/{_SLUG}/map", json={"corners": [
-        {"number": 1, "apex_dist": 200.0, "start_dist": 150.0, "end_dist": 250.0}]})
+    r = client.put(f"/tracks/{_SLUG}/map", json=with_map_rev(client, f"/tracks/{_SLUG}/map", {"corners": [
+        {"number": 1, "apex_dist": 200.0, "start_dist": 150.0, "end_dist": 250.0}]}))
     assert r.status_code == 200, r.text                # a NaN bake would 500 here
     return ribbon, json.loads(f.read_text())["corners"][0]
 
@@ -1466,7 +1523,7 @@ def test_saving_a_borrowed_outline_by_slug_is_refused_and_writes_nothing(tmp_pat
     assert shown.get("path")
     body = {"corners": [{k: c[k] for k in ("number", "name", "apex_dist", "start_dist", "end_dist")}
                         for c in shown["corners"]], "sectors": [], "sections": []}
-    r = client.put(f"/tracks/{_SPA}/map", json=body)
+    r = client.put(f"/tracks/{_SPA}/map", json=with_map_rev(client, f"/tracks/{_SPA}/map", body))
     assert r.status_code == 422, r.text
     assert "no stored outline" in r.json()["detail"]
     assert f.read_bytes() == before
@@ -1482,7 +1539,7 @@ def test_a_slug_write_refreshes_the_borrowed_outline(tmp_path):
     client, store, _f = _spa_client(tmp_path)
     lap = _circuit_lap(store, "Car A", rz=30.0)
     assert client.get(f"/tracks/{_SPA}/map").json()["rotation"] == 0.0
-    assert client.post(f"/tracks/{_SPA}/rotation", json={"degrees": 90}).status_code == 200
+    assert client.post(f"/tracks/{_SPA}/rotation", json=with_map_rev(client, f"/tracks/{_SPA}/rotation", {"degrees": 90})).status_code == 200
     assert client.get(f"/tracks/{_SPA}/map").json()["rotation"] == 90.0
     assert client.get(f"/laps/{lap}/map").json()["rotation"] == 90.0
 
@@ -1500,7 +1557,7 @@ def test_saving_a_borrowed_outline_by_lap_route_is_refused_and_writes_nothing(tm
     assert shown.get("path")
     body = {"corners": [{k: c[k] for k in ("number", "name", "apex_dist", "start_dist", "end_dist")}
                         for c in shown["corners"]], "sectors": [], "sections": []}
-    r = client.put(f"/laps/{lap}/map", json=body)
+    r = client.put(f"/laps/{lap}/map", json=with_map_rev(client, f"/laps/{lap}/map", body))
     assert r.status_code == 422, r.text
     assert "no stored outline" in r.json()["detail"]
     assert f.read_bytes() == before
@@ -1554,7 +1611,7 @@ def test_saving_an_unchanged_spa_shaped_fixture_by_lap_route_keeps_directions_an
     lap = _circuit_lap(store, "Car A", track=_SPA_NAME, position=False)
     body = {"corners": [{k: c[k] for k in ("number", "name", "apex_dist", "start_dist", "end_dist")}
                         for c in before["corners"]], "sectors": [], "sections": []}
-    r = client.put(f"/laps/{lap}/map", json=body)
+    r = client.put(f"/laps/{lap}/map", json=with_map_rev(client, f"/laps/{lap}/map", body))
     assert r.status_code == 200, r.text
     after = json.loads(f.read_text(encoding="utf-8"))
     assert [(c["number"], c["direction"]) for c in after["corners"]] == \
@@ -1600,9 +1657,9 @@ def test_an_unchanged_editor_save_of_every_shipped_map_is_a_byte_identical_no_op
         client = TestClient(create_app(store, Coach(FakeModel("{}")),
                                        tracks_dir=str(tracks_dir)),
                             base_url="http://127.0.0.1")
-        r = client.put(f"/tracks/{src.stem}/map", json={
+        r = client.put(f"/tracks/{src.stem}/map", json=with_map_rev(client, f"/tracks/{src.stem}/map", {
             "corners": before["corners"], "sectors": before.get("sectors") or [],
-            "sections": before.get("sections") or [], "name": before.get("name")})
+            "sections": before.get("sections") or [], "name": before.get("name")}))
         assert r.status_code == 200, (src.name, r.text)
         assert (tracks_dir / src.name).read_bytes() == src.read_bytes(), \
             f"{src.name}: an unchanged editor save rewrote the file"
@@ -1661,8 +1718,10 @@ def test_a_lone_surrogate_is_refused_with_422_not_a_500(tmp_path):
     def put(route, body):
         # Sent as the \ud800 ESCAPE, the way a browser's JSON.stringify sends it: httpx's
         # json= encodes raw UTF-8 and cannot carry a lone surrogate at all.
-        r = client.put(f"/tracks/algarve_international_circuit/{route}",
-                       content=json.dumps(body), headers={"content-type": "application/json"})
+        url = f"/tracks/algarve_international_circuit/{route}"
+        if route == "map":
+            body = with_map_rev(client, url, body)   # reach the write, not the 428 (#166)
+        r = client.put(url, content=json.dumps(body), headers={"content-type": "application/json"})
         assert r.status_code == 422, (route, body, r.text)
 
     def notes(**over):

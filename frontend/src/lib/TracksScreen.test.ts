@@ -431,6 +431,37 @@ test("a save after the notes failed to load says so, not that they changed", asy
   expect(screen.getByRole("button", { name: /reload notes/i })).toBeTruthy();
 });
 
+test("reloading notes refetches the map too, and no blank keys are written for its corners", async () => {
+  // #166 F2: the file was rewritten on disk (4 -> 2 corners) while this pane held the old
+  // map. Reloading only the notes left the 4-corner rows up, and the blank-note seed wrote
+  // "" under the gone corners' labels, which the next save put back on disk.
+  const two = fourCornerMap();
+  two.corners = two.corners.slice(0, 2);
+  const mapSpy = vi.spyOn(api, "getTrackMap").mockReset()
+    .mockResolvedValue(two)                       // what is on disk now
+    .mockResolvedValueOnce(fourCornerMap());      // what the pane loaded before the rewrite
+  vi.spyOn(api, "getTrackNotes")
+    .mockResolvedValue({ overview: "", corners: {}, reference_times: {}, source: "", rev: "r2" });
+  const saveSpy = vi.spyOn(api, "saveNotes")
+    .mockRejectedValueOnce(new Error(
+      "API request failed: PUT /tracks/algarve_international_circuit/notes -> 409: these notes changed"))
+    .mockResolvedValue({ ok: true, rev: "r3", dropped_notes: {} });
+  saveSpy.mockClear();
+  render(TracksScreen);
+  await fireEvent.click(await screen.findByText("Algarve"));
+  expect(await screen.findByLabelText("corner note 4")).toBeTruthy();   // the stale map
+  await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await fireEvent.click(await screen.findByRole("button", { name: /reload notes/i }));
+
+  await vi.waitFor(() => expect(screen.queryByLabelText("corner note 4")).toBeNull());
+  expect(mapSpy).toHaveBeenCalledTimes(2);                               // really refetched
+  await fireEvent.input(screen.getByLabelText("corner note 1"), { target: { value: "brake late" } });
+  await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await vi.waitFor(() => expect(saveSpy).toHaveBeenCalledTimes(2));
+  // Only what the driver typed: no "" under 2 (untouched) and none under 3/4 (gone).
+  expect(wire(saveSpy.mock.lastCall![2].corners)).toEqual({ "1": "brake late" });
+});
+
 // --- driven-but-unmapped tracks (#69) + visible capture coverage (#66) -----------------
 // These override the module-level listTracks spy, so they live LAST in the file: the
 // override persists (afterEach only cleans the DOM), and an earlier placement would hand
