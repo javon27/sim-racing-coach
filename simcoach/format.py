@@ -12,6 +12,7 @@ from simcoach.analysis import (
     PHASES,
     _sector_of,
     corner_tag,
+    optimal_headline,
 )
 
 
@@ -645,7 +646,9 @@ def format_time_on_table(*, lap_time, sectors, optimal, all_time, benchmark, for
     # it spun or ran off in is only kept out as a DONOR (see `optimal_sectors`).
     own_out = sorted(i for i, _, key in (optimal or {}).get("dropped", []) if key == "this")
     gained = []
-    session_opt = None   # this session's optimal lap, when one can honestly be stated
+    # This session's optimal lap, when one can honestly be stated -- the same figure
+    # #176's lap rail shows, from the one shared rule (`optimal_headline`).
+    session_opt = optimal_headline(lap_time, sectors, optimal)
 
     def gains(donors):
         """Real gains (>= 0.005 s) of each donor sector time over this lap's own."""
@@ -664,7 +667,6 @@ def format_time_on_table(*, lap_time, sectors, optimal, all_time, benchmark, for
             out.append(f"{under:.2f} s from your best clean sectors this session: "
                        + "; ".join(parts) + ".")
         elif parts:
-            session_opt = lap_time - under
             out.append(f"Optimal lap from your best sectors this session: "
                        f"{format_laptime(session_opt)}, {under:.2f} s under this lap:\n  "
                        + "; ".join(parts) + ".")
@@ -672,7 +674,6 @@ def format_time_on_table(*, lap_time, sectors, optimal, all_time, benchmark, for
             out.append("Optimal lap from your best sectors this session: no clean sector "
                        "of yours beat this lap's.")
         else:
-            session_opt = lap_time
             out.append("Optimal lap from your best sectors this session: this lap "
                        "(every sector is your best).")
         if own_out:

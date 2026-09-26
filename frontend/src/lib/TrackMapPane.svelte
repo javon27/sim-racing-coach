@@ -23,7 +23,7 @@
       return;
     }
     withRetry(() => getSessionLaps(sid))
-      .then((laps) => {
+      .then(({ laps }) => {
         if (sid !== sessionId) return;
         lapId = laps[0]?.id ?? null;
         trackName = laps[0]?.track ?? null;

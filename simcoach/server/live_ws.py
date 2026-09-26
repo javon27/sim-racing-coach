@@ -24,6 +24,7 @@ def register(app, deps) -> None:
     _status_view = deps._status_view
     _map_payload = deps._map_payload
     _live_map_key = deps._live_map_key
+    _session_optimal = deps._session_optimal
     mapcapture_status = deps.mapcapture_status
 
     _LIVE_PERIOD = 0.25  # ~4 Hz; the rail map doesn't need capture-rate updates
@@ -109,7 +110,10 @@ def register(app, deps) -> None:
                 sig = (sid, len(laps), laps[-1]["id"] if laps else None)
                 if last.get("_laps_sig", _MISSING) != sig:
                     last["_laps_sig"] = sig
-                    frames.append(("laps", {"session_id": sid, "laps": laps}))
+                    # #176: same headline the tool/endpoint compute, cached by
+                    # `_session_optimal` on this same signal.
+                    frames.append(("laps", {"session_id": sid, "laps": laps,
+                                            "optimal": _session_optimal(sid, laps)}))
             except Exception:
                 log.warning("events: laps tick failed", exc_info=True)
 

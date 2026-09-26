@@ -18,6 +18,7 @@ def register(app, deps) -> None:
     _map_payload = deps._map_payload
     _live_map_key = deps._live_map_key
     _ensure_rest = deps._ensure_rest
+    _session_optimal = deps._session_optimal
     status = deps.status
 
     @app.get("/sessions")
@@ -34,7 +35,11 @@ def register(app, deps) -> None:
 
     @app.get("/sessions/{sid}/laps")
     def session_laps(sid: str):
-        return store.session_laps(sid)
+        # #176: `optimal` rides along with the lap list it's derived from, computed
+        # off the cached headline (`_session_optimal`) so a poll only pays for
+        # `analyze_lap` again once a new lap actually lands.
+        laps = store.session_laps(sid)
+        return {"laps": laps, "optimal": _session_optimal(sid, laps)}
 
     @app.get("/sessions/{sid}/chats")
     def session_chats(sid: str):

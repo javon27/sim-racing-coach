@@ -170,6 +170,7 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     app.state.map_resolver = map_resolver  # (track) -> CornerMap | None
     app.state.rest_factory = rest_factory  # () -> LmuRest (probed on first use)
     app.state.cmaps = {}             # per-track CornerMap cache (only non-None cached)
+    app.state.optimal_cache = {}     # sid -> ((count, last id), optimal seconds|None), #176
     app.state.canon = {}             # per-(track,car) canonical map payload cache
     app.state.live_cmap = None       # (live track, CornerMap|None) for /live's next corner
     app.state.map_rev = 0            # bumped on every map save; /events re-pushes the map (#155)

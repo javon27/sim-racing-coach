@@ -39,10 +39,12 @@ export class Topic<T> {
   }
 }
 
-/** `laps` frame: the lap rows of the live session (`session_id: null` = no session). */
+/** `laps` frame: the lap rows of the live session (`session_id: null` = no session).
+    `optimal`: #176's headline optimal-lap figure, same as GET /sessions/{sid}/laps. */
 export interface LapsFrame {
   session_id: string | null;
   laps: LapRow[];
+  optimal: number | null;
 }
 
 /** `mapcapture` frame: same shape as GET /mapcapture/status. */

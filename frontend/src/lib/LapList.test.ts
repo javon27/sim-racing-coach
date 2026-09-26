@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/svelte";
-import { getStatus, getSessionLaps } from "./api";
+import { getStatus, getSessionLaps, type LapRow } from "./api";
 import { eventFeed } from "./events";
 import LapList from "./LapList.svelte";
 
@@ -8,6 +8,12 @@ vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
   return { ...actual, getStatus: vi.fn(), getSessionLaps: vi.fn() };
 });
+
+/** #176: getSessionLaps now resolves { laps, optimal } -- these fixtures only
+    care about the rows, so `optimal` defaults to null (no Optimal row). */
+function withOpt(laps: LapRow[]) {
+  return { laps, optimal: null as number | null };
+}
 
 function status(session_id: string | null, lap_id: number | null) {
   return {
@@ -45,7 +51,7 @@ describe("LapList", () => {
 
   it("live: renders the live session's laps and calls onselect on click", async () => {
     pushStatus("S1", 5);
-    vi.mocked(getSessionLaps).mockResolvedValue([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]));
 
     const onselect = vi.fn();
     render(LapList, { props: { onselect } });
@@ -59,7 +65,7 @@ describe("LapList", () => {
 
   it("clicked session: renders laps immediately even before any status frame (fast path)", async () => {
     // A deep-linked/clicked session must not be gated on live state arriving.
-    vi.mocked(getSessionLaps).mockResolvedValue([{ id: 42, lap_time: 90.0, valid: 1, ts: 100 }]);
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt([{ id: 42, lap_time: 90.0, valid: 1, ts: 100 }]));
 
     render(LapList, { props: { sessionId: "S2" } });
 
@@ -69,7 +75,7 @@ describe("LapList", () => {
 
   it("never calls getStatus — live state is a subscription, not a poll (#106)", async () => {
     pushStatus("S1", 5);
-    vi.mocked(getSessionLaps).mockResolvedValue([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]));
 
     render(LapList);
     await screen.findByText("Lap 1");
@@ -80,7 +86,9 @@ describe("LapList", () => {
 
   it("takes the live session's laps from the laps frame instead of re-fetching them", async () => {
     pushStatus("S1", 5);
-    eventFeed.push("laps", { session_id: "S1", laps: [{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }] });
+    eventFeed.push("laps", {
+      session_id: "S1", laps: [{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }], optimal: null,
+    });
 
     render(LapList);
 
@@ -90,7 +98,9 @@ describe("LapList", () => {
 
   it("appends laps from a laps frame with no status frame in between", async () => {
     pushStatus("S1", 5);
-    eventFeed.push("laps", { session_id: "S1", laps: [{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }] });
+    eventFeed.push("laps", {
+      session_id: "S1", laps: [{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }], optimal: null,
+    });
     render(LapList);
     await screen.findByText("Lap 1");
 
@@ -100,13 +110,14 @@ describe("LapList", () => {
         { id: 9, lap_time: 216.0, valid: 1, ts: 100 },
         { id: 10, lap_time: 214.0, valid: 1, ts: 200 },
       ],
+      optimal: null,
     });
 
     expect(await screen.findByText("Lap 2")).toBeTruthy();
   });
 
   it("ignores a laps frame for a session it is not following (pinned review)", async () => {
-    vi.mocked(getSessionLaps).mockResolvedValue([{ id: 42, lap_time: 210.0, valid: 1, ts: 300 }]);
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt([{ id: 42, lap_time: 210.0, valid: 1, ts: 300 }]));
     const { container } = render(LapList, { props: { sessionId: "OLD" } });
     await screen.findByText("Lap 1");
 
@@ -117,6 +128,7 @@ describe("LapList", () => {
         { id: 1, lap_time: 100.0, valid: 1, ts: 1 },
         { id: 2, lap_time: 101.0, valid: 1, ts: 2 },
       ],
+      optimal: null,
     });
 
     expect(screen.queryByText("Lap 2")).toBeNull();
@@ -126,11 +138,11 @@ describe("LapList", () => {
   it("renders per-sector delta bars colored vs the fastest lap, omits them when null", async () => {
     pushStatus("S1", 6);
     // Reference = fastest lap with sectors = lap9 (91.2s): S1 30.0, S2 30.5, S3 30.0.
-    vi.mocked(getSessionLaps).mockResolvedValue([
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt([
       { id: 9, lap_time: 91.2, valid: 1, ts: 100, s1: 30.0, s2: 30.5, s3: 30.0 },
       { id: 10, lap_time: 91.5, valid: 1, ts: 200, s1: 30.5, s2: 30.0, s3: 30.5 },
       { id: 11, lap_time: 92.0, valid: 1, ts: 300, s1: null, s2: null, s3: null },
-    ]);
+    ]));
 
     const { container } = render(LapList);
 
@@ -149,10 +161,10 @@ describe("LapList", () => {
 
   it("a faster mapping lap is neither the best lap nor the sector reference (#154)", async () => {
     pushStatus("S1", 6);
-    vi.mocked(getSessionLaps).mockResolvedValue([
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt([
       { id: 9, lap_time: 80.0, valid: 1, ts: 100, s1: 26.0, s2: 27.0, s3: 27.0, mapping: true },
       { id: 10, lap_time: 91.2, valid: 1, ts: 200, s1: 30.0, s2: 30.5, s3: 30.0 },
-    ]);
+    ]));
 
     const { container } = render(LapList);
 
@@ -165,10 +177,10 @@ describe("LapList", () => {
 
   it("expanding a lap's chevron reveals the sector delta detail", async () => {
     pushStatus("S1", 6);
-    vi.mocked(getSessionLaps).mockResolvedValue([
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt([
       { id: 9, lap_time: 91.2, valid: 1, ts: 100, s1: 30.0, s2: 30.5, s3: 30.0 },
       { id: 10, lap_time: 91.5, valid: 1, ts: 200, s1: 30.5, s2: 30.0, s3: 30.5 },
-    ]);
+    ]));
 
     const { container } = render(LapList);
     await screen.findByText("Lap 1");
@@ -191,9 +203,9 @@ describe("LapList", () => {
 
   it("left zone selects the lap; the right zone toggles detail without selecting", async () => {
     pushStatus("S1", 6);
-    vi.mocked(getSessionLaps).mockResolvedValue([
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt([
       { id: 9, lap_time: 91.2, valid: 1, ts: 100, s1: 30.0, s2: 30.5, s3: 30.0 },
-    ]);
+    ]));
 
     const onselect = vi.fn();
     const { container } = render(LapList, { props: { onselect } });
@@ -213,9 +225,9 @@ describe("LapList", () => {
 
   it("a lap with no sectors makes the whole row select (no expand zone)", async () => {
     pushStatus("S1", 6);
-    vi.mocked(getSessionLaps).mockResolvedValue([
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt([
       { id: 9, lap_time: 216.0, valid: 1, ts: 100, s1: null, s2: null, s3: null },
-    ]);
+    ]));
 
     const onselect = vi.fn();
     const { container } = render(LapList, { props: { onselect } });
@@ -230,12 +242,12 @@ describe("LapList", () => {
 
   it("groups laps by phase with per-phase numbering that restarts each phase", async () => {
     pushStatus("S1", 4);
-    vi.mocked(getSessionLaps).mockResolvedValue([
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt([
       { id: 1, lap_time: 95.0, valid: 1, ts: 100, s1: null, s2: null, s3: null, phase: "practice" },
       { id: 2, lap_time: 94.0, valid: 1, ts: 200, s1: null, s2: null, s3: null, phase: "practice" },
       { id: 3, lap_time: 93.0, valid: 1, ts: 300, s1: null, s2: null, s3: null, phase: "race" },
       { id: 4, lap_time: 92.5, valid: 1, ts: 400, s1: null, s2: null, s3: null, phase: "race" },
-    ]);
+    ]));
 
     const { container } = render(LapList);
 
@@ -248,10 +260,10 @@ describe("LapList", () => {
 
   it("a mapping lap stays in its real phase group and is tagged, not a MAPPING group (#154)", async () => {
     pushStatus("S1", 3);
-    vi.mocked(getSessionLaps).mockResolvedValue([
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt([
       { id: 1, lap_time: 95.0, valid: 1, ts: 100, s1: null, s2: null, s3: null, phase: "race" },
       { id: 2, lap_time: 99.0, valid: 1, ts: 200, s1: null, s2: null, s3: null, phase: "race", mapping: true },
-    ]);
+    ]));
 
     const { container } = render(LapList);
 
@@ -265,13 +277,13 @@ describe("LapList", () => {
     // Issue #77: a session with a garage return (or an out-lap) shows the game's
     // real numbers/gaps, not a plain 1..N re-count.
     pushStatus("S1", 9);
-    vi.mocked(getSessionLaps).mockResolvedValue([
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt([
       { id: 1, lap_time: 95.0, valid: 1, ts: 100, lap_no: 2 },
       { id: 2, lap_time: 94.0, valid: 1, ts: 200, lap_no: 3 },
       { id: 3, lap_time: 93.0, valid: 1, ts: 300, lap_no: 4 },
       { id: 4, lap_time: 92.5, valid: 1, ts: 400, lap_no: 8 },
       { id: 5, lap_time: 92.0, valid: 1, ts: 500, lap_no: 9 },
-    ]);
+    ]));
 
     render(LapList);
 
@@ -284,11 +296,11 @@ describe("LapList", () => {
 
   it("falls back to 1..N numbering when any lap in the session lacks a lap_no (legacy)", async () => {
     pushStatus("S1", 3);
-    vi.mocked(getSessionLaps).mockResolvedValue([
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt([
       { id: 1, lap_time: 95.0, valid: 1, ts: 100, lap_no: 2 },
       { id: 2, lap_time: 94.0, valid: 1, ts: 200, lap_no: null },
       { id: 3, lap_time: 93.0, valid: 1, ts: 300, lap_no: 4 },
-    ]);
+    ]));
 
     render(LapList);
 
@@ -299,10 +311,10 @@ describe("LapList", () => {
 
   it("shows a best-lap header with the fastest lap time", async () => {
     pushStatus("S1", 6);
-    vi.mocked(getSessionLaps).mockResolvedValue([
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt([
       { id: 9, lap_time: 216.0, valid: 1, ts: 100 },
       { id: 10, lap_time: 210.5, valid: 1, ts: 200 },
-    ]);
+    ]));
 
     const { container } = render(LapList);
 
@@ -313,12 +325,60 @@ describe("LapList", () => {
     expect(head!.textContent).toContain("3:30.500");
   });
 
+  // --- issue #176: the Optimal row -------------------------------------------------
+
+  it("shows an Optimal row under Best with the time and the gap, when it beats Best", async () => {
+    pushStatus("S1", 6);
+    vi.mocked(getSessionLaps).mockResolvedValue({
+      laps: [{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }],
+      optimal: 215.5, // 0.50 s under the 216.0 s best
+    });
+
+    const { container } = render(LapList);
+    await screen.findByText("Lap 1");
+
+    const rows = container.querySelectorAll(".best-head");
+    expect(rows).toHaveLength(2);
+    expect(rows[0].textContent).toContain("Best");
+    const optimalRow = rows[1];
+    expect(optimalRow.textContent).toContain("Optimal");
+    expect(optimalRow.textContent).toContain("3:35.500");
+    expect(optimalRow.textContent).toContain("−0.50");
+  });
+
+  it("hides the Optimal row when the server has no optimal for this session", async () => {
+    pushStatus("S1", 6);
+    vi.mocked(getSessionLaps).mockResolvedValue(
+      withOpt([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]),
+    );
+
+    const { container } = render(LapList);
+    await screen.findByText("Lap 1");
+
+    expect(container.querySelectorAll(".best-head")).toHaveLength(1); // Best only
+    expect(screen.queryByText("Optimal")).toBeNull();
+  });
+
+  it("hides the Optimal row when it isn't quicker than Best by the 0.005 s floor", async () => {
+    pushStatus("S1", 6);
+    vi.mocked(getSessionLaps).mockResolvedValue({
+      laps: [{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }],
+      optimal: 215.997, // 0.003 s under -- below the floor, same as "not quicker"
+    });
+
+    const { container } = render(LapList);
+    await screen.findByText("Lap 1");
+
+    expect(container.querySelectorAll(".best-head")).toHaveLength(1);
+    expect(screen.queryByText("Optimal")).toBeNull();
+  });
+
   it("review hold then snap: holds on the deep-linked session until a new live lap arrives", async () => {
     pushStatus("S1", 5); // live session already running
     vi.mocked(getSessionLaps).mockImplementation(async (sid: string) =>
-      sid === "OLD"
+      withOpt(sid === "OLD"
         ? [{ id: 42, lap_time: 210.0, valid: 1, ts: 300 }]
-        : [{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }],
+        : [{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]),
     );
 
     const onlive = vi.fn();
@@ -345,9 +405,9 @@ describe("LapList", () => {
   it("a pinned past session is queried once, not once per status frame", async () => {
     pushStatus("S1", 5);
     vi.mocked(getSessionLaps).mockImplementation(async (sid: string) =>
-      sid === "OLD"
+      withOpt(sid === "OLD"
         ? [{ id: 42, lap_time: 210.0, valid: 1, ts: 300 }]
-        : [{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }],
+        : [{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]),
     );
     const { container } = render(LapList, { props: { sessionId: "OLD" } });
     await vi.waitFor(() =>
@@ -367,11 +427,11 @@ describe("LapList", () => {
   it("pinned session, live session id changes: onlive fires once with the new id (snaps even before the baseline lap advances)", async () => {
     pushStatus("S1", 5);
     vi.mocked(getSessionLaps).mockImplementation(async (sid: string) =>
-      sid === "OLD"
+      withOpt(sid === "OLD"
         ? [{ id: 42, lap_time: 210.0, valid: 1, ts: 300 }]
         : sid === "S1"
           ? [{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]
-          : [{ id: 10, lap_time: 220.0, valid: 1, ts: 100 }], // S2
+          : [{ id: 10, lap_time: 220.0, valid: 1, ts: 100 }]), // S2
     );
 
     const onlive = vi.fn();
@@ -394,9 +454,9 @@ describe("LapList", () => {
   it("no pinned session, live session changes: onlive fires with the new id", async () => {
     pushStatus("S1", 5);
     vi.mocked(getSessionLaps).mockImplementation(async (sid: string) =>
-      sid === "S1"
+      withOpt(sid === "S1"
         ? [{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]
-        : [{ id: 10, lap_time: 220.0, valid: 1, ts: 100 }],
+        : [{ id: 10, lap_time: 220.0, valid: 1, ts: 100 }]),
     );
 
     const onlive = vi.fn();
@@ -416,7 +476,7 @@ describe("LapList", () => {
 
   it("cold start does not emit onlive (no prior followed session to switch away from)", async () => {
     pushStatus(null, null);
-    vi.mocked(getSessionLaps).mockResolvedValue([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]));
 
     const onlive = vi.fn();
     render(LapList, { props: { onlive } });
@@ -432,7 +492,7 @@ describe("LapList", () => {
     pushStatus("S1", 5);
     vi.mocked(getSessionLaps)
       .mockRejectedValueOnce(new Error("network"))
-      .mockResolvedValue([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
+      .mockResolvedValue(withOpt([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]));
 
     render(LapList);
     await screen.findByText(/connecting/i);
@@ -450,7 +510,7 @@ describe("LapList", () => {
     const retryBtn = await screen.findByRole("button", { name: /retry/i });
     expect(screen.getByText(/can't reach the coach server/i)).toBeTruthy();
 
-    vi.mocked(getSessionLaps).mockResolvedValue([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]));
     await fireEvent.click(retryBtn);
     pushStatus("S1", 5);
 
@@ -459,17 +519,17 @@ describe("LapList", () => {
 
   it("shows new laps when the next frame arrives", async () => {
     pushStatus("S1", 5);
-    vi.mocked(getSessionLaps).mockResolvedValueOnce([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
+    vi.mocked(getSessionLaps).mockResolvedValueOnce(withOpt([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]));
 
     render(LapList);
 
     expect(await screen.findByText("Lap 1")).toBeTruthy();
     expect(screen.queryByText("Lap 2")).toBeNull();
 
-    vi.mocked(getSessionLaps).mockResolvedValue([
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt([
       { id: 9, lap_time: 216.0, valid: 1, ts: 100 },
       { id: 10, lap_time: 214.0, valid: 1, ts: 200 },
-    ]);
+    ]));
     pushStatus("S1", 6);
 
     expect(await screen.findByText("Lap 2")).toBeTruthy();
@@ -477,7 +537,7 @@ describe("LapList", () => {
 
   it("keeps last good laps and does not go unreachable on a transient failure", async () => {
     pushStatus("S1", 5);
-    vi.mocked(getSessionLaps).mockResolvedValue([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]));
 
     render(LapList);
     expect(await screen.findByText("Lap 1")).toBeTruthy();
@@ -492,7 +552,7 @@ describe("LapList", () => {
 
   it("unsubscribes from the feed on unmount", async () => {
     pushStatus("S1", 5);
-    vi.mocked(getSessionLaps).mockResolvedValue([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]);
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt([{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }]));
 
     const before = eventFeed.status.subscriberCount;
     const { unmount } = render(LapList);
@@ -521,7 +581,7 @@ describe("LapList", () => {
 
   it("renders a partial lap greyed, with its kind instead of a time, still selectable", async () => {
     pushStatus("S1", 14);
-    vi.mocked(getSessionLaps).mockResolvedValue(partialRun);
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt(partialRun));
 
     const onselect = vi.fn();
     render(LapList, { props: { onselect } });
@@ -538,7 +598,7 @@ describe("LapList", () => {
 
   it("numbering runs 1,2,3,4 with no gap and no lap shows a bogus time", async () => {
     pushStatus("S1", 14);
-    vi.mocked(getSessionLaps).mockResolvedValue(partialRun);
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt(partialRun));
 
     render(LapList);
     await screen.findByText("Lap 1");
@@ -549,7 +609,7 @@ describe("LapList", () => {
 
   it("a partial lap is never the best lap", async () => {
     pushStatus("S1", 14);
-    vi.mocked(getSessionLaps).mockResolvedValue(partialRun);
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt(partialRun));
 
     render(LapList);
     const best = await screen.findByText("Lap 3");          // 92.0, the only real best
@@ -565,12 +625,12 @@ describe("LapList", () => {
     // No non-race lap between the two races -- only race_index tells them apart
     // (the case the old phase-only grouping got wrong).
     pushStatus("S1", 4);
-    vi.mocked(getSessionLaps).mockResolvedValue([
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt([
       { id: 1, lap_time: 95.0, valid: 1, ts: 100, phase: "race", race_index: 1 },
       { id: 2, lap_time: 94.0, valid: 1, ts: 200, phase: "race", race_index: 1 },
       { id: 3, lap_time: 93.0, valid: 1, ts: 1600, phase: "race", race_index: 2 },
       { id: 4, lap_time: 92.5, valid: 1, ts: 1700, phase: "race", race_index: 2 },
-    ]);
+    ]));
 
     const { container } = render(LapList);
 
@@ -584,10 +644,10 @@ describe("LapList", () => {
 
   it("a single race renders unchanged: no divider, plain RACE header", async () => {
     pushStatus("S1", 2);
-    vi.mocked(getSessionLaps).mockResolvedValue([
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt([
       { id: 1, lap_time: 95.0, valid: 1, ts: 100, phase: "race", race_index: 1 },
       { id: 2, lap_time: 94.0, valid: 1, ts: 200, phase: "race", race_index: 1 },
-    ]);
+    ]));
 
     render(LapList);
 
@@ -598,14 +658,14 @@ describe("LapList", () => {
 
   it("mixes practice, qualifying and two races: groups and numbers correctly", async () => {
     pushStatus("S1", 6);
-    vi.mocked(getSessionLaps).mockResolvedValue([
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt([
       { id: 1, lap_time: 100.0, valid: 1, ts: 100, phase: "practice", race_index: null },
       { id: 2, lap_time: 99.0, valid: 1, ts: 200, phase: "qualifying", race_index: null },
       { id: 3, lap_time: 95.0, valid: 1, ts: 300, phase: "race", race_index: 1 },
       { id: 4, lap_time: 94.0, valid: 1, ts: 400, phase: "race", race_index: 1 },
       { id: 5, lap_time: 93.0, valid: 1, ts: 1900, phase: "race", race_index: 2 },
       { id: 6, lap_time: 92.5, valid: 1, ts: 2000, phase: "race", race_index: 2 },
-    ]);
+    ]));
 
     const { container } = render(LapList);
 
@@ -648,7 +708,7 @@ describe("LapList", () => {
     const expected: Record<number, number> = { 1: 1, 2: 1, 3: 2, 4: 1, 5: 2 };
 
     pushStatus("S1", 5);
-    vi.mocked(getSessionLaps).mockResolvedValue(rows);
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt(rows));
     render(LapList);
 
     for (const [id, n] of Object.entries(expected)) {
@@ -667,11 +727,11 @@ describe("LapList", () => {
     // reference and every real lap reads as slower. Give it sectors to be sure it is
     // considered at all.
     pushStatus("S1", 14);
-    vi.mocked(getSessionLaps).mockResolvedValue([
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt([
       { id: 21, lap_time: null, valid: 0, ts: 10, lap_no: 1, partial: "in" as const,
         s1: 1.0, s2: 1.0, s3: 1.0 },
       { id: 22, lap_time: 95.0, valid: 1, ts: 20, lap_no: 2, s1: 30.0, s2: 32.0, s3: 33.0 },
-    ]);
+    ]));
 
     render(LapList);
     await screen.findByText("Lap 2");

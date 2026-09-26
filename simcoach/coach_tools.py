@@ -27,6 +27,7 @@ from simcoach.analysis import (
     grip_envelope,
     is_incident_lap,
     lap_events,
+    optimal_headline,
     optimal_sectors,
     phase_split,
     stint_consistency,
@@ -1507,6 +1508,49 @@ class CoachContext:
                 or time.strftime("%Y-%m-%d", time.localtime(best["ts"])),
                 "other": other}
 
+    def _optimal_for_lap(self, record, lap_id):
+        """(sectors, bounds, optimal, laps) for `record`: its own sectors, its sector
+        bounds, `analysis.optimal_sectors` over it and its comparable laps (each with
+        incidents), and the raw `(row_id, record, incidents)` comparable list
+        `corner_form`/diagnoses also need. Shared by `get_time_on_table` and #176's
+        `get_optimal_seconds`, so the comparable-set and incident rules live in
+        exactly one place. `laps` is `[]` with no comparable lap -- the only case the
+        callers need to branch on."""
+        rows, _ = self._comparable_rows(record, lap_id)
+        laps = []
+        for row in rows:
+            rec = self._load(row["id"])
+            if rec is not None:
+                laps.append((row["id"], rec, self._incidents(rec, row["id"])))
+        if not laps:
+            return None, None, None, []
+        sess = {r["id"]: r for r in rows}
+        # The subject's own sectors come with its record: a best lap from another
+        # session (the all-time fallback) has them too.
+        sectors = record.sectors if record.sectors and all(record.sectors) else None
+        bounds = self.store.sector_bounds(record.track, record.car)
+        optimal = optimal_sectors(
+            [{"key": "this", "sectors": sectors, "incidents": self._incidents(record, lap_id)}]
+            + [{"key": k, "sectors": [sess[k][s] for s in ("s1", "s2", "s3")], "incidents": inc}
+               for k, _, inc in laps], bounds)
+        return sectors, bounds, optimal, laps
+
+    def get_optimal_seconds(self, which="best") -> float | None:
+        """#176: the lap rail's Optimal row -- the same headline figure
+        `get_time_on_table` states (`analysis.optimal_headline`), computed the same
+        way, without the prose or the `corner_form`/diagnoses the rail doesn't show
+        (cheaper than the full tool). None wherever `get_time_on_table` would have
+        nothing to state for `which`: no such lap, no corner map (the full tool
+        refuses without one too -- #176 can't honestly do better), no lap time, or no
+        comparable lap this session."""
+        record, lap_id = self._resolve_lap(which)
+        if record is None or self.cmap is None or not record.lap_time:
+            return None
+        sectors, _, optimal, laps = self._optimal_for_lap(record, lap_id)
+        if not laps:
+            return None
+        return optimal_headline(record.lap_time, sectors, optimal)
+
     def get_time_on_table(self, which="best", detail=False):
         """#169: where the time is on a lap -- above all the best lap -- measured
         against the driver's own comparable laps this session (see
@@ -1519,26 +1563,12 @@ class CoachContext:
         lap_line = self._lap_line(record, lap_id)
         if not record.lap_time:
             return lap_line + "\nThat lap has no lap time (out, in or partial lap)."
-        rows, _ = self._comparable_rows(record, lap_id)
-        laps = []
-        for row in rows:
-            rec = self._load(row["id"])
-            if rec is not None:
-                laps.append((row["id"], rec, self._incidents(rec, row["id"])))
+        sectors, bounds, optimal, laps = self._optimal_for_lap(record, lap_id)
         if not laps:
             _, msg = self._reference_lap(record, lap_id)
             return lap_line + "\n" + (msg + "." if msg and msg.startswith("No comparable")
                                       else "No other lap this session to compare against yet.")
         label_by_id, _ = self._lap_numbering()
-        sess = {r["id"]: r for r in rows}
-        # The subject's own sectors come with its record: a best lap from another
-        # session (the all-time fallback) has them too.
-        sectors = record.sectors if record.sectors and all(record.sectors) else None
-        bounds = self.store.sector_bounds(record.track, record.car)
-        optimal = optimal_sectors(
-            [{"key": "this", "sectors": sectors, "incidents": self._incidents(record, lap_id)}]
-            + [{"key": k, "sectors": [sess[k][s] for s in ("s1", "s2", "s3")], "incidents": inc}
-               for k, _, inc in laps], bounds)
         form = corner_form(record, laps, self.cmap)
         diagnoses = []
         if form["ok"]:

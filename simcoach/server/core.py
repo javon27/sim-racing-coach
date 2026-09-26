@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
+from ..coach_tools import CoachContext
 from ..track_lookup import track_slug
 
 REST_PROBE_TTL = 2.0  # s: liveness probe rate cap so /status polling can't hammer LMU's REST
@@ -193,5 +194,30 @@ def register(app, deps) -> None:
             base = None
         return store.resolve_current_instance(base) if base else None
 
+    def _session_optimal(sid: str | None, laps: list[dict]) -> float | None:
+        """#176: the lap rail's Optimal figure for a session -- the same headline
+        `get_time_on_table` states for its best lap, computed the same way
+        (`CoachContext.get_optimal_seconds`, sharing every rule with the coach tool
+        rather than re-deriving them). Cached per session, keyed on the same
+        (count, last id) signal /events' laps frame already uses to invalidate --
+        analyze_lap runs once per comparable lap, so this is only redone when a lap
+        actually lands, never on every poll."""
+        if not sid or not laps:
+            return None
+        sig = (len(laps), laps[-1]["id"])
+        cached = app.state.optimal_cache.get(sid)
+        if cached is not None and cached[0] == sig:
+            return cached[1]
+        track = next((r["track"] for r in laps if r.get("track")), None)
+        car = next((r["car"] for r in laps if r.get("car")), None)
+        cmap = _map_for(track) if track else None
+        value = None
+        if track and car and cmap is not None:
+            value = CoachContext(store, cmap=cmap, track=track, car=car,
+                                 session_id=sid).get_optimal_seconds()
+        app.state.optimal_cache[sid] = (sig, value)
+        return value
+
     export(deps, _map_for, _curating, _map_dirs, _capture_path, _newest_capture,
-           _invalidate_canon, _fresh, _ensure_rest, _live_track, _live_session_id)
+           _invalidate_canon, _fresh, _ensure_rest, _live_track, _live_session_id,
+           _session_optimal)

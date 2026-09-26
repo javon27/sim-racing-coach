@@ -440,6 +440,53 @@ def test_get_time_on_table_needs_five_comparable_laps(tmp_path, synthetic_lap):
     assert "Optimal lap from your best sectors" in out
 
 
+# --- #176: get_optimal_seconds (the lap rail's Optimal row) --------------------------
+
+def test_get_optimal_seconds_matches_the_stated_headline(tmp_path, synthetic_lap):
+    # Same session `test_get_time_on_table_finds_the_time_on_the_best_lap` reads: it
+    # has a lap with the fastest S1 that ran off at T1 -- the naive min-of-sectors
+    # would use that 30.20 and understate the real total by 0.20 s.
+    store = _session(tmp_path, synthetic_lap)
+    ctx = _ctx(store)
+    prose = ctx.get_time_on_table()
+    m = re.search(r"Optimal lap from your best sectors this session: (\d+):(\d+\.\d+),", prose)
+    assert m, prose
+    stated = int(m.group(1)) * 60 + float(m.group(2))
+    assert ctx.get_optimal_seconds() == pytest.approx(stated, abs=0.001)
+    # Never the number a naive min-of-sectors would give (the off lap's 30.20 S1).
+    naive = 92.7 - (92.7 - (30.20 + 31.00 + 31.10))
+    assert ctx.get_optimal_seconds() != pytest.approx(naive, abs=0.001)
+
+
+def test_get_optimal_seconds_none_when_subjects_own_sector_dropped(tmp_path, synthetic_lap):
+    # The BEST lap itself ran off in its own fastest sector: get_time_on_table prints
+    # gains only, never a total resting on that sector -- get_optimal_seconds must
+    # agree there is no honest headline figure.
+    store = _store(tmp_path)
+    bounds = [1500.0, 2600.0]
+    off = _variant(synthetic_lap, [])
+    off.channels["track_edge"][(off.channels["lap_distance"] >= 800.0)
+                               & (off.channels["lap_distance"] <= 1200.0)] = 1.0
+    _save(store, off, 90.0, 1, 1, sectors=[29.0, 31.0, 31.0], sector_bounds=bounds)
+    _save(store, synthetic_lap, 91.0, 2, 2, sectors=[30.0, 30.8, 31.2], sector_bounds=bounds)
+    ctx = _ctx(store)
+    assert "This lap's own S1 (T1) had a spin or an off" in ctx.get_time_on_table()
+    assert ctx.get_optimal_seconds() is None
+
+
+def test_get_optimal_seconds_none_cases(tmp_path, synthetic_lap):
+    # No corner map: the full tool refuses too -- #176 can't honestly do better.
+    store = _store(tmp_path)
+    _save(store, synthetic_lap, 90.0, 1, 1)
+    no_map = CoachContext(store, cmap=None, track="test_track", car="test_car",
+                          session_id=SID, on_track=False)
+    assert no_map.get_optimal_seconds() is None
+    # No comparable lap this session (only one lap stored).
+    assert _ctx(store).get_optimal_seconds() is None
+    # No such lap at all.
+    assert _ctx(_store(tmp_path)).get_optimal_seconds() is None
+
+
 def test_nothing_measurable_says_so():
     cmap = CornerMap.load(CMAP)
     text = format_time_on_table(

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
-import { getSessionLaps, getLapMap, getStatus, getCurrentMap, type StatusResponse } from "./api";
+import { getSessionLaps, getLapMap, getStatus, getCurrentMap, type StatusResponse, type LapRow } from "./api";
 import { eventFeed } from "./events";
 import TrackMapPane from "./TrackMapPane.svelte";
 
@@ -9,6 +9,12 @@ vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
   return { ...actual, getSessionLaps: vi.fn(), getLapMap: vi.fn(), getStatus: vi.fn(), getCurrentMap: vi.fn() };
 });
+
+/** #176: getSessionLaps now resolves { laps, optimal } -- this pane only reads the
+    rows, so `optimal` defaults to null. */
+function withOpt(laps: LapRow[]) {
+  return { laps, optimal: null as number | null };
+}
 
 // #151: a controllable stand-in for the shared /live feed (App owns the real one).
 const live = vi.hoisted(() => {
@@ -77,7 +83,7 @@ describe("TrackMapPane", () => {
     vi.mocked(getLapMap).mockReset();
     vi.mocked(getStatus).mockReset();
     vi.mocked(getCurrentMap).mockReset();
-    vi.mocked(getSessionLaps).mockResolvedValue([{ id: 9, lap_time: 216, valid: 1, ts: 100 }]);
+    vi.mocked(getSessionLaps).mockResolvedValue(withOpt([{ id: 9, lap_time: 216, valid: 1, ts: 100 }]));
     vi.mocked(getLapMap).mockResolvedValue(mapFixture);
     vi.mocked(getStatus).mockResolvedValue(noStatus);
     vi.mocked(getCurrentMap).mockResolvedValue({});

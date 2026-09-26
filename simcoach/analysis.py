@@ -526,6 +526,24 @@ def optimal_sectors(laps: list[dict], bounds) -> dict | None:
                               key=lambda x: (x[0], x[1]))}
 
 
+def optimal_headline(lap_time: float, sectors, optimal: dict | None) -> float | None:
+    """The one 'optimal lap' figure the coach states (#169's `get_time_on_table`,
+    #176's lap rail) from `optimal_sectors`'s result: this lap's own time minus
+    each sector's gain over its own sector, counting only gains >= 0.005 s.
+
+    None when it can't be honestly stated: no sectors on this lap, no comparable
+    lap (`optimal` is None), or this lap's OWN sector was one of the dropped ones
+    (a spin/off) -- a total built on that sector would rest on the incident, so
+    `format_time_on_table` prints gains only and no headline lap time."""
+    if not sectors or optimal is None:
+        return None
+    if any(key == "this" for _, _, key in optimal.get("dropped", [])):
+        return None
+    under = sum(g for g in (sectors[i] - t for i, (t, _) in enumerate(optimal["best"]))
+                if g >= 0.005)
+    return lap_time - under
+
+
 def form_segments(cmap: CornerMap) -> list[tuple]:
     """(corner, seg_start, seg_end) per corner: the corner with its approach and
     run-out, from the previous corner's end to the next corner's start (owned map

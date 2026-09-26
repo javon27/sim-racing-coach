@@ -270,8 +270,17 @@ export function getSessionsSummary(f: Pick<SessionsFilter, "track" | "car" | "ca
   return request<SessionsSummary>(`/sessions/summary${sessionQuery(f)}`);
 }
 
-export function getSessionLaps(sid: string): Promise<LapRow[]> {
-  return request<LapRow[]>(`/sessions/${sid}/laps`);
+/** `optimal`: #176's headline optimal-lap figure (seconds) for this session's best
+    lap -- the same one the coach's get_time_on_table states -- or null wherever
+    it can't be honestly stated (no corner map, no comparable lap, own best sector
+    dropped for a spin/off). */
+export interface SessionLaps {
+  laps: LapRow[];
+  optimal: number | null;
+}
+
+export function getSessionLaps(sid: string): Promise<SessionLaps> {
+  return request<SessionLaps>(`/sessions/${sid}/laps`);
 }
 
 export function getSessionRace(sid: string): Promise<RaceResult | Record<string, never>> {

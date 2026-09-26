@@ -21,6 +21,10 @@
 
   let laps: LapRow[] = $state([]);
   let bestId: number | null = $state(null);
+  // #176: the server's headline optimal-lap figure for this session's best lap (the
+  // same one the coach's get_time_on_table states), refreshed on every path that
+  // refreshes `laps`/`bestId` below.
+  let optimal: number | null = $state(null);
   // Plain `let`, deliberately NOT $state: nothing renders it, and fetchLatest both
   // reads and writes it from inside an $effect's synchronous prefix — as reactive
   // state that self-dependency would re-run the sessionId effect and re-arm the
@@ -144,6 +148,7 @@
     if (target === null) {
       laps = [];
       bestId = null;
+      optimal = null;
       currentSessionId = null;
       return;
     }
@@ -154,21 +159,24 @@
     // isn't streaming (a pinned past session) still needs the indexed query.
     const frame = eventFeed.laps.value;
     let l: LapRow[];
+    let opt: number | null;
     if (frame && frame.session_id === target) {
       l = frame.laps;
+      opt = frame.optimal;
     } else if (!(reviewing && pinnedLoaded === target)) {
       // A pinned past session's rows never change: query them once per target,
       // not once per 1 Hz status frame. A followed live session keeps refetching
       // until its laps frame arrives. (`pinnedLoaded` is a plain let on purpose,
       // and `laps` is never READ here: a $state read in this synchronous prefix
       // would make the status effect depend on it.)
-      l = await getSessionLaps(target);
+      ({ laps: l, optimal: opt } = await getSessionLaps(target));
       pinnedLoaded = reviewing ? target : null;
     } else {
       return;
     }
     laps = l;
     bestId = bestIdOf(l);
+    optimal = opt;
   }
 
   // #106: this was a 5 s poll of getStatus + getSessionLaps. The status frame is
@@ -222,10 +230,12 @@
 
   async function loadPinned(target: string) {
     try {
-      const l = await withRetry(() => getSessionLaps(target), retryTries, retryDelayMs);
+      const { laps: l, optimal: opt } =
+        await withRetry(() => getSessionLaps(target), retryTries, retryDelayMs);
       if (target !== reviewTarget) return; // the prop moved on while we fetched
       laps = l;
       bestId = bestIdOf(l);
+      optimal = opt;
       currentSessionId = target;
       phase = "ok";
     } catch {
@@ -256,6 +266,7 @@
       if (!f || f.session_id === null || f.session_id !== currentSessionId) return;
       laps = f.laps;
       bestId = bestIdOf(f.laps);
+      optimal = f.optimal;
     }),
   );
   $effect(() =>
@@ -362,6 +373,13 @@
   <div class="best-head">
     <span class="lbl">Best</span>
     <span class="t">{formatTime(bestTime)}</span>
+  </div>
+{/if}
+{#if optimal !== null && bestTime !== null && bestTime - optimal > 0.005}
+  <div class="best-head optimal-head">
+    <span class="lbl">Optimal</span>
+    <span class="t">{formatTime(optimal)}</span>
+    <span class="gap">−{(bestTime - optimal).toFixed(2)}</span>
   </div>
 {/if}
 <div class="laps" bind:this={lapsEl}>
