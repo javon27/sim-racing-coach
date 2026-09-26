@@ -201,3 +201,16 @@ feels slow; whether the classifier's tiers match what the driver would have chos
 4. **Spend cap:** a per-answer thinking cap or none?
 5. **Classifier default:** the cheapest hosted model, or the coach's own model (simpler, one
    config, slower and dearer per question)?
+
+## Appendix: other harness patterns — driver decisions (2026-09-25)
+
+Reviewed against the coach, with the driver's ruling on each:
+
+| Pattern (from coding harnesses) | Ruling | Why / shape |
+|---|---|---|
+| Self-review pass before answering | **No** | A coach can't second-guess itself, and it adds latency the answer can't afford. The #159 mechanical grounding stays; no model review pass. |
+| Playbooks for recurring asks | **A handful only** | Post-race debrief, time-on-table, setup direction for a balance complaint — fixed tool sequences narrated by the model. More than a handful defeats the point of having the AI. |
+| Sub-agents / background jobs | **No** | Don't belong here. Deep tier is one call that acknowledges first, not a background task. |
+| In-the-moment feedback capture (thumbs, "that was useless") | **Development/testing only** | Useful for the eval loop; end users must opt in before any of it leaves the machine. |
+| Show the work (tool trace) | **Desktop analysis only** | Not in the rig. On desktop, a one-line streaming status ("reading race lap 5 · comparing…"), the way Claude Code shows its current step. |
+| Coach-written durable memory | **Yes — the original plan** | Per-track/per-car notes the coach adds after a session, reviewed by the driver before they're kept (the existing Settings memories pattern). |
