@@ -34,6 +34,12 @@
   // review hold the moment the list snapped to a new live session.
   let currentSessionId: string | null = null;
   let pinnedLoaded: string | null = null; // the pinned session whose rows are already shown
+  // #176 fix round 3 must-fix: the (session, laps-signature) `optimal` was last reset
+  // and re-fetched for. `fetchLatest` runs on every 1 Hz status frame even when
+  // nothing changed (#106's whole point was ending that kind of poll for laps/best);
+  // without this guard it was ALSO resetting and re-fetching `optimal` every second,
+  // blinking the row off and re-hitting GET /optimal for no reason.
+  let lastOptimalKey: string | null = null;
   // #176 fix round 2: while GET /optimal reports `pending` (a background compute is
   // scheduled or running -- the gap that left a just-opened Sessions-review session's
   // row blank), poll it again in ~1 s until it settles, up to POLL_MAX_TRIES times.
@@ -145,6 +151,12 @@
     }
   }
 
+  // #176 fix round 3: a cheap (session, lap-set) key -- `lastOptimalKey` is compared
+  // against this so `optimal` is only reset/re-fetched when it actually changed.
+  function optimalKey(target: string, rows: LapRow[]): string {
+    return `${target}:${rows.length}:${rows[rows.length - 1]?.id ?? ""}`;
+  }
+
   // #176 fix round 1/2: fetched after the laps load, for both the live and a pinned
   // session, and again on every later laps update (a new lap may change the
   // headline). Never blocks laps/bestId -- those are already set by the caller.
@@ -202,6 +214,7 @@
       bestId = null;
       optimal = null;
       stopOptimalPoll();
+      lastOptimalKey = null;
       currentSessionId = null;
       return;
     }
@@ -227,8 +240,18 @@
     }
     laps = l;
     bestId = bestIdOf(l);
-    optimal = null; // never show a stale/wrong number while the fresh one loads
-    void refreshOptimal(target);
+    // #176 fix round 3 must-fix: `fetchLatest` runs on every 1 Hz status frame even
+    // when the live laps set hasn't changed at all (the "laps" frame's own value is
+    // just being re-read from `eventFeed.laps.value`, not re-arriving). Reset and
+    // re-fetch `optimal` only when the session or the actual lap set changed --
+    // otherwise leave it to the laps-frame/optimal-topic subscriptions below, so the
+    // row doesn't blink off and GET /optimal doesn't get re-hit every second.
+    const key = optimalKey(target, l);
+    if (key !== lastOptimalKey) {
+      lastOptimalKey = key;
+      optimal = null; // never show a stale/wrong number while the fresh one loads
+      void refreshOptimal(target);
+    }
   }
 
   // #106: this was a 5 s poll of getStatus + getSessionLaps. The status frame is
@@ -286,6 +309,7 @@
       if (target !== reviewTarget) return; // the prop moved on while we fetched
       laps = l;
       bestId = bestIdOf(l);
+      lastOptimalKey = optimalKey(target, l);
       optimal = null; // never show a stale/wrong number while the fresh one loads
       currentSessionId = target;
       phase = "ok";
@@ -318,6 +342,7 @@
       if (!f || f.session_id === null || f.session_id !== currentSessionId) return;
       laps = f.laps;
       bestId = bestIdOf(f.laps);
+      lastOptimalKey = optimalKey(f.session_id, f.laps);
       optimal = null; // a new lap landed; the old headline may no longer be right
       void refreshOptimal(f.session_id);
     }),

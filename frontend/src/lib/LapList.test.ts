@@ -839,4 +839,31 @@ describe("LapList", () => {
       expect(oldCallsAfter).toBe(oldCallsBefore);
     });
   });
+
+  // --- issue #176 (fix round 3 must-fix): the live rail must not blink or re-poll ---
+  // on every 1 Hz status frame when nothing about the session or its laps changed
+  // (exactly the kind of poller #106 removed).
+
+  it("live rail: the Optimal row doesn't blink and /optimal isn't re-fetched on repeat status frames with an unchanged lap set", async () => {
+    pushStatus("S1", 6);
+    eventFeed.push("laps", { session_id: "S1", laps: [{ id: 9, lap_time: 216.0, valid: 1, ts: 100 }] });
+    vi.mocked(getSessionOptimal).mockResolvedValue({ optimal: 215.5, pending: false });
+
+    const { container } = render(LapList);
+    await screen.findByText("Lap 1");
+    await vi.waitFor(() => expect(container.querySelectorAll(".best-head")).toHaveLength(2));
+
+    const callsBefore = vi.mocked(getSessionOptimal).mock.calls.length;
+
+    // Several more 1 Hz status frames -- same session, same lap_id, same laps.
+    for (let i = 0; i < 3; i++) {
+      pushStatus("S1", 6);
+      await new Promise((r) => setTimeout(r, 5));
+      // Never blinks off: the row stays exactly as it was.
+      expect(container.querySelectorAll(".best-head")).toHaveLength(2);
+      expect(container.querySelectorAll(".best-head")[1].textContent).toContain("−0.50");
+    }
+
+    expect(vi.mocked(getSessionOptimal).mock.calls.length).toBe(callsBefore);
+  });
 });

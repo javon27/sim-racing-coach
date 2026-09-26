@@ -205,6 +205,44 @@ def test_map_rev_bump_invalidates_the_cache_and_a_real_value_appears(tmp_path, s
     assert fresh is not None
 
 
+# --- fix round 3 should-fix: never serve a stale-signature value while pending ------
+
+def test_stale_value_hidden_while_a_new_compute_is_pending(tmp_path, synthetic_lap, monkeypatch):
+    # A REAL, already-cached value exists (unlike the map_rev case above, where the
+    # cached value was None either way) -- a new best lap must never keep showing it
+    # against the new best while the fresh compute is still running (a false gap on
+    # the rail for the 2-4 s the compute takes).
+    app, store = _app(tmp_path)
+    bounds = [1500.0, 2600.0]
+    _save(store, synthetic_lap, 92.9, 1, 1, sectors=[30.6, 31.2, 31.1], sector_bounds=bounds)
+    _save(store, synthetic_lap, 92.7, 2, 2, sectors=[30.7, 30.9, 31.1], sector_bounds=bounds)
+    c = _tc(app)
+    c.get("/sessions/s1/optimal")
+    _wait_inflight(app, "s1")
+    old = c.get("/sessions/s1/optimal").json()
+    assert old["optimal"] is not None and old["pending"] is False
+
+    real = core_mod.CoachContext.get_optimal_seconds
+
+    def _slow(self, which="best"):
+        time.sleep(0.3)
+        return real(self, which)
+    monkeypatch.setattr(core_mod.CoachContext, "get_optimal_seconds", _slow)
+
+    _save(store, synthetic_lap, 92.3, 3, 3, sectors=[30.2, 30.9, 31.2],
+         sector_bounds=bounds)   # a new, faster best lap -- the cached sig is now stale
+    mid = c.get("/sessions/s1/optimal").json()
+    # Never the OLD figure against the new best: hidden (None) while the fresh
+    # compute for the new best is still running.
+    assert mid == {"optimal": None, "pending": True}
+
+    _wait_inflight(app, "s1")
+    new = c.get("/sessions/s1/optimal").json()
+    assert new["optimal"] is not None
+    assert new["pending"] is False
+    assert new["optimal"] != old["optimal"]
+
+
 # --- single-flight: two concurrent requests, one compute -----------------------------
 
 def test_two_concurrent_requests_run_one_compute(tmp_path, synthetic_lap, monkeypatch):

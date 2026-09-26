@@ -250,14 +250,19 @@ def register(app, deps) -> None:
         compute running at all at any moment, since `optimal_pool` has exactly one
         worker -- so a driver's PTT question and a lap landing never contend for more
         than one extra core between them), then returns
-        `(cached value, pending)` -- `pending` is True while a compute for this
-        session is scheduled or still running (#176 fix round 2: lets a caller that
-        just opened a session, with nothing cached yet, know to check back rather
-        than conclude there's simply no optimal). `value` is None the first time a
-        session is asked about, or may be one compute behind the very latest lap.
-        Never blocks: the REST endpoint that calls this returns instantly, and the
-        /events tick that also calls this (to decide whether to push a fresh
-        'optimal' frame once the compute lands) never awaits it either."""
+        `(value, pending)` -- `pending` is True while a compute for this session is
+        scheduled or still running (#176 fix round 2: lets a caller that just opened
+        a session, with nothing cached yet, know to check back rather than conclude
+        there's simply no optimal). `value` is None whenever there's nothing FRESH to
+        report: no session asked about yet, OR the cached value's signature is stale
+        (#176 fix round 3 should-fix: a new lap landing must never keep showing the
+        PREVIOUS lap's optimal against the new best -- that's a false gap on the
+        rail, worth 2-4 s of a wrong-looking number every time a lap lands. Hiding the
+        row until the fresh value lands is the honest choice, matching this repo's
+        rule that an unverified/stale value is cut, not hedged.) Never blocks: the
+        REST endpoint that calls this returns instantly, and the /events tick that
+        also calls this (to decide whether to push a fresh 'optimal' frame once the
+        compute lands) never awaits it either."""
         if not sid or not laps:
             return None, False
         sig = _optimal_sig(laps)
@@ -267,7 +272,7 @@ def register(app, deps) -> None:
             if not fresh and sid not in app.state.optimal_inflight:
                 fut = app.state.optimal_pool.submit(_compute_optimal, sid, sig, laps)
                 app.state.optimal_inflight[sid] = fut
-            value = cached[1] if cached is not None else None
+            value = cached[1] if fresh else None
             pending = sid in app.state.optimal_inflight
             return value, pending
 

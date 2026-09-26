@@ -173,23 +173,17 @@ def register(app, deps) -> None:
                 # lap measured) that must never delay `status`/`laps`/anything else on
                 # this loop, and it's checked LAST so a slow/raising compute can never
                 # push those other frames back either. `_ensure_optimal` only ever
-                # SCHEDULES a recompute and returns instantly; it's called here only
-                # when something that could change the answer actually changed (a lap
-                # landing or a map arriving/being resaved), not every tick.
-                gate = (sid, len(laps), laps[-1]["id"] if laps else None, app.state.map_rev)
-                if last.get("_optimal_gate", _MISSING) != gate:
-                    last["_optimal_gate"] = gate
-                    _ensure_optimal(sid, laps)   # schedule-only; result read below
-                # Checked every tick regardless of the gate (a cheap cache read) so a
-                # background compute that finishes between gate changes still reaches
-                # this connection on its very next tick, not just the one that
-                # triggered it.
-                cached = app.state.optimal_cache.get(sid) if sid else None
-                opt = cached[1] if cached is not None else None
-                opt_sig = (sid, opt)
+                # SCHEDULES a recompute (single-flight; a no-op when nothing is stale
+                # or a compute is already running) and returns instantly, so calling it
+                # every tick is cheap -- and #176 fix round 3 must-fix: it's also the
+                # ONLY source of truth for whether the cached value is fresh (a stale
+                # one is never pushed, see `_ensure_optimal`'s own docstring), so a
+                # separate raw cache read here would have to duplicate that rule.
+                value, _pending = _ensure_optimal(sid, laps)
+                opt_sig = (sid, value)
                 if last.get("_optimal_sig", _MISSING) != opt_sig:
                     last["_optimal_sig"] = opt_sig
-                    frames.append(("optimal", {"session_id": sid, "optimal": opt}))
+                    frames.append(("optimal", {"session_id": sid, "optimal": value}))
             except Exception:
                 log.warning("events: optimal tick failed", exc_info=True)
 
