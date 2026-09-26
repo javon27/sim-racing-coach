@@ -73,7 +73,6 @@ def _run(client):
     m = ClaudeModel.__new__(ClaudeModel)  # bypass __init__: no real anthropic client
     m.model = "claude-sonnet-5"
     m.max_tokens = 100
-    m.thinking = False
     m.client = client
     return m.run(SYSTEM, [{"role": "user", "content": "q"}], TOOLS,
                  dispatch=lambda n, i: "corner data")
@@ -147,7 +146,6 @@ def test_complete_carries_the_same_cache_breakpoint():
     m = ClaudeModel.__new__(ClaudeModel)
     m.model = "claude-sonnet-5"
     m.max_tokens = 100
-    m.thinking = False
     m.client = client
     assert m.complete(SYSTEM, [{"role": "user", "content": "q"}]) == "Brake later into 1."
 
@@ -163,7 +161,6 @@ def test_empty_system_is_not_sent_as_an_empty_text_block():
     m = ClaudeModel.__new__(ClaudeModel)
     m.model = "claude-sonnet-5"
     m.max_tokens = 100
-    m.thinking = False
     m.client = client
     m.run("", [{"role": "user", "content": "q"}], TOOLS, dispatch=lambda n, i: "x")
 

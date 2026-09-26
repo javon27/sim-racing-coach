@@ -53,6 +53,7 @@ class FakeStream {
   phase: CoachPhase = "idle";
   toolActivity: ToolActivity | null = null;
   answer = "";
+  ack: string | null = null;
   chatId: string | null = null;
   error: string | null = null;
   usage: ChatUsage | null = null;
@@ -144,7 +145,27 @@ describe("ChatPanel", () => {
     expect(screen.getByText(/Brake later into T3\./)).toBeTruthy();
   });
 
+  it("#175: while the model thinks the pending bubble says so, under a deep answer's ack", async () => {
+    const stream = new FakeStream();
+    render(ChatPanel, { props: { stream, sessionId: "s1", lapId: 9 } });
+    const textarea = await screen.findByPlaceholderText(/ask your engineer/i);
+    await fireEvent.input(textarea, { target: { value: "how was that race?" } });
+    await fireEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    stream.emit({ phase: "tool", toolActivity: { name: "get_race_result", input: {} } });
+    expect(await screen.findByText(/reading your lap/i)).toBeTruthy();
+    stream.emit({ phase: "thinking", ack: "Give me a moment — going through the race lap by lap." });
+    expect(await screen.findByText("thinking…")).toBeTruthy();
+    expect(screen.getByText("Give me a moment — going through the race lap by lap.")).toBeTruthy();
+    expect(screen.queryByText(/reading your lap/i)).toBeNull();
+
+    stream.emit({ phase: "done", answer: "Solid race.", chatId: "c1" });
+    expect(await screen.findByText("Solid race.")).toBeTruthy();
+    expect(screen.queryByText(/Give me a moment/)).toBeNull();   // not part of the answer
+  });
+
   it("#111: renderMarkdown escapes raw HTML from the model instead of injecting it", async () => {
+
     // The coach's answer is model-generated text that has passed through tool
     // results -- not trusted input. It reaches the DOM via {@html renderMarkdown(...)}.
     // A CSP is defence in depth here, not a sanitizer: this proves the actual

@@ -72,7 +72,27 @@ describe("CoachStream", () => {
     expect(ws.closed).toBe(true);
   });
 
+  it("#175: thinking and ack events show the thinking state; the ack is not answer text", () => {
+    const stream = new CoachStream();
+    stream.ask("how was that race?");
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.();
+
+    emit(ws, { type: "ack", text: "Give me a moment — going through the race lap by lap." });
+    expect(stream.phase).toBe("thinking");
+    expect(stream.ack).toBe("Give me a moment — going through the race lap by lap.");
+    emit(ws, { type: "tool", name: "get_race_result", input: {} });
+    emit(ws, { type: "thinking" });
+    expect(stream.phase).toBe("thinking");
+    emit(ws, { type: "text", text: "Solid race." });
+    expect(stream.answer).toBe("Solid race.");
+
+    stream.ask("next?");
+    expect(stream.ack).toBeNull();
+  });
+
   it("sets phase=error and closes the socket on an error event", () => {
+
     const stream = new CoachStream();
     stream.ask("what happened?");
     const ws = FakeWebSocket.instances[0];

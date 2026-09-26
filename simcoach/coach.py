@@ -570,8 +570,12 @@ def is_repeat_request(question: str) -> bool:
 class Coach:
     """Assembles prompts from analysis + corner facts + knowledge notes and calls the Model."""
 
-    def __init__(self, model: Model):
+    def __init__(self, model: Model, classifier_for=None):
         self.model = model
+        # #175: coach.classifier_model setting -> the router's classifier Model (or
+        # None); read per question so a Settings change applies without a restart.
+        # None here (tests, scripts) = keyword rules only, never a paid call.
+        self.classifier_for = classifier_for
 
     @staticmethod
     def _augment_system(system, allowed_adjustments, driver_profile, input_device):
@@ -638,6 +642,8 @@ class Coach:
         units: str = "metric",
         voice: str | None = None,
         prior_results: str = "",
+        thinking: str = "standard",
+        intent: str | None = None,
     ):
         """Like `ask_agentic`, but yields tool/text events as they occur instead of
         returning a final string. Does not persist or emit done/error — the caller does.
@@ -655,8 +661,15 @@ class Coach:
         sentence naming a driver no tool result named is dropped (#168: not replaced)
         before it is emitted, so it is never shown or spoken; if that leaves nothing,
         the answer is UNCONFIRMED. Every discarded draft and every cut sentence is
-        logged (INFO) with its reason."""
+        logged (INFO) with its reason.
+
+        `thinking` (#175) is the tier the router chose, passed to the model; a deep
+        answer first yields {"type":"ack","text"} -- a code-chosen line (by `intent`),
+        before the model is called, so it is neither model narration nor data."""
         from simcoach.coach_tools import TOOLS
+        from simcoach.thinking import ack_line
+        if thinking == "deep":
+            yield {"type": "ack", "text": ack_line(intent)}
         _, _, spd_u, temp_u = unit_fns(units)
         static = AGENTIC_SYSTEM_PROMPT.format(car=car, speed_unit=spd_u, temp_unit=temp_u)
         system = self._augment_system(
@@ -723,7 +736,8 @@ class Coach:
                 return body
 
             stream = self._separated(self.model.run_stream(
-                system, messages, TOOLS, context.dispatch, force_tool=force))
+                system, messages, TOOLS, context.dispatch, force_tool=force,
+                thinking=thinking))
             if voice == "ptt":
                 stream = self._final_answer(stream)
             for ev in stream:
@@ -824,6 +838,6 @@ class Coach:
                     text_so_far += "\n\n"
                 saw_tool_since_text = False
                 text_so_far += ev["text"]
-            elif ev["type"] != "usage":
+            elif ev["type"] not in ("usage", "thinking"):
                 saw_tool_since_text = True
             yield ev

@@ -15,6 +15,10 @@ DEFAULTS = {
     "units": "metric",            # "metric" (km/h, °C) or "imperial" (mph, °F)
     "input_device": "wheel",      # "wheel" or "controller"
     "model": "sonnet",            # "opus" | "sonnet" | "haiku" -> make_model
+    "coach": {                    # #175: how hard the coach thinks before answering
+        "thinking": "auto",       # "auto" (router) | "off" (always quick) | "always"
+        "classifier_model": "cheapest",   # the router's model (alias/id) | "none"
+    },
     "corner_naming": "names",     # "names" or "numbers"
     "show_cost": True,            # show the estimated $ on the chat meter (tokens always show)
     # Past this many billed tokens in one chat, the chat screen softly suggests

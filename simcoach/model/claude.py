@@ -1,8 +1,12 @@
+import json
+import logging
 from collections.abc import Callable, Iterator
 
 import anthropic
 
 from .base import RunResult, TokenUsage
+
+_log = logging.getLogger(__name__)
 
 # Safety stop for the tool-use loop: a coach question should need only a few
 # tool calls; this bounds a runaway model without capping normal use.
@@ -13,10 +17,9 @@ class ClaudeModel:
     """Claude model implementation via anthropic SDK."""
 
     def __init__(self, model: str = "claude-sonnet-5", api_key: str | None = None,
-                 max_tokens: int = 4096, thinking: bool = False):
+                 max_tokens: int = 4096):
         self.model = model
         self.max_tokens = max_tokens
-        self.thinking = thinking
         self.client = anthropic.Anthropic(api_key=api_key)
 
     @property
@@ -28,9 +31,34 @@ class ClaudeModel:
         UNCONFIRMED instead). Opus 5 accepts disabled thinking at the default effort."""
         return not self.model.startswith(("claude-opus-5-5", "claude-fable-", "claude-mythos-"))
 
-    def _thinking_param(self):
-        # sonnet-5 accepts {"type": "disabled"}; budget_tokens is rejected (400).
-        return {"type": "adaptive"} if self.thinking else {"type": "disabled"}
+    def _tier_kw(self, tier: str) -> dict:
+        """#175: the request kwargs a thinking tier maps to on this model. Confirmed
+        against the installed SDK (anthropic 1.8.0): `thinking` takes
+        {"type": "adaptive", "display": ...} / {"type": "disabled"}
+        (types/thinking_config_*_param.py); effort is `output_config={"effort": ...}`,
+        low|medium|high|xhigh|max (types/output_config_param.py; `max` is the top level
+        every model's EffortCapability reports). budget_tokens is rejected on sonnet-5,
+        so it is never sent.
+          quick    -> thinking disabled
+          standard -> adaptive (the model decides how much)
+          deep     -> adaptive + effort max + max_tokens 8192
+        Families that 400 on disabled thinking (Opus 5.5, Fable, Mythos -- the same set
+        can_force_tool names) run quick as adaptive at the lowest effort instead. Haiku
+        has no adaptive thinking and no effort: every tier runs it plain.
+        display "summarized": the text is logged for tuning (INFO), never shown."""
+        if self.model.startswith("claude-haiku-"):
+            # ponytail: Haiku is the only no-adaptive family the factory's aliases
+            # reach; add a prefix here if an older model id is ever configured.
+            return {"thinking": {"type": "disabled"}}
+        adaptive = {"type": "adaptive", "display": "summarized"}
+        if tier == "deep":
+            return {"thinking": adaptive, "output_config": {"effort": "max"},
+                    "max_tokens": max(self.max_tokens, 8192)}
+        if tier == "quick":
+            if not self.can_force_tool:       # this family rejects disabled thinking
+                return {"thinking": adaptive, "output_config": {"effort": "low"}}
+            return {"thinking": {"type": "disabled"}}
+        return {"thinking": adaptive}
 
     def complete(self, system: str, messages: list[dict]) -> str:
         """Generate a completion via Claude.
@@ -54,12 +82,28 @@ class ClaudeModel:
             max_tokens=self.max_tokens,
             system=_cached_system(system),
             messages=messages,
-            thinking=self._thinking_param(),
+            **self._tier_kw("quick"),
         )
         return _first_text(resp)
 
+    def classify(self, prompt: str, schema: dict) -> tuple[dict | None, TokenUsage]:
+        """#175 router call. JSON is asked for in words (no structured-output mode,
+        so any model id works); SDK timeout 0.8 s, no retries -- the router enforces
+        its own budget as well. No `thinking` kwarg: the classifier model's default
+        (none on Haiku). Never raises."""
+        try:
+            resp = self.client.with_options(timeout=0.8, max_retries=0).messages.create(
+                model=self.model, max_tokens=256,
+                system=("Reply with ONLY one JSON object matching this JSON schema, "
+                        "no prose: " + json.dumps(schema)),
+                messages=[{"role": "user", "content": prompt}])
+        except Exception as e:
+            _log.info("classifier call failed: %s: %s", type(e).__name__, e)
+            return None, TokenUsage()
+        return _json_object(_first_text(resp)), _usage_of(resp)
+
     def _stream_turn(self, system: str, convo: list[dict], tools: list[dict] | None,
-                     force_tool: bool = False):
+                     force_tool: bool = False, thinking: str = "standard"):
         """One model turn. Streams token deltas via `messages.stream` (yielding a
         `text` event per chunk) when the client supports it; falls back to a
         single whole-block `messages.create` call otherwise (a client/test-double
@@ -76,14 +120,16 @@ class ClaudeModel:
         cache breakpoint goes here: one place, every billed call."""
         kw = {"model": self.model, "max_tokens": self.max_tokens,
               "system": _cached_system(system),
-              "messages": convo, "thinking": self._thinking_param()}
+              "messages": convo, **self._tier_kw(thinking)}
         if tools is not None:
             kw["tools"] = tools
         if force_tool:
             # #159: must call a tool this turn. The API rejects a forced tool_choice
-            # with thinking on, so this one turn runs without it.
+            # with thinking on, so this one turn runs without it -- and without an
+            # effort level (Opus 5 400s on disabled thinking at effort max).
             kw["tool_choice"] = {"type": "any"}
             kw["thinking"] = {"type": "disabled"}
+            kw.pop("output_config", None)
         if not hasattr(self.client.messages, "stream"):
             resp = self.client.messages.create(**kw)
             text = _first_text(resp)
@@ -92,9 +138,20 @@ class ClaudeModel:
             yield self._usage_event(resp)
             return resp
         with self.client.messages.stream(**kw) as stream:
-            for delta in stream.text_stream:
-                yield {"type": "text", "text": delta}
+            for ev in stream:
+                kind = getattr(ev, "type", None)
+                if kind == "text":
+                    yield {"type": "text", "text": ev.text}
+                elif (kind == "content_block_start"
+                      and getattr(ev.content_block, "type", None) == "thinking"):
+                    yield {"type": "thinking"}      # #175: the UI's "thinking..." label
             final = stream.get_final_message()
+        # #175: thinking text is for tuning only -- logged, never yielded, so never
+        # shown, spoken or grounded as data. It bills as output: already in usage.
+        thought = "".join(getattr(b, "thinking", "") or "" for b in final.content
+                          if getattr(b, "type", None) == "thinking")
+        if thought:
+            _log.info("coach thinking (%s, %s tier): %s", self.model, thinking, thought)
         yield self._usage_event(final)
         return final
 
@@ -108,19 +165,24 @@ class ClaudeModel:
         tools: list[dict],
         dispatch: Callable[[str, dict], str],
         force_tool: bool = False,
+        thinking: str = "standard",
     ) -> Iterator[dict]:
         """Agentic tool-use loop: let the model call `tools` to fetch data on
         demand, executing each via `dispatch`, until it stops calling tools.
         Yields a `tool` event before dispatching each tool_use block, and
-        streams the answer as one or more `text` delta events."""
+        streams the answer as one or more `text` delta events. `thinking` is the
+        #175 tier for every round (a forced #159 round runs without it)."""
         # Copy so we don't mutate the caller's history (the coach appends only the
         # final Q/A itself). tool_use/tool_result turns stay internal to this call.
         convo = list(messages)
         for i in range(MAX_TOOL_ITERATIONS):
             final = yield from self._stream_turn(system, convo, tools,
-                                                 force_tool=force_tool and i == 0)
+                                                 force_tool=force_tool and i == 0,
+                                                 thinking=thinking)
             if final.stop_reason != "tool_use":
                 return
+            # The WHOLE content goes back, thinking blocks (and their signatures)
+            # included: the API requires them unchanged across tool-use turns.
             convo.append({"role": "assistant", "content": final.content})
             results = []
             for block in final.content:
@@ -138,7 +200,7 @@ class ClaudeModel:
             convo.append({"role": "user", "content": results})
         # Hit the iteration cap — make one final tool-free call so the model answers
         # from what it has gathered rather than returning nothing.
-        yield from self._stream_turn(system, convo, tools=None)
+        yield from self._stream_turn(system, convo, tools=None, thinking=thinking)
 
     def run(
         self,
@@ -195,6 +257,18 @@ def _usage_of(resp) -> TokenUsage:
         cache_read=getattr(u, "cache_read_input_tokens", 0) or 0,
         cache_write=getattr(u, "cache_creation_input_tokens", 0) or 0,
     )
+
+
+def _json_object(text: str) -> dict | None:
+    """The one JSON object in `text` (a model may fence it), or None."""
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end < start:
+        return None
+    try:
+        obj = json.loads(text[start:end + 1])
+    except ValueError:
+        return None
+    return obj if isinstance(obj, dict) else None
 
 
 def _first_text(resp) -> str:

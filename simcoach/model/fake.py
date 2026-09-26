@@ -1,3 +1,4 @@
+import time
 from collections.abc import Callable
 
 from .base import RunResult, TokenUsage
@@ -14,7 +15,8 @@ class FakeModel:
 
     def __init__(self, reply: str = "ok", tool_script: list | None = None,
                  stream_script: list[tuple] | None = None,
-                 forced_stream_script: list[tuple] | None = None):
+                 forced_stream_script: list[tuple] | None = None,
+                 classify_result: dict | None = None, classify_delay: float = 0.0):
         self.reply = reply
         # tool_script: list of (tool_name, input_dict) the fake "model" will call
         # via dispatch before returning `reply`. Empty = answer with no tool calls.
@@ -28,6 +30,12 @@ class FakeModel:
         # force_tool=True -- a forced re-ask. None -> the normal script again.
         self.forced_stream_script = forced_stream_script
         self.forced: list[bool] = []    # force_tool of each run_stream call, in order
+        self.thinking: list[str] = []   # #175: the thinking tier of each run_stream call
+        # #175 classifier role: what classify() returns (None = a failed call) after
+        # sleeping `classify_delay` s; each prompt it was asked is kept in order.
+        self.classify_result = classify_result
+        self.classify_delay = classify_delay
+        self.classified: list[str] = []
         self.last_system: str | None = None
         self.last_messages: list[dict] | None = None
         self.last_tools: list[dict] | None = None
@@ -38,6 +46,12 @@ class FakeModel:
         self.last_system = system
         self.last_messages = messages
         return self.reply
+
+    def classify(self, prompt: str, schema: dict) -> tuple[dict | None, TokenUsage]:
+        self.classified.append(prompt)
+        if self.classify_delay:
+            time.sleep(self.classify_delay)
+        return self.classify_result, TokenUsage(input=len(prompt) // 4, output=20)
 
     def _usage(self, messages: list[dict]) -> TokenUsage:
         """Deterministic, network-free stand-in for billed usage (~4 chars/token)."""
@@ -56,7 +70,8 @@ class FakeModel:
         return RunResult(text=self.reply, usage=self._usage(messages))
 
     def run_stream(self, system: str, messages: list[dict], tools: list[dict],
-                   dispatch: Callable[[str, dict], str], force_tool: bool = False):
+                   dispatch: Callable[[str, dict], str], force_tool: bool = False,
+                   thinking: str = "standard"):
         """With stream_script set, replay it verbatim (dispatching each "tool" step)
         so callers can script text/tool/text interleavings (#133). Otherwise: dispatch
         the scripted tool calls, yielding a tool event per call, then yield the fixed
@@ -67,6 +82,8 @@ class FakeModel:
         self.last_messages = messages
         self.last_tools = tools
         self.forced.append(force_tool)
+        self.thinking.append(thinking)
+
         script = self.stream_script
         if force_tool and self.forced_stream_script is not None:
             script = self.forced_stream_script

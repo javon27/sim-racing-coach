@@ -105,6 +105,7 @@
   let phase: CoachPhase = $state("idle");
   let toolActivity: ToolActivity | null = $state(null);
   let answer = $state("");
+  let ack: string | null = $state(null);
   let error: string | null = $state(null);
   let scrollEl: HTMLDivElement | undefined = $state();
   // Jump-to-latest button (#104): shown whenever the driver has scrolled away
@@ -475,14 +476,21 @@
     // ChatPanel already tracks `answer` for rendering, so this is the smaller
     // plumbing than threading a `lastDelta` through the stream/store contract.
     let voiced = "";   // the answer text already handed to the voice loop
+    let acked: string | null = null;   // #175: the deep-tier ack already voiced
     const unsubscribe = stream.subscribe((s) => {
-      const snap = s as { phase: CoachPhase; toolActivity: ToolActivity | null; answer: string; chatId: string | null; error: string | null; usage?: ChatUsage | null; cost?: number | null; costComplete?: boolean; longChat?: boolean };
+      const snap = s as { phase: CoachPhase; toolActivity: ToolActivity | null; answer: string; ack: string | null; chatId: string | null; error: string | null; usage?: ChatUsage | null; cost?: number | null; costComplete?: boolean; longChat?: boolean };
       phase = snap.phase;
       toolActivity = snap.toolActivity;
       answer = snap.answer;
       error = snap.error;
+      ack = snap.ack;
       if (snap.phase === "connecting") {
         voiced = "";
+        acked = null;
+      }
+      if (snap.ack && snap.ack !== acked) {
+        acked = snap.ack;
+        activeVoice?.onAck(snap.ack);
       }
       if (!snap.answer.startsWith(voiced)) {
         // #159: the answer was revised after part of it was voiced (e.g. `done`
@@ -635,6 +643,7 @@
                 {:else if phase === "streaming"}
                   {@html renderMarkdown(answer)}
                 {:else}
+                  {#if ack}<p class="ack">{ack}</p>{/if}
                   <span class="typing">thinking…</span>
                 {/if}
               </div>

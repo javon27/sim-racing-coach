@@ -7,7 +7,7 @@ import type { VoiceMode } from "./voice";
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8765";
 const WS_BASE = API_BASE.replace(/^http/, "ws"); // http -> ws, https -> wss
 
-export type CoachPhase = "idle" | "connecting" | "tool" | "streaming" | "done" | "error";
+export type CoachPhase = "idle" | "connecting" | "tool" | "thinking" | "streaming" | "done" | "error";
 
 export interface ToolActivity {
   name: string;
@@ -28,6 +28,9 @@ export class CoachStream {
   phase: CoachPhase = "idle";
   toolActivity: ToolActivity | null = null;
   answer = "";
+  // #175: a deep answer's opening line ("Give me a moment — ..."), sent before the
+  // model is called. Shown and spoken while pending; not part of the answer.
+  ack: string | null = null;
   chatId: string | null = null;
   error: string | null = null;
   // The CHAT cumulative usage + estimated $ the server reports on `done`. Null
@@ -53,6 +56,7 @@ export class CoachStream {
     this.phase = "connecting";
     this.toolActivity = null;
     this.answer = "";
+    this.ack = null;
     this.chatId = null;
     this.error = null;
     this.usage = null;
@@ -78,6 +82,13 @@ export class CoachStream {
           case "tool":
             this.phase = "tool";
             this.toolActivity = { name: data.name, input: data.input };
+            break;
+          case "thinking": // #175: the model is deliberating (thinking text never sent)
+            this.phase = "thinking";
+            break;
+          case "ack":
+            this.phase = "thinking";
+            this.ack = data.text;
             break;
           case "text":
             this.phase = "streaming";

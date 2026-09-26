@@ -252,7 +252,16 @@ export class VoiceLoop {
     });
   }
 
+  // #175: a deep answer's opening line, sent before the model thinks -- said at
+  // once in either mode, queued ahead of the answer (PTT speaks that on `done`).
+  onAck(text: string): void {
+    if (this.state !== "asking") return;
+    const spoken = stripForSpeech(text);
+    if (spoken) this.#o.speaker.enqueue(spoken);
+  }
+
   // Conversation mode only: pop and enqueue every complete sentence the buffer
+
   // now holds as text streams in; the first enqueue moves state -> speaking
   // (mic stays open for barge-in, same as #speakThen).
   onText(delta: string): void {

@@ -139,7 +139,22 @@ describe("VoiceLoop PTT", () => {
     speaker.drain(); await flush();
     expect(loop.state).toBe("idle");
   });
+  it("#175: a deep answer's ack is said at once, ahead of the answer", async () => {
+    const { loop, speaker } = make();
+    loop.press(); await flush(); loop.release(); await flush(); await flush();
+    loop.onAck("Give me a moment — going through the **race**.");
+    expect(loop.state).toBe("asking");
+    expect(speaker.enqueued).toEqual(["Give me a moment — going through the race."]);
+    loop.onAnswer("Full answer."); await flush();
+    expect(speaker.enqueued).toEqual(["Give me a moment — going through the race.", "Full answer."]);
+  });
+  it("#175: an ack after the ask was abandoned is not said", () => {
+    const { loop, speaker } = make();
+    loop.onAck("Give me a moment.");
+    expect(speaker.enqueued).toEqual([]);
+  });
   it("there is no onSpoken on the loop (#119: no separate cue event)", () => {
+
     const { loop } = make();
     expect((loop as unknown as { onSpoken?: unknown }).onSpoken).toBeUndefined();
   });

@@ -65,7 +65,8 @@ def test_paused_game_frozen_clock_still_reports_state(buffers, monkeypatch):
     _alive(monkeypatch, True)
     for _ in range(5):
         live = _real_read_live_status()
-        assert live == {"track": "Test Circuit", "car": "Car", "state": "track"}
+        assert {k: live[k] for k in ("track", "car", "state")} == {
+            "track": "Test Circuit", "car": "Car", "state": "track"}
     assert _real_read_live_session_id() is not None
 
 

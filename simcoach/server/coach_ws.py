@@ -27,6 +27,7 @@ from ..format import format_laptime
 from ..model.base import TokenUsage
 from ..model.factory import CoachUserError
 from ..race import live_race
+from ..thinking import MOVING_KPH, route
 from ..tiers import legal_adjustments
 from .security import ALLOWED_HOSTS, _bad_origin
 from .serialize import _usage_view
@@ -112,6 +113,7 @@ def register(app, deps) -> None:
                 live = None
             race_snap = race_note = live_session = None
             live_meta = car_status = None
+            live_status = None      # #175: {"state", "speed"} -- is the car moving?
             if live:
                 on_track = True
                 track, vehicle = live
@@ -121,8 +123,9 @@ def register(app, deps) -> None:
                     # Only the LIVE session's buffer: one left from the previous
                     # session (no wrap since) never answers for this one.
                     from ..lmu.smm import read_live_session_id, read_live_status
+                    live_status = read_live_status()
                     live_meta, car_status = app.state.live_lap.now(
-                        read_live_status(), live=(track, vehicle),
+                        live_status, live=(track, vehicle),
                         session_id=read_live_session_id())
                 except Exception:
                     live_meta = car_status = None
@@ -312,10 +315,10 @@ def register(app, deps) -> None:
             # The stored question (below) stays the driver's own words.
             # #136's CURRENT RACE line leads: it frames every number in the turn, including
             # the lap the NEW SINCE line names. Both are silent when there is nothing to say.
-            facts = [f for f in (current_race_fact(ctx._race_windows()),
+            windows = ctx._race_windows()
+            facts = [f for f in (current_race_fact(windows),
                                  f"NEW SINCE YOUR LAST ANSWER: {new_since_last_turn}"
                                  if new_since_last_turn else "") if f]
-            model_question = "\n\n".join([*facts, question])
 
             text = ""
             # What this turn billed. One usage event arrives per model call, so a
@@ -329,12 +332,47 @@ def register(app, deps) -> None:
             # answer, not the scrubbed history copy.)
             last_answer = (messages[-1]["answer"] if history and history[-1]["role"] == "assistant"
                            and is_repeat_request(question) else None)
+            # #175: how hard to think -- code gates, then the classifier (<= 800 ms),
+            # then keyword rules. Its tokens bill with this turn. ponytail: priced at
+            # the coach model's rate (one model per chat row) -- overstates a sub-cent
+            # classifier call; split it into its own row if that ever matters.
+            tier, intent, hint = "standard", None, ""
+            if not last_answer:
+                coach_cfg = cfg.get("coach") or {}
+                moving = bool(live_status and live_status.get("state") == "track"
+                              and (live_status.get("speed") or 0) >= MOVING_KPH)
+                race_live = ctx.race is not None or bool(ctx.race_note)
+                race_finished = bool(windows) and not race_live
+                where = ("on track, moving" if moving else "on track, stationary"
+                         if live_status and live_status.get("state") == "track"
+                         else (live_status or {}).get("state") or "not in a session")
+                classifier = None
+                classifier_for = getattr(app.state.coach, "classifier_for", None)
+                if classifier_for is not None:
+                    try:
+                        classifier = classifier_for(coach_cfg.get("classifier_model"))
+                    except Exception as e:
+                        logging.getLogger(__name__).info("no classifier: %s", e)
+                try:
+                    laps_n = len(store.session_laps(eff_session_id)) if eff_session_id else 0
+                except Exception:
+                    laps_n = 0
+                state = (f"{where}; session phase {getattr(live_session, 'phase', '') or 'unknown'}; "
+                         f"race {'live' if race_live else 'finished' if race_finished else 'none'}; "
+                         f"voice {voice or 'typed'}; {laps_n} laps this session")
+                tier, intent, hint, classify_usage = route(
+                    question, setting=coach_cfg.get("thinking", "auto"), moving=moving,
+                    race_finished=race_finished, classifier=classifier, history=history,
+                    state=state, cmap=ctx.cmap)
+                turn_usage = turn_usage + classify_usage
+            model_question = "\n\n".join([*facts, *([hint] if hint else []), question])
             try:
                 for ev in ([{"type": "text", "text": last_answer}] if last_answer else
                            app.state.coach.ask_agentic_stream(
                         ctx, model_question, car=car, input_device=req.get("input_device"),
                         history=history, units=ctx.units, driver_profile=driver_profile,
-                        voice=voice, prior_results=prior_results)):
+                        voice=voice, prior_results=prior_results,
+                        thinking=tier, intent=intent)):
                     if ev["type"] == "usage":
                         # Keep the per-turn breakdown server-side (noise on the wire);
                         # the client gets one cumulative figure on `done`. The model id

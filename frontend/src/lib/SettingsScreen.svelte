@@ -402,6 +402,7 @@
       show_cost: settings.show_cost,
       input_device: settings.input_device,
       model: settings.model,
+      coach: settings.coach,
       driver: settings.driver,
       voice: settings.voice,
       lmu_dir: settings.lmu_dir,
@@ -662,6 +663,27 @@
           </select>
         </div>
       </div>
+      {#if settings.coach}
+        <div class="field">
+          <span class="lbl">Thinking<InfoTip text="Auto: quick answers while you drive, the coach thinks before answering in the garage, and thinks hard for a race review. Off: always answer at once. Always: think on every answer. Say “think about it” or “quick answer” to override one question." /></span>
+          <div class="control">
+            <select aria-label="Thinking" bind:value={settings.coach.thinking} onchange={saveConfig}>
+              <option value="auto">Auto</option>
+              <option value="off">Off</option>
+              <option value="always">Always</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <span class="lbl">Question sorter<InfoTip text="In Auto, a small, cheap model reads each garage question to decide how hard the coach should think (its tokens count on the chat meter). Off: simple keyword rules decide instead." /></span>
+          <div class="control">
+            <select aria-label="Question sorter" bind:value={settings.coach.classifier_model} onchange={saveConfig}>
+              <option value="cheapest">Cheapest model</option>
+              <option value="none">Off (keyword rules)</option>
+            </select>
+          </div>
+        </div>
+      {/if}
       <div class="field">
         <span class="lbl">Cost estimate<InfoTip text="Show the estimated $ next to the chat's token count. Token counts always show; this only hides the dollar figure." /></span>
         <div class="control">

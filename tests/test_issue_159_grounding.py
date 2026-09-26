@@ -339,27 +339,29 @@ class _Client:
         return _Block(content=[_Block(type="text", text="ok")], stop_reason="end_turn")
 
 
-def _claude(client, thinking):
+def _claude(client):
     from simcoach.model.claude import ClaudeModel
     m = ClaudeModel.__new__(ClaudeModel)      # no real anthropic client
-    m.model, m.max_tokens, m.thinking, m.client = "claude-sonnet-5", 100, thinking, client
+    m.model, m.max_tokens, m.client = "claude-sonnet-5", 100, client
     return m
 
 
 def test_claude_force_tool_forces_only_the_first_turn():
     client = _Client()
-    list(_claude(client, thinking=True).run_stream(
+    list(_claude(client).run_stream(
         "sys", [{"role": "user", "content": "q"}], [{"name": "get_race_state"}],
-        lambda n, i: "r", force_tool=True))
+        lambda n, i: "r", force_tool=True, thinking="standard"))
     first, second = client.calls
     assert first["tool_choice"] == {"type": "any"}
     assert first["thinking"] == {"type": "disabled"}     # API rejects forced + thinking
-    assert "tool_choice" not in second and second["thinking"] == {"type": "adaptive"}
+    assert "tool_choice" not in second
+    assert second["thinking"] == {"type": "adaptive", "display": "summarized"}
 
 
 def test_claude_default_sends_no_tool_choice():
     client = _Client()
-    list(_claude(client, thinking=False).run_stream(
+    list(_claude(client).run_stream(
+
         "sys", [{"role": "user", "content": "q"}], [{"name": "get_race_state"}],
         lambda n, i: "r"))
     assert all("tool_choice" not in kw for kw in client.calls)

@@ -175,6 +175,8 @@ export interface SettingsResponse {
   lmu_build: string | null;
   lmu_dir: string | null;
   lmu_player_names: string[];
+  // #175: how hard the coach thinks. Optional: an older sidecar sends none.
+  coach?: { thinking: "auto" | "off" | "always"; classifier_model: string };
 }
 
 // Retries a rejected fn up to `tries` times, waiting `delayMs` between attempts.

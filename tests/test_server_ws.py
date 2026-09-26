@@ -261,7 +261,8 @@ class _DeltaModel:
     def run(self, system, messages, tools, dispatch):
         return "Brake later into 1."
 
-    def run_stream(self, system, messages, tools, dispatch, force_tool=False):
+    def run_stream(self, system, messages, tools, dispatch, force_tool=False,
+                   thinking="standard"):
         for t in ["Brake ", "later ", "into 1."]:
             yield {"type": "text", "text": t}
 

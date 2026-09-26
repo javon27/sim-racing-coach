@@ -92,6 +92,7 @@ class Model(Protocol):
         tools: list[dict],
         dispatch: Callable[[str, dict], str],
         force_tool: bool = False,
+        thinking: str = "standard",
     ) -> Iterator[dict]:
         """Like `run`, but yield events as they occur instead of returning a string:
         {"type":"tool","name","input"} as each tool is called, then one or more
@@ -110,5 +111,17 @@ class Model(Protocol):
         the model picks which) instead of answering; later turns are unconstrained.
         The coach uses it to re-ask when a draft stated data without reading any. A
         model that cannot honour it sets `can_force_tool = False` (default: True when
-        absent) and the coach never asks."""
+        absent) and the coach never asks.
+
+        `thinking` (#175) is the tier -- "quick" (no deliberation), "standard" (the
+        model thinks as much as it judges), "deep" (think hard, longer answer). What a
+        tier means for a given model is the adapter's business. An adapter that
+        deliberates yields {"type":"thinking"} as it starts to, so the UI can say so;
+        the thinking text itself is never yielded (never shown, spoken or grounded)."""
+        ...
+
+    def classify(self, prompt: str, schema: dict) -> tuple[dict | None, TokenUsage]:
+        """#175 router: one short call that answers `prompt` with ONE JSON object
+        matching `schema`. Returns (the object, or None on any failure -- bad JSON,
+        an API error, a timeout; what the call billed). Never raises."""
         ...

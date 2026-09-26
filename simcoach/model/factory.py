@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import os
 import threading
 
@@ -14,6 +15,9 @@ MODEL_ALIASES = {
     "opus": "claude-opus-5",
     "sonnet": "claude-sonnet-5",
     "haiku": "claude-haiku-4-5-20251001",
+    # #175: the provider's cheapest hosted model -- the coach.classifier_model
+    # default. Settings name the ROLE, so no model id lives outside this package.
+    "cheapest": "claude-haiku-4-5-20251001",
 }
 
 
@@ -45,6 +49,32 @@ def make_model(provider: str | None = None, model: str | None = None,
     raise ValueError(f"unknown model provider {provider!r}; supported={SUPPORTED}, planned={PLANNED}")
 
 
+def make_classifier(name: str | None, provider: str | None = None) -> Model | None:
+    """#175: the Model behind the thinking router's classify() call, or None when the
+    setting is "none" (keyword rules only). `name` is coach.classifier_model: an
+    alias or a model id. Raises like make_model (no key) -- the router treats that as
+    a failed call and falls back to the rules."""
+    if not name or name == "none":
+        return None
+    provider = (provider or os.environ.get("SIMCOACH_MODEL_PROVIDER") or "anthropic").lower()
+    if provider == "fake":
+        from .fake import FakeModel
+        return FakeModel()
+    if provider != "anthropic":
+        return make_model(provider=provider, model=name)
+    key = get_api_key()
+    if not key:
+        raise CoachUserError("No Anthropic API key set — add one in Settings.")
+    return _cached_classifier(MODEL_ALIASES.get(name, name), key)
+
+
+@functools.lru_cache(maxsize=4)
+def _cached_classifier(model_id: str, key: str) -> Model:
+    # One client per (model, key): its kept-alive connection is most of the 800 ms
+    # budget on a cold TLS handshake, so the router must not build one per question.
+    return ClaudeModel(model=model_id, api_key=key)
+
+
 class LazyModel:
     """Model that defers make_model() until first use, so a server can boot with
     no API key set and only fail when the coach is actually called."""
@@ -72,9 +102,10 @@ class LazyModel:
     def can_force_tool(self):
         return getattr(self._get(), "can_force_tool", True)
 
-    def run_stream(self, system, messages, tools, dispatch, force_tool=False):
+    def run_stream(self, system, messages, tools, dispatch, force_tool=False,
+                   thinking="standard"):
         # Must be a generator (has `yield`) so `self._get()` runs on first
         # iteration, not at call time — a no-key RuntimeError then surfaces
         # lazily, inside the caller's try/except around the iteration.
         yield from self._get().run_stream(system, messages, tools, dispatch,
-                                          force_tool=force_tool)
+                                          force_tool=force_tool, thinking=thinking)

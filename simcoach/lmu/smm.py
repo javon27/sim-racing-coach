@@ -683,7 +683,8 @@ def read_live_status() -> dict | None:
     lap has been captured yet — so the UI can show on-track/garage/pits the moment
     the car is in that state, not only after the first completed lap.
 
-    Returns {"track", "car", "state"} with state ∈ {"track","pits","garage"}, or
+    Returns {"track", "car", "state", "speed"} with state ∈ {"track","pits","garage"}
+    and speed in km/h (None without a telemetry row; #175's "is the car moving"), or
     None if LMU isn't running / no player is in the session (menus).
 
     # PENDING LIVE VALIDATION: mInGarageStall / mInPits offsets are from the
@@ -706,7 +707,8 @@ def read_live_status() -> dict | None:
         state = "pits"
     else:
         state = "track"
-    return {"track": track, "car": car, "state": state}
+    speed = vt.mLocalVel.magnitude() * 3.6 if vt is not None else None
+    return {"track": track, "car": car, "state": state, "speed": speed}
 
 
 def read_live_session_id() -> str | None:

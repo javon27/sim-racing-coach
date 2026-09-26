@@ -27,11 +27,20 @@ class _ToolUse:
 
 
 class _StreamCM:
-    """Fake `messages.stream(...)` context manager: `text_stream` yields
-    `deltas`, `get_final_message()` returns `final`."""
+    """Fake `messages.stream(...)` context manager: iterating it yields one SDK-shaped
+    `text` event per delta (plus a thinking block start per `thinking` block in
+    `final`, first), `get_final_message()` returns `final`."""
     def __init__(self, deltas, final):
         self.text_stream = deltas
         self._final = final
+
+    def __iter__(self):
+        from types import SimpleNamespace as NS
+        for b in self._final.content:
+            if getattr(b, "type", None) == "thinking":
+                yield NS(type="content_block_start", content_block=NS(type="thinking"))
+        for d in self.text_stream:
+            yield NS(type="text", text=d)
 
     def __enter__(self):
         return self
@@ -79,7 +88,8 @@ class _FakeClient:
 def _model(stream_deltas=None, final_text="Carry more speed through Turn 1.",
            usages=(None, None), model="x"):
     m = ClaudeModel.__new__(ClaudeModel)          # bypass __init__ (no real anthropic client)
-    m.model = model; m.max_tokens = 100; m.thinking = False
+    m.model = model; m.max_tokens = 100
+
     m.client = _FakeClient(stream_deltas=stream_deltas, final_text=final_text, usages=usages)
     return m
 
@@ -174,7 +184,7 @@ class _FakeClientDispatchError:
 
 def test_run_continues_after_dispatch_error_and_returns_final_text():
     m = ClaudeModel.__new__(ClaudeModel)
-    m.model = "x"; m.max_tokens = 100; m.thinking = False
+    m.model = "x"; m.max_tokens = 100
     client = _FakeClientDispatchError()
     m.client = client
 
@@ -213,7 +223,7 @@ def test_run_hits_iteration_cap_and_makes_final_tool_free_call():
     from simcoach.model.claude import MAX_TOOL_ITERATIONS
 
     m = ClaudeModel.__new__(ClaudeModel)
-    m.model = "x"; m.max_tokens = 100; m.thinking = False
+    m.model = "x"; m.max_tokens = 100
     client = _FakeClientIterationCap()
     m.client = client
 
@@ -231,7 +241,7 @@ def test_iteration_cap_final_call_is_also_billed():
     from simcoach.model.claude import MAX_TOOL_ITERATIONS
 
     m = ClaudeModel.__new__(ClaudeModel)
-    m.model = "x"; m.max_tokens = 100; m.thinking = False
+    m.model = "x"; m.max_tokens = 100
     m.client = _FakeClientIterationCap()
 
     res = m.run("sys", [{"role": "user", "content": "q"}],

@@ -15,7 +15,7 @@ from ..lmu.ingest import poll_results
 from ..lmu.rest import LmuRest
 from ..lmu.smm import LmuSource
 from ..logging_setup import configure_logging
-from ..model.factory import LazyModel
+from ..model.factory import LazyModel, make_classifier
 from ..paths import db_path, telemetry_dir
 from ..store import LapStore
 from ..track_lookup import TRACKS_DIR, load_map_data
@@ -26,7 +26,7 @@ def build_app():
     configure_logging()
     cfg = load_config()
     store = LapStore(str(db_path()), str(telemetry_dir()))
-    coach = Coach(LazyModel(model=cfg["model"]))
+    coach = Coach(LazyModel(model=cfg["model"]), classifier_for=make_classifier)
 
     user_tracks_dir = str(Path(store.data_dir) / "tracks")
 
