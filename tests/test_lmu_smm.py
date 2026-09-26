@@ -819,12 +819,22 @@ def _scoring(controls, game_mode):
     return s
 
 
+def test_game_mode_at_its_absolute_buffer_offset():
+    """#170 red-team: byte 296 of the raw $rFactor2SMMP_Scoring$ buffer (12-byte
+    preamble + 284) is mGameMode, and the vehicle array still starts at 560."""
+    from simcoach.lmu.rf2structs import rF2Scoring
+    raw = bytearray(C.sizeof(rF2Scoring))
+    raw[296] = 2
+    s = rF2Scoring.from_buffer_copy(bytes(raw))
+    assert s.mScoringInfo.mGameMode == 2
+    assert rF2Scoring.mVehicles.offset == 560
+
+
 def test_is_online_alone_on_a_server_from_game_mode():
     # #170 rig case: the driver alone on an online practice server -- no remote car,
-    # so mControl can't see it; mGameMode (2 = client) does.
+    # so mControl can't see it; mGameMode 2 (client) does.
     from simcoach.lmu.smm import _is_online
     assert _is_online(_scoring([0], game_mode=2)) is True
-    assert _is_online(_scoring([0], game_mode=3)) is True    # hosting and driving
 
 
 def test_is_online_offline_with_ai_stays_offline():
@@ -832,13 +842,28 @@ def test_is_online_offline_with_ai_stays_offline():
     assert _is_online(_scoring([0, 1, 1], game_mode=0)) is False
 
 
-def test_is_online_falls_back_to_mcontrol_without_a_game_mode():
-    # mGameMode 0 (unfilled / offline) or 1 (a dedicated server, never the driver's
-    # own machine) is no answer: the pre-#170 remote-car read still decides.
+def test_is_online_falls_back_to_mcontrol_for_other_game_modes():
+    # Only 2 is trusted. 3 (server and client) is what offline single-player may
+    # report (rF2 runs it through its own server+client), 1 is a dedicated server, 0
+    # unfilled/offline: the pre-#170 remote-car read decides for all of them.
     from simcoach.lmu.smm import _is_online
-    assert _is_online(_scoring([0, 2], game_mode=0)) is True
-    assert _is_online(_scoring([0, 1], game_mode=1)) is False
-    assert _is_online(_scoring([0, 2], game_mode=1)) is True
+    for mode in (0, 1, 3):
+        assert _is_online(_scoring([0], game_mode=mode)) is False, mode
+        assert _is_online(_scoring([0, 1, 1], game_mode=mode)) is False, mode
+        assert _is_online(_scoring([0, 2], game_mode=mode)) is True, mode
+
+
+def test_is_online_logs_once_per_change_never_per_frame(caplog, monkeypatch):
+    from simcoach.lmu import smm
+    monkeypatch.setattr(smm, "_online_logged", None)
+    with caplog.at_level("INFO", logger=smm.__name__):
+        for _ in range(3):
+            smm._is_online(_scoring([0], game_mode=0))
+        for _ in range(3):
+            smm._is_online(_scoring([0], game_mode=2))
+    lines = [r.getMessage() for r in caplog.records if "online detection" in r.getMessage()]
+    assert lines == ["online detection: mGameMode=0 remote_car=False -> offline",
+                     "online detection: mGameMode=2 remote_car=False -> online"]
 
 
 def make_wrapper(num_vehicles: int = 1, **vehicle_overrides) -> rF2Telemetry:

@@ -132,8 +132,8 @@ def _is_online(race_results: ET.Element, session_elem: ET.Element) -> bool:
     """Was this a multiplayer session? Must answer what live capture's `--online` suffix
     means (smm._is_online: on a server, even alone -- #170), or the two can't be matched.
 
-    The signal is `<Setting>Multiplayer</Setting>`. Measured over 1466 real result
-    sessions: all 1350 'Multiplayer' ones are on a server (6 of them one human alone,
+    The signal is `<Setting>Multiplayer</Setting>`. Measured over 1467 real result
+    files (1466 parse, one session each): all 1350 'Multiplayer' ones are on a server (6 of them one human alone,
     e.g. 2026_09_25_00_00_03-95P1), every 'Race Weekend' one is offline. Without a
     Setting, fall back to the pre-#170 read: `isPlayer` set on more than one driver
     (a multiplayer file flags every human, an offline file only the player)."""

@@ -188,19 +188,26 @@ def register(app, deps) -> None:
         latest = app.state.latest
         return latest["record"].track if latest is not None else None
 
-    def _live_session_id() -> str | None:
+    def _read_live_base() -> str | None:
+        # The live BASE session id (`track--car--online|offline`), or None if LMU isn't
+        # running / no player / the read fails.
+        try:
+            from ..lmu.smm import read_live_session_id
+            return read_live_session_id()
+        except Exception:
+            return None
+
+    def _live_session_id(base=...) -> str | None:
         # The store instance id for the CURRENT live track/car (what the next
         # captured lap -- or a garage chat started before one -- gets stamped
         # with), or None if LMU isn't running / no player. Not cached: SMM reads
-        # are cheap and each call site wants a fresh read.
-        try:
-            from ..lmu.smm import read_live_session_id
-            base = read_live_session_id()
-        except Exception:
-            base = None
+        # are cheap and each call site wants a fresh read. `base`: an already-read
+        # _read_live_base() result, so one request reads SMM once.
+        if base is ...:
+            base = _read_live_base()
         return store.resolve_current_instance(base) if base else None
 
-    def _latest_is_live(record, live) -> bool:
+    def _latest_is_live(record, live, base=...) -> bool:
         # Is the latest captured lap from the LIVE session? `live` is the live
         # (track, car), None when SMM is down (then the latest lap stands). Compared on
         # the base session id, which carries online|offline too: a question in the
@@ -208,11 +215,8 @@ def register(app, deps) -> None:
         # lap's id (#170). (track, car) only if the live id can't be read.
         if live is None:
             return True
-        try:
-            from ..lmu.smm import read_live_session_id
-            base = read_live_session_id()
-        except Exception:
-            base = None
+        if base is ...:
+            base = _read_live_base()
         if base:
             return _session_base(record.session_id or "") == base
         return (record.track, record.car) == tuple(live)
@@ -296,4 +300,4 @@ def register(app, deps) -> None:
 
     export(deps, _map_for, _curating, _map_dirs, _capture_path, _newest_capture,
            _invalidate_canon, _fresh, _ensure_rest, _live_track, _live_session_id,
-           _latest_is_live, _ensure_optimal)
+           _read_live_base, _latest_is_live, _ensure_optimal)

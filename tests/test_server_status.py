@@ -137,6 +137,33 @@ def test_status_same_mode_keeps_latest_lap_instance(tmp_path, monkeypatch):
     assert b["session_id"] == "spa--gt3--online~7" and b["lap_id"] == 5
 
 
+def test_status_falls_back_to_track_car_when_live_id_unreadable(tmp_path, monkeypatch):
+    # _latest_is_live with live set but no live session id (read raises or returns
+    # None): the (track, car) match decides, as before #170.
+    from simcoach.lmu import smm
+    monkeypatch.setattr(smm, "read_live_status",
+                        lambda: {"track": "spa", "car": "gt3", "state": "track"})
+
+    def boom():
+        raise OSError("torn read")
+
+    for reader in (lambda: None, boom):
+        monkeypatch.setattr(smm, "read_live_session_id", reader)
+        store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+        rec = LapRecord("lmu", "spa", "gt3", 90.0, True, 0.0, {},
+                        session_id="spa--gt3--offline~2")
+        other = LapRecord("lmu", "cota", "gt3", 90.0, True, 0.0, {},
+                          session_id="cota--gt3--offline~1")
+        app = create_app(store, Coach(FakeModel()))
+        client = TestClient(app, base_url="http://127.0.0.1")
+        app.state.latest = {"record": rec, "lap_id": 3}
+        b = client.get("/status").json()
+        assert b["session_id"] == "spa--gt3--offline~2" and b["lap_id"] == 3
+        app.state.latest = {"record": other, "lap_id": 4}
+        b = client.get("/status").json()
+        assert b["track"] == "spa" and b["session_id"] is None and b["lap_id"] is None
+
+
 def test_status_reports_garage_before_any_lap(tmp_path, monkeypatch):
     # The fix: garage/on-track is reported live, with NO captured lap at all.
     from simcoach.lmu import smm

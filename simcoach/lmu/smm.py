@@ -496,28 +496,37 @@ def session_phase(m_session: int) -> str:
     return "race"
 
 
+_online_logged: tuple | None = None
+
+
 def _is_online(scoring: rF2Scoring) -> bool:
     """True on a multiplayer server, even alone on it (#170).
 
-    Primary signal: scoring mGameMode, the game's own multiplayer flag (LMU's shipped
-    InternalsPlugin.hpp: 1 = server, 2 = client, 3 = server and client). The driver's
-    machine is a client (2), or a host that also drives (3); 1 is a dedicated server
-    with no local player, so it doesn't count. Read from the same frame, no REST call.
+    Primary signal: scoring mGameMode == 2, "client" in LMU's shipped
+    InternalsPlugin.hpp (1 = server, 2 = client, 3 = server and client) -- the
+    driver's machine on someone else's server. 3 is NOT trusted: the rF2 engine runs
+    single-player through its own server+client, so offline may report it. 1 is a
+    dedicated server with no local player.
 
     Fallback: any mapped opponent remote/human (mControl == 2; offline AI is 1, the
-    player 0) -- the pre-#170 signal, still right whenever a human is on track.
+    player 0) -- the pre-#170 signal. Covers hosting (3) with others present.
 
-    # ponytail: an offline mGameMode of 0 is assumed from the header, not yet read at the
-    # rig; if LMU leaves the field 0 on a server too, alone-on-a-server reads offline
-    # exactly as before (the fallback can't see it). Rig-verify on an empty server.
+    # ponytail: mGameMode's real values are from the header, not yet read at the rig.
+    # If LMU leaves it 0 on a server, alone-on-a-server reads offline exactly as
+    # before. The INFO line below (once per change, never per frame) settles it.
     """
-    if scoring.mScoringInfo.mGameMode in (2, 3):
-        return True
+    global _online_logged
+    game_mode = int(scoring.mScoringInfo.mGameMode)
     n = min(scoring.mScoringInfo.mNumVehicles, MAX_MAPPED_VEHICLES)
-    for i in range(max(n, 0)):
-        if scoring.mVehicles[i].mControl == 2:
-            return True
-    return False
+    remote = any(scoring.mVehicles[i].mControl == 2 for i in range(max(n, 0)))
+    online = game_mode == 2 or remote
+    if (game_mode, online) != _online_logged:
+        # ponytail: module-global, unlocked -- two threads may both log one change.
+        _online_logged = (game_mode, online)
+        logging.getLogger(__name__).info(
+            "online detection: mGameMode=%d remote_car=%s -> %s",
+            game_mode, remote, "online" if online else "offline")
+    return online
 
 
 def _slug(s: str) -> str:

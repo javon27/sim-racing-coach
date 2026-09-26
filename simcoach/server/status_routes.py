@@ -12,6 +12,7 @@ def register(app, deps) -> None:
     _ensure_rest = deps._ensure_rest
     _live_session_id = deps._live_session_id
     _latest_is_live = deps._latest_is_live
+    _read_live_base = deps._read_live_base
 
     @app.get("/health")
     def health():
@@ -30,7 +31,8 @@ def register(app, deps) -> None:
             live = None
         live_tc = (live["track"], live["car"]) if live else None
         latest = app.state.latest
-        matches_live = latest is not None and _latest_is_live(latest["record"], live_tc)
+        base = _read_live_base() if live else None  # one SMM read for both uses below
+        matches_live = latest is not None and _latest_is_live(latest["record"], live_tc, base)
         session_id = lap_id = None
         if matches_live:
             record = latest["record"]
@@ -42,7 +44,7 @@ def register(app, deps) -> None:
             # change): report the id the first lap on the new track will be
             # stamped with, so the strip and chat pin move right away instead
             # of waiting on that lap (#127). lap_id stays None -- no lap yet.
-            session_id = _live_session_id()
+            session_id = _live_session_id(base)
         else:
             # #137: no live SMM and nothing captured this process (a sidecar
             # restart with LMU in the lobby) -- fall back to the newest stored
