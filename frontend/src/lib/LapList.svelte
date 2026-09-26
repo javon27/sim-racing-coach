@@ -34,6 +34,15 @@
   // review hold the moment the list snapped to a new live session.
   let currentSessionId: string | null = null;
   let pinnedLoaded: string | null = null; // the pinned session whose rows are already shown
+  // #176 fix round 2: while GET /optimal reports `pending` (a background compute is
+  // scheduled or running -- the gap that left a just-opened Sessions-review session's
+  // row blank), poll it again in ~1 s until it settles, up to POLL_MAX_TRIES times.
+  // Applies to both the live and pinned paths (on the live path the `optimal` push
+  // usually wins first). One timer at a time: `refreshOptimal` cancels any previous
+  // chain before starting a new one.
+  const POLL_MAX_TRIES = 15;
+  const POLL_INTERVAL_MS = 1000;
+  let pollTimer: ReturnType<typeof setTimeout> | undefined;
   let phase: "connecting" | "ok" | "unreachable" = $state("connecting");
 
   // Auto-scroll: keep the newest lap in view as laps are appended (session_laps
@@ -129,15 +138,41 @@
     );
   }
 
-  // #176 fix round 1: fetched after the laps load, for both the live and a pinned
+  function stopOptimalPoll() {
+    if (pollTimer !== undefined) {
+      clearTimeout(pollTimer);
+      pollTimer = undefined;
+    }
+  }
+
+  // #176 fix round 1/2: fetched after the laps load, for both the live and a pinned
   // session, and again on every later laps update (a new lap may change the
   // headline). Never blocks laps/bestId -- those are already set by the caller.
   // Guarded on `target === currentSessionId` at resolution time so a stale response
   // (the view moved on while this was in flight) never clobbers the current one.
+  // Starts (or restarts) the poll chain below: any earlier chain for a session
+  // that's since changed is superseded, never left running alongside a new one.
   async function refreshOptimal(target: string) {
+    stopOptimalPoll();
+    await pollOptimalOnce(target, POLL_MAX_TRIES);
+  }
+
+  // While the server reports `pending` (a background compute is scheduled or still
+  // running -- the common case the FIRST time a Sessions-review session is opened,
+  // with nothing cached yet), poll again in ~1 s, up to `triesLeft` more times. Stops
+  // on its own once `pending` clears, once the session being viewed changes (checked
+  // both before AND after the wait, and again by the caller on every fresh laps
+  // update), or once tries run out.
+  async function pollOptimalOnce(target: string, triesLeft: number) {
     try {
-      const { optimal: opt } = await getSessionOptimal(target);
-      if (target === currentSessionId) optimal = opt;
+      const { optimal: opt, pending } = await getSessionOptimal(target);
+      if (target !== currentSessionId) return; // moved on while this was in flight
+      optimal = opt;
+      if (pending && triesLeft > 0) {
+        pollTimer = setTimeout(() => {
+          if (target === currentSessionId) void pollOptimalOnce(target, triesLeft - 1);
+        }, POLL_INTERVAL_MS);
+      }
     } catch {
       /* the next laps update, or an `optimal` push, retries this */
     }
@@ -166,6 +201,7 @@
       laps = [];
       bestId = null;
       optimal = null;
+      stopOptimalPoll();
       currentSessionId = null;
       return;
     }
@@ -310,7 +346,10 @@
     prevCount = laps.length;
   });
 
-  onDestroy(clearDead);
+  onDestroy(() => {
+    clearDead();
+    stopOptimalPoll();
+  });
 
   function formatTime(seconds: number | null): string {
     if (seconds == null || !Number.isFinite(seconds)) return "—";

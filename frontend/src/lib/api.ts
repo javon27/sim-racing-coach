@@ -279,9 +279,12 @@ export function getSessionLaps(sid: string): Promise<LapRow[]> {
     (seconds) for this session's best lap -- the same one the coach's
     get_time_on_table states -- or null wherever it can't be honestly stated yet (no
     corner map, no comparable lap, own best sector dropped for a spin/off, or the
-    background compute just hasn't finished). */
-export function getSessionOptimal(sid: string): Promise<{ optimal: number | null }> {
-  return request<{ optimal: number | null }>(`/sessions/${sid}/optimal`);
+    background compute just hasn't finished). `pending` (fix round 2): true while a
+    compute for this session is scheduled or still running -- a session just opened
+    in Sessions review, with nothing cached yet, polls while this holds instead of
+    concluding there's simply no optimal. */
+export function getSessionOptimal(sid: string): Promise<{ optimal: number | null; pending: boolean }> {
+  return request<{ optimal: number | null; pending: boolean }>(`/sessions/${sid}/optimal`);
 }
 
 export function getSessionRace(sid: string): Promise<RaceResult | Record<string, never>> {

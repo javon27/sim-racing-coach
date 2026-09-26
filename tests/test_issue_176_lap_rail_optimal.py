@@ -98,7 +98,10 @@ def test_optimal_endpoint_matches_coach_tool_and_recomputes_on_a_new_lap(tmp_pat
     t0 = time.perf_counter()
     first = c.get("/sessions/s1/optimal").json()
     assert time.perf_counter() - t0 < 0.5   # never blocks on analyze_lap
-    assert first == {"optimal": None}        # nothing cached yet; a compute was scheduled
+    # Nothing cached yet; a compute was scheduled -- pending tells a Sessions-review
+    # caller to check back rather than conclude there's simply no optimal (#176 fix
+    # round 2).
+    assert first == {"optimal": None, "pending": True}
     _wait_inflight(app, "s1")
 
     body = c.get("/sessions/s1/optimal").json()
@@ -129,7 +132,8 @@ def test_optimal_endpoint_matches_coach_tool_and_recomputes_on_a_new_lap(tmp_pat
 
 def test_optimal_endpoint_none_with_no_such_session(tmp_path):
     app, _store = _app(tmp_path)
-    assert _tc(app).get("/sessions/absent/optimal").json() == {"optimal": None}
+    # No laps at all -> `_ensure_optimal` never schedules anything.
+    assert _tc(app).get("/sessions/absent/optimal").json() == {"optimal": None, "pending": False}
 
 
 def test_optimal_endpoint_none_without_a_comparable_lap(tmp_path, synthetic_lap):
@@ -138,7 +142,7 @@ def test_optimal_endpoint_none_without_a_comparable_lap(tmp_path, synthetic_lap)
     c = _tc(app)
     c.get("/sessions/s1/optimal")
     _wait_inflight(app, "s1")
-    assert c.get("/sessions/s1/optimal").json() == {"optimal": None}
+    assert c.get("/sessions/s1/optimal").json() == {"optimal": None, "pending": False}
 
 
 def test_optimal_endpoint_none_without_a_corner_map(tmp_path, synthetic_lap):
@@ -148,7 +152,29 @@ def test_optimal_endpoint_none_without_a_corner_map(tmp_path, synthetic_lap):
     c = _tc(app)
     c.get("/sessions/s1/optimal")
     _wait_inflight(app, "s1")
-    assert c.get("/sessions/s1/optimal").json() == {"optimal": None}
+    assert c.get("/sessions/s1/optimal").json() == {"optimal": None, "pending": False}
+
+
+# --- fix round 2: `pending` while a compute runs, then settles false ----------------
+
+def test_pending_is_true_while_compute_runs_and_false_after(tmp_path, synthetic_lap, monkeypatch):
+    app, store = _app(tmp_path)
+    _seed_session(store, synthetic_lap)
+    real = core_mod.CoachContext.get_optimal_seconds
+
+    def _slow(self, which="best"):
+        time.sleep(0.2)
+        return real(self, which)
+    monkeypatch.setattr(core_mod.CoachContext, "get_optimal_seconds", _slow)
+
+    c = _tc(app)
+    body = c.get("/sessions/s1/optimal").json()
+    assert body == {"optimal": None, "pending": True}
+
+    _wait_inflight(app, "s1")
+    after = c.get("/sessions/s1/optimal").json()
+    assert after["pending"] is False
+    assert after["optimal"] is not None
 
 
 # --- map_rev invalidation ------------------------------------------------------------
@@ -161,18 +187,18 @@ def test_map_rev_bump_invalidates_the_cache_and_a_real_value_appears(tmp_path, s
     c = _tc(app)
     c.get("/sessions/s1/optimal")
     _wait_inflight(app, "s1")
-    assert c.get("/sessions/s1/optimal").json() == {"optimal": None}
+    assert c.get("/sessions/s1/optimal").json() == {"optimal": None, "pending": False}
 
     # A map now exists (the same invalidation _invalidate_canon applies on a save, #155).
     app.state.cmap = CornerMap.load(CMAP)
     app.state.map_rev += 1
 
     # Right after the bump: the endpoint is still instant and hands back the STALE
-    # (None) cached value -- it schedules, it never blocks.
+    # (None) cached value -- it schedules (pending=True), it never blocks.
     t0 = time.perf_counter()
     right_after = c.get("/sessions/s1/optimal").json()
     assert time.perf_counter() - t0 < 0.5
-    assert right_after == {"optimal": None}
+    assert right_after == {"optimal": None, "pending": True}
 
     _wait_inflight(app, "s1")
     fresh = c.get("/sessions/s1/optimal").json()["optimal"]
@@ -277,7 +303,7 @@ def test_raising_compute_never_breaks_laps_or_events(tmp_path, synthetic_lap, mo
 
     with caplog.at_level("WARNING"):
         body = c.get("/sessions/s1/optimal").json()
-        assert body == {"optimal": None}
+        assert body == {"optimal": None, "pending": True}
         _wait_inflight(app, "s1")
     assert len(calls) == 1
     assert app.state.optimal_cache["s1"][1] is None

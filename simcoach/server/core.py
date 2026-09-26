@@ -240,7 +240,7 @@ def register(app, deps) -> None:
                 app.state.optimal_cache.popitem(last=False)
             app.state.optimal_inflight.pop(sid, None)
 
-    def _ensure_optimal(sid: str | None, laps: list[dict]) -> float | None:
+    def _ensure_optimal(sid: str | None, laps: list[dict]) -> tuple[float | None, bool]:
         """#176 fix round 1: the lap rail's Optimal figure for a session, computed the
         same way the coach's get_time_on_table does (`CoachContext.get_optimal_seconds`,
         sharing every rule -- see `_compute_optimal`) but NEVER on the caller's thread.
@@ -249,14 +249,17 @@ def register(app, deps) -> None:
         (single-flight: at most one in-flight compute per session id, and at most one
         compute running at all at any moment, since `optimal_pool` has exactly one
         worker -- so a driver's PTT question and a lap landing never contend for more
-        than one extra core between them), then returns whatever is cached RIGHT NOW
-        -- None the first time a session is asked about, or a value that may be one
-        compute behind the very latest lap. Never blocks: the REST endpoint that calls
-        this returns instantly, and the /events tick that also calls this (to decide
-        whether to push a fresh 'optimal' frame once the compute lands) never awaits
-        it either."""
+        than one extra core between them), then returns
+        `(cached value, pending)` -- `pending` is True while a compute for this
+        session is scheduled or still running (#176 fix round 2: lets a caller that
+        just opened a session, with nothing cached yet, know to check back rather
+        than conclude there's simply no optimal). `value` is None the first time a
+        session is asked about, or may be one compute behind the very latest lap.
+        Never blocks: the REST endpoint that calls this returns instantly, and the
+        /events tick that also calls this (to decide whether to push a fresh
+        'optimal' frame once the compute lands) never awaits it either."""
         if not sid or not laps:
-            return None
+            return None, False
         sig = _optimal_sig(laps)
         with app.state.optimal_lock:
             cached = app.state.optimal_cache.get(sid)
@@ -264,7 +267,9 @@ def register(app, deps) -> None:
             if not fresh and sid not in app.state.optimal_inflight:
                 fut = app.state.optimal_pool.submit(_compute_optimal, sid, sig, laps)
                 app.state.optimal_inflight[sid] = fut
-            return cached[1] if cached is not None else None
+            value = cached[1] if cached is not None else None
+            pending = sid in app.state.optimal_inflight
+            return value, pending
 
     export(deps, _map_for, _curating, _map_dirs, _capture_path, _newest_capture,
            _invalidate_canon, _fresh, _ensure_rest, _live_track, _live_session_id,

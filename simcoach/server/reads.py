@@ -43,8 +43,12 @@ def register(app, deps) -> None:
         # analyze_lap. This always returns instantly -- `_ensure_optimal` schedules a
         # background recompute when stale and hands back whatever is cached right now
         # (None the first time), never the caller's own compute.
+        # #176 fix round 2: `pending` tells a caller with nothing cached yet (a
+        # session just opened in Sessions review) that a value is on the way, so it
+        # knows to poll rather than conclude there's simply no optimal.
         laps = store.session_laps(sid)
-        return {"optimal": _ensure_optimal(sid, laps)}
+        value, pending = _ensure_optimal(sid, laps)
+        return {"optimal": value, "pending": pending}
 
     @app.get("/sessions/{sid}/chats")
     def session_chats(sid: str):

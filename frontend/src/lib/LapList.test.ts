@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/svelte";
+import { tick } from "svelte";
 import { getStatus, getSessionLaps, getSessionOptimal } from "./api";
 import { eventFeed } from "./events";
 import LapList from "./LapList.svelte";
@@ -776,5 +777,66 @@ describe("LapList", () => {
     // Both rows carry sectors here, so target lap 2's own toggle.
     await fireEvent.click(screen.getAllByLabelText("Toggle sector detail")[1]);
     expect(screen.getAllByText("best").length).toBe(3);
+  });
+
+  // --- issue #176 (fix round 2): poll /optimal while `pending`, close the ------------
+  // pinned-session gap (opening a past session in Sessions review is a main use case,
+  // so the row can't stay hidden on its first open).
+
+  describe("#176 fix round 2: the pending poll", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("a pinned session shows pending, then polls in ~1 s and the row appears", async () => {
+      vi.useFakeTimers();
+      vi.mocked(getSessionLaps).mockResolvedValue([{ id: 42, lap_time: 210.0, valid: 1, ts: 300 }]);
+      vi.mocked(getSessionOptimal)
+        .mockResolvedValueOnce({ optimal: null, pending: true })
+        .mockResolvedValueOnce({ optimal: 209.0, pending: false });
+
+      const { container } = render(LapList, { props: { sessionId: "OLD" } });
+      await vi.advanceTimersByTimeAsync(0);   // flush the laps load + the first /optimal fetch
+      await tick();
+
+      expect(vi.mocked(getSessionOptimal)).toHaveBeenCalledTimes(1);
+      expect(container.querySelectorAll(".best-head")).toHaveLength(1); // Best only: still pending
+
+      await vi.advanceTimersByTimeAsync(1000);   // the scheduled ~1 s poll fires
+      await tick();
+
+      expect(vi.mocked(getSessionOptimal)).toHaveBeenCalledTimes(2);
+      const rows = container.querySelectorAll(".best-head");
+      expect(rows).toHaveLength(2);
+      expect(rows[1].textContent).toContain("Optimal");
+      expect(rows[1].textContent).toContain("−1.00");
+    });
+
+    it("stops polling once the session being viewed changes", async () => {
+      vi.useFakeTimers();
+      vi.mocked(getSessionLaps).mockResolvedValue([{ id: 42, lap_time: 210.0, valid: 1, ts: 300 }]);
+      // Always pending: if the poll kept going, calls for "OLD" would keep climbing.
+      vi.mocked(getSessionOptimal).mockResolvedValue({ optimal: null, pending: true });
+
+      const { rerender } = render(LapList, { props: { sessionId: "OLD" } });
+      await vi.advanceTimersByTimeAsync(0);
+      await tick();
+      const oldCallsBefore = vi.mocked(getSessionOptimal).mock.calls
+        .filter(([sid]) => sid === "OLD").length;
+      expect(oldCallsBefore).toBe(1);
+
+      // A different pinned session is opened before the ~1 s poll would have fired.
+      await rerender({ sessionId: "NEW" });
+      await vi.advanceTimersByTimeAsync(0);
+      await tick();
+
+      // Advance well past several would-be poll intervals: "OLD" never gets polled
+      // again -- its chain was cancelled, not merely superseded by a later write.
+      await vi.advanceTimersByTimeAsync(5000);
+      await tick();
+      const oldCallsAfter = vi.mocked(getSessionOptimal).mock.calls
+        .filter(([sid]) => sid === "OLD").length;
+      expect(oldCallsAfter).toBe(oldCallsBefore);
+    });
   });
 });
