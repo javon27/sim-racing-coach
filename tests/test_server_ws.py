@@ -569,6 +569,37 @@ def test_ws_coach_track_change_uses_live_session_not_stale_latest_lap(
     assert msgs[0]["session_id"] == smm.session_id_for("cota", "gt3", False)
 
 
+def test_ws_coach_mode_switch_uses_live_session_not_stale_latest_lap(
+        tmp_path, synthetic_lap, monkeypatch):
+    # #170: same track/car, latest lap OFFLINE, driver now in the ONLINE garage (and
+    # vice versa). A question before the first lap of the new mode must be stamped with
+    # the live session, not the stale lap's.
+    from simcoach.lmu import smm
+    from simcoach.model_types import LapRecord
+
+    monkeypatch.setattr(smm, "read_session_track_car", lambda: ("spa", "gt3"))
+    for stale, live in ((False, True), (True, False)):
+        monkeypatch.setattr(smm, "read_live_session_id",
+                            lambda live=live: smm.session_id_for("spa", "gt3", live))
+        store = LapStore(str(tmp_path / f"c{live}.sqlite"), str(tmp_path / f"d{live}"))
+        rec = LapRecord(**{**synthetic_lap.__dict__, "track": "spa", "car": "gt3",
+                           "session_id": smm.session_id_for("spa", "gt3", stale)})
+        lap_id = store.save(rec)
+        app = create_app(store, Coach(FakeModel(reply="ok")))
+        app.state.latest = {"record": rec, "lap_id": lap_id}
+
+        client = TestClient(app, base_url="http://127.0.0.1")
+        with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+            ws.send_json({"question": "setup for this race?"})
+            while True:
+                ev = ws.receive_json()
+                if ev["type"] in ("done", "error"):
+                    break
+
+        sid = store.chat_messages(ev["chat_id"])[0]["session_id"]
+        assert sid.startswith(smm.session_id_for("spa", "gt3", live)), sid
+
+
 def test_ws_coach_respects_imperial_units(tmp_path, monkeypatch):
     # Regression: the coach's unit labels + tool data must follow the user's
     # config (imperial), not silently default to metric.

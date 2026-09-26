@@ -497,15 +497,22 @@ def session_phase(m_session: int) -> str:
 
 
 def _is_online(scoring: rF2Scoring) -> bool:
-    """True if any mapped opponent is a remote/human driver (mControl == 2).
-    Offline AI opponents are mControl == 1; a solo/empty grid is the player
-    only (mControl == 0). This is the verified online signal.
+    """True on a multiplayer server, even alone on it (#170).
 
-    # ponytail: hotlapping ALONE on an online server (0 remote opponents) is
-    # indistinguishable from offline in the mapped fields, so it classifies as
-    # offline. The real online flag lives in the unmapped struct tail; not worth
-    # chasing until it matters.
+    Primary signal: scoring mGameMode, the game's own multiplayer flag (LMU's shipped
+    InternalsPlugin.hpp: 1 = server, 2 = client, 3 = server and client). The driver's
+    machine is a client (2), or a host that also drives (3); 1 is a dedicated server
+    with no local player, so it doesn't count. Read from the same frame, no REST call.
+
+    Fallback: any mapped opponent remote/human (mControl == 2; offline AI is 1, the
+    player 0) -- the pre-#170 signal, still right whenever a human is on track.
+
+    # ponytail: an offline mGameMode of 0 is assumed from the header, not yet read at the
+    # rig; if LMU leaves the field 0 on a server too, alone-on-a-server reads offline
+    # exactly as before (the fallback can't see it). Rig-verify on an empty server.
     """
+    if scoring.mScoringInfo.mGameMode in (2, 3):
+        return True
     n = min(scoring.mScoringInfo.mNumVehicles, MAX_MAPPED_VEHICLES)
     for i in range(max(n, 0)):
         if scoring.mVehicles[i].mControl == 2:

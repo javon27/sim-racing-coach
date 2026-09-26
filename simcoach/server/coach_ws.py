@@ -38,6 +38,7 @@ def register(app, deps) -> None:
     _ensure_rest = deps._ensure_rest
     _map_for = deps._map_for
     _live_session_id = deps._live_session_id
+    _latest_is_live = deps._latest_is_live
 
     @app.websocket("/coach")
     async def coach_ws(ws: WebSocket):
@@ -180,12 +181,12 @@ def register(app, deps) -> None:
                     cmap, on_track = _map_for(track), False
             # Backfill the current stint id from the latest lap when the client didn't
             # supply one (auto-anchor) — the live path above resolves track/car but not
-            # the session stamp. Only when that lap still matches the live track/car
-            # (same rule as _status_view's matches_live); on a track change the latest
-            # lap is from the OLD track, so use the live session instead (#127).
+            # the session stamp. Only when that lap is still from the live session
+            # (same rule as _status_view's matches_live); on a track change (#127) or an
+            # offline->online switch (#170) it's the OLD one, so use the live session.
             if eff_session_id is None and app.state.latest is not None:
                 lr = app.state.latest["record"]
-                if live is None or (lr.track, lr.car) == live:
+                if _latest_is_live(lr, live):
                     eff_session_id = lr.session_id
                 else:
                     eff_session_id = _live_session_id()

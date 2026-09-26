@@ -284,8 +284,13 @@ class rF2ScoringInfo(C.Structure):
         ("_mResultsStream_ptr_or_pad", C.c_uint64),  # UNSURE: header has char*
         ("mNumVehicles", C.c_long),
         # 440-byte tail: empirically sized so mVehicles[] lands at the right offset
-        # (see docstring). Not yet broken into named fields.
-        ("_tail", C.c_ubyte * 440),
+        # (see docstring). Only mGameMode is broken out (#170), at the offset LMU's own
+        # shipped header puts it (Support/SharedMemoryInterface/InternalsPlugin.hpp,
+        # ScoringInfoV01: mGamePhase..mMaxPathWetness = 176 bytes after mNumVehicles;
+        # the header's fields also sum to exactly this 440-byte tail).
+        ("_tail", C.c_ubyte * 176),
+        ("mGameMode", C.c_ubyte),  # header: 1 = server, 2 = client, 3 = server and client
+        ("_tail2", C.c_ubyte * 263),
     ]
 
 

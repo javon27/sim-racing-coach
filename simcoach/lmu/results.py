@@ -72,8 +72,8 @@ class ResultSession:
     # can report a race backwards (issue #67).
     grid_position: int | None = None
     class_grid_position: int | None = None
-    # True when another HUMAN was on track, i.e. what live capture calls an "online"
-    # session (smm: any vehicle with mControl == 2). See _is_online for the signal.
+    # True for a multiplayer session, i.e. what live capture calls "online" (on a
+    # server, even alone -- #170). See _is_online for the signal.
     online: bool | None = None
 
 
@@ -128,18 +128,18 @@ def _find_player_driver(session_elem: ET.Element, names: set[str]) -> ET.Element
     return None
 
 
-def _is_online(session_elem: ET.Element) -> bool:
-    """Was another human on track? Live capture's session id ends `--online` when any
-    vehicle has mControl == 2 (a remotely controlled car), so a result log has to answer
-    the same question or the two can't be matched to each other.
+def _is_online(race_results: ET.Element, session_elem: ET.Element) -> bool:
+    """Was this a multiplayer session? Must answer what live capture's `--online` suffix
+    means (smm._is_online: on a server, even alone -- #170), or the two can't be matched.
 
-    The signal is the NUMBER of drivers flagged `isPlayer`. A multiplayer result file
-    sets it on every driver (hence the module docstring calling it useless for *picking*
-    the player); an offline file sets it only on the human. Measured over 1401 real
-    result logs: every offline file ('Race Weekend') has exactly 1, every multiplayer
-    file with 2+ entries has it on all of them, and it is never partial. `Setting` alone
-    is NOT usable -- the 5 single-entry 'Multiplayer' files are one human alone on a
-    server, which mControl (no remote car) correctly reads as offline, as this does."""
+    The signal is `<Setting>Multiplayer</Setting>`. Measured over 1466 real result
+    sessions: all 1350 'Multiplayer' ones are on a server (6 of them one human alone,
+    e.g. 2026_09_25_00_00_03-95P1), every 'Race Weekend' one is offline. Without a
+    Setting, fall back to the pre-#170 read: `isPlayer` set on more than one driver
+    (a multiplayer file flags every human, an offline file only the player)."""
+    setting = (race_results.findtext("Setting") or "").strip()
+    if setting:
+        return setting == "Multiplayer"
     return sum(1 for d in session_elem.findall("Driver")
                if (d.findtext("isPlayer") or "").strip() == "1") > 1
 
@@ -220,7 +220,7 @@ def parse_result(path, player_names: str | Iterable[str]) -> ResultSession | Non
             class_position=_to_int(driver.findtext("ClassPosition")),
             grid_position=_to_int(driver.findtext("GridPos")),
             class_grid_position=_to_int(driver.findtext("ClassGridPos")),
-            online=_is_online(session_elem),
+            online=_is_online(race_results, session_elem),
             best_lap=_to_float(driver.findtext("BestLapTime")),
             finish_status=driver.findtext("FinishStatus"),
             laps=_player_laps(driver),

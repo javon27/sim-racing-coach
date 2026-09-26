@@ -11,6 +11,7 @@ def register(app, deps) -> None:
     _live_map_key = deps._live_map_key
     _ensure_rest = deps._ensure_rest
     _live_session_id = deps._live_session_id
+    _latest_is_live = deps._latest_is_live
 
     @app.get("/health")
     def health():
@@ -29,11 +30,7 @@ def register(app, deps) -> None:
             live = None
         live_tc = (live["track"], live["car"]) if live else None
         latest = app.state.latest
-        matches_live = (
-            latest is not None
-            and (live_tc is None
-                 or (latest["record"].track == live_tc[0] and latest["record"].car == live_tc[1]))
-        )
+        matches_live = latest is not None and _latest_is_live(latest["record"], live_tc)
         session_id = lap_id = None
         if matches_live:
             record = latest["record"]

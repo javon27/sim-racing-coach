@@ -117,10 +117,8 @@ def test_parse_result_extracts_player_session():
 
 
 def test_parse_result_reads_offline_from_a_lone_isplayer(tmp_path):
-    """An OFFLINE result flags only the human; the AI field does not get isPlayer. Built
-    from the real shape of 2026_09_10_00_39_07-16R1 (18 drivers, 1 isPlayer, Setting
-    'Race Weekend'). `Setting` is NOT the signal -- 5 real logs say 'Multiplayer' for one
-    human alone on a server, which live capture reads as offline, as this does."""
+    """An OFFLINE result: Setting 'Race Weekend'. Built from the real shape of
+    2026_09_10_00_39_07-16R1 (18 drivers, 1 isPlayer, Setting 'Race Weekend')."""
     xml = tmp_path / "offline.xml"
     xml.write_text(
         "<rFactorXML><RaceResults><DateTime>1789017807</DateTime>"
@@ -194,3 +192,31 @@ def test_parse_result_returns_none_on_malformed_xml(tmp_path):
     bad.write_text("<rFactorXML><RaceResults>")  # unclosed tags
 
     assert results.parse_result(bad, "Jayson G") is None
+
+
+def _solo_server_xml(tmp_path, setting):
+    """The real shape of 2026_09_25_00_00_03-95P1 (#170 rig case): the driver ALONE on
+    an online practice server -- one Driver, isPlayer 1, Setting 'Multiplayer'."""
+    xml = tmp_path / "solo.xml"
+    xml.write_text(
+        "<rFactorXML><RaceResults>" + setting +
+        "<ServerName></ServerName><DateTime>1790312013</DateTime>"
+        "<TrackCourse>Algarve International Circuit</TrackCourse><Dedicated>0</Dedicated>"
+        "<Practice1><DateTime>1790312015</DateTime><Stream/>"
+        "<Driver><Name>Jayson G</Name><VehName>Logitech G Challenge #12:LGC</VehName>"
+        "<isPlayer>1</isPlayer><Position>1</Position>"
+        "<Lap num=\"2\" s1=\"22.9285\" s2=\"38.1566\" s3=\"45.6522\">106.7373</Lap>"
+        "</Driver></Practice1></RaceResults></rFactorXML>")
+    return xml
+
+
+def test_parse_result_alone_on_a_server_is_online(tmp_path):
+    # #170: live capture now reads a server as online even alone on it; the result log
+    # must say the same or it can't be matched to the live session.
+    xml = _solo_server_xml(tmp_path, "<Setting>Multiplayer</Setting>")
+    assert results.parse_result(xml, "Jayson G").online is True
+
+
+def test_parse_result_without_setting_falls_back_to_isplayer_count(tmp_path):
+    xml = _solo_server_xml(tmp_path, "")
+    assert results.parse_result(xml, "Jayson G").online is False

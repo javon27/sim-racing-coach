@@ -802,6 +802,45 @@ def test_is_online_false_for_ai_and_solo():
     assert _is_online(_scoring_with_controls([0])) is False        # solo
 
 
+def test_game_mode_sits_where_lmus_header_puts_it():
+    """#170: mGameMode is broken out of the empirically sized tail at the offset LMU's
+    shipped InternalsPlugin.hpp gives it: ScoringInfoV01 after mNumVehicles is
+    mGamePhase(1) mYellowFlagState(1) mSectorFlag(3) mStartLight(1) mNumRedLights(1)
+    mInRealtime(1) mPlayerName(32) mPlrFileName(64) + 9 doubles (4 weather, mWind x3,
+    min/max wetness) = 176 bytes. The vehicle array must not move (548 verified live)."""
+    from simcoach.lmu.rf2structs import rF2ScoringInfo
+    assert rF2ScoringInfo.mGameMode.offset == rF2ScoringInfo._tail.offset + 1 + 1 + 3 + 1 + 1 + 1 + 32 + 64 + 9 * 8
+    assert C.sizeof(rF2ScoringInfo) == 548
+
+
+def _scoring(controls, game_mode):
+    s = _scoring_with_controls(controls)
+    s.mScoringInfo.mGameMode = game_mode
+    return s
+
+
+def test_is_online_alone_on_a_server_from_game_mode():
+    # #170 rig case: the driver alone on an online practice server -- no remote car,
+    # so mControl can't see it; mGameMode (2 = client) does.
+    from simcoach.lmu.smm import _is_online
+    assert _is_online(_scoring([0], game_mode=2)) is True
+    assert _is_online(_scoring([0], game_mode=3)) is True    # hosting and driving
+
+
+def test_is_online_offline_with_ai_stays_offline():
+    from simcoach.lmu.smm import _is_online
+    assert _is_online(_scoring([0, 1, 1], game_mode=0)) is False
+
+
+def test_is_online_falls_back_to_mcontrol_without_a_game_mode():
+    # mGameMode 0 (unfilled / offline) or 1 (a dedicated server, never the driver's
+    # own machine) is no answer: the pre-#170 remote-car read still decides.
+    from simcoach.lmu.smm import _is_online
+    assert _is_online(_scoring([0, 2], game_mode=0)) is True
+    assert _is_online(_scoring([0, 1], game_mode=1)) is False
+    assert _is_online(_scoring([0, 2], game_mode=1)) is True
+
+
 def make_wrapper(num_vehicles: int = 1, **vehicle_overrides) -> rF2Telemetry:
     """Build an rF2Telemetry wrapper around make_telem(), the way a real MMF
     frame holds mNumVehicles + mVehicles[]."""

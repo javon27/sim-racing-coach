@@ -100,6 +100,43 @@ def test_status_track_change_reports_live_session_not_stale_latest(tmp_path, mon
     assert b["lap_id"] is None
 
 
+def test_status_mode_switch_reports_live_session_not_stale_latest(tmp_path, monkeypatch):
+    # #170: same track/car, but the latest lap is OFFLINE and the driver is now in an
+    # online garage (and vice versa). Before, (track, car) matched, so /status kept the
+    # stale lap's id; the live id's online|offline must decide too.
+    from simcoach.lmu import smm
+    monkeypatch.setattr(smm, "read_live_status",
+                        lambda: {"track": "spa", "car": "gt3", "state": "garage"})
+    for stale, live in ((False, True), (True, False)):
+        monkeypatch.setattr(smm, "read_live_session_id",
+                            lambda live=live: smm.session_id_for("spa", "gt3", live))
+        store = LapStore(str(tmp_path / f"c{live}.sqlite"), str(tmp_path / f"d{live}"))
+        rec = LapRecord("lmu", "spa", "gt3", 90.0, True, 0.0, {},
+                        session_id=smm.session_id_for("spa", "gt3", stale) + "~1")
+        app = create_app(store, Coach(FakeModel()))
+        app.state.latest = {"record": rec, "lap_id": 1}
+        b = TestClient(app, base_url="http://127.0.0.1").get("/status").json()
+        assert b["session_id"].startswith(smm.session_id_for("spa", "gt3", live))
+        assert b["lap_id"] is None
+
+
+def test_status_same_mode_keeps_latest_lap_instance(tmp_path, monkeypatch):
+    # The base-id match strips the ~instance: a latest lap from the live session keeps
+    # its own instance id and lap id.
+    from simcoach.lmu import smm
+    monkeypatch.setattr(smm, "read_live_status",
+                        lambda: {"track": "spa", "car": "gt3", "state": "track"})
+    monkeypatch.setattr(smm, "read_live_session_id",
+                        lambda: smm.session_id_for("spa", "gt3", True))
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    rec = LapRecord("lmu", "spa", "gt3", 90.0, True, 0.0, {},
+                    session_id="spa--gt3--online~7")
+    app = create_app(store, Coach(FakeModel()))
+    app.state.latest = {"record": rec, "lap_id": 5}
+    b = TestClient(app, base_url="http://127.0.0.1").get("/status").json()
+    assert b["session_id"] == "spa--gt3--online~7" and b["lap_id"] == 5
+
+
 def test_status_reports_garage_before_any_lap(tmp_path, monkeypatch):
     # The fix: garage/on-track is reported live, with NO captured lap at all.
     from simcoach.lmu import smm

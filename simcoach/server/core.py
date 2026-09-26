@@ -10,6 +10,7 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from ..coach_tools import CoachContext
+from ..store import _session_base
 from ..track_lookup import track_slug
 
 REST_PROBE_TTL = 2.0  # s: liveness probe rate cap so /status polling can't hammer LMU's REST
@@ -199,6 +200,23 @@ def register(app, deps) -> None:
             base = None
         return store.resolve_current_instance(base) if base else None
 
+    def _latest_is_live(record, live) -> bool:
+        # Is the latest captured lap from the LIVE session? `live` is the live
+        # (track, car), None when SMM is down (then the latest lap stands). Compared on
+        # the base session id, which carries online|offline too: a question in the
+        # online garage before the first online lap must not take the last OFFLINE
+        # lap's id (#170). (track, car) only if the live id can't be read.
+        if live is None:
+            return True
+        try:
+            from ..lmu.smm import read_live_session_id
+            base = read_live_session_id()
+        except Exception:
+            base = None
+        if base:
+            return _session_base(record.session_id or "") == base
+        return (record.track, record.car) == tuple(live)
+
     def _optimal_sig(laps: list[dict]) -> tuple:
         """The cache key for #176's background optimal compute. Recomputes on: a lap
         landing (count + last id), a corner map appearing or being re-saved (map_rev
@@ -278,4 +296,4 @@ def register(app, deps) -> None:
 
     export(deps, _map_for, _curating, _map_dirs, _capture_path, _newest_capture,
            _invalidate_canon, _fresh, _ensure_rest, _live_track, _live_session_id,
-           _ensure_optimal)
+           _latest_is_live, _ensure_optimal)
