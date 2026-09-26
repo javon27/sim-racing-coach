@@ -70,8 +70,12 @@ def make_classifier(name: str | None, provider: str | None = None) -> Model | No
 
 @functools.lru_cache(maxsize=4)
 def _cached_classifier(model_id: str, key: str) -> Model:
-    # One client per (model, key): its kept-alive connection is most of the 800 ms
-    # budget on a cold TLS handshake, so the router must not build one per question.
+    # One client per (model, key), so questions asked in quick succession reuse a
+    # warm connection. Only that: the SDK pool drops an idle connection after 5 s
+    # (httpx2 keepalive_expiry), so a garage question minutes after the last one
+    # still pays a fresh TLS handshake inside the 800 ms budget -- how often that
+    # times out is a rig-verify item.
+
     return ClaudeModel(model=model_id, api_key=key)
 
 

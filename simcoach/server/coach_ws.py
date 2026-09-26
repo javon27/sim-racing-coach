@@ -24,10 +24,10 @@ from ..coach_tools import (
 )
 from ..driver import DriverProfile
 from ..format import format_laptime
-from ..model.base import TokenUsage
+from ..model.base import TURN_TAG, TokenUsage
 from ..model.factory import CoachUserError
 from ..race import live_race
-from ..thinking import MOVING_KPH, route
+from ..thinking import MOVING_KPH, race_finished, route
 from ..tiers import legal_adjustments
 from .security import ALLOWED_HOSTS, _bad_origin
 from .serialize import _usage_view
@@ -336,35 +336,46 @@ def register(app, deps) -> None:
             # then keyword rules. Its tokens bill with this turn. ponytail: priced at
             # the coach model's rate (one model per chat row) -- overstates a sub-cent
             # classifier call; split it into its own row if that ever matters.
+            # #175: names this turn in the router and adapter log lines (this worker
+            # thread's own context). A new chat has no id until it is saved.
+            TURN_TAG.set(f"chat={chat_id_in or 'new'} "
+                         f"turn={len(messages) + 1 if chat_id_in else 1}")
             tier, intent, hint = "standard", None, ""
             if not last_answer:
-                coach_cfg = cfg.get("coach") or {}
-                moving = bool(live_status and live_status.get("state") == "track"
-                              and (live_status.get("speed") or 0) >= MOVING_KPH)
-                race_live = ctx.race is not None or bool(ctx.race_note)
-                race_finished = bool(windows) and not race_live
-                where = ("on track, moving" if moving else "on track, stationary"
-                         if live_status and live_status.get("state") == "track"
-                         else (live_status or {}).get("state") or "not in a session")
-                classifier = None
-                classifier_for = getattr(app.state.coach, "classifier_for", None)
-                if classifier_for is not None:
-                    try:
-                        classifier = classifier_for(coach_cfg.get("classifier_model"))
-                    except Exception as e:
-                        logging.getLogger(__name__).info("no classifier: %s", e)
                 try:
-                    laps_n = len(store.session_laps(eff_session_id)) if eff_session_id else 0
+                    coach_cfg = cfg.get("coach") or {}
+                    state_now = (live_status or {}).get("state")
+                    # Moving on track or down the pit lane. Backstop: a PTT question
+                    # while live with no status read (SMM hiccup) is from the car.
+                    moving = ((state_now in ("track", "pits")
+                               and (live_status.get("speed") or 0) >= MOVING_KPH)
+                              or (voice == "ptt" and bool(live) and live_status is None))
+                    race_live = ctx.race is not None or bool(ctx.race_note)
+                    live_phase = (live_session.phase if live_session is not None
+                                  and live_session.live else None)
+                    laps = store.session_laps(eff_session_id) if eff_session_id else []
+                    result = store.race_session(eff_session_id) if eff_session_id else None
+                    finished = race_finished(
+                        windows, (result or {}).get("race_ts"), has_result=result is not None,
+                        race_live=race_live, live_phase=live_phase, laps=laps)
+                    where = ("on track, moving" if moving else f"{state_now}, stationary"
+                             if state_now else "not in a session")
+                    state = (f"{where}; session phase {live_phase or 'unknown'}; race "
+                             f"{'finished' if finished else 'live' if race_live else 'none'}; "
+                             f"voice {voice or 'typed'}; {len(laps)} laps this session")
+                    classifier_for = getattr(app.state.coach, "classifier_for", None)
+                    tier, intent, hint, classify_usage = route(
+                        question, setting=coach_cfg.get("thinking", "auto"), moving=moving,
+                        race_finished=finished, history=history, state=state, cmap=ctx.cmap,
+                        classifier=(lambda: classifier_for(coach_cfg.get("classifier_model")))
+                        if classifier_for is not None else None)
+                    turn_usage = turn_usage + classify_usage
                 except Exception:
-                    laps_n = 0
-                state = (f"{where}; session phase {getattr(live_session, 'phase', '') or 'unknown'}; "
-                         f"race {'live' if race_live else 'finished' if race_finished else 'none'}; "
-                         f"voice {voice or 'typed'}; {laps_n} laps this session")
-                tier, intent, hint, classify_usage = route(
-                    question, setting=coach_cfg.get("thinking", "auto"), moving=moving,
-                    race_finished=race_finished, classifier=classifier, history=history,
-                    state=state, cmap=ctx.cmap)
-                turn_usage = turn_usage + classify_usage
+                    # Routing is an optimisation: a failure costs deliberation, never
+                    # the answer.
+                    logging.getLogger(__name__).warning("thinking router failed; standard",
+                                                        exc_info=True)
+                    tier, intent, hint = "standard", None, ""
             model_question = "\n\n".join([*facts, *([hint] if hint else []), question])
             try:
                 for ev in ([{"type": "text", "text": last_answer}] if last_answer else

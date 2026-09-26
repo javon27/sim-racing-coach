@@ -909,6 +909,14 @@ body {
   font-size: 12px;
   letter-spacing: 0.05em;
 }
+/* #175: a deep answer's opening line, above the "thinking…" label, in its style */
+.ack {
+  margin: 0 0 6px;
+  color: var(--faint);
+  font-family: var(--display);
+  font-size: 12px;
+  letter-spacing: 0.05em;
+}
 /* composer */
 .composer {
   padding: 14px 26px 20px;

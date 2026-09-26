@@ -699,6 +699,7 @@ class Coach:
             held: list[dict] = []
             pend: str | None = None     # set once a tool ran: text not yet emitted
             text = ""
+            cut_off = False     # #175: the model ran out of max_tokens mid-answer
             # After a tool: `out` is what was emitted; `filler` is held narration
             # (a lookup, an acknowledgement, a "here's the field:" lead-in) released
             # only in front of a real sentence -- if a cut took every real sentence,
@@ -735,12 +736,20 @@ class Coach:
                 state["real"] |= not filler
                 return body
 
+            # A forced round runs quick for its WHOLE turn (#175 red team): the adapter
+            # must disable thinking for the forced round, and switching it back on for
+            # the later rounds of the same tool-use turn is unverified against the API
+            # -- so thinking never flips mid-turn. The forced re-ask is a fresh call,
+            # not a continuation of the discarded draft's turn.
             stream = self._separated(self.model.run_stream(
                 system, messages, TOOLS, context.dispatch, force_tool=force,
-                thinking=thinking))
+                thinking="quick" if force else thinking))
             if voice == "ptt":
                 stream = self._final_answer(stream)
             for ev in stream:
+                if ev["type"] == "stop":
+                    cut_off = True      # PTT: arrives before _final_answer's text
+                    continue
                 if ev["type"] == "text":
                     text += ev["text"]
                     if pend is None:
@@ -763,9 +772,17 @@ class Coach:
                     pend = ""
                 yield ev
             if pend is not None:
+                if cut_off:
+                    # Never release the cut-off tail ("Your best lap was"): only the
+                    # sentences already complete stand.
+                    _log.warning("coach #175: answer cut at max_tokens; dropped %r",
+                                 pend[:300])
+                    pend = ""
                 if chunk := release(pend):
                     yield {"type": "text", "text": chunk}
-                if state["filler"].strip() and not state["cut"]:   # a short answer, uncut
+                if state["filler"].strip() and not state["cut"] and not cut_off:
+                    # a short answer, uncut
+
                     filler = state["filler"].rstrip()   # already carries its lead space
                     state["out"] += filler
                     yield {"type": "text", "text": filler}
@@ -774,6 +791,14 @@ class Coach:
                 elif state["cut"] and not state["real"]:   # only narration survived
                     yield {"type": "text", "text": "\n\n" + UNCONFIRMED}
                 return
+            if cut_off:
+                end = max((m.end() for m in _BOUNDARY.finditer(text)), default=0)
+                _log.warning("coach #175: answer cut at max_tokens; dropped %r",
+                             text[end:][:300])
+                text = text[:end].rstrip()
+                if not text:
+                    break           # nothing complete: UNCONFIRMED, not an empty answer
+                held = [{"type": "text", "text": text}]
             reason = states_data(text, known)
             if not reason:
                 yield from held
@@ -838,6 +863,7 @@ class Coach:
                     text_so_far += "\n\n"
                 saw_tool_since_text = False
                 text_so_far += ev["text"]
-            elif ev["type"] not in ("usage", "thinking"):
+            elif ev["type"] not in ("usage", "thinking", "stop"):
+
                 saw_tool_since_text = True
             yield ev

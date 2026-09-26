@@ -1,10 +1,16 @@
 from collections.abc import Callable, Iterator
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Protocol
+
+# #175: "chat=<id> turn=<n>" for the coach turn being answered, set by the server's
+# worker thread so an adapter's log lines (thinking text) name the turn they belong to.
+TURN_TAG: ContextVar[str] = ContextVar("coach_turn_tag", default="")
 
 
 @dataclass(frozen=True)
 class TokenUsage:
+
     """Billed tokens for one or more model calls, in provider-neutral buckets.
 
     Summable on purpose: the agentic tool loop makes up to MAX_TOOL_ITERATIONS + 1
@@ -117,7 +123,11 @@ class Model(Protocol):
         model thinks as much as it judges), "deep" (think hard, longer answer). What a
         tier means for a given model is the adapter's business. An adapter that
         deliberates yields {"type":"thinking"} as it starts to, so the UI can say so;
-        the thinking text itself is never yielded (never shown, spoken or grounded)."""
+        the thinking text itself is never yielded (never shown, spoken or grounded).
+        A turn that ran out of output tokens mid-answer yields
+        {"type":"stop","reason":"max_tokens"} after its text, so the caller never
+        releases the cut-off sentence."""
+
         ...
 
     def classify(self, prompt: str, schema: dict) -> tuple[dict | None, TokenUsage]:

@@ -22,7 +22,7 @@ class FakeModel:
         # via dispatch before returning `reply`. Empty = answer with no tool calls.
         self.tool_script = tool_script or []
         # stream_script (run_stream only): list of ("text", str) / ("tool", name,
-        # input) in emission order, for tests that need text blocks interleaved
+        # input) / ("stop",) in emission order, for tests that need text blocks interleaved
         # with tool calls (#133) rather than tool_script's tools-then-one-reply
         # shape. None -> fall back to tool_script + reply.
         self.stream_script = stream_script
@@ -91,6 +91,9 @@ class FakeModel:
             for step in script:
                 if step[0] == "text":
                     yield {"type": "text", "text": step[1]}
+                elif step[0] == "stop":     # #175: the answer ran out of max_tokens
+                    yield {"type": "stop", "reason": "max_tokens"}
+
                 else:
                     _, name, inp = step
                     yield {"type": "tool", "name": name, "input": inp}

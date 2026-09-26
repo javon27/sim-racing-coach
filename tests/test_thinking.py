@@ -63,7 +63,7 @@ CMAP = CornerMap([Corner(5, "Eau Rouge", "left", 100, 150, 200),
 
 
 def _route(q, clf, **kw):
-    return route(q, classifier=clf, cmap=CMAP, state="garage", **kw)
+    return route(q, classifier=(lambda: clf), cmap=CMAP, state="garage", **kw)
 
 
 def test_router_uses_a_valid_classification_and_matches_the_corner_by_code():
@@ -222,10 +222,10 @@ def test_claude_tier_params():
         assert "output_config" not in call and call["max_tokens"] == 4096
     for call in _kw(_claude(), "standard"):
         assert call["thinking"] == ADAPTIVE
-        assert "output_config" not in call and call["max_tokens"] == 4096
+        assert "output_config" not in call and call["max_tokens"] == 16000
     for call in _kw(_claude(), "deep"):
         assert call["thinking"] == ADAPTIVE
-        assert call["output_config"] == {"effort": "max"} and call["max_tokens"] == 8192
+        assert call["output_config"] == {"effort": "max"} and call["max_tokens"] == 32000
 
 
 def test_claude_forced_round_runs_without_thinking_or_effort_at_any_tier():
@@ -239,6 +239,7 @@ def test_claude_forced_round_runs_without_thinking_or_effort_at_any_tier():
 def test_claude_quick_on_a_family_that_rejects_disabled_thinking():
     for call in _kw(_claude("claude-opus-5-5"), "quick"):
         assert call["thinking"] == ADAPTIVE and call["output_config"] == {"effort": "low"}
+        assert call["max_tokens"] == 16000      # thinking on: it needs the headroom too
 
 
 def test_claude_haiku_runs_every_tier_plain():
@@ -384,3 +385,263 @@ def test_ws_moving_gate_reads_live_speed(tmp_path, monkeypatch, mem_keyring, sta
     assert model.thinking == [tier]
     assert (clf.classified == []) == (tier == "quick")
 
+
+
+# --- fix round 1 (red team) -------------------------------------------------------
+
+# M1: a max_tokens stop never releases the cut-off sentence.
+
+_BIG = NS(input_tokens=10, output_tokens=16000, cache_read_input_tokens=0,
+          cache_creation_input_tokens=0)
+
+
+class _Scripted:
+    """messages.create double replaying `script` (one response per call)."""
+    def __init__(self, script):
+        self.messages, self.calls, self.script = self, [], script
+
+    def create(self, **kw):
+        self.calls.append(kw)
+        return self.script[len(self.calls) - 1]
+
+
+def _cut_answer(tmp_path, script, voice=None):
+    m = _claude()
+    m.client = _Scripted(script)
+    events = list(Coach(m).ask_agentic_stream(_ctx(tmp_path), "what's my best lap?",
+                                              car="C", thinking="standard", voice=voice))
+    assert not any(e["type"] == "stop" for e in events)      # consumed, never forwarded
+    return "".join(e["text"] for e in events if e["type"] == "text")
+
+
+_TOOL = NS(content=[NS(type="tool_use", id="t", name="list_recent_laps", input={})],
+           stop_reason="tool_use", usage=_BIG)
+
+
+def _final(text):
+    content = [NS(type="thinking", thinking="...", signature="x")]
+    return NS(content=content + ([NS(type="text", text=text)] if text else []),
+              stop_reason="max_tokens", usage=_BIG)
+
+
+@pytest.mark.parametrize("voice", [None, "ptt"])
+def test_max_tokens_with_no_text_is_unconfirmed_not_empty(tmp_path, voice, caplog):
+    from simcoach.coach import UNCONFIRMED
+    with caplog.at_level(logging.WARNING):
+        assert _cut_answer(tmp_path, [_final("")], voice) == UNCONFIRMED
+    assert any("max_tokens" in r.getMessage() and r.levelno == logging.WARNING
+               for r in caplog.records)
+
+
+@pytest.mark.parametrize("voice", [None, "ptt"])
+def test_max_tokens_after_a_tool_never_releases_the_cut_sentence(tmp_path, voice):
+    from simcoach.coach import UNCONFIRMED
+    assert _cut_answer(tmp_path, [_TOOL, _final("Your best lap was")], voice) == UNCONFIRMED
+
+
+@pytest.mark.parametrize("voice", [None, "ptt"])
+def test_max_tokens_keeps_only_the_complete_sentences(tmp_path, voice):
+    got = _cut_answer(tmp_path, [_TOOL, _final("Brake a touch later into the hairpin. "
+                                               "Then carry more")], voice)
+    assert got == "Brake a touch later into the hairpin."
+    got = _cut_answer(tmp_path, [_final("Smooth hands help the rear settle. Your bes")],
+                      voice)
+    assert got == "Smooth hands help the rear settle."
+
+
+def test_the_adapter_yields_one_stop_event_on_max_tokens():
+    m = _claude()
+    m.client = _Scripted([_final("Half a sen")])
+    events = list(m.run_stream("s", [{"role": "user", "content": "q"}], [],
+                               lambda n, i: "", thinking="standard"))
+    assert [e["type"] for e in events] == ["text", "usage", "stop"]
+
+
+# m2: a forced #159 re-ask runs quick for its whole turn.
+
+def test_forced_reask_runs_quick_for_the_whole_turn(tmp_path):
+    model = FakeModel(stream_script=[("text", "Your fronts are at 141 °F.")],
+                      forced_stream_script=[("tool", "get_session_status", {}),
+                                            ("text", "Fronts look fine.")])
+    list(Coach(model).ask_agentic_stream(_ctx(tmp_path), "fronts?", car="C",
+                                         thinking="deep"))
+    assert model.forced == [False, True]
+    assert model.thinking == ["deep", "quick"]
+
+
+# M3: only an unambiguous corner match counts.
+
+def _shipped(name):
+    from pathlib import Path
+
+    import simcoach.tracks as tracks_pkg
+    return CornerMap.load(str(Path(tracks_pkg.__path__[0]) / f"{name}.json"))
+
+
+@pytest.mark.parametrize("track, name, expect", [
+    ("monza_curva_grande_circuit", "variante", None),       # Roggia AND Ascari
+    ("monza_curva_grande_circuit", "curva", None),          # Grande AND Parabolica
+    ("monza_curva_grande_circuit", "Variante Ascari", "Turn 6 (Variante Ascari)"),
+    ("monza_curva_grande_circuit", "ascari", "Turn 6 (Variante Ascari)"),
+    ("autodromo_jose_carlos_pace", "curva", None),          # do Sol AND do Laranjinha
+    ("autodromo_jose_carlos_pace", "curva do sol", "Turn 3 (Curva do Sol)"),
+    ("autodromo_nazionale_monza", "8", "Turn 8"),           # name "Turn 8": no "(Turn 8)"
+    ("circuit_de_spa_francorchamps", "T8", "Turn 8 (Bruxelles)"),
+])
+def test_corner_match_on_shipped_maps(track, name, expect):
+    from simcoach.thinking import match_corner
+    assert match_corner(name, _shipped(track)) == expect
+
+
+def test_an_exact_name_beats_the_substring_matches():
+    from simcoach.thinking import match_corner
+    cmap = CornerMap([Corner(1, "Curva", "left", 0, 1, 2),
+                      Corner(2, "Curva Grande", "right", 3, 4, 5)])
+    assert match_corner("curva", cmap) == "Turn 1 (Curva)"
+
+
+# M2: is the race over?
+
+W = [{"start_ts": 1000.0, "end_ts": 2000.0}, {"start_ts": 5000.0, "end_ts": 6000.0}]
+RACE_LAPS = [{"phase": "race", "ts": 5500.0}]
+
+
+@pytest.mark.parametrize("kw, over", [
+    # after the flag: phase still "race" (a stale snapshot's note -> race_live), but
+    # the result log describes the last race
+    ({"has_result": True, "result_ts": 4900.0, "race_live": True, "live_phase": "race"}, True),
+    # the old rule alone: race laps and no live race
+    ({"has_result": False, "result_ts": None, "race_live": False, "live_phase": None}, True),
+    # a race being driven, its log not written yet
+    ({"has_result": False, "result_ts": None, "race_live": True, "live_phase": "race"}, False),
+    # race 2 live; the only result row is race 1's
+    ({"has_result": True, "result_ts": 900.0, "race_live": True, "live_phase": "race"}, False),
+    # a later practice session is live: not a race review
+    ({"has_result": True, "result_ts": 4900.0, "race_live": False, "live_phase": "practice"},
+     False),
+])
+def test_race_finished(kw, over):
+    from simcoach.thinking import race_finished
+    assert race_finished(W, laps=RACE_LAPS, **kw) is over
+
+
+def test_race_finished_false_once_practice_laps_follow_the_race():
+    from simcoach.thinking import race_finished
+    laps = RACE_LAPS + [{"phase": "practice", "ts": 7000.0}]
+    assert race_finished(W, 4900.0, has_result=True, race_live=False, live_phase=None,
+                         laps=laps) is False
+
+
+def _live_race_app(tmp_path, monkeypatch, synthetic_lap, *, phase, result):
+    """A live session at test_track in `phase`, a stale race snapshot (lap 12, the
+    game on lap 20), two stored race laps in session s1 and, with `result`, the race's
+    result-log row."""
+    import dataclasses
+
+    from simcoach.lmu import live as lmu_live
+    from simcoach.lmu import smm
+    from simcoach.model_types import LapRecord, RaceSample
+    from simcoach.race import LapFacts, build_snapshot
+    monkeypatch.setattr(smm, "read_session_track_car", lambda: ("test_track", "test_car"))
+    monkeypatch.setattr(smm, "read_live_status", lambda: {
+        "track": "test_track", "car": "test_car", "state": "garage", "speed": 0.0})
+    field = lmu_live.empty_snapshot()
+    field = dataclasses.replace(field, session=dataclasses.replace(
+        field.session, live=True, phase=phase, current_lap=20))
+    monkeypatch.setattr(lmu_live, "read_field_snapshot", lambda: field)
+    c, store, model = _app(tmp_path, monkeypatch, classifier=FakeModel(
+        classify_result={"tier": "standard", "intent": "other"}))
+    c.app.state.race.snapshot = build_snapshot(
+        [LapFacts(lap_no=n, lap_time=100.0, clean=True,
+                  race=RaceSample(class_position=3, max_laps=24)) for n in (11, 12)],
+        "s1", track="test_track", car="test_car")
+    t0 = time.time() - 600
+    for i in range(2):
+        store.save(LapRecord(**{**synthetic_lap.__dict__, "session_id": "s1",
+                                "phase": "race", "timestamp": t0 + i * 100}))
+    if result:
+        with store.conn:
+            store.conn.execute(
+                "INSERT INTO race_sessions (session_id, position, track, car, phase, ts) "
+                "VALUES ('s1', 3, 'test_track', 'test_car', 'race', ?)", (t0 - 120,))
+    return c, model
+
+
+def _ask_s1(client, question):
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": question, "session_id": "s1"})
+        while ws.receive_json()["type"] not in ("done", "error"):
+            pass
+
+
+@pytest.mark.parametrize("phase, result, tier", [
+    ("race", True, "deep"),         # after the flag, result logged: post-race review
+    ("race", False, "standard"),    # race still live (no result yet): no auto-deep
+    ("practice", True, "standard"),  # a later practice session: not a race review
+])
+def test_ws_post_race_review_reads_the_result_log(tmp_path, monkeypatch, mem_keyring,
+                                                  synthetic_lap, phase, result, tier):
+    c, model = _live_race_app(tmp_path, monkeypatch, synthetic_lap, phase=phase,
+                              result=result)
+    _ask_s1(c, "how was that race?")
+    assert model.thinking == [tier]
+
+
+# m1: moving down the pit lane; a PTT question while live with no status read.
+
+def test_ws_moving_in_the_pits_and_ptt_backstop(tmp_path, monkeypatch, mem_keyring):
+    from simcoach.lmu import smm
+    monkeypatch.setattr(smm, "read_session_track_car", lambda: ("T", "C"))
+    monkeypatch.setattr(smm, "read_live_status",
+                        lambda: {"track": "T", "car": "C", "state": "pits", "speed": 60.0})
+    c, _, model = _app(tmp_path, monkeypatch)
+    _ask(c, "analyze my braking in detail")
+    monkeypatch.setattr(smm, "read_live_status", lambda: None)
+    with c.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "analyze my braking in detail", "voice": "ptt"})
+        while ws.receive_json()["type"] not in ("done", "error"):
+            pass
+    _ask(c, "analyze my braking in detail")          # typed, no status: not the backstop
+    assert model.thinking == ["quick", "quick", "deep"]
+
+
+# m3: a router failure costs deliberation, never the answer.
+
+def test_ws_router_failure_falls_back_to_standard(tmp_path, monkeypatch, mem_keyring):
+    from simcoach.server import coach_ws
+
+    def boom(*a, **kw):
+        raise RuntimeError("router bug")
+    monkeypatch.setattr(coach_ws, "route", boom)
+    c, _, model = _app(tmp_path, monkeypatch)
+    frames = _ask(c, "analyze my braking in detail")
+    assert frames[-1]["type"] == "done" and model.thinking == ["standard"]
+
+
+# m4: the classifier is built only when it will be asked.
+
+def test_classifier_is_built_lazily():
+    built = []
+
+    def factory():
+        built.append(1)
+        return FakeModel(classify_result={"tier": "deep"})
+    route("tyres?", moving=True, classifier=factory)
+    route("tyres?", setting="off", classifier=factory)
+    assert built == []
+    assert route("why is it loose?", classifier=factory)[0] == "deep"
+    assert built == [1]
+
+
+# m6: the turn is named in the router log line.
+
+def test_router_log_names_the_chat_turn(tmp_path, monkeypatch, mem_keyring, caplog):
+    c, _, _ = _app(tmp_path, monkeypatch)
+    with caplog.at_level(logging.INFO, logger="simcoach.thinking"):
+        cid = _ask(c, "what's my fuel?")[-1]["chat_id"]
+        with c.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+            ws.send_json({"question": "and tyres?", "chat_id": cid})
+            while ws.receive_json()["type"] not in ("done", "error"):
+                pass
+    lines = [r.getMessage() for r in caplog.records if "coach thinking" in r.getMessage()]
+    assert "chat=new turn=1" in lines[0] and f"chat={cid} turn=2" in lines[1]

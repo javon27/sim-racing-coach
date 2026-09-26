@@ -4,7 +4,7 @@ from collections.abc import Callable, Iterator
 
 import anthropic
 
-from .base import RunResult, TokenUsage
+from .base import TURN_TAG, RunResult, TokenUsage
 
 _log = logging.getLogger(__name__)
 
@@ -41,11 +41,15 @@ class ClaudeModel:
         so it is never sent.
           quick    -> thinking disabled
           standard -> adaptive (the model decides how much)
-          deep     -> adaptive + effort max + max_tokens 8192
+          deep     -> adaptive + effort max
         Families that 400 on disabled thinking (Opus 5.5, Fable, Mythos -- the same set
         can_force_tool names) run quick as adaptive at the lowest effort instead. Haiku
         has no adaptive thinking and no effort: every tier runs it plain.
-        display "summarized": the text is logged for tuning (INFO), never shown."""
+        display "summarized": the text is logged for tuning (INFO), never shown.
+        Thinking shares max_tokens with the answer, so every adaptive tier gets real
+        headroom (16k; deep 32k) -- at 4096 thinking ate the whole answer (#175 red
+        team). Streaming only, so a large max_tokens has no HTTP-timeout cost; a turn
+        that still hits it yields a `stop` event (see _cut)."""
         if self.model.startswith("claude-haiku-"):
             # ponytail: Haiku is the only no-adaptive family the factory's aliases
             # reach; add a prefix here if an older model id is ever configured.
@@ -53,12 +57,13 @@ class ClaudeModel:
         adaptive = {"type": "adaptive", "display": "summarized"}
         if tier == "deep":
             return {"thinking": adaptive, "output_config": {"effort": "max"},
-                    "max_tokens": max(self.max_tokens, 8192)}
+                    "max_tokens": max(self.max_tokens, 32000)}
         if tier == "quick":
             if not self.can_force_tool:       # this family rejects disabled thinking
-                return {"thinking": adaptive, "output_config": {"effort": "low"}}
+                return {"thinking": adaptive, "output_config": {"effort": "low"},
+                        "max_tokens": max(self.max_tokens, 16000)}
             return {"thinking": {"type": "disabled"}}
-        return {"thinking": adaptive}
+        return {"thinking": adaptive, "max_tokens": max(self.max_tokens, 16000)}
 
     def complete(self, system: str, messages: list[dict]) -> str:
         """Generate a completion via Claude.
@@ -151,9 +156,21 @@ class ClaudeModel:
         thought = "".join(getattr(b, "thinking", "") or "" for b in final.content
                           if getattr(b, "type", None) == "thinking")
         if thought:
-            _log.info("coach thinking (%s, %s tier): %s", self.model, thinking, thought)
+            _log.info("coach thinking %s (%s, %s tier): %s", TURN_TAG.get(), self.model,
+                      thinking, thought)
+
         yield self._usage_event(final)
         return final
+
+    def _cut(self, final) -> list[dict]:
+        """#175: a turn that ran out of max_tokens mid-answer -> one
+        {"type":"stop","reason":"max_tokens"} event (logged WARNING), so the coach
+        never releases the cut-off sentence. [] for any other stop."""
+        if getattr(final, "stop_reason", None) != "max_tokens":
+            return []
+        _log.warning("coach answer hit max_tokens (%s): the cut-off tail is dropped",
+                     self.model)
+        return [{"type": "stop", "reason": "max_tokens"}]
 
     def _usage_event(self, resp) -> dict:
         return {"type": "usage", "usage": _usage_of(resp).as_dict(), "model": self.model}
@@ -180,6 +197,7 @@ class ClaudeModel:
                                                  force_tool=force_tool and i == 0,
                                                  thinking=thinking)
             if final.stop_reason != "tool_use":
+                yield from self._cut(final)
                 return
             # The WHOLE content goes back, thinking blocks (and their signatures)
             # included: the API requires them unchanged across tool-use turns.
@@ -200,7 +218,9 @@ class ClaudeModel:
             convo.append({"role": "user", "content": results})
         # Hit the iteration cap — make one final tool-free call so the model answers
         # from what it has gathered rather than returning nothing.
-        yield from self._stream_turn(system, convo, tools=None, thinking=thinking)
+        final = yield from self._stream_turn(system, convo, tools=None, thinking=thinking)
+        yield from self._cut(final)
+
 
     def run(
         self,
