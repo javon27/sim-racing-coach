@@ -958,7 +958,8 @@ class CoachContext:
             parts.append(f"game lap {record.lap_no}")
         if record.timestamp:
             parts.append(time.strftime("%H:%M:%S", time.localtime(record.timestamp)))
-        if label is None and record.session_id and record.session_id != self.session_id:
+        if (label is None and self.session_id and record.session_id
+                and record.session_id != self.session_id):
             # #169: never "this lap" for a lap from another session.
             head = "a lap from another session"
             if record.timestamp:
@@ -1472,28 +1473,24 @@ class CoachContext:
         except ValueError:
             return None
 
-    def _all_time(self, record, lap_id, optimal):
-        """{"best", "this_lap", "when", "optimal"} over every timed lap here in this
-        car (one query, `store.timed_laps`), or None with none. The all-time optimal
-        takes this session's sectors from `optimal` (the incident-checked session
-        optimal) and other sessions' from the game's valid laps; none without one."""
+    def _all_time(self, record, lap_id):
+        """{"best", "this_lap", "when", "other"} over every timed lap here in this
+        car (one query, `store.timed_laps`), or None with none. `other`: the best
+        valid time per sector in OTHER sessions (None where there is none) -- the
+        formatter builds the all-time optimal from it exactly the way it builds this
+        session's."""
         rows = self.store.timed_laps(record.track, self.car or record.car)
         if not rows:
             return None
         best = min(rows, key=lambda r: r["lap_time"])
         label_by_id, _ = self._lap_numbering()
-        total = None
-        if optimal is not None:
-            total = sum(min([t] + [r[k] for r in rows
-                                   if r[k] and r["session_id"] != self.session_id])
-                        for (t, _), k in zip(optimal["best"], ("s1", "s2", "s3")))
-            if total >= best["lap_time"]:
-                total = None   # clean sectors only: not a lap quicker than the best
+        other = [min((r[k] for r in rows if r[k] and r["session_id"] != self.session_id),
+                     default=None) for k in ("s1", "s2", "s3")]
         return {"best": best["lap_time"],
                 "this_lap": best["id"] == lap_id or best["ts"] == record.timestamp,
                 "when": label_by_id.get(best["id"])
                 or time.strftime("%Y-%m-%d", time.localtime(best["ts"])),
-                "optimal": total}
+                "other": other}
 
     def get_time_on_table(self, which="best", detail=False):
         """#169: where the time is on a lap -- above all the best lap -- measured
@@ -1546,7 +1543,7 @@ class CoachContext:
                                   "them": self._analysis_for(donor, r["donor"]).corners[i]})
         return lap_line + "\n" + format_time_on_table(
             lap_time=record.lap_time, sectors=sectors, optimal=optimal,
-            all_time=self._all_time(record, lap_id, optimal), benchmark=self._class_benchmark(),
+            all_time=self._all_time(record, lap_id), benchmark=self._class_benchmark(),
             form=form, diagnoses=diagnoses,
             label_of=lambda k: "this lap" if k == "this" else label_by_id.get(k, f"lap id {k}"),
             cmap=self.cmap, bounds=bounds,

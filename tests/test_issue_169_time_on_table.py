@@ -396,9 +396,9 @@ def test_get_time_on_table_finds_the_time_on_the_best_lap(tmp_path, synthetic_la
                         "under this lap:")
     assert lines[2] == "  S1 (T1) 0.20 s on practice lap 1."
     assert "Quicker S1 (T1) on practice lap 7 doesn't count: a spin or an off" in out
-    # All-time: the off lap's 30.20 S1 stays out here too (1:32.300 with it).
-    assert ("All-time here in this car: best 1:32.700 (this lap); optimal from best "
-            "sectors 1:32.500.") in out
+    # All-time: the same as this session's optimal (no other session), so not
+    # repeated -- and never the 1:32.300 the off lap's 30.20 S1 would make.
+    assert "All-time here in this car: best 1:32.700 (this lap)." in out
     assert ("Class benchmark (track notes, community): LMGT3 1:30.000, 2.70 s ahead of "
             "this lap. Total only, no sector splits, so it can't say where.") in out
     assert "Where your own laps were quicker than this one (corner with approach and " \
@@ -477,12 +477,58 @@ def test_own_sector_with_an_off_is_the_baseline_never_a_negative_gain():
     assert "every sector is your best" not in text and "on this lap doesn't count" not in text
     assert not re.search(r"-\d+\.\d\d s under", text)
     assert "at your own limit everywhere" not in text
-    # A real gain elsewhere is measured from this lap's own times: S2 0.20 s.
+    # A real gain elsewhere is measured from this lap's own times: S2 0.20 s -- with
+    # NO total, which would rest on the S1 it ran off in (probe12 F: "1:30.500").
     text = _table(91.5, [29.5, 31.0, 31.0], [
         {"key": "this", "sectors": [29.5, 31.0, 31.0], "incidents": [900.0]},
         {"key": "A", "sectors": [30.0, 30.8, 31.4], "incidents": []}])
-    assert "1:31.300, 0.20 s under this lap:\n  S2 (T2) 0.20 s on lap A." in text
+    assert text.splitlines()[0] == ("0.20 s from your best clean sectors this session: "
+                                    "S2 (T2) 0.20 s on lap A.")
+    assert "Optimal lap" not in text and "1:31.300" not in text
     assert "This lap's own S1 (T1) had a spin or an off" in text
+
+
+def _table_all_time(lap_time, sectors, laps, best, other):
+    cmap = CornerMap.load(CMAP)
+    bounds = [1500.0, 2600.0]
+    return format_time_on_table(
+        lap_time=lap_time, sectors=sectors, optimal=optimal_sectors(laps, bounds),
+        all_time={"best": best, "this_lap": True, "when": "", "other": other},
+        benchmark=None, form={"ok": True, "n": 5, "listed": [], "at_best": []},
+        diagnoses=[], label_of=lambda k: "this lap" if k == "this" else f"lap {k}",
+        cmap=cmap, bounds=bounds)
+
+
+def test_all_time_optimal_never_rests_on_this_laps_off_sector():
+    laps = [{"key": "this", "sectors": [29.5, 31.0, 31.0], "incidents": [900.0]},
+            {"key": "A", "sectors": [30.0, 30.8, 31.4], "incidents": []}]
+    # Clean sectors: 30.0 + 30.8 + 31.0 = 91.8, slower than the 91.5 best -- no line.
+    # (With the off S1 it would be 29.5 + 30.8 + 31.0 = 91.3 and print.)
+    text = _table_all_time(91.5, [29.5, 31.0, 31.0], laps, 91.5, [None, None, None])
+    assert "All-time here in this car: best 1:31.500 (this lap)." in text
+    # A clean 29.0 S1 from another session: 29.0 + 30.8 + 31.0 = 90.8.
+    text = _table_all_time(91.5, [29.5, 31.0, 31.0], laps, 91.5, [29.0, None, None])
+    assert "(this lap); optimal from best sectors 1:30.800." in text
+
+
+def test_all_time_optimal_is_built_like_the_session_one():
+    # Real Algarve LGC: session 1:45.736 vs all-time 1:45.734 -- the session total drops
+    # gains under 0.005 s, the all-time one didn't.
+    laps = [{"key": "this", "sectors": [30.0, 31.0, 31.0], "incidents": []},
+            {"key": "A", "sectors": [29.8, 31.2, 31.2], "incidents": []}]
+    for other in ([None, None, None], [None, 30.997, None]):   # a 0.003 s "gain"
+        text = _table_all_time(92.0, [30.0, 31.0, 31.0], laps, 92.0, other)
+        assert "1:31.800, 0.20 s under this lap" in text
+        assert "All-time here in this car: best 1:32.000 (this lap)." in text
+    text = _table_all_time(92.0, [30.0, 31.0, 31.0], laps, 92.0, [None, 30.7, None])
+    assert "(this lap); optimal from best sectors 1:31.500." in text
+
+
+def test_no_session_context_never_says_another_session(tmp_path, synthetic_lap):
+    store = _store(tmp_path)
+    _save(store, synthetic_lap, 90.0, 1, 1)
+    line = _ctx(store, sid=None).get_lap_summary("best").splitlines()[0]
+    assert "another session" not in line
 
 
 # --- the prompt ----------------------------------------------------------------------

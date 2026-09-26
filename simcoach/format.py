@@ -645,23 +645,34 @@ def format_time_on_table(*, lap_time, sectors, optimal, all_time, benchmark, for
     # it spun or ran off in is only kept out as a DONOR (see `optimal_sectors`).
     own_out = sorted(i for i, _, key in (optimal or {}).get("dropped", []) if key == "this")
     gained = []
+    session_opt = None   # this session's optimal lap, when one can honestly be stated
+
+    def gains(donors):
+        """Real gains (>= 0.005 s) of each donor sector time over this lap's own."""
+        return sorted(((sectors[i] - t, i, key) for i, (t, key) in enumerate(donors)
+                       if sectors[i] - t >= 0.005), key=lambda g: -g[0])
     if not sectors or optimal is None:
         out.append("No optimal lap: the game's sector times aren't stored for this lap."
                    if not sectors else
                    "No optimal lap: not every sector has a clean time on a comparable lap.")
     else:
-        gained = sorted(((sectors[i] - t, i, key) for i, (t, key) in enumerate(optimal["best"])
-                         if sectors[i] - t >= 0.005), key=lambda g: -g[0])
+        gained = gains(optimal["best"])
         under = sum(g for g, _, _ in gained)   # never negative: only real gains count
         parts = [f"{names[i]} {g:.2f} s on {label_of(key)}" for g, i, key in gained]
-        if parts:
+        if parts and own_out:
+            # A total would be built on the sector this lap ran off in: gains only.
+            out.append(f"{under:.2f} s from your best clean sectors this session: "
+                       + "; ".join(parts) + ".")
+        elif parts:
+            session_opt = lap_time - under
             out.append(f"Optimal lap from your best sectors this session: "
-                       f"{format_laptime(lap_time - under)}, {under:.2f} s under this lap:\n  "
+                       f"{format_laptime(session_opt)}, {under:.2f} s under this lap:\n  "
                        + "; ".join(parts) + ".")
         elif own_out:
             out.append("Optimal lap from your best sectors this session: no clean sector "
                        "of yours beat this lap's.")
         else:
+            session_opt = lap_time
             out.append("Optimal lap from your best sectors this session: this lap "
                        "(every sector is your best).")
         if own_out:
@@ -677,8 +688,23 @@ def format_time_on_table(*, lap_time, sectors, optimal, all_time, benchmark, for
     if all_time:
         when = "this lap" if all_time["this_lap"] else all_time["when"]
         line = f"All-time here in this car: best {format_laptime(all_time['best'])} ({when})"
-        if all_time.get("optimal"):
-            line += f"; optimal from best sectors {format_laptime(all_time['optimal'])}"
+        # All-time optimal, built exactly like this session's (same 0.005 s gain floor,
+        # same baseline), from the better of this session's clean best and other
+        # sessions' best per sector. Only said when it beats this session's optimal;
+        # with this lap's own sector ruled out, only from clean sectors, never a total
+        # resting on the off.
+        other = all_time.get("other") or [None, None, None]
+        if sectors and optimal is not None:
+            donors = [(min(t, o) if o is not None else t, key)
+                      for (t, key), o in zip(optimal["best"], other)]
+            if own_out:
+                opt = sum(t for t, _ in donors)
+                show = opt < all_time["best"] - 0.005
+            else:
+                opt = lap_time - sum(g for g, _, _ in gains(donors))
+                show = session_opt is not None and opt < session_opt - 0.005
+            if show:
+                line += f"; optimal from best sectors {format_laptime(opt)}"
         out.append(line + ".")
     if benchmark:
         cls, txt, secs = benchmark
