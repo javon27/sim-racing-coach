@@ -34,7 +34,7 @@ from simcoach.analysis import (
     stint_wear_baseline,
     time_loss_buckets,
 )
-from simcoach.battle import format_battle
+from simcoach.battle import build_battle, format_battle, format_race_battle
 from simcoach.coach import _setup_lines, live_electronics
 from simcoach.corners import CornerMap
 from simcoach.format import (
@@ -366,12 +366,15 @@ TOOLS = [
     },
     {
         "name": "get_battle",
-        "description": "LIVE RACE ONLY. Where a same-class rival was faster or slower than "
-                       "the driver on the LAST COMPLETED lap: corners and sections ranked by "
-                       "time gained or lost, plus apex-speed differences (the passing-chance "
-                       "read). By default the rival is the car the driver was nearest for most "
-                       "of that lap (it may name two). Use for 'where is he quicker', 'where "
-                       "can I pass him'. One call answers it.",
+        "description": "Where a same-class rival was faster or slower than the driver: "
+                       "corners and sections ranked by time gained or lost, plus apex-speed "
+                       "differences (the passing-chance read). In a live race, by default the "
+                       "LAST COMPLETED lap. With no race live (after the race), by default the "
+                       "most recent race of this session from its stored laps: per corner the "
+                       "median over the race laps compared, naming those laps. By default the "
+                       "rival is the car the driver was nearest (it may name two live). Use for "
+                       "'where is he quicker', 'where can I pass him', 'where could I have "
+                       "passed him'. One call answers it.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -379,6 +382,11 @@ TOOLS = [
                           "description": "Optional: a rival the driver named: 'P4' (CLASS "
                                          "position), a driver name, or a car/team name "
                                          "('the Ferrari')."},
+                "which": {"type": "string",
+                          "description": "Optional: 'race' for the whole most recent race, "
+                                         "or one stored race lap by its in-session number "
+                                         "like 'race lap 7'. Omit for the default (live: "
+                                         "the last completed lap; after the race: 'race')."},
             },
         },
     },
@@ -2074,7 +2082,7 @@ class CoachContext:
         if self.on_track and self.race is None and self.race_note:
             return self.race_note
         if not self.on_track or self.race is None:
-            return ("No live race: race state, strategy and battle reads exist only during "
+            return ("No live race: race state, strategy and live battle reads exist only during "
                     "a live race session, from its first completed lap.")
         return None
 
@@ -2234,10 +2242,49 @@ class CoachContext:
         return format_provisional(provisional_strategy(practice, to_go, start), lap_no,
                                   basis, len(practice), damage, damage_lap)
 
-    def get_battle(self, rival=None):
-        return self._no_live_race() or format_battle(self.race.battle, self.race.as_of_lap,
-                                                     self.units, rival,
-                                                     note=self.race.battle_note)
+    def get_battle(self, rival=None, which=None):
+        """#174: in a live race, the last completed lap's cached read (unchanged). With
+        no race live -- or when the driver names a stored lap or 'race' -- the read is
+        rebuilt from the battle_laps rows stored at each race lap's commit."""
+        which = (which or "").strip().lower()
+        if which in ("", "latest"):
+            live = self._no_live_race()
+            if live is None:
+                return format_battle(self.race.battle, self.race.as_of_lap, self.units,
+                                     rival, note=self.race.battle_note)
+            if self.on_track and self.race_note:
+                return live   # a race is live, its first lap not in: never the last race's
+            if self._current_race() is None:
+                return f"{live} This session has no race laps stored to read one from."
+            which = "race"
+        corners = self.cmap.corners if self.cmap else []
+        if not corners:
+            return "No battle read: there is no corner map for this track."
+        label_by_id, _ = self._lap_numbering()
+
+        def stored(lap_id):
+            laps = self.store.battle_laps(lap_id)
+            return build_battle(laps, corners) if laps else None
+
+        if which in ("race", "the race", "this race", "last race", "the whole race"):
+            win = self._current_race()
+            if win is None:
+                return ("No race in this session: battle reads are stored for race laps "
+                        "only.")
+            head = self._race_line()
+            return format_race_battle(
+                [(label_by_id.get(i, f"lap id {i}"), stored(i)) for i in win["lap_ids"]],
+                self.units, rival, head=f"{head} " if head else "")
+        record, lap_id = self._resolve_lap(which)
+        if record is None:
+            return self._no_lap_msg(which)
+        name = label_by_id.get(lap_id, f"lap id {lap_id}")
+        b = stored(lap_id)
+        if b is None or record.lap_no is None:
+            return (f"No battle read is stored for {name}: none is stored for a lap outside "
+                    "a race, with a stop, an out-/in-lap, a partly captured lap, or a lap "
+                    "the field was not recorded on.")
+        return f"Stored read for {name}.\n" + format_battle(b, record.lap_no, self.units, rival)
 
     def get_setup(self):
         if not self.setup:
@@ -2417,7 +2464,7 @@ class CoachContext:
             "get_race_state": lambda: self.get_race_state(),
             "get_strategy": lambda: self.get_strategy(args.get("race_laps"),
                                                       args.get("race_minutes")),
-            "get_battle": lambda: self.get_battle(args.get("rival")),
+            "get_battle": lambda: self.get_battle(args.get("rival"), args.get("which")),
             "get_car_status": lambda: self.get_car_status(),
             "get_setup": lambda: self.get_setup(),
             "record_driver_learning": lambda: self.record_driver_learning(

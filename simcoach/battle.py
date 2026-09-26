@@ -13,6 +13,7 @@ import bisect
 import math
 import re
 import statistics
+from collections import Counter
 from dataclasses import dataclass, field
 
 from simcoach.corners import Corner
@@ -331,6 +332,22 @@ def build_battle(laps: list[CarLap], corners: list[Corner]) -> Battle | None:
     return Battle(laps, corners, nearest_rivals(me, [c for c in laps if not c.is_player]))
 
 
+def _no_match(rival: str, others: list[CarLap]) -> str:
+    field_txt = "; ".join(f"{o.driver} ({o.model or o.car}), P{o.class_position} in class"
+                          for o in sorted(others, key=lambda o: o.class_position))
+    return (f"No car in your class matches {rival!r}. In your class: "
+            f"{field_txt or 'nobody else was recorded'}.")
+
+
+def _zone_text(z: Zone, units: str) -> str:
+    spd, _, spd_u, _ = unit_fns(units)
+    txt = f"{z.label} by {abs(z.delta):.2f} s"
+    if z.apex_gain_kph is not None and abs(z.apex_gain_kph) > APEX_SPEED_FLOOR_KPH:
+        more = "more" if z.apex_gain_kph > 0 else "less"
+        txt += f", you carry {abs(spd(z.apex_gain_kph)):.0f} {spd_u} {more} at the apex"
+    return txt
+
+
 def format_battle(b: Battle | None, as_of_lap: int, units: str = "metric",
                   rival: str | None = None, note: str | None = None) -> str:
     """The battle text; `note` is why there is no battle (RaceSnapshot.battle_note)."""
@@ -345,10 +362,7 @@ def format_battle(b: Battle | None, as_of_lap: int, units: str = "metric",
         if not hits and rival_matches([me], rival):
             return f"{head} {rival} is you, not a rival."
         if not hits:
-            field_txt = "; ".join(f"{o.driver} ({o.model or o.car}), P{o.class_position} in class"
-                                  for o in sorted(others, key=lambda o: o.class_position))
-            return (f"{head} No car in your class matches {rival!r}. In your class: "
-                    f"{field_txt or 'nobody else was recorded'}.")
+            return f"{head} {_no_match(rival, others)}"
         hit = hits[0]
         if not hit.entry:
             return (f"{head} {hit.driver} ({hit.model or hit.car}), P{hit.class_position} "
@@ -363,14 +377,8 @@ def format_battle(b: Battle | None, as_of_lap: int, units: str = "metric",
         if not picks:
             return (f"{head} Nobody in your class was within {BATTLE_RANGE_S:.0f} s of you "
                     f"on lap {as_of_lap}; no battle to compare.")
-    spd, _, spd_u, _ = unit_fns(units)
-
     def _zone(z: Zone) -> str:
-        txt = f"{z.label} by {abs(z.delta):.2f} s"
-        if z.apex_gain_kph is not None and abs(z.apex_gain_kph) > APEX_SPEED_FLOOR_KPH:
-            more = "more" if z.apex_gain_kph > 0 else "less"
-            txt += f", you carry {abs(spd(z.apex_gain_kph)):.0f} {spd_u} {more} at the apex"
-        return txt
+        return _zone_text(z, units)
 
     lines = [head]
     for o in picks:
@@ -398,4 +406,97 @@ def format_battle(b: Battle | None, as_of_lap: int, units: str = "metric",
                                             or "nowhere by more than the timing noise") + ".")
     lines.append(f"Differences of {BATTLE_NOISE_FLOOR_S:.2f} s or less are within the timing "
                  "noise and are not listed.")
+    return "\n".join(lines)
+
+
+def format_race_battle(laps: list[tuple[str, Battle | None]], units: str = "metric",
+                       rival: str | None = None, head: str = "") -> str:
+    """#174: get_battle after the race, from every race lap's STORED battle read.
+    `laps` is (the lap's in-session name, its Battle or None when none was stored) for
+    every race lap, oldest first -- a lap with none is skipped and counted, never guessed.
+
+    Each lap is compared exactly as the live read compares it (zone_deltas' same-lap and
+    pit rules, _was_near's battle range); per zone the result is the MEDIAN of those
+    per-lap deltas. BATTLE_NOISE_FLOOR_S is one lap's timing error, and the median stays
+    on that one-lap scale, so the same floor applies; a sum would add every lap's error
+    (and one lap stuck in traffic would dominate it) and need a floor of its own."""
+    have = [(name, b) for name, b in laps if b is not None]
+    if not have:
+        return (f"{head}No battle read is stored for any of the race's {len(laps)} laps "
+                "(none is stored for a lap with a stop, an out-/in-lap, a partly captured "
+                "lap, or a lap the field was not recorded on).")
+
+    def ident(c: CarLap) -> tuple[str, str]:
+        return (c.driver, c.car)     # a slot id can be reused; the names can't
+
+    def me_of(b: Battle) -> CarLap:
+        return next(c for c in b.laps if c.is_player)
+
+    field_: dict[tuple, CarLap] = {}    # each car as last recorded
+    for _, b in have:
+        field_.update((ident(c), c) for c in b.laps if not c.is_player)
+    if rival:
+        votes = Counter(ident(h[0]) for _, b in have
+                        if (h := rival_matches([c for c in b.laps if not c.is_player],
+                                               rival, me_of(b))))
+        if not votes:
+            if rival_matches([me_of(have[-1][1])], rival):
+                return f"{head}{rival} is you, not a rival."
+            return head + _no_match(rival, list(field_.values()))
+        why = "the car you named"
+    else:
+        votes = Counter(ident(b.rivals[0]) for _, b in have if b.rivals)
+        if not votes:
+            return (f"{head}Nobody in your class was within {BATTLE_RANGE_S:.0f} s of you "
+                    f"on any of the {len(have)} race laps with a stored battle read; no "
+                    "battle to compare.")
+        why = "nearest to you on the most race laps"
+    key = votes.most_common(1)[0][0]
+    o = field_[key]
+    per_zone: dict[str, list[tuple[str, Zone]]] = {}
+    compared, far, untimed = [], 0, 0
+    for name, b in have:
+        me = me_of(b)
+        his = next((c for c in b.laps if not c.is_player and ident(c) == key), None)
+        zones = zone_deltas(me, his, b.corners) if his is not None else []
+        if not zones:
+            untimed += 1
+        elif not _was_near(me, his):
+            far += 1
+        else:
+            compared.append(name)
+            for z in zones:
+                per_zone.setdefault(z.label, []).append((name, z))
+    skipped = [f"{n} {why_}" for n, why_ in (
+        (len(laps) - len(have), "with no stored battle read"),
+        (far, f"with him never within {BATTLE_RANGE_S:.0f} s of you"),
+        (untimed, "with no corner timed for both of you")) if n]
+    lines = [(f"{head}Rival ({why}): {o.driver} ({o.model or o.car}), P{o.class_position} "
+              "in class on the last lap he was recorded."),
+             f"Compared on {len(compared)} of {len(laps)} race laps"
+             + (f" ({', '.join(compared)})" if compared else "")
+             + (f"; skipped {', '.join(skipped)}" if skipped else "") + "."]
+    if not compared:
+        return "\n".join(lines + ["No race lap to compare him on."])
+    rows = []
+    for label, ents in per_zone.items():
+        d = statistics.median(z.delta for _, z in ents)
+        if round(abs(d), 2) <= BATTLE_NOISE_FLOOR_S:
+            continue
+        apex = [z.apex_gain_kph for _, z in ents if z.apex_gain_kph is not None]
+        beyond = [n for n, z in ents
+                  if (z.delta > 0) == (d > 0) and round(abs(z.delta), 2) > BATTLE_NOISE_FLOOR_S]
+        rows.append((d, _zone_text(Zone(label, d, statistics.median(apex) if apex else None),
+                                   units)
+                     + f" (median over {len(ents)} lap{'s' if len(ents) > 1 else ''}; beyond "
+                       f"the noise on {', '.join(beyond)})"))
+    his_zones = [t for d, t in sorted(rows) if d < 0]
+    mine = [t for d, t in sorted(rows, reverse=True) if d > 0]
+    lines.append("That car is quicker: " + ("; ".join(his_zones)
+                                            or "nowhere by more than the timing noise") + ".")
+    lines.append("You are quicker: " + ("; ".join(mine)
+                                        or "nowhere by more than the timing noise") + ".")
+    lines.append("Each difference is the median over the laps compared; a median of "
+                 f"{BATTLE_NOISE_FLOOR_S:.2f} s or less is within the timing noise and is not "
+                 "listed.")
     return "\n".join(lines)
