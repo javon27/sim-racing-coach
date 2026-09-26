@@ -5,7 +5,14 @@ from __future__ import annotations
 
 import math
 
-from simcoach.analysis import _ENVELOPE_MIN_LAPS, corner_tag
+from simcoach.analysis import (
+    _ENVELOPE_MIN_LAPS,
+    _FORM_FLOOR_S,
+    _FORM_MIN_LAPS,
+    PHASES,
+    _sector_of,
+    corner_tag,
+)
 
 
 def format_laptime(seconds) -> str:
@@ -521,16 +528,21 @@ def format_tire_report(analysis, units: str = "metric") -> str | None:
     return out
 
 
-def format_lap_facts(analysis, units: str = "metric", corner_order=None, top_loss=None) -> str:
+def format_lap_facts(analysis, units: str = "metric", corner_order=None, top_loss=None,
+                     ref_label: str | None = None) -> str:
     """The full per-corner table + tire report for one lap.
 
     `corner_order` (optional): explicit corner_no ordering, for a caller that wants
     the worst time-loss corners surfaced first (#102) instead of track order (the
     default). `top_loss` (optional): corner_no's to flag with a leading marker.
+    `ref_label` (#169): what the deltas are against -- a next-best lap must never be
+    headed "best".
     """
     lines = ["Corner facts (authoritative, from telemetry):"]
     if analysis.has_reference:
-        lines.append("Deltas below are vs the driver's best lap on this track/car.")
+        lines.append(f"Deltas below are vs {ref_label} (a line's 'vs best' means that lap)."
+                     if ref_label else
+                     "Deltas below are vs the driver's best lap on this track/car.")
     by_no = {cm.corner_no: cm for cm in analysis.corners}
     order = corner_order if corner_order is not None else list(by_no)
     top_loss = top_loss or set()
@@ -561,6 +573,154 @@ def format_lap_facts(analysis, units: str = "metric", corner_order=None, top_los
     if tire:
         lines.append(tire)
     return "\n".join(lines)
+
+
+# --- time on the table (#169) --------------------------------------------------
+_FORM_SPREAD_S = 0.05   # a segment's lap-to-lap spread worth a "varies" suffix
+
+
+def _sector_names(cmap, bounds) -> list[str]:
+    """'S1 (T1-T4)' per game sector: the map corners whose apex falls in it."""
+    names = []
+    for i in range(3):
+        tags = [f"T{c.label or c.number}" for c in sorted(cmap.corners, key=lambda c: c.apex_dist)
+                if bounds and _sector_of(c.apex_dist, bounds) == i]
+        span = (tags[0] if len(tags) == 1 else f"{tags[0]}-{tags[-1]}") if tags else ""
+        names.append(f"S{i + 1} ({span})" if span else f"S{i + 1}")
+    return names
+
+
+def _phase_words(phase: str, corner, nxt) -> str:
+    first = "first " if corner.apexes and len(corner.apexes) > 1 else ""
+    return {"approach": "on the approach, before turn-in",
+            "entry": f"from turn-in to the {first}apex",
+            "exit": f"from the {first}apex to the end of the corner",
+            "run-out": (f"on the run to T{nxt.label or nxt.number} after the exit" if nxt
+                        else "on the run after the exit")}[phase]
+
+
+def _differs(you, them, units) -> tuple[list[str], list[str]]:
+    """The measured facts that differ between two passes of one corner, each only
+    above its existing `_DELTA_*` floor, rendered for both sides."""
+    spd, _, spd_u, _ = unit_fns(units)
+
+    def before(cm):
+        return None if cm.brake_zone_start is None else cm.apex_dist - cm.brake_zone_start
+
+    def after(cm):
+        return None if cm.throttle_point is None else cm.throttle_point - cm.apex_dist
+
+    facts = (
+        (before, _DELTA_DIST_M, lambda v: f"braking from {v:.0f} m before the apex"),
+        (lambda cm: cm.brake_zone_peak, _DELTA_PTS, lambda v: f"peak brake {v:.0%}"),
+        (lambda cm: cm.apex_spd, _DELTA_SPEED_KMH, lambda v: f"{spd(v):.0f} {spd_u} at the apex"),
+        (lambda cm: cm.min_spd, _DELTA_SPEED_KMH, lambda v: f"min {spd(v):.0f} {spd_u}"),
+        (after, _DELTA_DIST_M, lambda v: f"throttle {v:.0f} m after the apex"),
+        (lambda cm: cm.coast_time, _DELTA_COAST_S, lambda v: f"coasting {v:.2f} s"),
+        (lambda cm: cm.exit_spd, _DELTA_SPEED_KMH, lambda v: f"{spd(v):.0f} {spd_u} at the exit"),
+    )
+    a, b = [], []
+    for get, floor, txt in facts:
+        x, y = get(you), get(them)
+        if x is None or y is None or math.isnan(x) or math.isnan(y) or abs(x - y) < floor:
+            continue
+        a.append(txt(x))
+        b.append(txt(y))
+    return a, b
+
+
+def format_time_on_table(*, lap_time, sectors, optimal, all_time, benchmark, form,
+                         diagnoses, label_of, cmap, bounds, units="metric") -> str:
+    """#169: where the time is on this lap, from the driver's own laps.
+
+    `sectors`: this lap's [s1, s2, s3] or None; `optimal`: `analysis.optimal_sectors`;
+    `all_time`: {"best", "this_lap", "when", "optimal"} or None; `benchmark`:
+    (class, "m:ss.mmm", seconds) or None; `form`: `analysis.corner_form`;
+    `diagnoses`: [{"row", "phases", "you", "them", "next"}] for the top segments;
+    `label_of(key)`: a lap's in-session name. Corners are never summed into a
+    headline: the only headline number is the game-sector optimal lap."""
+    out = []
+    names = _sector_names(cmap, bounds)
+    if not sectors or optimal is None:
+        out.append("No optimal lap: the game's sector times aren't stored for this lap"
+                   if not sectors else
+                   "No optimal lap: not every sector has a clean time on a comparable lap.")
+    else:
+        gains = sorted(((sectors[i] - t, i, key) for i, (t, key) in enumerate(optimal["best"])),
+                       key=lambda g: -g[0])
+        under = lap_time - optimal["total"]
+        parts = [f"{names[i]} {g:.2f} s on {label_of(key)}" for g, i, key in gains if g >= 0.005]
+        if parts:
+            out.append(f"Optimal lap from your best sectors this session: "
+                       f"{format_laptime(optimal['total'])}, {under:.2f} s under this lap:\n  "
+                       + "; ".join(parts) + ".")
+        else:
+            out.append("Optimal lap from your best sectors this session: this lap "
+                       "(every sector is your best).")
+        by_sector: dict = {}
+        for i, _, key in optimal["dropped"]:
+            by_sector.setdefault(i, []).append(label_of(key))
+        for i, labels in sorted(by_sector.items()):
+            out.append(f"  Quicker {names[i]} on {' and '.join(labels)} doesn't count: "
+                       "a spin or an off in that sector.")
+    if all_time:
+        when = "this lap" if all_time["this_lap"] else all_time["when"]
+        line = f"All-time here in this car: best {format_laptime(all_time['best'])} ({when})"
+        if all_time.get("optimal"):
+            line += f"; optimal from best sectors {format_laptime(all_time['optimal'])}"
+        out.append(line + ".")
+    if benchmark:
+        cls, txt, secs = benchmark
+        gap = lap_time - secs
+        out.append(f"Class benchmark (track notes, community): {cls} {txt}, {abs(gap):.2f} s "
+                   f"{'ahead of' if gap > 0 else 'behind'} this lap. Total only, no sector "
+                   "splits, so it can't say where.")
+    if not form["ok"]:
+        out.append(f"Not enough clean laps near this pace to read your form "
+                   f"({form['n']} of {_FORM_MIN_LAPS}).")
+        return "\n".join(out)
+    if form["listed"]:
+        out.append(f"Where your own laps were quicker than this one (corner with approach "
+                   f"and run-out, {form['n']} laps):")
+        for r in form["listed"]:
+            t = r["typical"]
+            typ = ("level with your typical lap" if abs(t) < _FORM_FLOOR_S else
+                   f"{-t:.2f} s slower than typical" if t < 0 else
+                   f"{t:.2f} s quicker than typical")
+            line = (f"  {corner_tag(r['corner'])}: {typ}; two laps {-r['repeatable']:.2f} s+ "
+                    f"quicker ({label_of(r['donor'])} by {-r['donor_d']:.2f} s)")
+            if r["spread"] >= _FORM_SPREAD_S:
+                line += f"; varies \N{PLUS-MINUS SIGN}{r['spread']:.2f} s"
+            out.append(line + ".")
+    elif optimal is not None and sectors and lap_time - optimal["total"] < 0.005:
+        out.append(f"No corner where another lap of yours was measurably quicker "
+                   f"({_FORM_FLOOR_S:.2f} s): this lap is at your own limit everywhere. "
+                   "Next step: the class benchmark gap, a setup change, or more laps.")
+    else:
+        out.append(f"No corner where two of your laps were quicker by {_FORM_FLOOR_S:.2f} s "
+                   "or more.")
+    if form["at_best"]:
+        tags = ", ".join(f"T{r['corner'].label or r['corner'].number}" for r in form["at_best"])
+        out.append(f"At your best on this lap (no other lap quicker by {_FORM_FLOOR_S:.2f} s): "
+                   f"{tags}.")
+    for d in diagnoses:
+        r, ph, c = d["row"], d["phases"], d["row"]["corner"]
+        who = label_of(r["donor"])
+        where = max(ph, key=ph.get)
+        line = (f"{corner_tag(c)} vs {who}: {sum(ph.values()):.2f} s, {ph[where]:.2f} of it "
+                f"{_phase_words(where, c, d['next'])}")
+        for p in PHASES:
+            if p != where and abs(ph[p]) >= _FORM_FLOOR_S:
+                line += (f"; {'lost' if ph[p] > 0 else 'gained'} {abs(ph[p]):.2f} s "
+                         f"{_phase_words(p, c, d['next'])}")
+        out.append(line + ".")
+        you, them = _differs(d["you"], d["them"], units)
+        if you:
+            out.append(f"  You: {', '.join(you)}.")
+            out.append(f"  {who[0].upper() + who[1:]}: {', '.join(them)}.")
+        else:
+            out.append("  No input difference above the noise floors.")
+    return "\n".join(out)
 
 
 def _event_corner_tag(cmap, corner_no) -> str:

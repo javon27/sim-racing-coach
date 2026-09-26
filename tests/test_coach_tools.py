@@ -1418,10 +1418,15 @@ def test_get_lap_summary_unchanged_without_a_reference(tmp_path, synthetic_lap):
     assert out.splitlines()[2] == "Corner facts (authoritative, from telemetry):"
 
 
-def test_get_time_loss_refuses_to_compare_a_lap_to_itself(tmp_path, synthetic_lap):
+def test_get_time_loss_on_the_best_lap_compares_to_next_best_not_itself(tmp_path, synthetic_lap):
     ctx, _ = _time_loss_ctx(tmp_path, synthetic_lap)
-    # 'best' as the subject lap would otherwise be compared against itself.
-    assert "itself" in ctx.get_time_loss(which="best").lower()
+    # #173: 'best' used to resolve no lap id, so it was compared against itself (a
+    # flat +0.00) or refused. It now resolves its id and meets its next-best lap,
+    # labelled so -- never "best".
+    out = ctx.get_time_loss(which="best")
+    assert "itself" not in out.lower()
+    assert "vs your next-best lap (race lap 2, +5.00 s)" in out
+    assert "vs next-best: race lap 2" in out and "vs best" not in out
 
 
 def test_get_time_loss_registered_in_tools_and_dispatch(tmp_path, synthetic_lap):
@@ -1742,7 +1747,9 @@ def test_get_time_loss_identity_names_subject_and_reference_laps(tmp_path, synth
     assert out.startswith("Lap: ")
     assert "race lap 3" in out          # the subject lap (latest, faster of the two)
     assert "game lap 3" in out
-    assert " vs best: " in out
+    # #169: the subject is the faster lap, so its reference is its NEXT-best lap --
+    # never labelled "best".
+    assert " vs next-best: " in out and " vs best: " not in out
     assert "game lap 2" in out          # the REFERENCE lap's identity, not the subject's
 
 

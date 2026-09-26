@@ -29,7 +29,16 @@ class CornerMetrics:
     brake_point: float | None
     throttle_point: float | None
     trailbrake_overlap: float
-    peak_brake: float = 0.0          # max brake input in the corner (0..1)
+    # Max brake input (0..1) over the braking run `brake_point` walked (#169: the
+    # window alone read "@ 0% peak" for a corner braked before turn-in); the
+    # window's max only when there is no brake point.
+    peak_brake: float = 0.0
+    # #169: the braking ZONE -- first brake >= 0.1 after the last throttle >= 0.8
+    # before the apex (same 250 m look-back), so a mid-zone pressure dip doesn't
+    # move it the way it moves `brake_point` -- and the peak brake inside it. None
+    # with no braking in the zone. Not stored in corner_metrics: computed on read.
+    brake_zone_start: float | None = None
+    brake_zone_peak: float | None = None
     peak_lat_g: float = 0.0          # max |lateral g| — how hard the car was loaded
     # Extended inputs/loads — nan when the source channel is absent (older laps).
     peak_brake_g: float = float("nan")   # max deceleration g while braking
@@ -467,6 +476,122 @@ def time_loss_buckets(record: LapRecord, reference: LapRecord, cmap: CornerMap):
                     "delta": t_at(hi0) - t_at(cursor), "exact": exact,
                     "start_dist": cursor, "end_dist": hi0})
     return out
+
+
+# --- time on the table (#169) --------------------------------------------------
+# A corner segment is listed as "your laps were quicker here" only when two laps beat
+# this one by at least this much (s). The exact axis's per-bucket noise is 0.005 s
+# (format._BUCKET_NOISE_S_EXACT); this sits well above it.
+# ponytail: tuning knobs -- a rig read on a known corner settles the floor and the
+# lap minimum.
+_FORM_FLOOR_S = 0.03
+_FORM_MIN_LAPS = 5
+PHASES = ("approach", "entry", "exit", "run-out")
+
+
+def _sector_of(dist: float, bounds) -> int:
+    """0/1/2: which game sector a lap distance falls in (same rule as
+    `format.corner_descriptor`)."""
+    return 0 if dist <= bounds[0] else (1 if dist <= bounds[1] else 2)
+
+
+def optimal_sectors(laps: list[dict], bounds) -> dict | None:
+    """The optimal lap from the game's own sector times: the best of each sector.
+
+    `laps`: `{"key", "sectors": [s1, s2, s3] | None, "incidents": [lap_distance]}`
+    per comparable lap, the subject included; `incidents` are the lap's spin/off
+    distances. A sector counts only when its lap had no spin/off inside it; with no
+    `bounds` any incident drops the whole lap. None when a sector has no clean time.
+    Else `{"total", "best": [(time, key)] * 3, "dropped": [(sector, time, key)]}` --
+    `dropped` are incident sectors that were quicker than the clean best."""
+    best: list = [None, None, None]
+    tainted = []
+    for lap in laps:
+        s = lap.get("sectors")
+        if not s or len(s) != 3 or any(v is None or not v > 0 for v in s):
+            continue
+        inc = lap.get("incidents") or []
+        bad = ({_sector_of(d, bounds) for d in inc} if bounds
+               else ({0, 1, 2} if inc else set()))
+        for i, t in enumerate(s):
+            if i in bad:
+                tainted.append((i, float(t), lap["key"]))
+            elif best[i] is None or t < best[i][0]:
+                best[i] = (float(t), lap["key"])
+    if any(b is None for b in best):
+        return None
+    return {"total": sum(b[0] for b in best), "best": best,
+            "dropped": sorted((x for x in tainted if x[1] < best[x[0]][0]),
+                              key=lambda x: (x[0], x[1]))}
+
+
+def form_segments(cmap: CornerMap) -> list[tuple]:
+    """(corner, seg_start, seg_end) per corner: the corner with its approach and
+    run-out, from the previous corner's end to the next corner's start (owned map
+    points). The first/last segment runs from/to the lap's ends.
+    ponytail: a seam-wrapped window keeps only its pre-line part (it sorts last);
+    split it across the seam if a track's last corner wraps and reads wrong."""
+    cs = sorted(cmap.corners, key=lambda c: c.start_dist)
+    return [(c, cs[i - 1].end_dist if i else 0.0,
+             cs[i + 1].start_dist if i + 1 < len(cs) else math.inf)
+            for i, c in enumerate(cs)]
+
+
+def corner_form(subject: LapRecord, others: list[tuple], cmap: CornerMap) -> dict:
+    """This lap against the driver's own other laps, segment by segment.
+
+    `others`: `(key, record, incident_distances)` per comparable lap. For each lap L,
+    `d` = L's time minus this lap's across the segment (negative = L quicker); a
+    segment with an incident on L skips L. Per segment: `typical` (median),
+    `repeatable` (second smallest -- two laps were at least this much quicker),
+    `donor` (the lap with the smallest), `spread` (population stddev).
+
+    `{"ok": False, "n"}` with fewer than `_FORM_MIN_LAPS` laps. Else `{"ok", "n",
+    "listed", "at_best"}`: `listed` = segments whose `repeatable` <= -floor, ranked by
+    it; `at_best` = segments where no lap was quicker by the floor. Never summed."""
+    segs = form_segments(cmap)
+    per = [[] for _ in segs]
+    n = 0
+    for key, rec, incidents in others:
+        aligned = align_time_axes(subject, rec)
+        if aligned is None:
+            continue
+        n += 1
+        grid, delta = aligned
+        for vals, (_, a, b) in zip(per, segs):
+            if any(a <= x <= b for x in incidents):
+                continue
+            vals.append((-float(np.interp(b, grid, delta) - np.interp(a, grid, delta)), key))
+    if n < _FORM_MIN_LAPS:
+        return {"ok": False, "n": n}
+    rows = []
+    for vals, (c, a, b) in zip(per, segs):
+        if not vals:
+            continue
+        ds = sorted(vals, key=lambda v: v[0])
+        arr = np.array([v[0] for v in vals])
+        rows.append({"corner": c, "seg": (a, b), "typical": float(np.median(arr)),
+                     "repeatable": ds[1][0] if len(ds) > 1 else None,
+                     "donor": ds[0][1], "donor_d": ds[0][0], "spread": float(np.std(arr)),
+                     "n": len(vals)})
+    listed = sorted((r for r in rows if r["repeatable"] is not None
+                     and r["repeatable"] <= -_FORM_FLOOR_S), key=lambda r: r["repeatable"])
+    return {"ok": True, "n": n, "listed": listed,
+            "at_best": [r for r in rows if r["donor_d"] > -_FORM_FLOOR_S]}
+
+
+def phase_split(subject: LapRecord, donor: LapRecord, corner: Corner, seg) -> dict | None:
+    """Seconds this lap LOST to `donor` (positive = slower) per phase of one corner
+    segment, cut at owned map points: approach [seg start, corner start], entry
+    [start, first apex], exit [first apex, end], run-out [end, seg end]. None when
+    the laps aren't comparable or the window wraps the S/F seam."""
+    aligned = align_time_axes(subject, donor)
+    if aligned is None or corner.start_dist > corner.end_dist:
+        return None
+    grid, delta = aligned
+    apex = min(corner.apexes) if corner.apexes else corner.apex_dist
+    t = np.interp([seg[0], corner.start_dist, apex, corner.end_dist, seg[1]], grid, delta)
+    return dict(zip(PHASES, (float(x) for x in np.diff(t))))
 
 
 def _wheel_summary(record: LapRecord):
@@ -1020,6 +1145,7 @@ def _metrics_for_corner(
     back = (corner.apex_dist - dist) % lap_len       # 0 at the apex, grows backwards
     sel = np.where(back <= (corner.apex_dist - corner.start_dist + 250.0) % lap_len)[0]
     brake_point = None   # no braking found; never a distance standing in for that
+    run_peak = brake_zone_start = brake_zone_peak = None
     if sel.size:
         order = sel[np.argsort(back[sel], kind="stable")]  # apex first, then backwards
         on = brake[order] > 0.1
@@ -1035,6 +1161,17 @@ def _metrics_for_corner(
             # distance ABOVE the apex is one that crossed S/F -- shift it a lap back
             # rather than report a "brake point" the apex appears to precede.
             brake_point = d0 - lap_len if d0 > corner.apex_dist else d0
+            run_peak = float(np.nanmax(brake[order[j:k + 1]]))
+        # #169: the zone runs from the last full-throttle sample before the apex (the
+        # whole look-back when there is none) to the apex; its start is the braking
+        # sample furthest back inside it -- the same wrap shift as brake_point.
+        thr = np.flatnonzero(throttle[order] >= 0.8)
+        zone = order[:thr[0]] if thr.size else order
+        zb = np.flatnonzero(brake[zone] >= 0.1)
+        if zb.size:
+            dz = float(dist[zone[zb[-1]]])
+            brake_zone_start = dz - lap_len if dz > corner.apex_dist else dz
+            brake_zone_peak = float(np.nanmax(brake[zone]))
 
     # Throttle point: first sample past the 0.8 gate at/after the min-speed point, and
     # None when there isn't one. Explicitly None rather than a distance sentinel -- the
@@ -1054,7 +1191,8 @@ def _metrics_for_corner(
             throttle_point = d1 if d1 >= corner.apex_dist else d1 + lap_len
 
     trailbrake_overlap = float(np.mean((win_brake > 0.1) & (np.abs(win_steering) > 0.1)))
-    peak_brake = float(np.nanmax(win_brake)) if win_brake.size else 0.0
+    peak_brake = (run_peak if run_peak is not None
+                  else float(np.nanmax(win_brake)) if win_brake.size else 0.0)
     win_lat_g = record.channels.get("lat_g")
     peak_lat_g = (
         float(np.nanmax(np.abs(win_lat_g[idx]))) if win_lat_g is not None and idx.size else 0.0
@@ -1167,6 +1305,8 @@ def _metrics_for_corner(
         throttle_point=throttle_point,
         trailbrake_overlap=trailbrake_overlap,
         peak_brake=peak_brake,
+        brake_zone_start=brake_zone_start,
+        brake_zone_peak=brake_zone_peak,
         peak_lat_g=peak_lat_g,
         peak_brake_g=peak_brake_g,
         peak_accel_g=peak_accel_g,

@@ -18,13 +18,17 @@ from simcoach.analysis import (
     _ENVELOPE_MIN_LAPS,
     CornerMetrics,
     analyze_lap,
+    corner_form,
     corner_tag,
     damage_events,
     damage_state,
+    form_segments,
     geometry_clause,
     grip_envelope,
     is_incident_lap,
     lap_events,
+    optimal_sectors,
+    phase_split,
     stint_consistency,
     stint_tire_trend,
     stint_wear_baseline,
@@ -43,6 +47,7 @@ from simcoach.format import (
     format_lap_facts,
     format_laptime,
     format_time_loss,
+    format_time_on_table,
     format_tire_report,
     format_tire_trend,
     format_wheel_report,
@@ -76,6 +81,12 @@ _MAX_EVENT_LAPS = 30
 # identity line, and in the `list_recent_laps` listing where a lap time would go.
 _PARTIAL_WORD = {"out": "out-lap", "in": "in-lap", "partial": "partial lap"}
 _PARTIAL_LIST_WORD = {"out": "out lap", "in": "in lap", "partial": "partial"}
+
+# #169: a lap slower than this multiple of the subject's time is never its reference
+# or a form sample (Long Beach #237 compared a 1:23 lap with a 1:36 exploration lap).
+_PACE_GATE = 1.07
+# The reference label when the subject IS the best lap: a slower lap, never "best".
+_NEXT_BEST = "your next-best lap"
 
 # Tool specs advertised to the model (Anthropic tool-use format).
 TOOLS = [
@@ -128,6 +139,29 @@ TOOLS = [
                               "description": "What to compare against: 'best' (default — "
                                              "this session's best, else all-time best) or "
                                              "an in-session lap number."},
+            },
+        },
+    },
+    {
+        "name": "get_time_on_table",
+        "description": "WHERE THE TIME IS on a lap (the BEST lap by default), measured "
+                       "against the driver's OWN other laps this session: the optimal lap "
+                       "from his best game sectors (the headline number), the corners where "
+                       "two of his laps were quicker than this one (ranked), and for the "
+                       "top corners the PHASE the time went in (approach/entry/exit/run-out) "
+                       "and what his faster pass did differently. Also the all-time best "
+                       "and the class benchmark. Call this FIRST for 'where's the time', "
+                       "'find me N tenths', 'how do I go faster', or any question about the "
+                       "best lap.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "which": {"type": "string",
+                          "description": "'best' (default), 'latest', or an in-session lap "
+                                         "number like 'race lap 3'."},
+                "detail": {"type": "boolean",
+                           "description": "true when the driver asks for more detail: "
+                                          "diagnoses the top 3 corners instead of 2."},
             },
         },
     },
@@ -1038,14 +1072,9 @@ class CoachContext:
         # spread) -- just no corners. Per-corner tools guard `self.cmap` themselves.
         key = lap_id if lap_id is not None else id(record)
         if key not in self._analysis_cache:
-            # Prefer this session's best (fair same-phase comparison — a race lap vs
-            # the race best, not a qualy hot lap); fall back to all-time.
-            ref = None
-            if self.session_id:
-                ref = self.store.best_lap(record.track, record.car, exclude_lap_id=lap_id,
-                                          session_id=self.session_id)
-            if ref is None:
-                ref = self.store.best_lap(record.track, record.car, exclude_lap_id=lap_id)
+            # The same reference get_lap_summary names (#169): never the lap itself,
+            # never a lap outside the comparable-pace gate.
+            ref, _ = self._reference_lap(record, lap_id)
             envelope = self._grip_envelope(ref)
             self._analysis_cache[key] = analyze_lap(record, self.cmap or CornerMap([]),
                                                      reference=ref,
@@ -1067,8 +1096,9 @@ class CoachContext:
             if not (self.track and self.car):
                 return None, None
             best = self.store.best_lap(self.track, self.car)
-            # best_lap returns the record; find its id via recent list match on time
-            return best, None
+            # #169/#173: resolve its id, or every comparison of the best lap excludes
+            # nothing and picks the best lap itself as its own reference.
+            return best, self._lap_id_for(best)
         # In-session reference (matches how laps are named to the driver) first.
         _, id_by_ref = self._lap_numbering()
         lid = id_by_ref.get(which)
@@ -1242,36 +1272,95 @@ class CoachContext:
         # first below) whenever a reference resolves -- a flat table buries the
         # finding the driver actually needs 15-30 lines down.
         ref, ref_label = self._reference_lap(record, lap_id, "best")
-        buckets = time_loss_buckets(record, ref, self.cmap) if ref is not None else None
+        if ref is None:
+            # #169: with no comparable lap say so, rather than print deltas vs a lap
+            # 16% slower (Long Beach #237).
+            return (lap_line + (f"\n{ref_label}." if ref_label else "") + "\n"
+                    + format_lap_facts(analysis, self.units))
+        if ref_label.startswith(_NEXT_BEST):
+            # #169: the best lap has no time-loss line -- vs a slower lap it is empty.
+            return (lap_line + "\nThis is your best lap: get_time_on_table finds the time "
+                    "left in it.\n" + format_lap_facts(analysis, self.units, ref_label=ref_label))
+        buckets = time_loss_buckets(record, ref, self.cmap)
         if not buckets:
-            return lap_line + "\n" + format_lap_facts(analysis, self.units)
+            return lap_line + "\n" + format_lap_facts(analysis, self.units, ref_label=ref_label)
         by_label = {corner_tag(cm): cm.corner_no for cm in analysis.corners}
         losses = sorted((b for b in buckets if b["kind"] == "corner" and b["delta"] > 0),
                         key=lambda b: -b["delta"])[:3]
         top = [by_label[b["label"]] for b in losses if b["label"] in by_label]
         order = top + [cm.corner_no for cm in analysis.corners if cm.corner_no not in top]
-        body = format_lap_facts(analysis, self.units, corner_order=order, top_loss=set(top))
+        body = format_lap_facts(analysis, self.units, corner_order=order, top_loss=set(top),
+                                ref_label=ref_label)
         return lap_line + "\n" + format_time_loss(buckets, ref_label) + "\n\n" + body
 
     def _reference_lap(self, record, lap_id, reference="best"):
         """(record, label) for a time-loss comparison, or (None, label).
 
-        'best' resolves the SAME way `_analysis_for` does — this session's best
-        first (same-phase fairness), all-time best as the fallback — so
+        'best' is the one reference `_analysis_for` also uses -- this session's
+        quickest comparable lap first, all-time best as the fallback -- so
         get_time_loss and the per-corner 'min vs best' deltas never disagree about
-        what "best" means. Never returns the subject lap itself.
+        what "best" means. Never returns the subject lap itself. (None, None) with no
+        other lap; (None, 'No comparable lap yet (...)') when the only ones fail the
+        pace gate.
         """
         reference = (reference or "best").strip().lower()
         if reference not in ("best", ""):
             ref, _ = self._resolve_lap(reference)
             return ref, f"your {reference}"
-        if self.session_id:
-            ref = self.store.best_lap(record.track, record.car, exclude_lap_id=lap_id,
-                                      session_id=self.session_id)
-            if ref is not None:
-                return ref, "your session best"
+        # #169: only a comparable lap is a reference (see `_comparable_rows`), and when
+        # the subject is quicker than all of them it IS the best: the reference is
+        # then its next-best lap, labelled so -- never "best".
+        rows, slower = self._comparable_rows(record, lap_id)
+        label_by_id, _ = self._lap_numbering()
+        for row in rows:
+            try:
+                ref = self.store.load(row["id"])
+            except Exception:
+                continue   # a result-log row with no telemetry
+            if record.lap_time and ref.lap_time > record.lap_time:
+                return ref, (f"{_NEXT_BEST} ({label_by_id.get(row['id'], 'this session')}, "
+                             f"+{ref.lap_time - record.lap_time:.2f} s)")
+            return ref, "your session best"
         ref = self.store.best_lap(record.track, record.car, exclude_lap_id=lap_id)
+        # This session's laps were all judged above; the lap itself is never its own.
+        if ref is not None and (not ref.lap_time or ref.timestamp == record.timestamp or (
+                self.session_id and ref.session_id == self.session_id)):
+            ref = None
+        if ref is not None and record.lap_time and ref.lap_time > _PACE_GATE * record.lap_time:
+            slower = slower or {"lap_time": ref.lap_time, "id": None}
+            ref = None
+        if ref is None:
+            if slower is None:
+                return None, None
+            name = label_by_id.get(slower["id"], "your all-time best")
+            pct = (slower["lap_time"] / record.lap_time - 1.0) * 100.0
+            return None, f"No comparable lap yet ({name} is {pct:.0f}% slower)"
+        if record.lap_time and ref.lap_time > record.lap_time:
+            return ref, (f"{_NEXT_BEST} (another session, "
+                         f"+{ref.lap_time - record.lap_time:.2f} s)")
         return ref, "your all-time best"
+
+    def _comparable_rows(self, record, lap_id):
+        """#169: (rows, slower). `rows` are this session's laps comparable to `record`,
+        fastest first: valid, timed, complete, not a pit or mapping lap, not race lap 1
+        (the start), and within 107% of its time (no pace gate for an untimed lap).
+        `slower` is the fastest lap refused by the pace gate alone, for the 'No
+        comparable lap yet' line; None when nothing was refused on pace."""
+        if not self.session_id:
+            return [], None
+        rows, slower = [], None
+        for r in sorted((r for r in self.store.session_laps(self.session_id)
+                         if r["id"] != lap_id and r["ts"] != record.timestamp
+                         and r["valid"] and r["lap_time"] and not r["pit"]
+                         and not r["partial"] and not r["mapping"]
+                         # The game's lap 1 of a race is the standing/rolling start.
+                         and not (r["phase"] == "race" and r["lap_no"] == 1)),
+                        key=lambda r: r["lap_time"]):
+            if record.lap_time and r["lap_time"] > _PACE_GATE * record.lap_time:
+                slower = slower or r
+                continue
+            rows.append(r)
+        return rows, slower
 
     def get_time_loss(self, which="latest", reference="best"):
         record, lap_id = self._resolve_lap(which)
@@ -1287,6 +1376,8 @@ class CoachContext:
                     "different track length).")
         ref, ref_label = self._reference_lap(record, lap_id, reference)
         if ref is None:
+            if ref_label and ref_label.startswith("No comparable"):
+                return ref_label + "."
             return ("No reference lap to compare against yet — you need a second valid "
                     "lap on this track/car.")
         # `which='best'` resolves no lap_id, so exclude_lap_id can't keep the best lap
@@ -1298,10 +1389,118 @@ class CoachContext:
         if buckets is None:
             return ("That lap can't be compared to the reference (partial lap, or a "
                     "different track length).")
-        ref_word = (reference or "best").strip().lower()
+        ref_word = ("next-best" if ref_label.startswith(_NEXT_BEST)
+                    else (reference or "best").strip().lower())
         ref_line = self._lap_line(ref, self._lap_id_for(ref)).removeprefix("Lap: ")
         identity = f"{self._lap_line(record, lap_id)} vs {ref_word}: {ref_line}"
         return identity + "\n" + format_time_loss(buckets, ref_label)
+
+    def _incidents(self, record, lap_id) -> list[float]:
+        """Lap distances of this lap's spins and offs (#169: a sector or a corner
+        segment a lap ran off in is never a best)."""
+        return [e["lap_distance"] for e in
+                lap_events(record, self.cmap, self._analysis_for(record, lap_id))
+                if e["kind"] in ("spin", "off")]
+
+    def _class_benchmark(self):
+        """(class, 'm:ss.mmm', seconds) from the track notes' reference_times for this
+        car's class, or None with no class, no time, or no single matching key."""
+        refs = (getattr(self.cmap, "notes", None) or {}).get("reference_times") or {}
+        cls = (self.car_class or "").strip().lower()
+        if not cls:
+            return None
+        keys = ([k for k in refs if k.lower() == cls]
+                or [k for k in refs if cls in k.lower() or k.lower() in cls])
+        if len(keys) != 1:
+            return None
+        txt = str(refs[keys[0]]).strip()
+        try:
+            m, _, s = txt.rpartition(":")
+            return keys[0], txt, (int(m) * 60 if m else 0) + float(s)
+        except ValueError:
+            return None
+
+    def _all_time(self, record, lap_id, optimal):
+        """{"best", "this_lap", "when", "optimal"} over every timed lap here in this
+        car (one query, `store.timed_laps`), or None with none. The all-time optimal
+        takes this session's sectors from `optimal` (the incident-checked session
+        optimal) and other sessions' from the game's valid laps; none without one."""
+        rows = self.store.timed_laps(record.track, self.car or record.car)
+        if not rows:
+            return None
+        best = min(rows, key=lambda r: r["lap_time"])
+        label_by_id, _ = self._lap_numbering()
+        total = None
+        if optimal is not None:
+            total = sum(min([t] + [r[k] for r in rows
+                                   if r[k] and r["session_id"] != self.session_id])
+                        for (t, _), k in zip(optimal["best"], ("s1", "s2", "s3")))
+        return {"best": best["lap_time"],
+                "this_lap": best["id"] == lap_id or best["ts"] == record.timestamp,
+                "when": label_by_id.get(best["id"])
+                or time.strftime("%Y-%m-%d", time.localtime(best["ts"])),
+                "optimal": total}
+
+    def get_time_on_table(self, which="best", detail=False):
+        """#169: where the time is on a lap -- above all the best lap -- measured
+        against the driver's own comparable laps this session (see
+        `format_time_on_table`)."""
+        record, lap_id = self._resolve_lap(which)
+        if record is None:
+            return self._no_lap_msg(which)
+        if self.cmap is None:
+            return "No corner map for this track yet — can't break the lap into corners."
+        lap_line = self._lap_line(record, lap_id)
+        if not record.lap_time:
+            return lap_line + "\nThat lap has no lap time (out, in or partial lap)."
+        rows, _ = self._comparable_rows(record, lap_id)
+        laps = []
+        for row in rows:
+            try:
+                rec = self.store.load(row["id"])
+            except Exception:
+                continue   # a result-log row with no telemetry
+            laps.append((row["id"], rec, self._incidents(rec, row["id"])))
+        if not laps:
+            _, msg = self._reference_lap(record, lap_id)
+            return lap_line + "\n" + (msg + "." if msg and msg.startswith("No comparable")
+                                      else "No other lap this session to compare against yet.")
+        label_by_id, _ = self._lap_numbering()
+        sess = {r["id"]: r for r in rows}
+        mine = next((r for r in self.store.session_laps(self.session_id)
+                     if r["id"] == lap_id), None) if lap_id is not None else None
+        sectors = [mine[k] for k in ("s1", "s2", "s3")] if mine else None
+        if sectors and not all(sectors):
+            sectors = None
+        bounds = self.store.sector_bounds(record.track, record.car)
+        optimal = optimal_sectors(
+            [{"key": "this", "sectors": sectors, "incidents": self._incidents(record, lap_id)}]
+            + [{"key": k, "sectors": [sess[k][s] for s in ("s1", "s2", "s3")], "incidents": inc}
+               for k, _, inc in laps], bounds)
+        form = corner_form(record, laps, self.cmap)
+        diagnoses = []
+        if form["ok"]:
+            segs = form_segments(self.cmap)
+            after = {id(c): (segs[i + 1][0] if i + 1 < len(segs) else None)
+                     for i, (c, _, _) in enumerate(segs)}
+            recs = {k: rec for k, rec, _ in laps}
+            mine_a = self._analysis_for(record, lap_id)
+            for r in form["listed"][:3 if detail else 2]:
+                donor = recs[r["donor"]]
+                phases = phase_split(record, donor, r["corner"], r["seg"])
+                if phases is None:
+                    continue
+                i = self.cmap.corners.index(r["corner"])
+                diagnoses.append({"row": r, "phases": phases, "next": after[id(r["corner"])],
+                                  "you": mine_a.corners[i],
+                                  "them": self._analysis_for(donor, r["donor"]).corners[i]})
+        return lap_line + "\n" + format_time_on_table(
+            lap_time=record.lap_time, sectors=sectors, optimal=optimal,
+            all_time=self._all_time(record, lap_id, optimal), benchmark=self._class_benchmark(),
+            form=form, diagnoses=diagnoses,
+            label_of=lambda k: "this lap" if k == "this" else label_by_id.get(k, f"lap id {k}"),
+            cmap=self.cmap, bounds=bounds,
+            units=self.units)
 
     def _stint_analyses(self, phase=None):
         """(analyses, lap_times, incident) for one stint -- session + phase, valid laps
@@ -2149,6 +2348,8 @@ class CoachContext:
             "get_lap_summary": lambda: self.get_lap_summary(args.get("which", "latest")),
             "get_time_loss": lambda: self.get_time_loss(args.get("which", "latest"),
                                                         args.get("reference", "best")),
+            "get_time_on_table": lambda: self.get_time_on_table(
+                args.get("which", "best"), bool(args.get("detail", False))),
             "get_stint_events": lambda: self.get_stint_events(args.get("laps", 10)),
             "get_consistency": lambda: self.get_consistency(args.get("phase")),
             "get_tire_trend": lambda: self.get_tire_trend(args.get("phase")),
