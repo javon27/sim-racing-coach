@@ -262,6 +262,11 @@ TOOLS = [
                 "phase": {"type": "string", "enum": ["race"],
                           "description": "'race' to scan only the current or most "
                                          "recent race's racing laps."},
+                "race": {"type": "integer",
+                         "description": "Which race of a session holding several "
+                                        "(1 = the first; laps are labelled 'race N lap "
+                                        "M'). Implies phase='race'. Default: the current "
+                                        "or most recent race."},
             },
         },
     },
@@ -987,18 +992,22 @@ class CoachContext:
         about, or '' when the session holds at most one race (nothing to disambiguate,
         and a lone 'Race 1 of this session' is noise). `race_ts` names a specific race
         by the moment its result log says it began; without one the CURRENT race."""
-        windows = self._race_windows()
-        if len(windows) < 2:
+        if len(self._race_windows()) < 2:
             return ""
-        win = self._current_race()
-        if race_ts is not None:
-            # The window this result describes: the first one still running at race_ts.
-            # race_ts is the race's own start stamp, which is exactly how the position
-            # arc is floored (`since=race_ts`), so the two can never disagree.
-            win = next((w for w in windows if w["end_ts"] >= race_ts), win)
+        win = self._race_window_at(race_ts)
         started = time.strftime("%H:%M", time.localtime(win["start_ts"]))
         return (f"Race {win['index']} of this session (started {started}, "
                 f"{win['laps']} laps).")
+
+    def _race_window_at(self, race_ts: float | None) -> dict | None:
+        """The race window a result row describes: the first one still running at its
+        race_ts -- the race's own start stamp, which is exactly how the position arc is
+        floored (`since=race_ts`), so the two can never disagree. The current race
+        without one; None when the session has no race."""
+        win = self._current_race()
+        if race_ts is not None:
+            win = next((w for w in self._race_windows() if w["end_ts"] >= race_ts), win)
+        return win
 
     def _lap_numbering(self) -> tuple[dict, dict]:
         """In-session lap numbering matching the UI (LapList.svelte): laps are
@@ -1128,13 +1137,25 @@ class CoachContext:
             idx = next((i for i, r in enumerate(sess_laps) if r["id"] == lap_id), None)
             cur_pos = sess_laps[idx]["position"] if idx is not None else None
             if cur_pos is not None:
+                # #187: the previous lap of THIS race -- race 2 lap 1 is not measured
+                # against race 1's finish.
+                win = next((w for w in self._race_windows() if lap_id in w["lap_ids"]), None)
+                ids = set(win["lap_ids"]) if win else set()
                 prev_pos = next((r["position"] for r in reversed(sess_laps[:idx])
-                                 if r.get("phase") == "race" and r.get("position") is not None
+                                 if r["id"] in ids and r.get("position") is not None
                                  and not _pre_green(r["phase"], r.get("lap_no"))),
                                 None)
                 pos_txt = f"position P{cur_pos} overall"   # laps.position is mPlace
                 if prev_pos is not None:
                     pos_txt += f" (from P{prev_pos} overall)"
+                elif record.lap_no == 1 and win is not None:
+                    # Race lap 1 starts from the grid slot -- only ever the result log's,
+                    # and only when that log is THIS race's (never guessed).
+                    rr = self.store.race_session(self.session_id)
+                    grid = rr.get("grid_position") if rr else None
+                    at = self._race_window_at(rr.get("race_ts")) if rr else None
+                    if grid is not None and at is not None and at["index"] == win["index"]:
+                        pos_txt += f" (from P{grid} overall on the grid)"
                 tail_bits.append(pos_txt)
         return (f"Lap: {head}" + (f" ({', '.join(parts)})" if parts else "")
                 + (f" — {'; '.join(tail_bits)}" if tail_bits else ""))
@@ -1781,7 +1802,7 @@ class CoachContext:
             incident.append(is_incident_lap(record, self.cmap or CornerMap([]), analysis))
         return analyses, lap_times, incident
 
-    def get_stint_events(self, laps=None, phase=None):
+    def get_stint_events(self, laps=None, phase=None, race=None):
         """Incidents over the last N laps of this session, grouped by lap.
 
         Deliberately NOT filtered to valid laps -- a lap with a spin or an off is
@@ -1792,7 +1813,11 @@ class CoachContext:
         racing laps only, never qualifying or race lap 0 (grid/formation), and by
         default the whole race rather than the last 10 laps of the session. Opt-in
         (the model passes it for a race question), not automatic: 'that spin a few
-        laps ago' right after qualy must still reach the qualy lap."""
+        laps ago' right after qualy must still reach the qualy lap.
+
+        #187: race=N (1-based, store.race_windows' index -- #174's 'race N') reviews
+        that race of a multi-race session instead of the latest; it implies
+        phase='race'."""
         if not self.session_id and not self.on_track:
             return "No active session — no stint to scan for incidents."
         if self.cmap is None:
@@ -1800,7 +1825,7 @@ class CoachContext:
         this_lap = self._this_lap_events()
         if not self.session_id:
             return this_lap or "No active session — no stint to scan for incidents."
-        race_only = phase == "race"
+        race_only = phase == "race" or race is not None
         try:
             # A race review is the WHOLE race: `laps` is ignored, or laps=10 (what the
             # model sent in #279) drops the start of any race longer than 10 laps.
@@ -1818,6 +1843,15 @@ class CoachContext:
         if race_only:
             if cur_race is None:
                 return "No race in this session — no race laps to scan for incidents."
+            if race is not None:
+                windows = self._race_windows()
+                try:
+                    cur_race = next((w for w in windows if w["index"] == int(race)), None)
+                except (TypeError, ValueError):
+                    cur_race = None
+                if cur_race is None:
+                    return (f"No race {race} in this session: it holds {len(windows)} "
+                            f"race(s), race 1 to race {len(windows)}.")
             ids = set(cur_race["lap_ids"])
             rows = [r for r in rows if r["id"] in ids and not _pre_green("race", r["lap_no"])]
             if not rows:
@@ -2285,13 +2319,10 @@ class CoachContext:
         """#180: the race's per-lap positions from race lap 1 (session_laps rows, no
         telemetry), so a race recap has the arc even when the model never makes the
         race-scoped incident call -- and the pointer to that call."""
-        windows = self._race_windows()
-        if not windows:
+        # The race the result row describes (same rule as `_race_line`).
+        win = self._race_window_at(rr.get("race_ts") if rr else None)
+        if win is None:
             return []
-        win = windows[-1]
-        if rr and rr.get("race_ts") is not None:
-            # The race the result row describes (same rule as `_race_line`).
-            win = next((w for w in windows if w["end_ts"] >= rr["race_ts"]), win)
         ids = set(win["lap_ids"])
         label_by_id, _ = self._lap_numbering()
         rows = [r for r in self._session_laps()
@@ -2310,7 +2341,12 @@ class CoachContext:
         if any(bad):
             out.append("An invalidated lap was RACED -- a racing lap LMU didn't time (an off "
                        "or a cut), never the cool-down.")
-        return out + ["Lap-by-lap incidents for this race: get_stint_events with phase='race'."]
+        # #187: with several races the pointer names this one -- phase='race' alone reads
+        # the latest, which is not this race when the result log is an earlier race's.
+        sel = f", race={win['index']}" if len(self._race_windows()) > 1 else ""
+        pointer = ("Lap-by-lap incidents for this race: get_stint_events with "
+                   f"phase='race'{sel}.")
+        return out + [pointer]
 
     def _no_live_race(self) -> str | None:
         """#152 guard for the race tools: a snapshot exists only in a live race, from its
@@ -3024,7 +3060,8 @@ class CoachContext:
             "get_time_on_table": lambda: self.get_time_on_table(
                 args.get("which", "best"), bool(args.get("detail", False))),
             "get_stint_events": lambda: self.get_stint_events(args.get("laps"),
-                                                              args.get("phase")),
+                                                              args.get("phase"),
+                                                              args.get("race")),
             "get_consistency": lambda: self.get_consistency(args.get("phase")),
             "get_tire_trend": lambda: self.get_tire_trend(args.get("phase")),
             "get_handling": lambda: self.get_handling(args.get("which", "latest")),
