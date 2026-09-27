@@ -1729,6 +1729,73 @@ def test_an_unchanged_notes_save_of_every_shipped_map_is_a_byte_identical_no_op(
             f"{src.name}: an unchanged notes save rewrote the file"
 
 
+_LAGUNA = "weathertech_raceway_laguna_seca"
+
+
+def _laguna_route_save(client, lap, route):
+    # One UNCHANGED save of the Laguna fixture through `route`, the body each screen sends.
+    d = json.loads((Path(simcoach.__file__).parent / "tracks" / f"{_LAGUNA}.json")
+                   .read_text(encoding="utf-8"))
+    base = f"/laps/{lap}" if route.startswith("laps") else f"/tracks/{_LAGUNA}"
+    if route.endswith("notes"):
+        got = client.get(f"{base}/notes").json()
+        return client.put(f"{base}/notes",
+                          json={"track": _LAGUNA, "rev": got.pop("rev"), "notes": got})
+    if route.endswith("rotation"):
+        return client.post(f"{base}/rotation",
+                           json=with_map_rev(client, f"{base}/rotation", {"degrees": d["rotation"]}))
+    return client.put(f"{base}/map", json=with_map_rev(client, f"{base}/map", {
+        "corners": d["corners"], "sectors": d["sectors"], "sections": d["sections"],
+        "name": "Portimão"}))
+
+
+@pytest.mark.parametrize("route", ["tracks/map", "laps/map", "tracks/notes",
+                                   "tracks/rotation", "laps/rotation"])
+def test_every_track_writer_route_writes_dump_track_json_bytes(tmp_path, route):
+    # #171: a driver's Laguna is byte-for-byte the pre-#145 writer's output (text mode,
+    # ensure_ascii), and the shipped-map tests above only cover the map PUT. Pin EVERY
+    # route that rewrites a track JSON: it must emit exactly dump_track_json's bytes (raw
+    # UTF-8, CRLF only from the serializer), keep the baked point-cloud width_m (Laguna has
+    # no ribbon to re-derive it from), and be a byte-identical no-op when nothing changed.
+    src = json.loads((Path(simcoach.__file__).parent / "tracks" / f"{_LAGUNA}.json")
+                     .read_text(encoding="utf-8"))
+    src["name"] = "Portimão"                          # non-ASCII outside the IPA table too
+    tracks = tmp_path / "tracks"
+    tracks.mkdir()
+    f = tracks / f"{_LAGUNA}.json"
+    f.write_bytes(dump_track_json(src))
+    before = f.read_bytes()
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    lap = store.save(LapRecord("lmu", "WeatherTech Raceway Laguna Seca", "Oreca 07", 90.0,
+                               True, 0.0, {"lap_distance": np.linspace(0.0, 3600.0, 200),
+                                           "speed": np.full(200, 50.0)}))
+    client = TestClient(create_app(store, Coach(FakeModel("{}")), tracks_dir=str(tracks)),
+                        base_url="http://127.0.0.1")
+    r = _laguna_route_save(client, lap, route)
+    assert r.status_code == 200, r.text
+    out = f.read_bytes()
+    assert out == dump_track_json(json.loads(out.decode("utf-8")))   # canonical bytes
+    assert b"\\u" not in out and "Portimão".encode() in out
+    assert out.replace(b"\r\n", b"").count(b"\r") == 0 == out.replace(b"\r\n", b"").count(b"\n")
+    assert all("width_m" in c for c in json.loads(out.decode("utf-8"))["corners"])
+    assert out == before, f"{route}: an unchanged save rewrote the file"
+
+
+def test_mapcapture_save_writes_dump_track_json_bytes(tmp_path):
+    # #171, the one writer route that builds its payload from scratch: same bytes rule, and
+    # a kept non-ASCII display name lands raw, not \\u-escaped.
+    client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
+    f = tmp_path / "tracks" / f"{_SLUG}.json"
+    f.write_bytes(dump_track_json({"track": _SLUG, "name": "Portimão", "corners": []}))
+    for z in (-5.0, 0.0, 5.0):
+        _cloud_lap(store, z, 3.0)
+    _rebuild(client)
+    assert client.post("/mapcapture/save", json={}).json()["saved"] is True
+    out = f.read_bytes()
+    assert out == dump_track_json(json.loads(out.decode("utf-8")))
+    assert b"\\u" not in out and "Portimão".encode() in out
+
+
 def test_a_notes_save_that_clears_a_field_writes_it_empty(tmp_path):
     # The other half of the no-op rule: a field the file HAS is written even when the
     # author empties it -- dropping only fields the file never had must not make a
