@@ -89,6 +89,9 @@ _PARTIAL_WORD = {"out": "out-lap", "in": "in-lap", "partial": "partial lap"}
 _PARTIAL_LIST_WORD = {"out": "out lap", "in": "in lap", "partial": "partial"}
 
 
+_PRE_GREEN_NOTE = "grid/formation lap before the green flag, not racing"
+
+
 def _pre_green(phase, lap_no) -> bool:
     """#180: race lap 0 -- the grid/garage segments and the formation lap, before the
     green flag (never timed: every real one is an out/in/partial lap). Its position is
@@ -196,8 +199,9 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "laps": {"type": "integer",
-                         "description": "How many recent laps to scan (default 10, or "
-                                        "the whole race with phase='race'; max 30)."},
+                         "description": "How many recent laps to scan (default 10, "
+                                        "max 30). Ignored with phase='race', which "
+                                        "always scans the whole race."},
                 "phase": {"type": "string", "enum": ["race"],
                           "description": "'race' to scan only the current or most "
                                          "recent race's racing laps."},
@@ -1006,6 +1010,11 @@ class CoachContext:
         # looked up from session_laps rather than `record` (store.load() doesn't
         # thread position onto LapRecord).
         tail_bits = [kind] if kind else []
+        # #180: race lap 0 is not racing -- said here so every lap read (lap list,
+        # unscoped stint scan, lap summary) carries it even when a race question
+        # forgot phase='race'.
+        if _pre_green(record.phase, record.lap_no):
+            tail_bits.append(_PRE_GREEN_NOTE)
         # #138: a pit-stop lap's time and corner deltas are the stop, not the
         # driving -- flag it right in the identity line so the model doesn't
         # read a stint-ending outlier as damage or a spin.
@@ -1302,6 +1311,8 @@ class CoachContext:
             pit = " (pit)" if r.get("pit") else ""
             if r.get("mapping"):
                 pit += f" — {_MAPPING_NOTE}"
+            if _pre_green(r.get("phase"), r.get("lap_no")):
+                pit += f" — {_PRE_GREEN_NOTE}"
             # A partial lap keeps its NUMBER (that is why it is stored) but has no
             # time to print and is not "INVALID" -- it is unfinished (#77).
             if r.get("partial"):
@@ -1674,7 +1685,9 @@ class CoachContext:
             return this_lap or "No active session — no stint to scan for incidents."
         race_only = phase == "race"
         try:
-            n = int(laps or (_MAX_EVENT_LAPS if race_only else 10))
+            # A race review is the WHOLE race: `laps` is ignored, or laps=10 (what the
+            # model sent in #279) drops the start of any race longer than 10 laps.
+            n = _MAX_EVENT_LAPS if race_only else int(laps or 10)
         except (TypeError, ValueError):
             n = 10
         n = max(1, min(n, _MAX_EVENT_LAPS))
@@ -1684,11 +1697,18 @@ class CoachContext:
         # "that spin a few laps ago" came back as race 1's spin during race 3. Scan
         # this race only; an earlier race's laps stay reachable by name ('race 1 lap 2').
         cur_race = self._current_race()
+        cut = []
         if race_only:
             if cur_race is None:
                 return "No race in this session — no race laps to scan for incidents."
             ids = set(cur_race["lap_ids"])
             rows = [r for r in rows if r["id"] in ids and not _pre_green("race", r["lap_no"])]
+            if not rows:
+                msg = ("The race hasn't started yet: only the grid/formation lap so far, "
+                       "no racing laps to scan.")
+                return msg + ("\n" + this_lap if this_lap else "")
+            if len(rows) > n:
+                cut.append(f"(last {n} of {len(rows)} race laps)")
         elif cur_race is not None and len(self._race_windows()) > 1:
             rows = [r for r in rows if r["ts"] >= cur_race["start_ts"]]
         rows = rows[-n:]
@@ -1703,7 +1723,7 @@ class CoachContext:
         if not loaded:
             return this_lap or "No telemetry-backed laps in this session yet — nothing to scan."
         baseline = stint_wear_baseline([rec for rec, _ in loaded])
-        out = []
+        out = cut
         for record, lap_id in loaded:
             lines = self._events_for(record, lap_id, baseline)
             out.append(self._lap_line(record, lap_id))
@@ -2142,7 +2162,29 @@ class CoachContext:
                      "(its result log isn't read yet): talk about it as a finished race -- "
                      "a last lap into the pits is the cool-down after the flag, not a pit "
                      "stop; no pit-stop or strategy offers.")
-        return "\n".join([h for h in head if h] + [text])
+        return "\n".join([h for h in head if h] + [text] + self._race_lap_positions(rr))
+
+    def _race_lap_positions(self, rr) -> list[str]:
+        """#180: the race's per-lap positions from race lap 1 (session_laps rows, no
+        telemetry), so a race recap has the arc even when the model never makes the
+        race-scoped incident call -- and the pointer to that call."""
+        windows = self._race_windows()
+        if not windows:
+            return []
+        win = windows[-1]
+        if rr and rr.get("race_ts") is not None:
+            # The race the result row describes (same rule as `_race_line`).
+            win = next((w for w in windows if w["end_ts"] >= rr["race_ts"]), win)
+        ids = set(win["lap_ids"])
+        label_by_id, _ = self._lap_numbering()
+        laps = [f"{label_by_id.get(r['id'], 'lap id ' + str(r['id']))} P{r['position']}"
+                for r in self._session_laps()
+                if r["id"] in ids and r.get("position") is not None
+                and not _pre_green(r["phase"], r.get("lap_no"))]
+        if not laps:
+            return []
+        return [f"Per-lap positions (overall) from race lap 1: {', '.join(laps)}.",
+                "Lap-by-lap incidents for this race: get_stint_events with phase='race'."]
 
     def _no_live_race(self) -> str | None:
         """#152 guard for the race tools: a snapshot exists only in a live race, from its

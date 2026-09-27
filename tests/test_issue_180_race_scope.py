@@ -107,3 +107,69 @@ def test_no_race_in_session_says_so(tmp_path, synthetic_lap):
     ctx = CoachContext(store, cmap=CornerMap.load("simcoach/tracks/test_track.json"),
                        track=synthetic_lap.track, car=synthetic_lap.car, session_id="q")
     assert ctx.get_stint_events(phase="race").startswith("No race in this session")
+
+
+def _race(store, synthetic_lap, n, t0, lap0=True):
+    rows = ([(0, "partial", 6)] if lap0 else []) + [(i, None, 5) for i in range(1, n + 1)]
+    for k, (lap_no, partial, pos) in enumerate(rows):
+        store.save(dataclasses.replace(
+            synthetic_lap, session_id=SID, phase="race", lap_no=lap_no, partial=partial,
+            position=pos, lap_time=None if partial else 90.0, valid=not partial,
+            timestamp=t0 + 100 * k))
+
+
+def _ctx(store, synthetic_lap):
+    return CoachContext(store, cmap=CornerMap.load("simcoach/tracks/test_track.json"),
+                        track=synthetic_lap.track, car=synthetic_lap.car, session_id=SID)
+
+
+def test_race_scope_ignores_laps_and_reads_the_whole_race(tmp_path, synthetic_lap):
+    """Red-team round 1: laps=10 on a 25-lap race returned laps 16-25 -- the start lost."""
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    _race(store, synthetic_lap, 14, T0)
+    ctx = _ctx(store, synthetic_lap)
+    for args in ({"phase": "race"}, {"laps": 10, "phase": "race"}):
+        out = ctx.dispatch("get_stint_events", args)
+        assert _laps(out) == [f"race lap {n}" for n in range(1, 15)], args
+        assert "(last " not in out
+
+
+def test_race_scope_says_when_the_cap_cuts(tmp_path, synthetic_lap):
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    _race(store, synthetic_lap, 32, T0, lap0=False)
+    out = _ctx(store, synthetic_lap).dispatch("get_stint_events", {"phase": "race"})
+    assert out.startswith("(last 30 of 32 race laps)")
+    assert _laps(out)[0] == "race lap 3" and len(_laps(out)) == 30
+
+
+def test_race_scope_reads_only_the_latest_race(tmp_path, synthetic_lap):
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    _race(store, synthetic_lap, 3, T0)
+    _race(store, synthetic_lap, 2, T0 + 3600)      # > _RACE_WINDOW_GAP_S later
+    out = _ctx(store, synthetic_lap).dispatch("get_stint_events", {"phase": "race"})
+    assert _laps(out) == ["race 2 lap 1", "race 2 lap 2"]
+
+
+def test_race_scope_on_the_grid_says_the_race_has_not_started(tmp_path, synthetic_lap):
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    _race(store, synthetic_lap, 0, T0)
+    out = _ctx(store, synthetic_lap).get_stint_events(phase="race")
+    assert out.startswith("The race hasn't started yet")
+
+
+def test_race_lap_0_is_labelled_not_racing_everywhere(tmp_path, synthetic_lap):
+    """Safety net when the model skips phase='race'."""
+    ctx = _sarthe(tmp_path, synthetic_lap)
+    out = ctx.dispatch("get_stint_events", {"laps": 10})
+    lap0 = [line for line in out.splitlines() if line.startswith("Lap: race lap 0")]
+    assert len(lap0) == 4 and all("not racing" in line for line in lap0)
+    listing = ctx.list_recent_laps(limit=20)
+    assert sum("not racing" in line for line in listing.splitlines()) == 4
+    assert "not racing" not in ctx.get_lap_summary("race lap 1").splitlines()[0]
+
+
+def test_race_result_lists_the_race_laps_positions(tmp_path, synthetic_lap):
+    out = _sarthe(tmp_path, synthetic_lap).get_race_result()
+    assert ("Per-lap positions (overall) from race lap 1: race lap 1 P5, race lap 2 P4, "
+            "race lap 3 P3, race lap 4 P2, race lap 5 P2.") in out
+    assert out.endswith("get_stint_events with phase='race'.")
