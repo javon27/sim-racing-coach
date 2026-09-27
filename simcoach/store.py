@@ -1192,8 +1192,7 @@ class LapStore:
         `telemetry` is False for those, which have no channels to analyse. `car_class`
         keeps only entries of that scraped class: one model can race in two (the Oreca 07
         is both LMP2 and LMP2_ELMS), and their times must not merge."""
-        teams = [c for c in self._distinct_db_cars() if resolve_car(c) == car
-                 and (car_class is None or resolve_car_class(c) == car_class)] or [car]
+        teams = self._teams(car, car_class)
         with self._lock:
             rows = self.conn.execute(
                 "SELECT id, ts, session_id, lap_time, s1, s2, s3, "
@@ -1203,6 +1202,26 @@ class LapStore:
                 "AND NOT COALESCE(mapping, 0)", [track, *teams]).fetchall()
         return [dict(zip(("id", "ts", "session_id", "lap_time", "s1", "s2", "s3", "telemetry"),
                          (*r[:7], bool(r[7])))) for r in rows]
+
+    def _teams(self, car: str, car_class: str | None) -> list[str]:
+        """The raw entry names that resolve to model `car` (and scraped `car_class`, when
+        given) -- or `car` itself when none does (a raw entry name)."""
+        return [c for c in self._distinct_db_cars() if resolve_car(c) == car
+                and (car_class is None or resolve_car_class(c) == car_class)] or [car]
+
+    def race_start_laps(self, track: str, car: str, car_class: str | None = None) -> list[dict]:
+        """#184: every race lap-0 (grid, formation) and lap-1 row for a track/car, in ts
+        order, as {id, ts, session_id, lap_no, pit, time_left, telemetry} -- the rows a
+        formation lap is picked from. `car`/`car_class` expand like `timed_laps`."""
+        teams = self._teams(car, car_class)
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT id, ts, session_id, lap_no, pit, time_left, telemetry_path IS NOT NULL "
+                f"FROM laps WHERE track = ? AND car IN ({','.join('?' * len(teams))}) "
+                "AND phase = 'race' AND lap_no IN (0, 1) ORDER BY ts",
+                [track, *teams]).fetchall()
+        return [dict(zip(("id", "ts", "session_id", "lap_no", "pit", "time_left", "telemetry"),
+                         (*r[:6], bool(r[6])))) for r in rows]
 
     def recent_laps(self, track: str, car: str, limit: int = 10,
                     session_id: str | None = None,

@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 import time
 from collections import Counter
+from itertools import pairwise
 from types import SimpleNamespace
 
 from simcoach.analysis import (
@@ -64,18 +65,22 @@ from simcoach.fuel import laps_remaining
 from simcoach.livelap import impact_text, incident_lines
 from simcoach.race import (
     HISTORY_LAPS,
+    HISTORY_LOADS,
     MIN_STINT_LAPS,
     NO_RACE_LAP_YET,
     PACE_LAPS,
     RATE_LAPS,
+    HistLap,
     _clock,
     format_provisional,
     format_race_state,
     format_strategy,
-    history_burn,
+    formation_burn,
+    history_pick,
     lap_facts,
     laps_left,
     live_battle_target,
+    pick_formation,
     picked_up_mid_lap,
     provisional_strategy,
     race_sample,
@@ -2393,7 +2398,9 @@ class CoachContext:
             f = lap_facts(rec)
             if f.clean and (f.fuel_used or f.energy_used):
                 practice.append(f)
-        practice, source = practice[-RATE_LAPS:], None
+        practice, source, notes, energy_sessions = practice[-RATE_LAPS:], None, [], {sid}
+        ve = None
+        cls = self._stored_class()
         if len(practice) >= MIN_STINT_LAPS:
             recent = practice[-PACE_LAPS:]
             pace = sum(f.lap_time for f in recent) / len(recent)
@@ -2401,25 +2408,24 @@ class CoachContext:
         else:
             # #184 (Sarthe 2026-09-26: one qualy lap, 'that doesn't help me'): this car's
             # stored burn at this track, every session -- practice, qualifying AND race.
-            hist = self._burn_history()
-            med = history_burn([f for _, _, f in hist])
+            hist, read, stored = self._burn_history(cls)
+            med, notes, energy_sessions = history_pick(hist, sid)
             if med is None:
                 return no(f"it needs {MIN_STINT_LAPS} clean laps with a measured fuel/energy "
                           f"burn at this track in this car (found {len(hist)} across all "
                           "your sessions here)")
-            # The mean of copies is the median: the same strategy math, on the median.
+            # The mean of copies is the median: the same strategy math, on the medians.
+            # A VE car stays one when its VE isn't projected: fuel is set by the ratio.
             practice, pace = [med] * MIN_STINT_LAPS, med.lap_time
-            at_pace = f"at the median lap time of those laps ({format_laptime(pace)})"
-            days = sorted({time.strftime("%Y-%m-%d", time.localtime(ts)) for ts, _, _ in hist})
-            kinds = Counter(ph or "unlabelled" for _, ph, _ in hist)
-            source = (f"the median of {len(hist)} clean laps from your sessions here in this "
-                      f"car ({', '.join(days)}: "
+            ve = any(h.facts.energy_used for h in hist)
+            at_pace = f"at {format_laptime(pace)} a lap"
+            days = sorted({time.strftime("%Y-%m-%d", time.localtime(h.ts)) for h in hist})
+            kinds = Counter(h.phase or "unlabelled" for h in hist)
+            source = (f"medians of {len(hist)} clean laps stored here in this car "
+                      f"({', '.join(days)}: "
                       + ", ".join(f"{v} {k}" for k, v in sorted(kinds.items())) + ")"
-                      + "".join(f"; no {what} burn recorded in them (the channel is flat or "
-                                "absent), so none is projected"
-                                for what, v in (("fuel", med.fuel_used),
-                                                ("virtual-energy", med.energy_used))
-                                if v is None))
+                      + (f", the newest found in {read} of {stored} stored laps"
+                         if read < stored else ""))
         start, lap_no, damage, damage_lap = None, 0, None, None
         if self.race is not None:
             # A race lap is done: plan from what was on board at ITS line, never lap 0.
@@ -2428,6 +2434,13 @@ class CoachContext:
                 return no(f"race lap {self.race.as_of_lap} isn't readable from the store")
             start, lap_no = lap_facts(rec), rec.lap_no
             damage, damage_lap = damage_state(rec.channels), rec.lap_no
+
+        def either(n, last):
+            # #184: a timed race ends at your first crossing after the OVERALL leader's
+            # flag -- one lap more than counted when you finish lap `last` before him.
+            return (f"{n} lap{'s' if n != 1 else ''} if the overall leader takes the flag "
+                    f"before you finish lap {last}, {n + 1} if not")
+        timed = False
         if race_laps is not None or race_minutes is not None:
             try:
                 if isinstance(race_laps, bool) or isinstance(race_minutes, bool):
@@ -2442,11 +2455,10 @@ class CoachContext:
                     raise ValueError
             except (TypeError, ValueError, OverflowError):
                 return no("race_laps / race_minutes must be a positive number")
-            to_go = max(total - lap_no, 0)
-            laps_word = f"{total} lap{'s' if total != 1 else ''}"
-            basis = (f"{laps_word} (as you said)" if race_laps is not None else
-                     f"{float(race_minutes):g} minutes (as you said) {at_pace} = about "
-                     f"{laps_word}")
+            to_go, timed = max(total - lap_no, 0), race_laps is None
+            basis = (f"{total} lap{'s' if total != 1 else ''} (as you said)" if not timed
+                     else f"{float(race_minutes):g} minutes (as you said) {at_pace} = "
+                          f"{either(total, total)}")
         elif sess is not None and sess.phase == "race":
             # #184: before race lap 1 is done the clock is not the race length -- in the
             # race session's garage/grid it counts down to the start (Sarthe 2026-09-26,
@@ -2454,46 +2466,81 @@ class CoachContext:
             clock = (sess.end_time - sess.elapsed) if sess.end_time > 0 and lap_no else None
             to_go = laps_left(lap_no, sess.max_laps, clock, pace)
             by_laps = sess.max_laps and to_go == max(sess.max_laps - lap_no, 0)
+            timed = not by_laps and clock is not None
             basis = (f"{sess.max_laps} laps (the live race's lap count)" if by_laps else
-                     f"{_clock(clock)} on the clock {at_pace} = about {to_go} laps to go"
-                     if clock is not None else None)
+                     f"{_clock(clock)} on the clock {at_pace} = "
+                     f"{either(to_go, lap_no + to_go)} to go" if timed else None)
         else:
             to_go = basis = None
         if to_go is None or basis is None:
             return no("race length unknown. Ask the driver how long the race is, then "
                       "call get_strategy again with race_laps or race_minutes")
-        return format_provisional(provisional_strategy(practice, to_go, start), lap_no,
-                                  basis, len(practice), damage, damage_lap, source)
+        return format_provisional(
+            provisional_strategy(practice, to_go, start, ve), lap_no, basis, len(practice),
+            damage, damage_lap, source, notes, measured=start is not None, timed=timed,
+            ve_car=bool(ve),
+            formation=None if start is not None else self._formation(cls, energy_sessions))
 
-    def _burn_history(self) -> list[tuple]:
-        """#184: (ts, phase, facts) of the newest HISTORY_LAPS clean laps with a measured
-        fuel/energy burn at this track in this car, from every session. A car is a (model,
-        class) pair: the Oreca 07 races as LMP2 AND LMP2_ELMS, and their burn must never
-        merge (#182) -- the live class picks one stored class, and with the live class
-        unknown only a model stored in exactly one class is read."""
+    def _stored_class(self):
+        """#184: the stored class this car's laps are filed under (store.timed_laps'
+        `car_class`; None = no scraped class), or False when it can't be told: a car is a
+        (model, class) pair -- the Oreca 07 races as LMP2 AND LMP2_ELMS, and their burn
+        must never merge (#182). The live class picks one stored class; with the live
+        class unknown, only a model stored in exactly one class is read."""
         if not (self.track and self.car):
-            return []
+            return False
         classes = {g["car_class"] for g in self.store.session_facets()["car_groups"]
                    if self.car in g["cars"]}
         mine = [c for c in classes
                 if not self.car_class or _norm_class(c) == _norm_class(self.car_class)]
         if len(mine) != 1:
-            return []
-        rows = self.store.timed_laps(self.track, self.car,
-                                     None if mine[0] == "Other" else mine[0])
-        out = []
-        for row in sorted((r for r in rows if r["telemetry"]), key=lambda r: r["ts"],
-                          reverse=True):
+            return False
+        return None if mine[0] == "Other" else mine[0]
+
+    def _burn_history(self, cls) -> tuple[list, int, int]:
+        """#184: (the newest HISTORY_LAPS clean laps with a measured fuel/energy burn at
+        this track in this car, from every session, as race.HistLap; laps read; laps
+        stored). Stops after HISTORY_LOADS reads (latency) even with fewer."""
+        if cls is False:
+            return [], 0, 0
+        rows = sorted((r for r in self.store.timed_laps(self.track, self.car, cls)
+                       if r["telemetry"]), key=lambda r: r["ts"], reverse=True)
+        out, read = [], 0
+        for row in rows[:HISTORY_LOADS]:
+            read += 1
             try:
                 rec = self.store.load(row["id"])
             except Exception:
                 continue
             f = lap_facts(rec)
             if f.clean and (f.fuel_used or f.energy_used):
-                out.append((rec.timestamp, rec.phase, f))
+                out.append(HistLap(rec.timestamp, rec.phase, rec.session_id, f))
                 if len(out) == HISTORY_LAPS:
                     break
-        return out
+        return out, read, len(rows)
+
+    def _formation(self, cls, energy_sessions):
+        """#184: race.pick_formation over this car's stored formation laps here, or None
+        with none. The formation row is the one committed just before race lap 1 of the
+        same race -- never a pit row (it spans garage fuel changes: Long Beach 2026-09-24
+        read 99 -> 56.7 L) nor a countdown row, whose clock is below lap 1's (Sarthe
+        2026-09-26: 8.0 s against lap 1's 949 s)."""
+        if cls is False:
+            return None
+        rows = self.store.race_start_laps(self.track, self.car, cls)
+        found = [a for a, b in pairwise(rows)
+                 if a["lap_no"] == 0 and b["lap_no"] == 1 and a["session_id"] == b["session_id"]
+                 and not a["pit"] and a["telemetry"]
+                 and (a["time_left"] is None or b["time_left"] is None
+                      or a["time_left"] >= b["time_left"])]
+        out = []
+        for r in reversed(found[-HISTORY_LAPS:]):          # newest first
+            try:
+                rec = self.store.load(r["id"])
+            except Exception:
+                continue
+            out.append((r["ts"], r["session_id"], formation_burn(rec)))
+        return pick_formation(out, energy_sessions) if out else None
 
     def get_battle(self, rival=None, which=None, direction=None, position=None):
         """#174: in a live race, the last completed lap's cached read (unchanged). With
