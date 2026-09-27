@@ -656,6 +656,7 @@ class GapRead:
     gap: float | None           # s now; None = a lap or more away
     slope: float | None         # s/lap over the trend laps; negative = the gap is shrinking
     catch_lap: int | None       # the lap it reaches zero at that slope, before the flag
+                                # (#201: the longer count's, as build_snapshot plans)
 
 
 @dataclass
@@ -725,14 +726,15 @@ def build_snapshot(stint: list[LapFacts], session_id: str | None,
     pace = (sum(f.lap_time for f in recent) / len(recent)
             if len(clean) >= MIN_STINT_LAPS else None)
     to_go = laps_left(latest.lap_no, r.max_laps, r.time_left, pace)
-    final = latest.lap_no + to_go if to_go is not None else None
     timed = bool(to_go is not None and pace and r.time_left is not None
                  and not (r.max_laps and to_go == max(r.max_laps - latest.lap_no, 0)))
+    # #195: a timed race is planned on the longer count, as the pre-race plan is (#184);
+    # #201: so is the gap trend's catch cutoff.
+    plan = to_go + 1 if timed and plans_longer(r.time_left, latest.position) else to_go
+    final = latest.lap_no + plan if plan is not None else None
     state = RaceState(latest.position, r.class_position, r.max_laps, r.time_left, pace, to_go,
                       _gap_read(stint, "ahead", final), _gap_read(stint, "behind", final),
                       latest.race is not None, timed)
-    # #195: a timed race is planned on the longer count, as the pre-race plan is (#184).
-    plan = to_go + 1 if timed and plans_longer(r.time_left, latest.position) else to_go
     try:
         strat = strategy(stint, plan)
     except Exception:
@@ -839,7 +841,10 @@ def _clock(seconds: float) -> str:
     return f"{s // 60}:{s % 60:02d}"
 
 
-def _gap_line(label: str, g: GapRead | None, side: str, placed: bool) -> str:
+def _gap_line(label: str, g: GapRead | None, side: str, placed: bool,
+              counts: tuple[int, int] | None = None) -> str:
+    """`counts` = flag_counts' (laps to go, flag lap) when the race is planned on the
+    longer count (#201): a catch after that flag lap is said to be conditional."""
     if not placed:
         return f"{label}: not sampled this lap."
     if g is None:
@@ -861,6 +866,8 @@ def _gap_line(label: str, g: GapRead | None, side: str, placed: bool) -> str:
         reach = "he reaches you"
     if g.catch_lap is not None:
         trend += f"; at this rate {reach} around lap {g.catch_lap}"
+        if counts and g.catch_lap > counts[1]:
+            trend += f", only if the race runs that long (laps to go: {flag_counts(*counts)})"
     elif closing:
         trend += "; not before the flag at this rate"
     return f"{head}; {trend}."
@@ -914,16 +921,19 @@ def format_race_state(snap: RaceSnapshot,
     if st.sampled and not st.max_laps and st.time_left is None:
         lines.append("Remaining: the game reports no lap count or clock for this race.")
     placed = st.sampled and st.class_position is not None
+    # A catch past the shorter count's flag lap is only ever projected when the plan is
+    # the longer count (build_snapshot's cutoff), so `timed` is enough here.
+    counts = (st.laps_to_go, snap.as_of_lap + st.laps_to_go) if st.timed else None
     for side, g in (("ahead", st.ahead), ("behind", st.behind)):
         label = f"Car {side} in class"
         if now is None:
-            lines.append(_gap_line(label, g, side, placed))
+            lines.append(_gap_line(label, g, side, placed, counts))
         elif now[side] is None:
             lines.append(f"{label} now (live): none"
                          + (" — you lead your class." if side == "ahead" else "."))
         elif placed and now[side] == who[side]:
             lines.append(_gap_line(f"{label} at the end of lap {snap.as_of_lap}", g, side,
-                                   placed))
+                                   placed, counts))
         else:
             lines.append(f"{label} now (live): {now[side]}; no gap to him yet — it's read "
                          f"at the line, and a trend needs {MIN_STINT_LAPS} clean laps with "

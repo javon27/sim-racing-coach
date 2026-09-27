@@ -15,6 +15,7 @@ import glob
 import os
 import threading
 import xml.etree.ElementTree as ET
+from time import monotonic
 
 from .lmu.install import results_dir
 
@@ -54,8 +55,15 @@ def _scan_results(results_root: str | None) -> dict[str, tuple[str, str | None]]
 # new result log every session end used to bump the dir's mtime and force a full
 # re-scan on the next call. `_cache` holds the merged table + the dir signature that
 # gates even looking at `_file_cache` -- most calls just stat the dir and return.
+# "checked" = monotonic() when that dir check last completed (see _CHECK_EVERY_S).
 _file_cache: dict[str, tuple[tuple[int, int], dict[str, tuple[str, str | None]]]] = {}
-_cache: dict = {"sig": None, "table": {}}
+_cache: dict = {"sig": None, "table": {}, "checked": None}
+
+# ponytail: the dir check (a config load + Steam-dir stats, ~1.3 ms) runs at most once
+# per second per process (#201) -- one get_strategy answer makes ~270 lookups. A result
+# log LMU writes at a session's end is so seen up to 1 s late; cache the table per coach
+# turn instead if even that ever matters.
+_CHECK_EVERY_S = 1.0
 
 # Background warm-up (#179 part 2): a fresh sidecar's first scan can take several
 # seconds cold (worse alongside the rest of the app importing/compiling -- up to ~23 s
@@ -114,8 +122,12 @@ def _evict_stale(seen: set[str]) -> None:
 
 
 def _scan_if_stale() -> dict[str, tuple[str, str | None]]:
+    checked = _cache["checked"]
+    if checked is not None and monotonic() - checked < _CHECK_EVERY_S:
+        return _cache["table"]
     rd = results_dir()
     if rd is None:
+        _cache["sig"], _cache["table"], _cache["checked"] = None, {}, monotonic()
         return {}
     try:
         sig = os.stat(rd).st_mtime_ns
@@ -128,6 +140,9 @@ def _scan_if_stale() -> dict[str, tuple[str, str | None]]:
     if sig != _cache["sig"]:
         _cache["table"] = _rescan(str(rd))
         _cache["sig"] = sig
+    # Stamped only once the table is in place, never before the scan: a caller whose
+    # warm-up wait timed out must scan itself, not be served the empty table (#179).
+    _cache["checked"] = monotonic()
     return _cache["table"]
 
 

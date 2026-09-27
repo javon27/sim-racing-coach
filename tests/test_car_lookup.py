@@ -284,3 +284,96 @@ def test_concurrent_eviction_of_the_same_stale_entry_never_raises(tmp_path, monk
 
     car_lookup._evict_stale(set())  # `victim` not in `seen` -> gone before AND after
     assert victim not in fake_cache
+
+
+# --- #201: the dir check runs at most once per _CHECK_EVERY_S ---------------------------
+
+def _clocked(tmp_path, monkeypatch):
+    """The real 1 s interval on a hand-driven clock; returns (clock, dir-check calls).
+    Counts both the config load (results_dir) and the stat of the dir it returns."""
+    monkeypatch.setattr(car_lookup, "_CHECK_EVERY_S", 1.0)
+    clock = [100.0]
+    monkeypatch.setattr(car_lookup, "monotonic", lambda: clock[0])
+    checks = {"results_dir": 0, "stat": 0}
+
+    def _results_dir():
+        checks["results_dir"] += 1
+        return tmp_path
+    monkeypatch.setattr(car_lookup, "results_dir", _results_dir)
+    real_stat = os.stat
+
+    def _stat(p, *a, **kw):
+        if os.fspath(p) == os.fspath(tmp_path):
+            checks["stat"] += 1
+        return real_stat(p, *a, **kw)
+    monkeypatch.setattr(car_lookup.os, "stat", _stat)
+    return clock, checks
+
+
+def test_lookups_inside_the_interval_skip_the_dir_check(tmp_path, monkeypatch):
+    (tmp_path / "a.xml").write_text(_one_driver_xml("A #1", "Car A", "GT3"))
+    clock, checks = _clocked(tmp_path, monkeypatch)
+    assert resolve_car("A #1") == "Car A"
+    assert checks == {"results_dir": 1, "stat": 1}
+    for t in (100.1, 100.5, 100.999):
+        clock[0] = t
+        assert resolve_car("A #1") == "Car A" and resolve_car_class("A #1") == "GT3"
+    assert checks == {"results_dir": 1, "stat": 1}     # no config load, no stat
+
+
+def test_a_new_result_log_is_seen_once_the_interval_has_passed(tmp_path, monkeypatch):
+    (tmp_path / "a.xml").write_text(_one_driver_xml("A #1", "Car A", "GT3"))
+    clock, checks = _clocked(tmp_path, monkeypatch)
+    car_lookup._entry_table()
+    (tmp_path / "b.xml").write_text(_one_driver_xml("B #2", "Car B", "Hyper"))  # LMU, post-race
+    _bump_dir(tmp_path, 5)
+    clock[0] = 100.9
+    assert "B #2" not in car_lookup._entry_table()   # inside the interval: not looked yet
+    clock[0] = 101.0
+    assert car_lookup._entry_table()["B #2"] == ("Car B", "Hyper")
+    assert checks == {"results_dir": 2, "stat": 2}
+    clock[0] = 101.5                                   # the interval restarts from there
+    car_lookup._entry_table()
+    assert checks == {"results_dir": 2, "stat": 2}
+
+
+def test_a_warmup_waiter_that_times_out_scans_rather_than_serve_the_empty_table(
+        tmp_path, monkeypatch):
+    """#179's guarantee under #201's interval: the check is stamped only once a scan's
+    table is in place, so a caller whose wait for a still-running warm scan times out
+    scans itself -- it is never handed the empty table as 'checked just now'."""
+    monkeypatch.setattr(car_lookup, "_CHECK_EVERY_S", 1.0)
+    monkeypatch.setattr(car_lookup, "_WARM_WAIT_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(car_lookup, "results_dir", lambda: tmp_path)
+    (tmp_path / "a.xml").write_text(_one_driver_xml("Team X #1", "Car X", "GT3"))
+    real_parse = car_lookup._parse_one
+    entered, release = threading.Event(), threading.Event()
+
+    def _slow_warm_parse(path):
+        if threading.current_thread().name == "car-lookup-warm":
+            entered.set()
+            assert release.wait(timeout=5), "test setup: release was never signalled"
+        return real_parse(path)
+    monkeypatch.setattr(car_lookup, "_parse_one", _slow_warm_parse)
+    car_lookup.warm_entry_table_async()
+    assert entered.wait(timeout=5)                     # the warm scan is mid-parse
+    try:
+        assert car_lookup.resolve_car("Team X #1", "GT3") == "Car X"   # never "GT3 car"
+    finally:
+        release.set()
+    assert car_lookup._warmed.wait(timeout=5)
+    assert car_lookup.resolve_car("Team X #1", "GT3") == "Car X"
+
+
+def test_no_results_dir_is_checked_once_per_interval_too(tmp_path, monkeypatch):
+    """No LMU install found (or its dir gone from the config): the table is empty, and
+    the config load behind that answer is rate-limited like the stat."""
+    (tmp_path / "a.xml").write_text(_one_driver_xml("A #1", "Car A", "GT3"))
+    clock, _ = _clocked(tmp_path, monkeypatch)
+    assert car_lookup._entry_table() == {"A #1": ("Car A", "GT3")}
+    calls = []
+    monkeypatch.setattr(car_lookup, "results_dir", lambda: calls.append(1))
+    clock[0] = 101.0
+    assert car_lookup._entry_table() == {} and len(calls) == 1
+    clock[0] = 101.5
+    assert car_lookup._entry_table() == {} and len(calls) == 1

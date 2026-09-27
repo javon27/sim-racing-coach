@@ -208,11 +208,16 @@ def _isolated_car_lookup(monkeypatch):
     test_events_laps_frame_is_not_delayed_by_a_slow_optimal_compute). Point
     car_lookup.results_dir at nothing and reset its caches for every test; a test that
     deliberately wants the real dir overrides `car_lookup.results_dir` itself (e.g.
-    `monkeypatch.setattr(car_lookup, "results_dir", install.results_dir)`)."""
+    `monkeypatch.setattr(car_lookup, "results_dir", install.results_dir)`).
+
+    The once-a-second dir check (#201) is off (interval 0): a test that changes the dir
+    and looks again must see it now. The #201 tests set the interval back themselves."""
     from simcoach import car_lookup
     monkeypatch.setattr(car_lookup, "results_dir", lambda: None)
+    monkeypatch.setattr(car_lookup, "_CHECK_EVERY_S", 0.0)
     car_lookup._cache["sig"] = None
     car_lookup._cache["table"] = {}
+    car_lookup._cache["checked"] = None
     car_lookup._file_cache.clear()
     car_lookup._warm_started = False
     car_lookup._warmed.clear()

@@ -1083,3 +1083,54 @@ def test_the_overall_leader_crossing_after_the_clock_ran_out_took_the_flag():
             "out (the end of lap 9) — that was the chequered flag.")
     assert format_strategy(snap) == f"As of lap 9. No projection: {over}"
     assert f"Remaining: none — {over}" in format_race_state(snap)
+
+
+def _closing(gaps, position, time_left=950.0, max_laps=None):
+    """#201: laps 10-12, clean at 100 s, closing on the car ahead 0.3 s/lap. A timed race
+    with 950 s left at lap 12 is 10 laps to go (the flag at lap 22), or 11 (lap 23)."""
+    return [LapFacts(n, 100.0, True, position=position,
+                     race=RaceSample(class_position=3, class_ahead="A. Rival (Rival Entry)",
+                                     class_gap_ahead=g, time_left=time_left,
+                                     max_laps=max_laps))
+            for n, g in zip((10, 11, 12), gaps)]
+
+
+def test_a_catch_on_the_longer_counts_flag_lap_is_said_conditionally():
+    """#201: the catch cutoff is the plan's (plans_longer), never the shorter count's --
+    3.2 s at 0.3 s/lap is 11 laps: lap 23, possible when the leader's flag comes late."""
+    snap = build_snapshot(_closing((3.8, 3.5, 3.2), position=7), "s")
+    assert snap.state.laps_to_go == 10 and snap.strategy.laps_to_go == 11
+    assert snap.state.ahead.catch_lap == 23
+    text = format_race_state(snap)
+    assert ("you are closing 0.30 s/lap; at this rate you reach him around lap 23, only if "
+            "the race runs that long (laps to go: 10 laps if the overall leader takes the "
+            "flag before you finish lap 22, 11 if not).") in text, text
+    assert "not before the flag" not in text
+    # #186's live read: the place changed, the same car is ahead -- the lap's line, as said.
+    live = format_race_state(snap, (8, RaceSample(class_position=3,
+                                                  class_ahead="A. Rival (Rival Entry)")))
+    assert ("Car ahead in class at the end of lap 12: A. Rival (Rival Entry), 3.2 s ahead; "
+            "you are closing 0.30 s/lap; at this rate you reach him around lap 23, only if "
+            "the race runs that long") in live, live
+    # A catch inside the shorter count (2.9 s: lap 22) needs no caveat.
+    text = format_race_state(build_snapshot(_closing((3.5, 3.2, 2.9), position=7), "s"))
+    assert "you reach him around lap 22." in text, text
+
+
+def test_the_overall_leader_is_past_the_flag_on_the_longer_counts_lap():
+    """#201: P1 overall -- the flag is his own at lap 22, so a lap-23 catch is past it."""
+    snap = build_snapshot(_closing((3.8, 3.5, 3.2), position=1), "s")
+    assert snap.state.ahead.catch_lap is None
+    assert "; not before the flag at this rate." in format_race_state(snap)
+
+
+def test_a_lap_count_race_keeps_its_own_catch_cutoff():
+    """#201: a 22-lap race ends at lap 22 -- a lap-23 catch is past the flag."""
+    snap = build_snapshot(_closing((3.8, 3.5, 3.2), position=7, time_left=None,
+                                   max_laps=22), "s")
+    assert snap.state.laps_to_go == 10 and snap.state.ahead.catch_lap is None
+    text = format_race_state(snap)
+    assert "; not before the flag at this rate." in text and "only if" not in text
+    snap = build_snapshot(_closing((3.5, 3.2, 2.9), position=7, time_left=None,
+                                   max_laps=22), "s")
+    assert snap.state.ahead.catch_lap == 22
