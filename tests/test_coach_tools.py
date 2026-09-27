@@ -2872,7 +2872,8 @@ def test_get_strategy_in_practice_plans_from_the_race_length_the_driver_gives(tm
     assert ("Race length: 25 minutes (as you said) at your practice pace of 1:41.000 = 15 "
             "laps if the overall leader takes the flag before you finish lap 15, 16 if "
             "not.") in out, out
-    assert "Pit window: laps 7 to 7" in out
+    # Planned on the longer count, 16 laps (#184): 8 on a full charge, stop at lap 8.
+    assert "Pit window: laps 8 to 8" in out
 
 
 def test_get_strategy_provisional_needs_two_clean_practice_laps(tmp_path, synthetic_lap):
@@ -3351,17 +3352,22 @@ def test_pre_race_plan_from_a_lap_count_race_and_never_the_grid_countdown(
     assert "about 1 lap" not in grid
 
 
-def test_pre_race_energy_comes_only_from_laps_at_this_sessions_fuel_ratio(
-        tmp_path, synthetic_lap, monkeypatch):
-    """#184 red-team C1, Road Atlanta Z06 2026-09-23 (real rows): the 13:xx session ran
-    2.25 L/lap at 2.39 %VE/lap (0.94 L per 1%); the 21:xx one the same litres at 3.40 %.
-    Cut after the evening's first clean qualy lap, the pooled median said '15 laps x
-    2.4%/lap = 35.9%'; the race burned 3.16-3.53 %/lap and would have run dry ~lap 11."""
-    ra, evening = "Michelin Raceway Road Atlanta", (
-        "michelin-raceway-road-atlanta--13-autosport-2026-13-lm--online")
+_RA_TRACK = "Michelin Raceway Road Atlanta"
+_RA_EVENING = "michelin-raceway-road-atlanta--13-autosport-2026-13-lm--online"
+# The evening #13 session's first rows (ids 7530-7531): the out-lap leaves the pits on
+# 23.25 L at 31% -- fuel ratio 0.75 -- then one clean qualy lap.
+_RA_0923_EVENING = [
+    (1790215210.2885888, "qualifying", 1, None, True, .31, .21324, 23.25, 16.04079),
+    (1790215297.686399, "qualifying", 2, 87.3708, False, .21323, .17901, 16.04007, 13.77587)]
+
+
+def _ra_store(tmp_path, synthetic_lap, monkeypatch, evening):
+    """Road Atlanta Z06 2026-09-23 (real rows): the 13:xx TF Sport race (ids 7486-7490)
+    filled at fuel ratio 1.00 and burned 2.25 L/lap at 2.4 %VE; `evening` rows of the
+    21:xx #13 session, which filled at 0.75 -- the same litres at 3.4 %VE."""
     store = _z06_store(tmp_path, synthetic_lap, monkeypatch, history=False)
     _sarthe_laps(store, synthetic_lap, _TF_ENTRY,
-                 "michelin-raceway-road-atlanta--tf-sport-2026-2-lm--online", [  # 7486-7490
+                 "michelin-raceway-road-atlanta--tf-sport-2026-2-lm--online", [
                      (1790188209.3709934, "race", 2, 84.2498, False, .43752, .41352,
                       43.70377, 41.43749),
                      (1790188292.969675, "race", 3, 83.5526, False, .41351, .39047,
@@ -3371,17 +3377,24 @@ def test_pre_race_energy_comes_only_from_laps_at_this_sessions_fuel_ratio(
                      (1790188458.968076, "race", 5, 83.1533, False, .36727, .34334,
                       37.08856, 34.84375),
                      (1790188542.7709658, "race", 6, 83.7617, False, .34333, .31980,
-                      34.84295, 32.64165)], cap=120.0, track=ra)
-    _sarthe_laps(store, synthetic_lap, _RIG_ENTRY, evening, [                    # 7530-7531
-        (1790215210.2885888, "qualifying", 1, None, True, .31, .21324, 23.25, 16.04079),
-        (1790215297.686399, "qualifying", 2, 87.3708, False, .21323, .17901, 16.04007,
-         13.77587)], cap=120.0, track=ra)
-    out = _z06_ctx(store, _live("qualifying"), track=ra, sid=evening).dispatch(
+                      34.84295, 32.64165)], cap=120.0, track=_RA_TRACK)
+    _sarthe_laps(store, synthetic_lap, _RIG_ENTRY, _RA_EVENING, evening, cap=120.0,
+                 track=_RA_TRACK)
+    return _z06_ctx(store, _live("qualifying"), track=_RA_TRACK, sid=_RA_EVENING)
+
+
+def test_pre_race_energy_comes_only_from_laps_at_this_sessions_fuel_ratio(
+        tmp_path, synthetic_lap, monkeypatch):
+    """#184 red-team C1: cut after the evening's first clean qualy lap, the pooled median
+    said '15 laps x 2.4%/lap = 35.9%'; the race burned 3.16-3.53 %/lap and would have run
+    dry ~lap 11."""
+    out = _ra_store(tmp_path, synthetic_lap, monkeypatch, _RA_0923_EVENING).dispatch(
         "get_strategy", {"race_minutes": 20})
     assert "2.4%/lap" not in out and "Virtual energy needed" not in out, out
-    assert ("Virtual energy: only 1 clean lap at your current fuel ratio (this session's "
-            "energy per litre, within 3%); 5 stored laps at another fuel ratio are left out "
-            "-- it needs 2, so none is projected yet.") in out
+    assert ("Virtual energy: 1 stored lap at your current fuel ratio (0.75 L per 1% on board "
+            "after a fill, within 2%); 5 at fuel ratio 1.00 on ") in out
+    assert ("Virtual energy: only 1 clean lap to measure it on at this fuel ratio -- it needs "
+            "2, so none is projected yet.") in out
     # Litres still pool: 2.1715 2.1757 [2.2013 2.2448] 2.2642 2.2663.
     assert "Fuel needed to the flag: 15 laps × 2.22 L/lap" in out
     # A VE car stays one: its fuel is set by the ratio, never assumed a full 120 L tank.
@@ -3390,21 +3403,98 @@ def test_pre_race_energy_comes_only_from_laps_at_this_sessions_fuel_ratio(
     assert "full tank" not in out and "120.0 L on board" not in out
 
 
+def test_before_a_clean_lap_the_fuel_ratio_is_read_off_the_out_lap(tmp_path, synthetic_lap,
+                                                                  monkeypatch):
+    """#184 red-team F1: cut BEFORE the evening's first clean lap, the plan said '15 laps x
+    2.4%/lap ... start with at least 38%' -- the race burned ~51%. The out-lap already
+    shows the 0.75 fill, and no stored lap ran at it."""
+    out = _ra_store(tmp_path, synthetic_lap, monkeypatch, _RA_0923_EVENING[:1]).dispatch(
+        "get_strategy", {"race_minutes": 20})
+    assert "2.4%/lap" not in out and "Virtual energy needed" not in out, out
+    assert ("Virtual energy: 0 stored laps at your current fuel ratio (0.75 L per 1% on board "
+            "after a fill, within 2%); 5 at fuel ratio 1.00 on ") in out
+    assert "only 0 clean laps to measure it on at this fuel ratio" in out
+
+
+def test_with_no_row_this_session_the_stored_ratio_is_stated_every_time(
+        tmp_path, synthetic_lap, monkeypatch):
+    """#184 red-team F1: no row of this session at all -- the VE figure is the stored
+    laps', measured at their fill ratio, and says so: at another setting it is wrong."""
+    out = _ra_store(tmp_path, synthetic_lap, monkeypatch, []).dispatch(
+        "get_strategy", {"race_minutes": 20})
+    assert ("Virtual energy: 5 stored laps at your newest stored fuel ratio (1.00 L per 1% on "
+            "board after a fill, within 2%) -- measured at 1.00: at another ratio this figure "
+            "is wrong, so set your fuel ratio before trusting it.") in out, out
+    assert "Virtual energy needed to the flag: 15 laps × 2.4%/lap" in out
+
+
+def test_one_odd_lap_this_session_keeps_the_history_at_the_same_fill(
+        tmp_path, synthetic_lap, monkeypatch):
+    """#184 red-team F2, Long Beach Z06 (real rows): 09-26 qualifying lap 7642 burned 1.01 L
+    per 1% VE, 6.9% off 09-24's race laps -- a per-lap check threw all history out as 'at
+    another fuel ratio'. Both days filled at 0.99 (7578: 99 L at 100%; 7641 leaves the
+    pits on 27.72 L at 28%)."""
+    lb = "Grand Prix of Long Beach"
+    lb26 = "grand-prix-of-long-beach--13-autosport-2026-13-lm--online"
+    store = _z06_store(tmp_path, synthetic_lap, monkeypatch, history=False)
+    _sarthe_laps(store, synthetic_lap, "TF Sport 2026 #33:ELMS",
+                 "grand-prix-of-long-beach--tf-sport-2026-33-elms--online", [
+                     (1790309138.2130044, "race", 0, None, True, 1.0, .58, 99.0, 56.6797,
+                      "out", 1800.4),
+                     (1790309235.4010775, "race", 1, 97.1418, False, .58, .56048, 56.67964,
+                      54.6106),
+                     (1790309319.8148165, "race", 2, 84.3062, False, .56047, .53959, 54.60979,
+                      52.63498),
+                     (1790309403.4138086, "race", 3, 83.7756, False, .53958, .51865, 52.63418,
+                      50.65400),
+                     (1790309486.404799, "race", 4, 82.8444, False, .51864, .49820, 50.65319,
+                      48.72010)], cap=120.0, track=lb)
+    _sarthe_laps(store, synthetic_lap, _RIG_ENTRY, lb26, [
+        (1790474198.583762, "qualifying", 1, None, True, .28, .26021, 27.72, 25.28019,
+         "partial", None),
+        (1790474305.0260348, "qualifying", 2, 106.3879, False, .26020, .23813, 25.27939,
+         23.04479)], cap=120.0, track=lb)
+    out = _z06_ctx(store, _live("qualifying"), track=lb, sid=lb26).dispatch(
+        "get_strategy", {"race_minutes": 20})
+    assert "fuel ratio" not in out.split("Race length")[0], out
+    assert "Virtual energy needed to the flag: " in out and "2.1%/lap" in out
+
+
+def test_a_timed_race_is_planned_on_the_longer_count_after_the_formation_lap(
+        tmp_path, synthetic_lap, monkeypatch):
+    """#184 red-team F3, Sarthe 40 min: 'needs 103.3% -> more than a full charge' beside
+    '100% left = 10.9 laps, 0.9 spare; Stops: none' -- the model repeats the Stops line.
+    Planned on 11 laps (the leader can take the flag after this car's lap 10), from 97.6%
+    at the green (the 09-17 formation burned 2.4%)."""
+    store = _z06_store(tmp_path, synthetic_lap, monkeypatch)
+    out = _z06_ctx(store, _live("qualifying")).dispatch("get_strategy", {"race_minutes": 40})
+    # 2400 / 244.65 = 9.8 -> 10 laps, or 11.
+    assert "= 10 laps if the overall leader takes the flag before you finish lap 10, 11 if " \
+           "not." in out, out
+    assert "(97.6% at the green, after the formation lap)" in out
+    assert "Laps to go: planned on 11, the longer count" in out
+    # .976 / .0917 = 10.6 laps for 11: short -- a save target, and one stop otherwise.
+    assert "Virtual energy: 9.2%/lap, 98% left = 10.6 laps: short by 0.4 laps; save" in out
+    assert "Stops to the flag: one." in out and "Stops to the flag: none" not in out
+
+
 def test_the_formation_lap_is_the_row_just_before_race_lap_1_never_a_countdown(
         tmp_path, synthetic_lap, monkeypatch):
-    """#184 red-team M1: its burn is its own term. The newest formation (0 VE from 09-23
-    on) wins over 09-17's 2.4% when they disagree; a garage countdown row (a refill, 8 s
-    on the clock) is never read as one."""
+    """#184 red-team M1: its burn is its own term. When 09-17's 2.4% and 09-26's 0 VE
+    disagree the larger is planned, both said; a garage countdown row (a refill, 8 s on
+    the clock) is never read as one."""
     import time
     store = _z06_store(tmp_path, synthetic_lap, monkeypatch)
     _sarthe_laps(store, synthetic_lap, _RIG_ENTRY, _RIG_SID,
                  [_Z06_0926_COUNTDOWN, _Z06_0926_FORMATION, _Z06_0926_LAP1], cap=120.0)
     out = _z06_ctx(store, _live("qualifying")).dispatch("get_strategy", {"race_minutes": 20})
     days = sorted({time.strftime("%Y-%m-%d", time.localtime(r[0]))
-                   for r in (_Z06_0917_START[0], _Z06_0926_FORMATION)})
-    # Fuel: the median of 2.0952 and 2.0107 L; VE: 2.4% vs 0.0% disagree -> the newest.
-    assert ("Formation lap: 0.0% virtual energy, 2.05 L (from 2 stored formation laps here in "
-            f"this car, {', '.join(days)}).") in out, out
+                   for r in (_Z06_0917_START[1], _Z06_0926_FORMATION)})
+    # Fuel: the median of 2.0952 and 2.0107 L; VE: 2.4% vs 0.0% disagree -> the LARGER,
+    # both stated (#184 round 2: 2.4% extra at the start is cheap, 2.4% short is not).
+    assert ("Formation lap: 2.4% virtual energy (stored formation laps differ: 2.4% "
+            f"({days[0]}) or 0.0% ({days[1]}); planning 2.4%), 2.05 L (from 2 stored "
+            f"formation laps here in this car, {', '.join(days)}).") in out, out
     # Without the formation row, the countdown row just before lap 1 is refused.
     store2 = _z06_store(tmp_path / "b", synthetic_lap, monkeypatch)
     _sarthe_laps(store2, synthetic_lap, _RIG_ENTRY, _RIG_SID,

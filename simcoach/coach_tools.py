@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 from itertools import pairwise
 from types import SimpleNamespace
 
@@ -64,6 +64,7 @@ from simcoach.format import (
 from simcoach.fuel import laps_remaining
 from simcoach.livelap import impact_text, incident_lines
 from simcoach.race import (
+    FILL_ROWS,
     HISTORY_LAPS,
     HISTORY_LOADS,
     MIN_STINT_LAPS,
@@ -72,6 +73,8 @@ from simcoach.race import (
     RATE_LAPS,
     HistLap,
     _clock,
+    departure,
+    fill_ratio,
     format_provisional,
     format_race_state,
     format_strategy,
@@ -2409,7 +2412,7 @@ class CoachContext:
             # #184 (Sarthe 2026-09-26: one qualy lap, 'that doesn't help me'): this car's
             # stored burn at this track, every session -- practice, qualifying AND race.
             hist, read, stored = self._burn_history(cls)
-            med, notes, energy_sessions = history_pick(hist, sid)
+            med, notes, energy_sessions = history_pick(hist, *self._fills(hist, sid))
             if med is None:
                 return no(f"it needs {MIN_STINT_LAPS} clean laps with a measured fuel/energy "
                           f"burn at this track in this car (found {len(hist)} across all "
@@ -2475,11 +2478,13 @@ class CoachContext:
         if to_go is None or basis is None:
             return no("race length unknown. Ask the driver how long the race is, then "
                       "call get_strategy again with race_laps or race_minutes")
+        # A timed race is planned on the longer count (see `either`): running dry is the
+        # costly error. Before the start, the formation lap comes off the assumed fill.
+        formation = None if start is not None else self._formation(cls, energy_sessions)
         return format_provisional(
-            provisional_strategy(practice, to_go, start, ve), lap_no, basis, len(practice),
-            damage, damage_lap, source, notes, measured=start is not None, timed=timed,
-            ve_car=bool(ve),
-            formation=None if start is not None else self._formation(cls, energy_sessions))
+            provisional_strategy(practice, to_go + timed, start, ve, formation), lap_no,
+            basis, len(practice), damage, damage_lap, source, notes,
+            measured=start is not None, timed=timed, ve_car=bool(ve), formation=formation)
 
     def _stored_class(self):
         """#184: the stored class this car's laps are filed under (store.timed_laps'
@@ -2514,10 +2519,38 @@ class CoachContext:
                 continue
             f = lap_facts(rec)
             if f.clean and (f.fuel_used or f.energy_used):
-                out.append(HistLap(rec.timestamp, rec.phase, rec.session_id, f))
+                out.append(HistLap(rec.timestamp, rec.phase, rec.session_id, f,
+                                   departure(rec)))
                 if len(out) == HISTORY_LAPS:
                     break
         return out, read, len(rows)
+
+    def _fills(self, hist, sid) -> tuple[dict, float | None]:
+        """#184: ({(session, phase): fuel ratio}, the live session's ratio or None) --
+        race.fill_ratio over each sitting's departures: its clean laps' (already read) and
+        its pit/out/in/partial rows', where fills happen (at most FILL_ROWS of those a
+        sitting, newest first). The live ratio is its newest sitting's that shows one: a
+        grid or out-lap row is enough, no clean lap needed."""
+        deps: dict = defaultdict(list)
+        for h in hist:
+            deps[(h.session, h.phase)].append(h.dep)
+        live = [r for r in self.store.session_laps(sid) if self._live_row(r)] if sid else []
+        mine = list(dict.fromkeys((sid, r["phase"]) for r in reversed(live)))
+        want = set(deps) | set(mine)
+        for session in {k[0] for k in want}:
+            seen: Counter = Counter()
+            for r in reversed(live if session == sid else self.store.session_laps(session)):
+                key = (session, r["phase"])
+                if (key not in want or r.get("mapping") or seen[key] >= FILL_ROWS
+                        or not (r.get("pit") or r.get("partial"))):
+                    continue
+                seen[key] += 1
+                try:
+                    deps[key].append(departure(self.store.load(r["id"])))
+                except Exception:
+                    continue    # a result-log row: no telemetry
+        fills = {k: fill_ratio(v) for k, v in deps.items()}
+        return fills, next((fills[k] for k in mine if fills.get(k)), None)
 
     def _formation(self, cls, energy_sessions):
         """#184: race.pick_formation over this car's stored formation laps here, or None

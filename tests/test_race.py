@@ -16,6 +16,8 @@ from simcoach.race import (
     build_snapshot,
     catch_lap,
     class_neighbours,
+    departure,
+    fill_ratio,
     format_provisional,
     format_race_state,
     format_strategy,
@@ -675,9 +677,10 @@ def _h(ts, session, phase, lap_time, fuel, energy):
                                                 energy_used=energy))
 
 
-# Road Atlanta Z06, 2026-09-23 (real rows): the 13:xx TF Sport session ran 0.94 L per 1%
-# VE (ids 7486-7490), the 21:xx 13 Autosport session 0.66 (ids 7531-7532) -- the same
-# 2.25 L/lap at 2.4 vs 3.4 %VE/lap. Newest first, as the caller passes them.
+# Road Atlanta Z06, 2026-09-23 (real rows): the 13:xx TF Sport session ran fuel ratio
+# 1.00 (L per 1% VE after a fill; ids 7486-7490), the 21:xx 13 Autosport one 0.75 (ids
+# 7531-7532) -- the same 2.25 L/lap at 2.4 vs 3.4 %VE/lap. Newest first, as the caller
+# passes them.
 _RA_EVENING = "michelin-raceway-road-atlanta--13-autosport-2026-13-lm--online"
 _RA_NOON = "michelin-raceway-road-atlanta--tf-sport-2026-2-lm--online"
 _RA = ([_h(1790215383.4888265, _RA_EVENING, "qualifying", 85.7913, 2.2486, 0.03392),
@@ -688,6 +691,8 @@ _RA = ([_h(1790215383.4888265, _RA_EVENING, "qualifying", 85.7913, 2.2486, 0.033
            (1790188375.770235, 82.9324, 2.1757, 0.02318),
            (1790188292.969675, 83.5526, 2.1715, 0.02304),
            (1790188209.3709934, 84.2498, 2.2663, 0.02401))])
+_RA_FILLS = {(_RA_EVENING, "qualifying"): 0.75, (_RA_NOON, "race"): 1.00}
+_NOON = time.strftime("%Y-%m-%d %H:%M", time.localtime(1790188209.3709934))
 
 
 def test_history_pick_is_the_median_and_never_projects_a_channel_measured_once():
@@ -695,36 +700,73 @@ def test_history_pick_is_the_median_and_never_projects_a_channel_measured_once()
     hist = [_h(3, "s", "race", 245.3115, 7.4275, 0.0922), _h(2, "s", "race", 243.8760, 7.3333,
                                                             None),
             _h(1, "s", "race", 300.0, 4.0, None)]
-    med, notes, _ = history_pick(hist, None)
+    med, notes, _ = history_pick(hist, {}, None)
     assert med.fuel_used == pytest.approx(7.3333) and med.lap_time == pytest.approx(245.3115)
     assert med.energy_used is None                 # measured on one lap: not projected
-    assert "Virtual energy: only 1 clean lap to measure it on -- it needs 2" in notes[0]
-    assert history_pick(hist[:1], None)[0] is None
+    assert ("Virtual energy: the fuel ratio these laps ran at isn't recorded -- at another "
+            "ratio this figure is wrong.") in notes
+    assert ("Virtual energy: only 1 clean lap to measure it on at this fuel ratio -- it needs "
+            "2, so none is projected yet.") in notes
+    assert history_pick(hist[:1], {}, None)[0] is None
 
 
 def test_history_pick_takes_virtual_energy_only_at_this_sessions_fuel_ratio():
     """#184 red-team C1: pooled, Road Atlanta read 2.4 %/lap -- the evening race burned
     3.16-3.53 and would have run dry around lap 11."""
-    med, notes, sessions = history_pick(_RA, _RA_EVENING)
+    med, notes, sessions = history_pick(_RA, _RA_FILLS, 0.75)
     assert med.energy_used == pytest.approx((0.03392 + 0.03422) / 2)
     assert med.fuel_used == pytest.approx(2.2448)          # L/lap is physical: every lap
     assert sessions == {_RA_EVENING}
-    assert ("Virtual energy: only 2 clean laps at your current fuel ratio (this session's "
-            "energy per litre, within 3%); 5 stored laps at another fuel ratio are left "
-            "out.") in notes
+    assert notes == [(f"Virtual energy: 2 stored laps at your current fuel ratio (0.75 L per "
+                      f"1% on board after a fill, within 2%); 5 at fuel ratio 1.00 on {_NOON} "
+                      "race left out.")]
 
 
-def test_history_pick_without_a_lap_this_session_names_an_older_fuel_ratio():
-    med, notes, sessions = history_pick(_RA, "another-session")
-    assert med.energy_used == pytest.approx((0.03392 + 0.03422) / 2)   # the newest sitting
-    assert sessions == {_RA_EVENING}
-    noon = time.strftime("%Y-%m-%d %H:%M", time.localtime(1790188209.3709934))
-    assert (f"Your earlier sessions here ran at a different energy per litre (2.4%/lap on "
-            f"{noon} race)") in notes[0]
-    assert notes[0].endswith("only -- set your fuel ratio before trusting this.")
-    # Sittings that agree pool, with no note.
-    med, notes, _ = history_pick(_RA[2:], "another-session")
-    assert med.energy_used == pytest.approx(0.02353) and notes == []
+def test_history_pick_with_no_lap_this_session_still_keys_on_its_fuel_ratio():
+    """#184 red-team F1: cut before the evening session's first clean lap, the pooled plan
+    said '15 laps x 2.4%/lap'; the race burned ~51%. Its out-lap already shows the fill:
+    0.75 -- and no stored lap ran at it."""
+    med, notes, _ = history_pick(_RA[2:], _RA_FILLS, 0.75)
+    assert med.energy_used is None and med.fuel_used == pytest.approx(2.2013)
+    assert ("Virtual energy: only 0 clean laps to measure it on at this fuel ratio -- it "
+            "needs 2, so none is projected yet.") in notes
+    # Laps whose sitting's fill can't be read (no pit row stored) can't be confirmed.
+    med, notes, _ = history_pick(_RA[2:], {}, 0.75)
+    assert med.energy_used is None
+    assert notes[0].endswith("; 5 whose fuel ratio isn't recorded left out.")
+
+
+def test_history_pick_with_no_row_this_session_states_the_ratio_it_measured_at():
+    """No row of this session at all: the newest stored sitting's ratio is used, and
+    said, every time -- at another setting the VE figure is wrong."""
+    med, notes, _ = history_pick(_RA[2:], _RA_FILLS, None)
+    assert med.energy_used == pytest.approx(0.02353)
+    assert notes == [("Virtual energy: 5 stored laps at your newest stored fuel ratio (1.00 L "
+                      "per 1% on board after a fill, within 2%) -- measured at 1.00: at "
+                      "another ratio this figure is wrong, so set your fuel ratio before "
+                      "trusting it.")]
+    # Two stored settings: only the newest one's laps, the other named.
+    med, notes, _ = history_pick(_RA, _RA_FILLS, None)
+    assert med.energy_used == pytest.approx((0.03392 + 0.03422) / 2)
+    assert f"; 5 at fuel ratio 1.00 on {_NOON} race left out -- measured at 0.75" in notes[0]
+
+
+def test_one_odd_lap_this_session_never_throws_out_history_at_the_same_ratio():
+    """#184 red-team F2, Long Beach Z06 (real rows): 09-26 qualifying lap 7642 burned 1.01 L
+    per 1% VE, 6.9% off 09-24's race laps (ids 7579-7582) -- but both days filled at 0.99.
+    Per-lap scatter in one sitting runs to 12%; the fill is the setting."""
+    lb24 = "grand-prix-of-long-beach--tf-sport-2026-33-elms--online"
+    lb26 = "grand-prix-of-long-beach--13-autosport-2026-13-lm--online"
+    hist = ([_h(1790474305.0260348, lb26, "qualifying", 106.3879, 2.23459, 0.022073)]
+            + [_h(ts, lb24, "race", t, f, e) for ts, t, f, e in (
+                (1790309486.404799, 82.8444, 1.93309, 0.020444),
+                (1790309403.4138086, 83.7756, 1.98018, 0.020932),
+                (1790309319.8148165, 84.3062, 1.97481, 0.020879),
+                (1790309235.4010775, 97.1418, 2.06905, 0.019523))])
+    med, notes, _ = history_pick(hist, {(lb26, "qualifying"): 0.99, (lb24, "race"): 0.99},
+                                 0.99)
+    assert med.energy_used == pytest.approx(0.020879)            # all five pooled
+    assert not [n for n in notes if "fuel ratio" in n], notes
 
 
 def test_history_pick_counts_laps_at_the_fastest_sittings_pace_when_they_differ():
@@ -741,11 +783,41 @@ def test_history_pick_counts_laps_at_the_fastest_sittings_pace_when_they_differ(
                 (1789015392.5161924, 55.332, 1.6275, 0.01778),
                 (1789015337.1223092, 55.983, 1.6084, 0.01757),
                 (1789015281.1241658, 55.806, 1.604, 0.01763))])
-    med, notes, _ = history_pick(hist, None)
+    med, notes, _ = history_pick(hist, {}, None)
     assert med.lap_time == pytest.approx(55.806)
     practice = time.strftime("%Y-%m-%d %H:%M", time.localtime(1789015281.1241658))
     assert (f"Lap time: 0:55.806, the median of your {practice} practice session -- the "
             "fastest of your sessions here") in notes[-1]
+
+
+def test_the_fuel_ratio_is_read_off_the_tank_while_the_car_moves(synthetic_lap):
+    """Long Beach 2026-09-26 qualifying row 7641: it opens on the LAST session's car still
+    at speed (Sarthe's 17.29 L at 19%, 188 km/h), sits parked on Sarthe's 56.55 L at 65%
+    for 13 minutes, shows the 1.0 L-at-100% garage placeholder, then the real fill driven
+    away: 27.72 L at 28% -- 0.99. Here the stale tail is set to 40% VE (above the fill,
+    as a longer previous session's would be): it must still never count."""
+    ch = dict(synthetic_lap.channels)
+    n = len(ch["lap_distance"])
+    t, a, b = n // 10, n // 3, 2 * n // 3
+    ch["speed"] = np.concatenate([np.full(t, 188.0), np.zeros(b - t), np.full(n - b, 150.0)])
+    ch["fuel"] = np.concatenate([np.full(t, 34.8), np.full(a - t, 56.55), np.full(b - a, 1.0),
+                                 np.linspace(27.72, 25.28, n - b)])
+    ch["virtual_energy"] = np.concatenate([np.full(t, 0.40), np.full(a - t, 0.65),
+                                           np.full(b - a, 1.0),
+                                           np.linspace(0.28, 0.2602, n - b)])
+    dep = departure(dataclasses.replace(synthetic_lap, channels=ch))
+    assert dep == pytest.approx((0.28, 27.72))
+    # Sarthe 2026-09-17 row 7418 showed a 76 L / 100% garage preview before its real load
+    # (33.93 L at 39%, 0.87). A row that ENDS parked on it must not read 0.76.
+    park = dict(synthetic_lap.channels)
+    park["speed"] = np.concatenate([np.full(a, 150.0), np.zeros(n - a)])
+    park["fuel"] = np.concatenate([np.linspace(33.93, 32.4, a), np.full(n - a, 76.0)])
+    park["virtual_energy"] = np.concatenate([np.linspace(0.39, 0.377, a), np.full(n - a, 1.0)])
+    assert departure(dataclasses.replace(synthetic_lap, channels=park)) == pytest.approx(
+        (0.39, 33.93))
+    # The fullest departure is the fill; later ones drift as both drain.
+    assert fill_ratio([dep, (0.2602, 25.28), None]) == pytest.approx(0.99)
+    assert fill_ratio([None]) is None
 
 
 def test_formation_burn_reads_a_flat_channel_as_zero_and_a_refill_as_none(synthetic_lap):
@@ -759,23 +831,29 @@ def test_formation_burn_reads_a_flat_channel_as_zero_and_a_refill_as_none(synthe
     assert formation_burn(dataclasses.replace(synthetic_lap, channels=ch))["fuel"] is None
 
 
-def test_pick_formation_takes_the_newest_when_they_disagree():
-    # Sarthe: 2.36% and 2.41% VE on 09-17/18 (ids 7422, 7454), 0 from 09-23 on.
+def test_pick_formation_plans_the_largest_when_they_disagree_and_says_so():
+    """Sarthe: 2.36% and 2.41% VE on 09-17/18 (ids 7422, 7454), 0 on 09-26 (id 7635). An
+    extra 2.4% at the start is cheap; 2.4% short eats half the 5% margin."""
     old = [(1789709360.6580997, "t", {"fuel": 2.1329, "energy": 0.02408}),
            (1789698569.2824166, "t", {"fuel": 2.0952, "energy": 0.02360})]
-    fuel, energy, _ = pick_formation(old, None)
-    assert energy == pytest.approx((0.02408 + 0.02360) / 2)
+    fuel, energy, _, how = pick_formation(old, None)
+    assert energy == pytest.approx((0.02408 + 0.02360) / 2) and how is None
     assert fuel == pytest.approx((2.1329 + 2.0952) / 2)
     new = [(1790471894.7841697, "r", {"fuel": 2.0107, "energy": 0.0})] + old
-    assert pick_formation(new, None)[1] == 0.0
-    assert pick_formation(new, {"t"})[1] == pytest.approx(0.02384)   # its fuel-ratio pool
+    fuel, energy, _, how = pick_formation(new, None)
+    days = [time.strftime("%Y-%m-%d", time.localtime(ts)) for ts, _, _ in reversed(new)]
+    assert energy == pytest.approx(0.02408)
+    assert how == (f"stored formation laps differ: 2.4% ({days[0]}, {days[1]}) or 0.0% "
+                   f"({days[2]}); planning 2.4%")
+    assert pick_formation(new, {"r"})[1] == 0.0          # its fuel-ratio pool only
 
 
 def test_the_pre_race_plan_states_what_the_race_needs_from_the_start():
     """#184: 'how much energy for this race' -- laps x burn + the formation lap, rounded
-    UP with the margin like the pit menu; a timed race states N and N+1 laps."""
-    s = provisional_strategy(_practice(energy=0.07), 14)
-    text = format_provisional(s, 0, "14 laps", 3, timed=True, formation=(1.2, 0.0, "x"))
+    UP with the margin like the pit menu; a timed race states N and N+1 laps and is
+    planned on N+1."""
+    s = provisional_strategy(_practice(energy=0.07), 15)          # timed: planned on N+1
+    text = format_provisional(s, 0, "x", 3, timed=True, formation=(1.2, 0.0, "x", None))
     assert "Formation lap: 0.0% virtual energy, 1.20 L (from x)." in text
     # 14 x 7% = 98% -- under a full charge, but not with the margin: 102.9%.
     assert ("Virtual energy needed to the flag: 14 laps × 7.0%/lap = 98.0% + 0.0% formation "
@@ -785,13 +863,29 @@ def test_the_pre_race_plan_states_what_the_race_needs_from_the_start():
     assert ("Fuel needed to the flag: 14 laps × 2.50 L/lap = 35.0 L + 1.2 L formation lap = "
             "36.2 L → start with at least 39 L; or 15 laps = 37.5 L + 1.2 L formation lap = "
             "38.7 L → start with at least 41 L (with the 5% margin).") in text
-    lap_count = format_provisional(s, 0, "14 laps", 3)
+    assert ("Laps to go: planned on 15, the longer count (the flag at the end of lap 15 at "
+            "the latest).") in text
+    lap_count = format_provisional(provisional_strategy(_practice(energy=0.07), 14), 0,
+                                   "14 laps", 3)
     assert "; or 15 laps" not in lap_count and "formation lap, not measured" in lap_count
+    assert "Laps to go: 14 (flag at the end of lap 14)." in lap_count
     lap1 = LapFacts(lap_no=1, lap_time=None, clean=False, fuel_end=97.0,
                     fuel_capacity=100.0, energy_end=0.88)
     # After a race lap the on-board amounts answer it instead.
     assert "needed to the flag" not in format_provisional(
         provisional_strategy(_practice(), 13, start=lap1), 1, "14 laps", 3)
+
+
+def test_an_assumed_start_loses_the_formation_lap_before_the_green():
+    """#184 red-team F3, Sarthe 40 min: '103.3% -> more than a full charge' printed beside
+    '100% left = 10.9 laps ... Stops: none' -- the formation lap burns before the green."""
+    s = provisional_strategy(_practice(energy=0.09), 11, formation=(2.1, 0.024, "x", None))
+    assert {r.name: r.on_board for r in s.resources} == {"energy": pytest.approx(0.976)}
+    text = format_provisional(s, 0, "x", 3, timed=True, formation=(2.1, 0.024, "x", None))
+    assert ("Assumes you start on 100% virtual energy (97.6% at the green, after the "
+            "formation lap)") in text
+    # 0.976 / 0.09 = 10.8 laps for the planned 11: short.
+    assert "Stops to the flag: none" not in text
 
 
 def test_a_start_read_off_the_formation_row_is_stated_not_assumed():

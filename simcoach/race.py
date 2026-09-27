@@ -12,6 +12,7 @@ import logging
 import math
 import time
 from dataclasses import dataclass, replace
+from itertools import pairwise
 
 import numpy as np
 
@@ -376,7 +377,8 @@ def strategy(stint: list[LapFacts], laps_to_go: int | None) -> Strategy:
 
 
 def provisional_strategy(practice: list[LapFacts], laps_to_go: int | None,
-                         start: LapFacts | None = None, ve: bool | None = None) -> Strategy:
+                         start: LapFacts | None = None, ve: bool | None = None,
+                         formation: tuple | None = None) -> Strategy:
     """#161: a pre-race plan before the race stint has MIN_STINT_LAPS clean laps.
 
     The same `strategy` math, on burn rates from `practice` (this session's clean
@@ -387,14 +389,18 @@ def provisional_strategy(practice: list[LapFacts], laps_to_go: int | None,
     tank only on a fuel-only car. Tires are not projected: practice runs span tire
     changes, so their wear says nothing about this set. `ve`: the car has virtual energy
     (default: a rate shows a VE burn) -- #184: a VE car whose VE burn is not projected
-    still has its fuel set by the ratio, never a full tank."""
+    still has its fuel set by the ratio, never a full tank. `formation` (fuel L, energy
+    fraction, ...): #184, an assumed start loses the measured formation lap before the
+    green."""
     rates = [replace(f, wear_end=None) for f in practice if f.clean]
     if start is None:
         cap = next((f.fuel_capacity for f in reversed(practice) if f.fuel_capacity), None)
         ve = any(f.energy_used for f in rates) if ve is None else ve
+        form_fuel, form_energy = (formation or (None, None))[:2]
         start = LapFacts(lap_no=0, lap_time=None, clean=False,
-                         fuel_end=None if ve else cap, fuel_capacity=cap,
-                         energy_end=1.0 if ve else None)
+                         fuel_end=None if ve or cap is None else cap - (form_fuel or 0.0),
+                         fuel_capacity=cap,
+                         energy_end=1.0 - (form_energy or 0.0) if ve else None)
     else:
         start = replace(start, clean=False, wear_end=None)
     return strategy(rates + [start], laps_to_go)
@@ -405,24 +411,67 @@ def provisional_strategy(practice: list[LapFacts], laps_to_go: int | None,
 # the rig) while the driver waits.
 HISTORY_LAPS = 20
 HISTORY_LOADS = 60
-# Two energy-per-litre readings (the fuel ratio in the pit menu) or two sittings' lap
-# pace within this, relative, are "the same". A judgement: Road Atlanta 2026-09-23 ran
-# 0.94 and 0.66 L per 1% VE in two sessions; lap-to-lap scatter at one ratio is ~1-2%.
+# ...and reads at most this many pit/out/in/partial rows a sitting for its fuel ratio.
+FILL_ROWS = 6
+# Two sittings' lap pace within this, relative, are "the same". A judgement: lap-to-lap
+# scatter in one sitting is ~1-2%; Silverstone BMW practice vs race was 17%.
 REGIME_TOL = 0.03
+# Two fuel ratios (L on board per 1% virtual energy, read after a fill) within this are
+# the same setting. Measured: one setting reads the same to 0.1-0.5% at every fill of a
+# session (Road Atlanta 0.75/1.00, Sarthe 0.87, Long Beach 0.99, Algarve 0.85).
+FILL_TOL = 0.02
+# A sample counts only while the car drives: parked in the garage the channels show
+# menu/loading values -- 1.0 L at 100% VE, the previous session's last state (Long Beach
+# 2026-09-26 read Sarthe's 56.55 L / 65% for 13 minutes), a 76 L / 100% preview.
+MOVING_KMH = 10.0
+# A fuel step bigger than this between two samples is not a burn (a refill, a garage
+# reset, a new session's state): the tank as last set starts after the last one.
+FUEL_STEP_L = 0.5
 
 
 @dataclass
 class HistLap:
-    """One stored clean lap the history fallback reads."""
+    """One stored clean lap the history fallback reads. `dep`: its `departure`."""
     ts: float
     phase: str | None
     session: str | None
     facts: LapFacts
+    dep: tuple | None = None
 
 
-def _per_litre(f: LapFacts) -> float | None:
-    """Virtual energy per litre on a lap (what the pit menu's fuel ratio sets)."""
-    return f.energy_used / f.fuel_used if f.energy_used and f.fuel_used else None
+def departure(record: LapRecord) -> tuple[float, float] | None:
+    """#184: (virtual energy, fuel L) at the row's highest-VE sample while the car moves,
+    in the last stretch between FUEL_STEP_L steps that has one -- right after a fill,
+    the tank as the fuel ratio set it. A session's first row can open on the LAST
+    session's car still at speed (Long Beach 2026-09-26 row 7641: Sarthe's 17.29 L / 19%
+    at 188 km/h); parked, the garage shows placeholders and previews, and a row can end
+    on one. ponytail: a row that is ONLY such a tail then parked would read the tail --
+    none seen in the store. None without VE, fuel and speed channels or such a
+    sample."""
+    ch = record.channels
+    ve, fu, sp = ch.get("virtual_energy"), ch.get("fuel"), ch.get("speed")
+    if ve is None or fu is None or sp is None or not len(ve):
+        return None
+    ve, fu, sp = np.asarray(ve), np.asarray(fu), np.asarray(sp)
+    cuts = [0, *(np.flatnonzero(np.abs(np.diff(fu)) > FUEL_STEP_L) + 1), len(fu)]
+    for lo, hi in reversed(list(pairwise(cuts))):
+        v, f = ve[lo:hi], fu[lo:hi]
+        ok = (sp[lo:hi] > MOVING_KMH) & (v > 0)
+        if ok.any():
+            m = float(v[ok].max())
+            return m, float(f[ok & (v >= m - 1e-6)].max())
+    return None
+
+
+def fill_ratio(deps) -> float | None:
+    """#184: the fuel ratio a sitting ran at -- L per 1% virtual energy at the fullest of
+    its `departure`s (a fill; the on-board ratio drifts as both drain: Road Atlanta 0.75
+    at the fill, 0.84 twenty laps on). None without one."""
+    deps = [d for d in deps if d]
+    if not deps:
+        return None
+    v, f = max(deps)
+    return f / (v * 100)
 
 
 def _when(laps: list[HistLap]) -> str:
@@ -445,22 +494,24 @@ def _med(xs) -> float | None:
     return float(np.median(xs)) if len(xs) >= MIN_STINT_LAPS else None
 
 
-def history_pick(hist: list[HistLap], live_session: str | None
+def history_pick(hist: list[HistLap], fills: dict, current: float | None
                  ) -> tuple[LapFacts | None, list[str], set]:
     """#184: one lap standing for this car's stored clean laps at this track, the notes
     that say how it was picked, and the sessions its virtual energy came from.
 
-    Fuel L/lap is physical: the median of every lap. Virtual energy per lap is not -- the
-    pit menu's fuel ratio sets how much VE a litre costs (Road Atlanta 2026-09-23: the
-    same 2.25 L/lap at 2.39 %/lap in one session, 3.40 %/lap in the next). So VE comes
-    only from laps at THIS session's energy per litre (within REGIME_TOL); with no lap
-    this session, from the sittings at the newest one's, and a differing older sitting
-    is named. The lap time comes from that same pool (else every lap); when its sittings'
-    paces differ by more than REGIME_TOL the FASTEST sitting's median is used -- too few
-    laps is the dangerous error. A channel measured on fewer than MIN_STINT_LAPS laps is
-    None, never projected (a car with no VE reads a flat 0: DKR LMP3, Sarthe). The first
-    item is None when neither channel is. The tank size is the newest lap's that reports
-    one (callers pass `hist` newest first)."""
+    Fuel L/lap is physical: the median of every lap. Virtual energy per lap is not: the
+    pit menu's fuel ratio sets how much VE a litre costs (Road Atlanta 2026-09-23: 2.25
+    L/lap at 2.39 %VE with a 1.00 ratio, 3.40 % with 0.75). So VE comes only from laps
+    whose sitting's `fills` ratio is within FILL_TOL of `current` -- the live session's,
+    read off the tank even before a clean lap. With none (no row of this session, or
+    none that shows it), the newest sitting's ratio is used and always stated. A sitting whose
+    ratio can't be read is left out once one can; with no ratio read anywhere the VE is
+    pooled and that is said. The lap time comes from the same pool (else every lap); when
+    its sittings' paces differ by more than REGIME_TOL the FASTEST sitting's median is
+    used -- too few laps is the dangerous error. A channel measured on fewer than
+    MIN_STINT_LAPS laps is None, never projected (a car with no VE reads a flat 0: DKR
+    LMP3, Sarthe). The first item is None when neither channel is. The tank size is the
+    newest lap's that reports one (callers pass `hist` newest first)."""
     notes: list[str] = []
     if not any(h.facts.fuel_used for h in hist):
         notes.append("No fuel burn recorded in them (the channel is flat or absent), so "
@@ -469,38 +520,39 @@ def history_pick(hist: list[HistLap], live_session: str | None
         notes.append("No virtual-energy burn recorded in them (the channel is flat or "
                      "absent), so none is projected.")
     energy = [h for h in hist if h.facts.energy_used]
-    rated = [h for h in energy if _per_litre(h.facts)]
-    left = ""
-    if rated:
-        def near(x, r0):
-            return abs(x / r0 - 1) <= REGIME_TOL
-        cur = [_per_litre(h.facts) for h in rated if h.session == live_session]
-        if cur:
-            r0 = float(np.median(cur))
-            energy = [h for h in rated if near(_per_litre(h.facts), r0)]
-            if len(energy) < len(rated):
-                left = (f" at your current fuel ratio (this session's energy per litre, "
-                        f"within {REGIME_TOL:.0%}); {len(rated) - len(energy)} stored laps "
-                        "at another fuel ratio are left out")
-        else:
-            groups = [(g, float(np.median([_per_litre(h.facts) for h in g])))
-                      for g in _sittings(rated)]
-            same = [g for g, r in groups if near(r, groups[0][1])]
-            other = [g for g, r in groups if not near(r, groups[0][1])]
-            energy = [h for g in same for h in g]
-            if other:
-                notes.append(
-                    "Your earlier sessions here ran at a different energy per litre ("
-                    + "; ".join(f"{np.median([h.facts.energy_used for h in g]) * 100:.1f}"
-                                f"%/lap on {_when(g)}" for g in other)
-                    + "); virtual energy is from " + ", ".join(_when(g) for g in same)
-                    + " only -- set your fuel ratio before trusting this.")
+
+    def fill(h):
+        return fills.get((h.session, h.phase))
+    ref, head = current, "at your current fuel ratio"  # read off this session's tank
+    if ref is None and energy:
+        known = [h for h in energy if fill(h)]
+        if known:
+            newest = max(known, key=lambda h: h.ts)
+            ref, head = fill(newest), "at your newest stored fuel ratio"
+    if ref is not None:
+        keep = [h for h in energy if fill(h) and abs(fill(h) / ref - 1) <= FILL_TOL]
+        other = [g for g in _sittings([h for h in energy if fill(h) and h not in keep])]
+        unknown = [h for h in energy if not fill(h)]
+        energy = keep
+        left = "".join([
+            "; " + ", ".join(f"{len(g)} at fuel ratio {fill(g[0]):.2f} on {_when(g)}"
+                             for g in other) + " left out" if other else "",
+            f"; {len(unknown)} whose fuel ratio isn't recorded left out" if unknown else ""])
+        if left or current is None:
+            notes.append(f"Virtual energy: {len(keep)} stored lap{'s' if len(keep) != 1 else ''}"
+                         f" {head} ({ref:.2f} L per 1% on board after a fill, within "
+                         f"{FILL_TOL:.0%}){left}"
+                         + ("" if current is not None else
+                            f" -- measured at {ref:.2f}: at another ratio this figure is "
+                            "wrong, so set your fuel ratio before trusting it") + ".")
+    elif energy:
+        notes.append("Virtual energy: the fuel ratio these laps ran at isn't recorded -- at "
+                     "another ratio this figure is wrong.")
     e = _med(h.facts.energy_used for h in energy)
-    if left or (e is None and energy):
-        notes.append(f"Virtual energy: only {len(energy)} clean lap{'s' if len(energy) != 1 else ''}"
-                     + (left or " to measure it on")
-                     + ("." if e is not None else
-                        f" -- it needs {MIN_STINT_LAPS}, so none is projected yet."))
+    if e is None and any(h.facts.energy_used for h in hist):
+        notes.append(f"Virtual energy: only {len(energy)} clean lap"
+                     f"{'s' if len(energy) != 1 else ''} to measure it on at this fuel ratio "
+                     f"-- it needs {MIN_STINT_LAPS}, so none is projected yet.")
     f = _med(h.facts.fuel_used for h in hist)
     if f is None and e is None:
         return None, notes, set()
@@ -532,23 +584,32 @@ def formation_burn(record: LapRecord) -> dict[str, float | None]:
     return out
 
 
-def pick_formation(rows: list[tuple[float, str | None, dict]],
-                   energy_sessions: set | None) -> tuple[float | None, float | None, str]:
-    """#184: (fuel L, energy fraction, where from) for the formation lap, from stored
-    formation rows (ts, session, formation_burn), newest first. Fuel (physical): the
-    median of every row. Energy:
-    only rows from `energy_sessions` (None = any) -- the laps' fuel-ratio partition --
-    the median, or the NEWEST when they disagree (Sarthe: 2.4% on 09-17/18, 0 from
-    09-23 on)."""
+def pick_formation(rows: list[tuple[float, str | None, dict]], energy_sessions: set | None
+                   ) -> tuple[float | None, float | None, str, str | None]:
+    """#184: (fuel L, energy fraction, where from, how the energy was picked) for the
+    formation lap, from stored formation rows (ts, session, formation_burn), newest first.
+    Fuel (physical): the median of every row. Energy: only rows from `energy_sessions`
+    (None = any) -- the laps' fuel-ratio partition -- the median, or the LARGEST when they
+    disagree, each stated (Sarthe: 2.4% on 09-17/18, 0 on 09-26): an extra 2.4% at the
+    start is cheap, running short eats half the margin."""
     fuels = [b["fuel"] for _, _, b in rows if b["fuel"] is not None]
     fuel = float(np.median(fuels)) if fuels else None
-    ves = [b["energy"] for _, s, b in rows if b["energy"] is not None
+    ves = [(b["energy"], ts) for ts, s, b in rows if b["energy"] is not None
            and (energy_sessions is None or s in energy_sessions)]
-    energy = (None if not ves else ves[0] if max(ves) - min(ves) > REGIME_TOL * max(ves)
-              else float(np.median(ves)))
+    vals = [v for v, _ in ves]
+    energy, how = (float(np.median(vals)) if vals else None), None
+    if vals and max(vals) - min(vals) > REGIME_TOL * max(vals):
+        energy = max(vals)
+        by: dict = {}
+        for v, ts in sorted(ves, key=lambda x: x[1]):
+            by.setdefault(round(v * 100, 1), []).append(
+                time.strftime("%Y-%m-%d", time.localtime(ts)))
+        how = ("stored formation laps differ: " + " or ".join(
+            f"{v:.1f}% ({', '.join(dict.fromkeys(d))})" for v, d in by.items())
+            + f"; planning {energy * 100:.1f}%")
     days = sorted({time.strftime("%Y-%m-%d", time.localtime(ts)) for ts, _, _ in rows})
     return fuel, energy, (f"{len(rows)} stored formation lap{'s' if len(rows) != 1 else ''} "
-                          f"here in this car, {', '.join(days)}")
+                          f"here in this car, {', '.join(days)}"), how
 
 
 _WHEEL_NAME = {"fl": "front-left", "fr": "front-right", "rl": "rear-left", "rr": "rear-right"}
@@ -848,9 +909,10 @@ def format_provisional(s: Strategy, as_of_lap: int, basis: str, n_practice: int,
     the race length came from. #184: `source` where the rates came from (default this
     session's practice laps) and `notes` how they were picked; `measured` whether the
     start amounts were read off a stored race row (default: after race lap 1) -- else a
-    full fill is ASSUMED; `timed` a timed race, which can run a lap longer than counted
-    (see laps_left); `formation` (fuel L, energy fraction, where from) of the formation
-    lap, pick_formation's; `ve_car` the car has virtual
+    full fill is ASSUMED, less the formation lap; `timed` a timed race, which can run a
+    lap longer than counted (see laps_left) -- `s` is then planned on the LONGER count
+    and the need lines give both; `formation` pick_formation's (fuel L, energy
+    fraction, where from, how) for the formation lap; `ve_car` the car has virtual
     energy (the fuel ratio sets its fuel)."""
     measured = as_of_lap > 0 if measured is None else measured
     source = source or (f"your last {n_practice} clean practice/qualifying laps this "
@@ -868,18 +930,28 @@ def format_provisional(s: Strategy, as_of_lap: int, basis: str, n_practice: int,
             else f"{r.on_board:.1f} L" for r in sorted(s.resources, key=lambda r: r.name))
             + " on board.")
     elif "energy" in by:
-        start = ("Assumes you start on 100% virtual energy; the fuel on board is unknown "
-                 "until race lap 1.")
+        start = ("Assumes you start on 100% virtual energy"
+                 + (f" ({by['energy'].on_board * 100:.1f}% at the green, after the "
+                    "formation lap)" if by["energy"].on_board < 1 else "")
+                 + "; the fuel on board is unknown until race lap 1.")
     elif "fuel" in by:
-        start = "Assumes you start on a full tank."
+        start = ("Assumes you start on a full tank"
+                 + (f" ({by['fuel'].on_board:.1f} L at the green, after the formation lap)"
+                    if (formation or (None,))[0] else "") + ".")
     elif ve_car:
         start = ("No start amount is assumed: on a virtual-energy car the fuel ratio sets "
                  "the fuel on board, unknown until race lap 1.")
     else:
         start = "No start amount can be assumed (no tank size reported)."
+    plan = _strategy_lines(s, as_of_lap)
+    if timed:
+        # The longer count is planned: a line saying the flag falls at its end as a fact
+        # would read the shorter race as ruled out.
+        plan[0] = (f"Laps to go: planned on {s.laps_to_go}, the longer count (the flag at "
+                   f"the end of lap {as_of_lap + s.laps_to_go} at the latest).")
     return "\n".join([head, *notes, f"Race length: {basis}.", start]
                      + ([] if measured else _need_lines(s, timed, formation))
-                     + _strategy_lines(s, as_of_lap)
+                     + plan
                      # No fuel ratio read off an ASSUMED start: it needs what is on board.
                      + _pit_menu_lines(s, as_of_lap, damage, damage_lap, measured))
 
@@ -887,18 +959,18 @@ def format_provisional(s: Strategy, as_of_lap: int, basis: str, n_practice: int,
 def _need_lines(s: Strategy, timed: bool, formation: tuple | None) -> list[str]:
     """#184: before the start, 'how much energy for this race' -- what the race needs,
     with the arithmetic's inputs, so the model narrates it, never works it out. A timed
-    race gives both counts: it can run one lap longer than counted (laps_left). The
-    amount to start with rounds UP, as the pit-menu line does."""
-    fuel_f, energy_f, where = formation or (None, None, "")
+    race gives both counts, N and the planned N+1 (laps_left). The amount to start with
+    rounds UP, as the pit-menu line does."""
+    fuel_f, energy_f, where, how = formation or (None, None, "", None)
     rates = {r.name: r.per_lap for r in s.resources} | (s.burn_only or {})
     form = {"fuel": fuel_f, "energy": energy_f}
     got = [n for n in rates if form[n] is not None]
     lines = []
     if got:
         lines.append("Formation lap: " + ", ".join(
-            f"{form[n] * 100:.1f}% virtual energy" if n == "energy" else f"{form[n]:.2f} L"
-            for n in got) + f" (from {where}).")
-    ks = (s.laps_to_go, s.laps_to_go + 1) if timed else (s.laps_to_go,)
+            f"{form[n] * 100:.1f}% virtual energy" + (f" ({how})" if how else "")
+            if n == "energy" else f"{form[n]:.2f} L" for n in got) + f" (from {where}).")
+    ks = (s.laps_to_go - 1, s.laps_to_go) if timed else (s.laps_to_go,)
     for name, per in rates.items():
         pct, fm = name == "energy", form[name]
 
