@@ -130,8 +130,10 @@ class Model(Protocol):
 
         ...
 
-    def classify(self, prompt: str, schema: dict) -> tuple[dict | None, TokenUsage]:
+    def classify(self, prompt: str, schema: dict,
+                 timeout: float = 0.8) -> tuple[dict | None, TokenUsage]:
         """#175 router: one short call that answers `prompt` with ONE JSON object
-        matching `schema`. Returns (the object, or None on any failure -- bad JSON,
-        an API error, a timeout; what the call billed). Never raises."""
+        matching `schema`, given up after `timeout` s (#183: the router's budget).
+        Returns (the object, or None on any failure -- bad JSON, an API error, a
+        timeout; what the call billed). Never raises."""
         ...

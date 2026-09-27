@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/svelte";
 import { getChatMessages, getChatUsage, getSettings, kokoroStatus, type ChatUsage, type SettingsResponse } from "./api";
-import type { CoachPhase, ToolActivity } from "./coach";
+import type { CoachPhase, ToolActivity, TurnLatency } from "./coach";
 import { VoiceLoop, type VoiceMode } from "./voice";
 import { KokoroSpeaker } from "./audio";
 import { eventFeed } from "./events";
@@ -60,6 +60,7 @@ class FakeStream {
   cost: number | null = null;
   costComplete = true;
   longChat = false;
+  latency: TurnLatency | null = null;
   lastAsk: { question: string; opts: { sessionId?: string; lapId?: number; chatId?: string; voice?: VoiceMode } } | null = null;
   ask = vi.fn((question: string, opts: { sessionId?: string; lapId?: number; chatId?: string; voice?: VoiceMode } = {}) => {
     this.lastAsk = { question, opts };
@@ -442,6 +443,27 @@ describe("ChatPanel", () => {
     await fireEvent.click(screen.getByRole("button", { name: /new session/i }));
 
     await waitFor(() => expect(screen.queryByTestId("usage-meter")).toBeNull());
+  });
+
+  // --- the per-turn latency readout (#183) ---
+
+  it("shows the last turn's tier, rounds and timing next to the meter", async () => {
+    const stream = new FakeStream();
+    stream.latency = { tier: "deep", tier_via: "rules: classifier timeout", classify_ms: 801,
+      first_text_ms: 12300, total_ms: 185000, rounds: 4, tools: 3 };
+    await answerWith(stream, { usage: usage({ total: 1200 }), cost: 0.011 });
+
+    const line = await screen.findByTestId("turn-latency");
+    expect(line.textContent).toBe("deep · 4 rounds · first text 12.3 s · total 3 m 05 s");
+    expect(line.title).toBe("Last turn: tier via rules: classifier timeout, classifier 801 ms, 3 tool calls");
+  });
+
+  it("shows no latency readout when the done frame carries none", async () => {
+    const stream = new FakeStream();
+    await answerWith(stream, { usage: usage({ total: 1200 }), cost: 0.011 });
+
+    expect(await screen.findByTestId("usage-meter")).toBeTruthy();
+    expect(screen.queryByTestId("turn-latency")).toBeNull();
   });
 
   // --- the soft long-chat nudge (issue #39, task 7) ---

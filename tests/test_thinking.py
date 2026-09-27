@@ -70,7 +70,7 @@ def test_router_uses_a_valid_classification_and_matches_the_corner_by_code():
     clf = FakeModel(classify_result={"tier": "deep", "intent": "setup", "corner": "turn 5",
                                      "lap": None, "rival": "Kevin Fischer",
                                      "wants_detail": True})
-    tier, intent, hint, usage = _route("why does the rear step out?", clf)
+    tier, intent, hint, usage, _ = _route("why does the rear step out?", clf)
     assert (tier, intent) == ("deep", "setup")
     assert "about Turn 5 (Eau Rouge)" in hint and "setup" in hint and "detail" in hint
     assert "Kevin Fischer" not in hint         # never a model-named driver as context
@@ -106,7 +106,7 @@ def test_unknown_intent_is_dropped_but_the_tier_is_used():
 def test_slow_classifier_falls_back_within_the_budget():
     clf = FakeModel(classify_result={"tier": "deep", "intent": "setup"}, classify_delay=3)
     t0 = time.monotonic()
-    tier, intent, hint, usage = _route("what's my fuel?", clf)
+    tier, intent, hint, usage, _ = _route("what's my fuel?", clf)
     assert time.monotonic() - t0 < CLASSIFY_TIMEOUT_S + 0.4
     assert (tier, intent, hint, usage) == ("standard", None, "", TokenUsage())
 

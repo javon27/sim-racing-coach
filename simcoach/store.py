@@ -92,7 +92,7 @@ def _session_base(sid: str) -> str:
     """The (track, car, mode) base of a session id, dropping any ~<instance> suffix."""
     return sid.split(_SESSION_SEP, 1)[0]
 
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 27
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
@@ -105,8 +105,10 @@ SCHEMA_VERSION = 26
 # race-session scope). The four *_tokens columns and `model` (added v12) record what
 # each turn actually cost to bill; `model` is per ROW because Settings can change the
 # model mid-chat, so a chat total is only priceable row by row. All five are nullable
-# -- pre-v12 rows stay NULL and sum as 0 via COALESCE. Defined separately so both
-# fresh installs and the migration create the identical table.
+# -- pre-v12 rows stay NULL and sum as 0 via COALESCE. `latency` (added v27, #183) is a
+# JSON object of how long the turn took and how it was routed -- see save_chat; NULL
+# on older rows. Defined separately so both fresh installs and the migration create
+# the identical table.
 _COACH_CHAT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS coach_chat (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -124,7 +126,8 @@ CREATE TABLE IF NOT EXISTS coach_chat (
     cache_read_tokens INTEGER,
     cache_write_tokens INTEGER,
     model TEXT,
-    spoken TEXT
+    spoken TEXT,
+    latency TEXT
 );
 """
 
@@ -804,6 +807,12 @@ class LapStore:
                 cols = [r[1] for r in self.conn.execute("PRAGMA table_info(laps)")]
                 if cols and "setup_id" not in cols:
                     _add_column(self.conn, "laps", "setup_id INTEGER")
+            if current_version < 27:
+                # v26 -> v27: per-turn latency + routing (#183). Existing rows stay
+                # NULL. Guarded like the v19 step.
+                cols = [r[1] for r in self.conn.execute("PRAGMA table_info(coach_chat)")]
+                if cols and "latency" not in cols:
+                    _add_column(self.conn, "coach_chat", "latency TEXT")
         if current_version != stamp:
             self.conn.execute(f"PRAGMA user_version = {stamp}")
         self.conn.commit()
@@ -1337,14 +1346,16 @@ class LapStore:
                   lap_id: int | None, question: str, answer: str,
                   tool_calls: list | None = None, ts: float | None = None,
                   usage: dict | None = None, model: str | None = None,
-                  spoken: str | None = None) -> None:
+                  spoken: str | None = None, latency: dict | None = None) -> None:
         """Append one coach Q&A exchange (with the tools it invoked) to the log.
 
         `usage` is a TokenUsage.as_dict() of what this turn actually billed, summed
         over every tool-loop call; `model` is the model that billed it. Both optional
         — a turn with no usage stores NULLs and sums as zero. `spoken` (added v19) is
         the PTT cue actually read aloud, so a later review can compare what was heard
-        against what was written; NULL for a non-voice or non-PTT turn."""
+        against what was written; NULL for a non-voice or non-PTT turn. `latency`
+        (added v27, #183) is the turn's timing and routing, stored as JSON: tier,
+        tier_via, classify_ms, first_text_ms, total_ms, rounds, tools."""
         if chat_id is None:
             raise ValueError("chat_id is required")
         tc_json = json.dumps([_capped_result(c) for c in tool_calls]) if tool_calls else None
@@ -1353,11 +1364,12 @@ class LapStore:
             self.conn.execute(
                 "INSERT INTO coach_chat (ts, chat_id, session_id, track, car, lap_id, "
                 "question, answer, tool_calls, input_tokens, output_tokens, "
-                "cache_read_tokens, cache_write_tokens, model, spoken) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "cache_read_tokens, cache_write_tokens, model, spoken, latency) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (ts if ts is not None else time.time(), chat_id, session_id, track, car,
                  lap_id, question, answer, tc_json,
-                 *(u.get(key) for _, key in _USAGE_COLUMNS), model, spoken),
+                 *(u.get(key) for _, key in _USAGE_COLUMNS), model, spoken,
+                 json.dumps(latency) if latency else None),
             )
 
     def chat_usage(self, chat_id: str) -> dict:
@@ -1430,16 +1442,17 @@ class LapStore:
         """Every Q&A exchange in a chat, oldest first."""
         with self._lock:
             rows = self.conn.execute(
-                "SELECT ts, session_id, track, car, lap_id, question, answer, tool_calls, spoken "
-                "FROM coach_chat WHERE chat_id = ? ORDER BY ts, id",
+                "SELECT ts, session_id, track, car, lap_id, question, answer, tool_calls, spoken, "
+                "latency FROM coach_chat WHERE chat_id = ? ORDER BY ts, id",
                 (chat_id,),
             ).fetchall()
             keys = ("ts", "session_id", "track", "car", "lap_id", "question", "answer", "tool_calls",
-                     "spoken")
+                     "spoken", "latency")
             out = []
             for r in rows:
                 d = dict(zip(keys, r))
                 d["tool_calls"] = _decode(d["tool_calls"])
+                d["latency"] = _decode(d["latency"])
                 out.append(d)
             return out
 

@@ -36,6 +36,7 @@ class FakeModel:
         self.classify_result = classify_result
         self.classify_delay = classify_delay
         self.classified: list[str] = []
+        self.classify_timeouts: list[float] = []   # #183: the budget of each call
         self.last_system: str | None = None
         self.last_messages: list[dict] | None = None
         self.last_tools: list[dict] | None = None
@@ -47,8 +48,10 @@ class FakeModel:
         self.last_messages = messages
         return self.reply
 
-    def classify(self, prompt: str, schema: dict) -> tuple[dict | None, TokenUsage]:
+    def classify(self, prompt: str, schema: dict,
+                 timeout: float = 0.8) -> tuple[dict | None, TokenUsage]:
         self.classified.append(prompt)
+        self.classify_timeouts.append(timeout)
         if self.classify_delay:
             time.sleep(self.classify_delay)
         return self.classify_result, TokenUsage(input=len(prompt) // 4, output=20)

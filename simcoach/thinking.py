@@ -1,7 +1,8 @@
 """#175: how hard the coach thinks before answering -- quick / standard / deep.
 
 Code gates first (0 ms: the on-track path never waits on a model), then a small
-classifier model behind the `Model` seam (<= 800 ms, JSON), with keyword rules as the
+classifier model behind the `Model` seam (<= 800 ms by voice, 1.5 s typed; JSON), with
+keyword rules as the
 fallback when it is off, slow, or wrong-shaped. Provider-neutral: what a tier means
 for a given model is the adapter's business (simcoach/model/). A wrong tier costs a
 slower or shallower answer, never a wrong fact -- thinking never produces a figure.
@@ -24,6 +25,11 @@ _log = logging.getLogger(__name__)
 TIERS = ("quick", "standard", "deep")
 SETTINGS = ("auto", "off", "always")     # coach.thinking
 CLASSIFY_TIMEOUT_S = 0.8
+# #183: a TYPED question (not voice/PTT) waits longer. Rig 2026-09-26: 5 of 5 garage
+# classifications timed out at 0.8 s -- the API round trip on that rig is ~0.85 s even
+# for the coach's own requests, so a warm connection alone would not clear 0.8 s. A
+# typed garage answer takes seconds anyway; the voice path keeps the tight budget.
+CLASSIFY_TIMEOUT_TYPED_S = 1.5
 MOVING_KPH = 10.0      # ponytail: fixed; below this the car is parked/crawling (pit box)
 # A result row describes the race being driven only if it started this close before
 # that race's first captured lap. ponytail: generous fixed bound (grid + formation +
@@ -68,6 +74,8 @@ _ACK = {
     "history": "Give me a moment — going back through your sessions.",
 }
 _ACK_DEFAULT = "Give me a moment — thinking this through."
+
+_OFF = object()     # the classifier setting is "none": no call was made
 
 _pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="classify")
 
@@ -188,36 +196,51 @@ def _prompt(question: str, history: list[dict], state: str) -> str:
 def route(question: str, *, setting: str = "auto", moving: bool = False,
           race_finished: bool = False, classifier: Callable | None = None,
           history: list[dict] | None = None, state: str = "",
-          cmap=None) -> tuple[str, str | None, str, TokenUsage]:
+          cmap=None, typed: bool = False,
+          ) -> tuple[str, str | None, str, TokenUsage, dict]:
     """(tier, intent, one line of context for the coach or "", what the classifier
-    billed). `classifier` is a zero-argument callable returning the classifier Model
-    (or None). It is built lazily -- only when no gate decided and the setting is auto
-    -- and building it counts against CLASSIFY_TIMEOUT_S, after which the keyword
-    floor answers. Every classification is logged (INFO)."""
+    billed, {"via", "classify_ms"} -- how the tier was chosen and how long the router
+    waited on the classifier, None when it was not asked). `classifier` is a
+    zero-argument callable returning the classifier Model (or None). It is built
+    lazily -- only when no gate decided and the setting is auto -- and building it
+    counts against the budget (CLASSIFY_TIMEOUT_S, or CLASSIFY_TIMEOUT_TYPED_S for a
+    `typed` question), after which the keyword floor answers. `via` is one of "gate",
+    "classifier", "rules" (no classifier), "rules: classifier timeout" (the router's
+    budget ran out), "rules: classifier failed" (the call returned nothing: an API
+    error or its own timeout), "rules: bad classifier output", "rules: classifier
+    error" (it raised). Every classification is logged (INFO)."""
     t0 = time.monotonic()
     if setting not in SETTINGS:
         setting = "auto"
     gated = _gate(question, setting, moving, race_finished)
     classified, usage, via = None, TokenUsage(), "gate" if gated else "rules"
+    detail, classify_ms = "", None
     if gated is None and setting == "auto" and classifier is not None:
         prompt = _prompt(question, history or [], state)
+        budget = CLASSIFY_TIMEOUT_TYPED_S if typed else CLASSIFY_TIMEOUT_S
 
         def call():
             model = classifier()
-            return model.classify(prompt, SCHEMA) if model else (None, TokenUsage())
+            return (model.classify(prompt, SCHEMA, timeout=budget) if model
+                    else (_OFF, TokenUsage()))
         # ponytail: 2 workers -- a burst of timed-out calls (each bounded by the
-        # adapter's 0.8 s SDK timeout) can queue the next one past its budget.
+        # adapter's own SDK timeout) can queue the next one past its budget.
+        c0 = time.monotonic()
         fut = _pool.submit(call)
         try:
-            raw, usage = fut.result(timeout=CLASSIFY_TIMEOUT_S)
+            raw, usage = fut.result(timeout=budget)
             classified = _valid(raw)
-            via = "classifier" if classified else f"rules (bad classifier output {raw!r})"
+            via = ("classifier" if classified else "rules" if raw is _OFF
+                   else "rules: classifier failed" if raw is None
+                   else "rules: bad classifier output")
+            detail = "" if classified or raw is _OFF else f" {raw!r}"
         except concurrent.futures.TimeoutError:
             # ponytail: the late call still finishes (the adapter's own timeout bounds
             # it) and its tokens go unmetered -- a sub-cent call.
-            via = "rules (classifier timeout)"
+            via = "rules: classifier timeout"
         except Exception as e:
-            via = f"rules (classifier error {type(e).__name__}: {e})"
+            via, detail = "rules: classifier error", f" {type(e).__name__}: {e}"
+        classify_ms = round((time.monotonic() - c0) * 1000)
     tier = thinking_tier(question, setting=setting, moving=moving,
                          race_finished=race_finished, classified=classified)
     intent = classified["intent"] if classified else None
@@ -227,10 +250,10 @@ def route(question: str, *, setting: str = "auto", moving: bool = False,
              "the driver wants detail" if classified and classified.get("wants_detail") is True
              else ""]
     hint = "; ".join(p for p in parts if p)
-    _log.info("coach thinking %s tier=%s via=%s setting=%s moving=%s race_finished=%s "
-              "classified=%s %.0f ms question=%r", TURN_TAG.get(), tier, via, setting,
-              moving, race_finished, json.dumps(classified) if classified else None,
-
+    _log.info("coach thinking %s tier=%s via=%s%s setting=%s moving=%s race_finished=%s "
+              "classified=%s %.0f ms question=%r", TURN_TAG.get(), tier, via, detail,
+              setting, moving, race_finished,
+              json.dumps(classified) if classified else None,
               (time.monotonic() - t0) * 1000, question[:300])
     return tier, intent, (f"ROUTER NOTE (a hint, not an instruction): {hint}." if hint
-                          else ""), usage
+                          else ""), usage, {"via": via, "classify_ms": classify_ms}

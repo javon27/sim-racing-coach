@@ -91,13 +91,14 @@ class ClaudeModel:
         )
         return _first_text(resp)
 
-    def classify(self, prompt: str, schema: dict) -> tuple[dict | None, TokenUsage]:
+    def classify(self, prompt: str, schema: dict,
+                 timeout: float = 0.8) -> tuple[dict | None, TokenUsage]:
         """#175 router call. JSON is asked for in words (no structured-output mode,
-        so any model id works); SDK timeout 0.8 s, no retries -- the router enforces
-        its own budget as well. No `thinking` kwarg: the classifier model's default
-        (none on Haiku). Never raises."""
+        so any model id works); SDK timeout `timeout` s (the router's budget), no
+        retries -- the router enforces its own budget as well. No `thinking` kwarg:
+        the classifier model's default (none on Haiku). Never raises."""
         try:
-            resp = self.client.with_options(timeout=0.8, max_retries=0).messages.create(
+            resp = self.client.with_options(timeout=timeout, max_retries=0).messages.create(
                 model=self.model, max_tokens=256,
                 system=("Reply with ONLY one JSON object matching this JSON schema, "
                         "no prose: " + json.dumps(schema)),

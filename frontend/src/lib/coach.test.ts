@@ -222,6 +222,21 @@ describe("CoachStream", () => {
     expect(stream.longChat).toBe(true);
   });
 
+  it("captures the turn's latency from the done frame and clears it on the next ask (#183)", () => {
+    const stream = new CoachStream();
+    stream.ask("q1");
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.();
+    const latency = { tier: "deep", tier_via: "rules: classifier timeout", classify_ms: 801,
+      first_text_ms: 12300, total_ms: 185000, rounds: 4, tools: 3 };
+
+    emit(ws, { type: "done", chat_id: "c1", latency });
+    expect(stream.latency).toEqual(latency);
+
+    stream.ask("q2");
+    expect(stream.latency).toBeNull();
+  });
+
   it("defaults long_chat to false when the frame omits it", () => {
     const stream = new CoachStream();
     stream.ask("q");

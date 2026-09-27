@@ -18,7 +18,7 @@ from simcoach.coach import Coach
 from simcoach.coach_tools import CoachContext
 from simcoach.model.fake import FakeModel
 from simcoach.server.app import _capture_loop, create_app
-from simcoach.store import LapStore
+from simcoach.store import SCHEMA_VERSION, LapStore
 
 _FIX = Path(__file__).parent / "fixtures"
 REAL = json.loads((_FIX / "lmu_setup_monza.json").read_text())
@@ -274,4 +274,4 @@ def test_v25_db_gains_laps_setup_id(tmp_path):
     store = LapStore(db, str(tmp_path / "data"))
     assert "setup_id" in [r[1] for r in store.conn.execute("PRAGMA table_info(laps)")]
     assert _nrows(store) == 0
-    assert store.conn.execute("PRAGMA user_version").fetchone()[0] == 26
+    assert store.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION

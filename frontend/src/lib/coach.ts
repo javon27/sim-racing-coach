@@ -14,6 +14,18 @@ export interface ToolActivity {
   input: unknown;
 }
 
+// #183: how long one turn took and how its thinking tier was chosen -- the server
+// measures it (monotonic clock) and stores it on the chat row; the UI only formats.
+export interface TurnLatency {
+  tier: string | null; // null: a "say again" replay, no model call
+  tier_via: string;
+  classify_ms: number | null;
+  first_text_ms: number | null;
+  total_ms: number;
+  rounds: number;
+  tools: number;
+}
+
 export interface AskOptions {
   sessionId?: string;
   lapId?: number;
@@ -40,6 +52,7 @@ export class CoachStream {
   costComplete = true;
   // The server's soft "this chat is getting long" signal (it owns the threshold).
   longChat = false;
+  latency: TurnLatency | null = null; // #183: this turn's, from `done`
 
   #ws: WebSocket | null = null;
   #listeners = new Set<(value: this) => void>();
@@ -63,6 +76,7 @@ export class CoachStream {
     this.cost = null;
     this.costComplete = true;
     this.longChat = false;
+    this.latency = null;
     this.#settled = false;
     this.#notify();
 
@@ -102,6 +116,7 @@ export class CoachStream {
             this.cost = data.cost ?? null;
             this.costComplete = data.cost_complete ?? true;
             this.longChat = data.long_chat === true;
+            this.latency = data.latency ?? null;
             this.#settled = true;
             this.#close();
             break;

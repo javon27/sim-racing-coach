@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time
 from pathlib import Path
 
 from fastapi import WebSocket
@@ -65,6 +66,7 @@ def register(app, deps) -> None:
         if not question:
             await ws.send_json({"type": "error", "message": "empty question"})
             await ws.close(code=1003);  return
+        t0 = time.monotonic()      # #183: the turn's clock starts as the question lands
 
         voice = req.get("voice")
         voice = voice if voice in ("ptt", "conversation") else None
@@ -352,6 +354,7 @@ def register(app, deps) -> None:
             TURN_TAG.set(f"chat={chat_id_in or 'new'} "
                          f"turn={len(messages) + 1 if chat_id_in else 1}")
             tier, intent, hint = "standard", None, ""
+            routed = {"via": "repeat", "classify_ms": None}   # #183: how the tier was chosen
             if not last_answer:
                 try:
                     coach_cfg = cfg.get("coach") or {}
@@ -375,11 +378,12 @@ def register(app, deps) -> None:
                              f"{'finished' if finished else 'live' if race_live else 'none'}; "
                              f"voice {voice or 'typed'}; {len(laps)} laps this session")
                     classifier_for = getattr(app.state.coach, "classifier_for", None)
-                    tier, intent, hint, classify_usage = route(
+                    tier, intent, hint, classify_usage, routed = route(
                         question, setting=coach_cfg.get("thinking", "auto"), moving=moving,
                         race_finished=finished, history=history, state=state, cmap=ctx.cmap,
                         classifier=(lambda: classifier_for(coach_cfg.get("classifier_model")))
-                        if classifier_for is not None else None)
+                        if classifier_for is not None else None,
+                        typed=voice is None)       # #183: longer budget off the voice path
                     turn_usage = turn_usage + classify_usage
                 except Exception:
                     # Routing is an optimisation: a failure costs deliberation, never
@@ -387,7 +391,12 @@ def register(app, deps) -> None:
                     logging.getLogger(__name__).warning("thinking router failed; standard",
                                                         exc_info=True)
                     tier, intent, hint = "standard", None, ""
+                    routed = {"via": "router error", "classify_ms": None}
             model_question = "\n\n".join([*facts, *([hint] if hint else []), question])
+            # #183: one usage event per billed model call = one round; the first text
+            # event is the first answer text the driver sees (a deep ack is its own type).
+            rounds = tools = 0
+            first_text_ms = None
             try:
                 for ev in ([{"type": "text", "text": last_answer}] if last_answer else
                            app.state.coach.ask_agentic_stream(
@@ -402,8 +411,13 @@ def register(app, deps) -> None:
                         # config, which may have changed since the model was resolved.
                         turn_usage = turn_usage + TokenUsage(**ev["usage"])
                         used_model = ev.get("model") or used_model
+                        rounds += 1
                         continue
+                    if ev["type"] == "tool":
+                        tools += 1
                     if ev["type"] == "text":
+                        if first_text_ms is None:
+                            first_text_ms = round((time.monotonic() - t0) * 1000)
                         text += ev["text"]       # accumulate streamed deltas into the full answer
                     _emit(ev)
                 terminal = {"type": "done", "answer": text}
@@ -413,6 +427,14 @@ def register(app, deps) -> None:
                 # from the client.
                 msg = str(e) if isinstance(e, CoachUserError) else "coach error"
                 terminal = {"type": "error", "message": msg}
+            latency = {"tier": None if last_answer else tier, "tier_via": routed["via"],
+                       "classify_ms": routed["classify_ms"], "first_text_ms": first_text_ms,
+                       "total_ms": round((time.monotonic() - t0) * 1000),
+                       "rounds": rounds, "tools": tools}
+            if terminal["type"] == "done":
+                terminal["latency"] = latency      # the chat meter's per-turn readout
+            logging.getLogger(__name__).info("coach turn latency %s %s", TURN_TAG.get(),
+                                             latency)
             # Persist best-effort, but only when there's a real turn to keep —
             # skip the row when an error produced no text, so failed turns don't
             # pollute history with an empty answer.
@@ -422,7 +444,8 @@ def register(app, deps) -> None:
                     stored_question = ("🎤 " + question) if voice else question
                     app.state.store.save_chat(chat_id, ctx.session_id, ctx.track, ctx.car, ctx.lap_id,
                                               stored_question, text, ctx.tool_calls,
-                                              usage=turn_usage.as_dict(), model=used_model)
+                                              usage=turn_usage.as_dict(), model=used_model,
+                                              latency=latency)
                     terminal["chat_id"] = chat_id
                     # Report the CHAT cumulative total, read back from the store after
                     # the insert: the number the driver sees is then the persisted
