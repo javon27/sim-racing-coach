@@ -549,9 +549,13 @@ def test_the_signed_metrics_are_classified_beside_the_key_list():
     local copy is the rule, and the server must use the same function object.
     """
     assert SIGNED_GEOMETRY_KEYS <= set(CORNER_GEOMETRY_KEYS)
+    from simcoach import track_lookup
     from simcoach.server import trackfile, tracks
-    for mod in (trackfile, tracks):   # every server module that applies the rule (#65)
+    # Every module that applies the rule (#65). The editor's save (server.tracks) reaches
+    # it through track_lookup.carried_geometry since #196, so that is the one to pin.
+    for mod in (trackfile, track_lookup):
         assert mod.measurable_geometry is analysis.measurable_geometry   # not a local copy
+    for mod in (trackfile, tracks, track_lookup):
         assert not hasattr(mod, "_measurable")
         assert not hasattr(mod, "SIGNED_GEOMETRY_KEYS")
 

@@ -1969,6 +1969,14 @@ CORNER_GEOMETRY_KEYS = ("radius_m", "width_m", "banking_deg", "elev_delta_m")
 # width/banking (#62). Add a fifth metric -> classify it here in the same edit.
 SIGNED_GEOMETRY_KEYS = frozenset({"banking_deg", "elev_delta_m"})
 
+# Which of those `corner_geometry` reads at the APEX alone (`at(apex_dist)`), so they
+# still describe a corner whose window moved but whose apex did not. Every other metric
+# reads the WINDOW -- radius_m is the tightest point inside it, elev_delta_m its end minus
+# its start -- and is stale the moment the window changes (#196: Laguna's merged T2 kept
+# old T1's -5.1 m for a window it no longer had). Listed positively so a metric added
+# above and not classified here is treated as window-read: dropped, never carried stale.
+APEX_GEOMETRY_KEYS = frozenset({"width_m", "banking_deg"})
+
 
 def measurable_geometry(key: str, value) -> bool:
     """Is a stored geometry value one that could have been MEASURED -- a finite number,

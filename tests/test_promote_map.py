@@ -154,6 +154,22 @@ def test_promoted_file_satisfies_the_on_disk_window_invariant(tmp_path):
         assert c["start_dist"] <= c["apex_dist"] <= c["end_dist"]
 
 
+def test_a_clamp_trimmed_window_drops_the_bake_measured_over_the_old_one(tmp_path):
+    """#196: the clamp narrows a window without re-baking it (the #30 narrowing that staled
+    18 radii), so radius/elevation measured over the old window must not be copied onto
+    the new one. Width/banking are read at the apex, which the clamp does not move."""
+    data = _map()
+    bake = {"radius_m": 80.0, "elev_delta_m": -5.1, "width_m": 10.3, "banking_deg": -2.2}
+    data["corners"][0].update(bake, end_dist=420.0)   # bleeds into corner 2 -> trimmed
+    data["corners"][1].update(bake)                   # already inside its bounds
+    corners = json.loads(promote(_src(tmp_path, data), _tracks(tmp_path))
+                         .read_text("utf-8"))["corners"]
+    assert corners[0]["end_dist"] < 420.0             # premise: the clamp moved it
+    assert not {"radius_m", "elev_delta_m"} & corners[0].keys()
+    assert (corners[0]["width_m"], corners[0]["banking_deg"]) == (10.3, -2.2)
+    assert {k: corners[1][k] for k in bake} == bake
+
+
 def test_authored_notes_survive_but_a_stale_corner_key_is_dropped(tmp_path):
     """The editor's save guard, not bypassed: a note keyed to a label that no longer
     exists would rebind to a different corner, which the coach states as fact."""

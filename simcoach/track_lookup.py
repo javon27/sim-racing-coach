@@ -13,7 +13,7 @@ import string
 import unicodedata
 from pathlib import Path
 
-from simcoach.analysis import CORNER_GEOMETRY_KEYS, measurable_geometry
+from simcoach.analysis import APEX_GEOMETRY_KEYS, CORNER_GEOMETRY_KEYS, measurable_geometry
 from simcoach.car_lookup import resolve_car
 from simcoach.corners import CornerMap
 from simcoach.mapbuild import build_map
@@ -209,7 +209,10 @@ def load_map_data(
     them. Per overlay corner, matched on `corner_apex_key` (the same identity the editor's
     carry-forward uses, so read and write agree on which corner a bake belongs to):
       - a shipped corner at that apex: each metric the shipped corner holds as a
-        measurement wins; the overlay keeps only metrics the shipped one lacks.
+        measurement wins; the overlay keeps only metrics the shipped one lacks. Only
+        what `carried_geometry` lets through, though: a shipped radius/elevation measured
+        over a DIFFERENT window than the overlay corner's does not describe it (#196),
+        so the overlay's own (re-measured, or dropped) value stands.
       - no shipped corner at that apex (the driver added it, or moved its apex): the
         overlay's own geometry, which the editor measured at that apex when it saved.
         A future SHIPPED re-map that moves an apex off its 1 dp value (a move of ~0.05 m
@@ -234,8 +237,7 @@ def load_map_data(
                    if (key := corner_apex_key(c)) is not None}
         corners = []
         for c in user["corners"]:
-            s = by_apex.get(corner_apex_key(c), {})
-            geo = {k: s[k] for k in CORNER_GEOMETRY_KEYS if measurable_geometry(k, s.get(k))}
+            geo = carried_geometry(by_apex.get(corner_apex_key(c)), c)
             corners.append({**c, **geo} if geo else c)
         merged["corners"] = corners
     return merged
@@ -292,6 +294,38 @@ def corner_apex_key(corner: dict) -> float | None:
     except (KeyError, TypeError, ValueError, OverflowError):   # OverflowError: huge int
         return None
     return round(a, 1) if math.isfinite(a) else None
+
+
+def carried_geometry(baked, corner) -> dict:
+    """The baked per-corner geometry of `baked` -- the stored corner matched to `corner`
+    by `corner_apex_key` -- that still describes `corner`: {metric: value}, measurable
+    values only.
+
+    Same apex is not the same measurement (#196). width_m/banking_deg are read at the
+    apex, so they carry; radius_m/elev_delta_m are read over the WINDOW, so they carry
+    only when the window is unchanged too. Laguna's merged T2 kept old T1's apex and
+    took a new window (423.9-549.6 for 370.2-495.8) and so inherited old T1's
+    elev_delta_m -5.1, which the coach then stated as "downhill 5m".
+
+    Unchanged means equal at the 1 dp every writer rounds windows to -- the same
+    resolution as the apex identity. That is the whole tolerance: the editor sends back
+    the stored window verbatim (its only window edit, a corner drag, moves the apex with
+    it), so an unchanged re-save shifts a window by nothing but sub-0.05 float noise,
+    and any real edit is at least a path station (~7 m on Laguna). A window-read metric
+    dropped here is re-measured where a source exists (radius_m from the path) and is
+    otherwise absent -- never stated -- until backfill_corner_geometry.py re-bakes it.
+    Total: takes anything off disk and never raises.
+    """
+    if not isinstance(baked, dict) or not isinstance(corner, dict):
+        return {}
+
+    def window(c):
+        s, e = _finite(c.get("start_dist")), _finite(c.get("end_dist"))
+        return None if s is None or e is None else (round(s, 1), round(e, 1))
+
+    same = window(baked) is not None and window(baked) == window(corner)
+    return {k: baked[k] for k in CORNER_GEOMETRY_KEYS
+            if (same or k in APEX_GEOMETRY_KEYS) and measurable_geometry(k, baked.get(k))}
 
 
 def _finite(value) -> float | None:

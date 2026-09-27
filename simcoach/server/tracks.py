@@ -6,9 +6,9 @@ import math
 
 from fastapi import Body, HTTPException
 
-from ..analysis import CORNER_GEOMETRY_KEYS, corner_geometry, geometry_clause, measurable_geometry
+from ..analysis import CORNER_GEOMETRY_KEYS, corner_geometry, geometry_clause
 from ..corners import in_window
-from ..track_lookup import corner_apex_key, fill_blank_labels, track_slug
+from ..track_lookup import carried_geometry, corner_apex_key, fill_blank_labels, track_slug
 from ..trackmap import average_racing_line, direction_from_path
 from .trackfile import content_rev, map_rev
 
@@ -275,6 +275,10 @@ def register(app, deps) -> None:
         # re-measure it. That is the curator changing the geometry, in a diff they can
         # see -- and it means any corner they reposition self-heals its stale #73
         # radius. Exact at the 1 dp boundary (+0.049 keeps the bake, +0.05 re-measures).
+        #   The apex is only where width/banking were measured, though: radius and
+        # elevation were measured over the WINDOW, so they carry only while the window
+        # is unchanged too (#196, `carried_geometry`) -- the one exception to "carry the
+        # bake untouched", because the bake no longer describes the corner.
         rib_w = keep_ribbon.get("width") if isinstance(keep_ribbon, dict) else None
         rib_b = keep_ribbon.get("bank") if isinstance(keep_ribbon, dict) else None
         # corner_geometry keys its result by label, and two corners can still share one:
@@ -295,12 +299,16 @@ def register(app, deps) -> None:
             # re-measures" rule as the geometry carry-forward just below.
             if baked.get("direction") in ("left", "right"):
                 c["direction"] = baked["direction"]
+            # Only the part of the bake that still describes THIS corner (#196): a
+            # window-read metric (radius_m, elev_delta_m) carries only if the window is
+            # unchanged too, so a merge, split or dragged-onto-an-old-apex corner does not
+            # inherit a measurement of a window it no longer has. What is not carried is
+            # re-measured from `geo` -- radius from the path, width/banking from a stored
+            # ribbon -- or left absent: elev_delta_m is never in `geo` here (no pos_y on
+            # an editor save), so a changed window DROPS it until the backfill re-bakes.
+            kept = carried_geometry(baked, c)
             for k in CORNER_GEOMETRY_KEYS:
-                # elev_delta_m is never in `geo` here (no pos_y on a corner/label edit),
-                # so for it this is the carry-forward it always was.
-                v = baked.get(k)
-                if not measurable_geometry(k, v):
-                    v = geo.get(str(i), {}).get(k)
+                v = kept.get(k, geo.get(str(i), {}).get(k))
                 if v is not None:
                     c[k] = v
             # The matched corner's key order too (#145): Laguna's bake lists elev_delta_m

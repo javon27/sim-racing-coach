@@ -48,6 +48,7 @@ from simcoach.corners import (
     validated_sectors,
 )
 from simcoach.track_lookup import (
+    carried_geometry,
     dump_track_json,
     fill_blank_labels,
     guard_corner_notes,
@@ -259,7 +260,15 @@ def promote(src: Path | str, tracks_dir: Path | str = TRACKS_DIR, *,
                for c in corners]
     clamp_corner_windows(clamped, length)
     for c, o in zip(corners, clamped):
+        before = dict(c)
         c["start_dist"], c["end_dist"] = o.start_dist, o.end_dist
+        # A trimmed window no longer matches the radius/elevation measured over it
+        # (#196, the #30 narrowing again): drop those, never copy them stale. This
+        # script never re-bakes -- backfill_corner_geometry.py does, after the promote.
+        kept = carried_geometry(before, c)
+        for k in CORNER_GEOMETRY_KEYS:
+            if k not in kept:
+                c.pop(k, None)
     bad = _overlaps(corners, length)
     if bad:
         raise PromoteError("corner windows still overlap after clamping: " + "; ".join(bad))

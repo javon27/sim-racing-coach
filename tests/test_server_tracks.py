@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import simcoach
+from simcoach.analysis import corner_geometry, geometry_clause
 from simcoach.coach import Coach
 from simcoach.coach_tools import CoachContext
 from simcoach.corners import CornerMap
@@ -20,7 +21,7 @@ from simcoach.model.fake import FakeModel
 from simcoach.model_types import LapRecord
 from simcoach.server.app import create_app
 from simcoach.store import LapStore
-from simcoach.track_lookup import dump_track_json, note_key_binds
+from simcoach.track_lookup import dump_track_json, load_map_data, note_key_binds
 from tests.conftest import with_map_rev
 
 
@@ -1903,3 +1904,149 @@ def test_an_untimed_invalidated_whole_lap_stays_off_the_outline_and_the_cloud(tm
     assert m == client.get(f"/laps/{lap}/map").json()
     row = next(t for t in client.get("/tracks").json() if t["slug"] == _SPA)
     assert row["live_laps"] == 2
+
+
+# --- #196: a corner whose window changed does not keep the old window's bake ---------
+
+_LAGUNA = "weathertech_raceway_laguna_seca"
+# Laguna's T1/T2 exactly as committed before the driver's merge edit (origin/main 46d85eb),
+# inline so the driver's uncommitted re-edit of the shipped file can't move the premise.
+_LAGUNA_OLD_T1_T2 = [
+    {"number": 1, "label": "1", "name": "Turn 1", "direction": "left", "start_dist": 370.2,
+     "apex_dist": 459.9, "end_dist": 495.8, "apexes": [459.9], "radius_m": 31.2,
+     "elev_delta_m": -5.1, "width_m": 10.3, "banking_deg": -2.2},
+    {"number": 2, "label": "2", "name": "Andretti Hairpin", "direction": "left",
+     "start_dist": 495.8, "apex_dist": 531.8, "end_dist": 621.5, "apexes": [531.8],
+     "radius_m": 34.8, "elev_delta_m": -0.8, "width_m": 10.3, "banking_deg": -2.2},
+]
+_EDITOR_KEYS = ("number", "label", "name", "apex_dist", "apexes", "start_dist", "end_dist")
+
+
+def _laguna_client(tmp_path):
+    # The real map (500-station frozen path, no ribbon, baked geometry, notes) with its
+    # first two corners pinned to the pre-merge committed values.
+    data = json.loads((Path(simcoach.__file__).parent / "tracks" / f"{_LAGUNA}.json")
+                      .read_text(encoding="utf-8"))
+    data["corners"] = [dict(c) for c in _LAGUNA_OLD_T1_T2] + data["corners"][2:]
+    tracks = tmp_path / "tracks"
+    tracks.mkdir()
+    f = tracks / f"{_LAGUNA}.json"
+    f.write_bytes(dump_track_json(data))
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    client = TestClient(create_app(store, Coach(FakeModel("{}")), tracks_dir=str(tracks)),
+                        base_url="http://127.0.0.1")
+    return client, store, data, f
+
+
+def _put_laguna(client, corners, data):
+    # The body TrackMapEditor sends: identity + window only, never geometry.
+    return client.put(f"/tracks/{_LAGUNA}/map", json=with_map_rev(
+        client, f"/tracks/{_LAGUNA}/map", {
+            "corners": [{k: c[k] for k in _EDITOR_KEYS if k in c} for c in corners],
+            "sectors": data.get("sectors") or [], "sections": data.get("sections") or [],
+            "name": data.get("name")}))
+
+
+def _by_apex(corners, apex):
+    return next(c for c in corners if c["apex_dist"] == apex)
+
+
+def _measured(data, c):
+    # What corner_geometry measures for `c`'s own window on the map's path.
+    return corner_geometry(data["path"], data["path_dist"], [dict(c, label="x")])["x"]
+
+
+# The driver's real edit (#196): old T2 dragged onto old T1's apex 459.9 -- its window
+# translated with it to 423.9-549.6 -- old T1 deleted, 531.8 re-added as a second apex,
+# and a new T1 placed at 230.0.
+_MERGED_T2 = {"number": 2, "label": "2", "name": "Andretti Hairpin", "start_dist": 423.9,
+              "apex_dist": 459.9, "end_dist": 549.6, "apexes": [459.9, 531.8]}
+_NEW_T1 = {"number": 1, "label": "1", "name": "Turn 1", "start_dist": 140.3,
+           "apex_dist": 230.0, "end_dist": 265.9, "apexes": [230.0]}
+
+
+def test_a_merged_corner_keeps_neither_old_corners_window_bake(tmp_path):
+    client, _store, data, f = _laguna_client(tmp_path)
+    r = _put_laguna(client, [_NEW_T1, _MERGED_T2] + data["corners"][2:], data)
+    assert r.status_code == 200, r.text
+    written = json.loads(f.read_text(encoding="utf-8"))
+    t2 = _by_apex(written["corners"], 459.9)
+    # Old T1's -5.1 was measured over 370.2-495.8, old T2's -0.8 over 495.8-621.5:
+    # neither describes 423.9-549.6, and an editor save has no elevation source.
+    assert "elev_delta_m" not in t2
+    assert t2["radius_m"] == _measured(written, t2)["radius_m"]   # re-measured, own window
+    assert (t2["width_m"], t2["banking_deg"]) == (10.3, -2.2)     # read AT the apex: same
+    t1 = _by_apex(written["corners"], 230.0)                       # brand-new corner
+    assert not {"elev_delta_m", "width_m", "banking_deg"} & t1.keys()
+    assert t1["radius_m"] == _measured(written, t1)["radius_m"]
+    # Untouched corners keep their bake (the Corkscrew's -16.7 m is the real one).
+    assert _by_apex(written["corners"], 2515.4)["elev_delta_m"] == -16.7
+
+    # And the coach no longer states it: get_corner's geometry line, from the map it loads.
+    ctx = CoachContext(store=None, cmap=CornerMap.from_data(written), track="Laguna Seca",
+                       car="GT3")
+    clause = ctx._corner_geometry_clause("2", "left")
+    assert clause == "2\N{DEGREE SIGN} banked" and "downhill" not in clause
+    # The same save under the old carry-forward: this is what the coach used to say.
+    assert geometry_clause(_LAGUNA_OLD_T1_T2[0], "left").startswith("downhill 5m")
+
+
+def test_a_split_corner_re_measures_its_window_and_the_new_half_inherits_nothing(tmp_path):
+    client, _store, data, f = _laguna_client(tmp_path)
+    t1, t2 = (dict(c) for c in _LAGUNA_OLD_T1_T2)
+    first = dict(t2, end_dist=560.0)                               # Andretti, entry half
+    second = {"number": 3, "label": "2b", "name": "Andretti exit", "start_dist": 560.0,
+              "apex_dist": 590.0, "end_dist": 621.5, "apexes": [590.0]}
+    rest = [dict(c, number=c["number"] + 1) for c in data["corners"][2:]]
+    r = _put_laguna(client, [t1, first, second] + rest, data)
+    assert r.status_code == 200, r.text
+    corners = json.loads(f.read_text(encoding="utf-8"))["corners"]
+    a, b = _by_apex(corners, 531.8), _by_apex(corners, 590.0)
+    assert "elev_delta_m" not in a and a["radius_m"] == _measured(data, a)["radius_m"]
+    assert (a["width_m"], a["banking_deg"]) == (10.3, -2.2)
+    assert not {"elev_delta_m", "width_m", "banking_deg"} & b.keys()
+    assert _by_apex(corners, 459.9)["elev_delta_m"] == -5.1       # T1 untouched: kept
+
+
+@pytest.mark.parametrize("end, kept", [(2605.14, True), (2605.16, False), (2615.1, False)])
+def test_a_window_move_beyond_the_1dp_tolerance_drops_the_window_bake(tmp_path, end, kept):
+    # The Corkscrew (2479.4-2605.1, elev -16.7). Windows are written at 1 dp and the
+    # editor sends them back verbatim, so the tolerance is that resolution: +0.04 is the
+    # same stored window (and a byte-identical save), +0.06 is a different one.
+    client, _store, data, f = _laguna_client(tmp_path)
+    before = f.read_bytes()
+    corners = [dict(c) for c in data["corners"]]
+    cork = _by_apex(corners, 2515.4)
+    cork["end_dist"] = end
+    r = _put_laguna(client, corners, data)
+    assert r.status_code == 200, r.text
+    out = _by_apex(json.loads(f.read_text(encoding="utf-8"))["corners"], 2515.4)
+    assert (out.get("elev_delta_m") == -16.7) is kept
+    assert (f.read_bytes() == before) is kept
+    if not kept:
+        assert "elev_delta_m" not in out
+        assert out["radius_m"] == _measured(data, out)["radius_m"]
+        assert (out["width_m"], out["banking_deg"]) == (9.4, 4.1)
+
+
+def test_an_installed_builds_read_does_not_put_the_shipped_bake_back(tmp_path, monkeypatch):
+    # The frozen sidecar writes an app-data overlay and reads it merged over the shipped
+    # map, where a shipped corner at the same apex used to win on every metric (#75) --
+    # so the merged T2 picked old T1's -5.1 back up on the very next read.
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    client, store, data, f = _laguna_client(tmp_path)
+    r = _put_laguna(client, [_NEW_T1, _MERGED_T2] + data["corners"][2:], data)
+    assert r.status_code == 200, r.text
+    user = Path(store.data_dir) / "tracks"
+    overlay_t2 = _by_apex(json.loads((user / f.name).read_text("utf-8"))["corners"], 459.9)
+    assert "elev_delta_m" not in overlay_t2
+    merged = load_map_data(_LAGUNA, str(f.parent), str(user))
+    t2 = _by_apex(merged["corners"], 459.9)
+    assert "elev_delta_m" not in t2 and t2["radius_m"] == overlay_t2["radius_m"]
+    assert (t2["width_m"], t2["banking_deg"]) == (10.3, -2.2)
+    # An unchanged window still takes the shipped bake (#75's re-bakes keep reaching it).
+    assert _by_apex(merged["corners"], 2515.4)["elev_delta_m"] == -16.7
+    # And the next unchanged save from that merged read is a no-op on the overlay.
+    before = (user / f.name).read_bytes()
+    assert _put_laguna(client, merged["corners"], data).status_code == 200
+    assert (user / f.name).read_bytes() == before
