@@ -398,6 +398,7 @@
   async function saveGen() {
     saving = true;
     genErr = null;
+    ribbonStale = false;
     try {
       await saveRibbon();
       onSaved?.();
@@ -405,10 +406,11 @@
       onClose?.();
     } catch (e) {
       // #178: the track's map was saved elsewhere after this preview was built, and the
-      // preview carries that map's old sections/sectors. Build it again to pick them up.
+      // preview carries that map's old sections/sectors (Save replaces corners by design,
+      // and re-reads rotation and name). Building again picks the new ones up.
       if (/-> 409\b/.test(String((e as Error)?.message ?? ""))) {
         ribbonStale = true;
-        genErr = "Not saved: this track's map changed on disk since this preview was built. Rebuild the preview to pick up the change, then save.";
+        genErr = "Not saved: this track's map was saved elsewhere after this preview was built. Rebuild the preview, then save.";
         return;
       }
       genErr = "Save failed.";

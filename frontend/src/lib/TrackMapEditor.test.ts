@@ -684,14 +684,14 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     await fireEvent.click(screen.getByText("Build"));
     await fireEvent.click(await screen.findByText("Save ribbon"));
 
-    expect(await screen.findByText(/changed on disk since this preview was built/i)).toBeTruthy();
+    expect(await screen.findByText(/saved elsewhere after this preview was built/i)).toBeTruthy();
     expect(onSaved).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
 
     await fireEvent.click(screen.getByRole("button", { name: "Rebuild preview" }));
     await waitFor(() => expect(buildRibbon).toHaveBeenCalledTimes(2));
     await screen.findByText("Save ribbon");
-    expect(screen.queryByText(/changed on disk/i)).toBeNull();
+    expect(screen.queryByText(/saved elsewhere/i)).toBeNull();
     expect(screen.queryByRole("button", { name: "Rebuild preview" })).toBeNull();
 
     await fireEvent.click(screen.getByText("Save ribbon"));
@@ -709,6 +709,17 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     await fireEvent.click(await screen.findByRole("button", { name: "Rebuild preview" }));
     await waitFor(() => expect(rebuildFromCapture).toHaveBeenCalledTimes(2));
     expect(buildRibbon).not.toHaveBeenCalled();
+  });
+
+  it("a Save ribbon failure that is not a 409 says Save failed and offers no rebuild", async () => {
+    vi.mocked(saveRibbon).mockRejectedValueOnce(new Error(
+      "API request failed: POST /mapcapture/save -> 422: no built ribbon to save"));
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+    await fireEvent.click(screen.getByText("Rebuild from saved capture"));
+    await fireEvent.click(await screen.findByText("Save ribbon"));
+    expect(await screen.findByText("Save failed.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Rebuild preview" })).toBeNull();
   });
 
   it("Rebuild says how many laps back the geometry, before Save", async () => {

@@ -3,6 +3,7 @@
 # crash / restart / app close between driving and Save loses nothing, no lap is
 # silently dropped by a buffer cap, and Save never writes a map without its cloud.
 import json
+import os
 
 import numpy as np
 import pytest
@@ -456,11 +457,19 @@ def _assert_refused(tmp_path, c, before):
 
 def test_save_ribbon_refuses_a_map_saved_since_build(tmp_path):
     app, c = _mapped(tmp_path)
+    app.state.map_buffer = []
+    _drive(app, app.state.store, 2)              # real pending laps on disk (#150)
     assert c.post("/mapcapture/build", json={}).status_code == 200
     _put_sections(c)
     before = _map_file(tmp_path).read_bytes()
+    saved = tmp_path.joinpath(*SAVED)
+    os.utime(saved, (1_000_000_000, 1_000_000_000))   # so a rewrite is visible in mtime
+    cloud = saved.read_bytes()
     _assert_refused(tmp_path, c, before)
-    assert len(app.state.map_buffer) == 2        # not promoted: Build again has its laps
+    # Refused before ANY write: the saved cloud untouched, nothing promoted.
+    assert saved.read_bytes() == cloud and saved.stat().st_mtime == 1_000_000_000
+    assert len(_pending(tmp_path)) == 2
+    assert len(app.state.map_buffer) == 2        # Build again has its laps
     # The way out the 409 names: Build again picks up the sections, and that Save lands.
     assert c.post("/mapcapture/build", json={}).status_code == 200
     assert c.post("/mapcapture/save", json={}).status_code == 200
