@@ -5,6 +5,7 @@ import os
 import random
 import shutil
 import string
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -1729,56 +1730,95 @@ def test_an_unchanged_notes_save_of_every_shipped_map_is_a_byte_identical_no_op(
             f"{src.name}: an unchanged notes save rewrote the file"
 
 
-_LAGUNA = "weathertech_raceway_laguna_seca"
+_ALG_SLUG = "algarve_international_circuit"
 
 
-def _laguna_route_save(client, lap, route):
-    # One UNCHANGED save of the Laguna fixture through `route`, the body each screen sends.
-    d = json.loads((Path(simcoach.__file__).parent / "tracks" / f"{_LAGUNA}.json")
-                   .read_text(encoding="utf-8"))
-    base = f"/laps/{lap}" if route.startswith("laps") else f"/tracks/{_LAGUNA}"
+def _writer_fixture() -> dict:
+    # Inline, so a driver's uncommitted edit to a shipped map can't fail these tests (#171
+    # round 1). Shipped-map shape: a stored outline (the map PUT refuses without one), no
+    # ribbon (so baked width_m can only be carried, never re-derived), baked geometry, an
+    # IPA table, notes, and a non-ASCII display name.
+    t = np.linspace(0.0, 2 * np.pi, 121)[:-1]
+    path = [[round(60.0 * np.cos(a), 1), round(40.0 * np.sin(a), 1)] for a in t]
+    corners = [{"number": n, "label": str(n), "name": nm, "direction": dr,
+                "start_dist": s, "apex_dist": a, "end_dist": e, "apexes": [a],
+                "radius_m": r, "elev_delta_m": -1.2, "width_m": w, "banking_deg": 1.4}
+               for n, nm, dr, s, a, e, r, w in [
+                   (1, "Primeira", "left", 20.0, 50.0, 80.0, 40.5, 12.3),
+                   (2, "Torre VIP", "left", 170.0, 200.0, 230.0, 38.1, 11.8)]]
+    return {"track": _ALG_SLUG, "name": "Portimão", "corners": corners,
+            "path": path, "path_dist": [i * 2.5 for i in range(120)],
+            "sectors": [100.0, 200.0], "sections": [], "length": 297.5, "rotation": 0.0,
+            "notes": {"overview": "Montanha russa.", "corners": {"1": "Travão cedo."}},
+            "pronunciations": {"Torre VIP": "tˈɔːɹ vˈɪp"}}
+
+
+def _writer_route_save(client, lap, route):
+    # One UNCHANGED save of the fixture through `route`, the body each screen sends.
+    d = _writer_fixture()
+    base = f"/laps/{lap}" if route.startswith("laps") else f"/tracks/{_ALG_SLUG}"
     if route.endswith("notes"):
-        got = client.get(f"{base}/notes").json()
-        return client.put(f"{base}/notes",
-                          json={"track": _LAGUNA, "rev": got.pop("rev"), "notes": got})
+        got = client.get(f"/tracks/{_ALG_SLUG}/notes").json()
+        return client.put(f"/tracks/{_ALG_SLUG}/notes",
+                          json={"track": _ALG_SLUG, "rev": got.pop("rev"), "notes": got})
     if route.endswith("rotation"):
         return client.post(f"{base}/rotation",
                            json=with_map_rev(client, f"{base}/rotation", {"degrees": d["rotation"]}))
     return client.put(f"{base}/map", json=with_map_rev(client, f"{base}/map", {
         "corners": d["corners"], "sectors": d["sectors"], "sections": d["sections"],
-        "name": "Portimão"}))
+        "name": d["name"]}))
 
 
-@pytest.mark.parametrize("route", ["tracks/map", "laps/map", "tracks/notes",
-                                   "tracks/rotation", "laps/rotation"])
-def test_every_track_writer_route_writes_dump_track_json_bytes(tmp_path, route):
-    # #171: a driver's Laguna is byte-for-byte the pre-#145 writer's output (text mode,
-    # ensure_ascii), and the shipped-map tests above only cover the map PUT. Pin EVERY
-    # route that rewrites a track JSON: it must emit exactly dump_track_json's bytes (raw
-    # UTF-8, CRLF only from the serializer), keep the baked point-cloud width_m (Laguna has
-    # no ribbon to re-derive it from), and be a byte-identical no-op when nothing changed.
-    src = json.loads((Path(simcoach.__file__).parent / "tracks" / f"{_LAGUNA}.json")
-                     .read_text(encoding="utf-8"))
-    src["name"] = "Portimão"                          # non-ASCII outside the IPA table too
+def _writer_client(tmp_path):
     tracks = tmp_path / "tracks"
     tracks.mkdir()
-    f = tracks / f"{_LAGUNA}.json"
-    f.write_bytes(dump_track_json(src))
-    before = f.read_bytes()
+    f = tracks / f"{_ALG_SLUG}.json"
+    f.write_bytes(dump_track_json(_writer_fixture()))
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    lap = store.save(LapRecord("lmu", "WeatherTech Raceway Laguna Seca", "Oreca 07", 90.0,
-                               True, 0.0, {"lap_distance": np.linspace(0.0, 3600.0, 200),
+    lap = store.save(LapRecord("lmu", "Algarve International Circuit", "Oreca 07", 90.0,
+                               True, 0.0, {"lap_distance": np.linspace(0.0, 297.5, 200),
                                            "speed": np.full(200, 50.0)}))
     client = TestClient(create_app(store, Coach(FakeModel("{}")), tracks_dir=str(tracks)),
                         base_url="http://127.0.0.1")
-    r = _laguna_route_save(client, lap, route)
+    return client, store, lap, f
+
+
+_WRITER_ROUTES = ["tracks/map", "laps/map", "tracks/notes", "tracks/rotation", "laps/rotation"]
+
+
+@pytest.mark.parametrize("route", _WRITER_ROUTES)
+def test_every_track_writer_route_writes_dump_track_json_bytes(tmp_path, route):
+    # #171: a driver's Laguna is byte-for-byte the pre-#145 writer's output (text mode,
+    # ensure_ascii), and the shipped-map tests above only cover the map PUT. Pin EVERY
+    # route that rewrites a track JSON: exactly dump_track_json's bytes (raw UTF-8, CRLF
+    # only from the serializer), and an unchanged save is a byte-identical no-op -- which
+    # is also what proves the carried width_m survived.
+    assert all("width_m" in c for c in _writer_fixture()["corners"])   # premise
+    client, _store, lap, f = _writer_client(tmp_path)
+    before = f.read_bytes()
+    r = _writer_route_save(client, lap, route)
     assert r.status_code == 200, r.text
     out = f.read_bytes()
     assert out == dump_track_json(json.loads(out.decode("utf-8")))   # canonical bytes
     assert b"\\u" not in out and "Portimão".encode() in out
     assert out.replace(b"\r\n", b"").count(b"\r") == 0 == out.replace(b"\r\n", b"").count(b"\n")
-    assert all("width_m" in c for c in json.loads(out.decode("utf-8"))["corners"])
     assert out == before, f"{route}: an unchanged save rewrote the file"
+
+
+@pytest.mark.parametrize("route", _WRITER_ROUTES)
+def test_an_installed_build_writes_its_overlay_as_dump_track_json_bytes(tmp_path, monkeypatch,
+                                                                        route):
+    # The frozen sidecar never touches the bundled map: it writes an app-data overlay
+    # (trackfile._write_track_json). That overlay is the same format, not a second one.
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    client, store, lap, f = _writer_client(tmp_path)
+    before = f.read_bytes()
+    r = _writer_route_save(client, lap, route)
+    assert r.status_code == 200, r.text
+    assert f.read_bytes() == before                      # the bundle is untouched
+    out = (Path(store.data_dir) / "tracks" / f.name).read_bytes()
+    assert out == dump_track_json(json.loads(out.decode("utf-8")))
+    assert b"\\u" not in out and "Portimão".encode() in out
 
 
 def test_mapcapture_save_writes_dump_track_json_bytes(tmp_path):
