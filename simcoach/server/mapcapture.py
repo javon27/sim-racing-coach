@@ -17,6 +17,7 @@ from .captures import (
 )
 from .core import export
 from .serialize import _clean
+from .trackfile import map_rev
 
 
 def register(app, deps) -> None:
@@ -178,6 +179,9 @@ def register(app, deps) -> None:
         app.state.last_ribbon = {"world": ribbon, "corners": corners, "sectors": sectors,
                                  "sections": sections, "track": track, "laps": raw,
                                  "built_from": "capture",
+                                 # The rev of the file `sectors`/`sections` came from:
+                                 # Save's stale guard (#178).
+                                 "rev": map_rev(extras),
                                  # The buffered laps behind `laps` (#150): Save promotes
                                  # exactly these, never a lap driven after Build.
                                  "buffered": buf}
@@ -201,6 +205,15 @@ def register(app, deps) -> None:
                 "end_dist", "apexes")
         corners = [{k: c[k] for k in keys if k in c} for c in rib["corners"]]
         existing = _track_file_data(track)
+        # Stale guard (#178), the map PUT's twin (#166): Build/Rebuild snapshot the file's
+        # sectors and sections into the ribbon, so a map or rotation save landing before
+        # this Save was silently reverted. The rev is stamped server-side with that
+        # snapshot, so there is no client rev to omit (no 428), and an unstamped ribbon
+        # fails closed. Before ANY write, the cloud included.
+        # ponytail: check-then-write, not atomic -- same stance as _check_map_rev.
+        if rib.get("rev") != map_rev(existing):
+            raise HTTPException(409, "this track's map changed on disk since the ribbon was "
+                                     "built; build it again before saving")
         out = {
             "track": track_slug(track),
             # Display name from the session (the live track), unless a custom name was
@@ -359,7 +372,8 @@ def register(app, deps) -> None:
         # laps driven afterwards never reached the map while the badge counted them.
         app.state.last_ribbon = {"world": ribbon, "corners": corners, "sectors": sectors,
                                  "sections": sections, "track": track, "laps": None,
-                                 "built_from": "capture" if from_capture else "live_laps"}
+                                 "built_from": "capture" if from_capture else "live_laps",
+                                 "rev": map_rev(extras)}   # Save's stale guard (#178)
         res = _clean(ribbon_to_screen(ribbon, corners, sectors,
                                       rotation=_track_rotation(track), sections=sections))
         res["track_name"] = _track_file_data(track).get("name") or track

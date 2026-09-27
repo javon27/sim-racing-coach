@@ -2,6 +2,8 @@
 # #150: a mapping lap reaches disk AS IT COMPLETES (captures/pending/<slug>/), so a
 # crash / restart / app close between driving and Save loses nothing, no lap is
 # silently dropped by a buffer cap, and Save never writes a map without its cloud.
+import json
+
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
@@ -13,7 +15,9 @@ from simcoach.model_types import LapRecord
 from simcoach.server import app as app_mod
 from simcoach.server import mapcapture as mapcapture_mod
 from simcoach.server.app import _capture_loop, create_app
+from simcoach.server.trackfile import map_rev
 from simcoach.store import LapStore
+from tests.conftest import with_map_rev
 
 
 @pytest.fixture(autouse=True)
@@ -231,7 +235,8 @@ def test_capture_built_ribbon_whose_cloud_is_gone_is_refused(tmp_path):
     app.state.last_ribbon = {"world": {"left": [], "right": [], "center": [], "width": [],
                                        "bank": [], "dist": []},
                              "corners": [], "sectors": [], "track": "MapTrack",
-                             "laps": None, "built_from": "capture"}
+                             "laps": None, "built_from": "capture",
+                             "rev": map_rev({})}   # no track file: a fresh Build's stamp
     assert _tc(app).post("/mapcapture/save", json={}).status_code == 422
     assert not tmp_path.joinpath("tracks", "maptrack.json").exists()
 
@@ -410,3 +415,91 @@ def test_an_untimed_whole_lap_is_persisted_but_never_buffered(tmp_path):
     assert len(app.state.map_buffer) == 1 and app.state.map_buffer[0].lap_time == 90.0
     assert len(_pending(tmp_path)) == 1
     assert store.conn.execute("SELECT COUNT(*) FROM laps WHERE mapping=1").fetchone()[0] == 2
+
+
+# --- #178: "Save ribbon" refuses a map changed on disk since Build -----------------------
+# Build/Rebuild snapshot the file's sectors and sections into the staged ribbon, so a map
+# save landing before Save used to be silently reverted. The ribbon carries the rev of the
+# file it was built from (server-side), and Save 409s on a stale one, writing nothing.
+
+_SECTIONS = [{"name": "Back straight", "kind": "straight", "start_dist": 10.0, "end_dist": 40.0}]
+
+
+def _map_file(tmp_path):
+    return tmp_path.joinpath("tracks", "maptrack.json")
+
+
+def _mapped(tmp_path):
+    # MapTrack mapped once (Build + Save), with laps buffered again for the next Build.
+    app, _store = _app(tmp_path)
+    c = _tc(app)
+    app.state.map_buffer = [_edge(1), _edge(-1)]
+    assert c.post("/mapcapture/build", json={}).status_code == 200
+    assert c.post("/mapcapture/save", json={}).status_code == 200
+    app.state.map_buffer = [_edge(1), _edge(-1)]
+    return app, c
+
+
+def _put_sections(c):
+    # What a second window (or the Tracks editor) does between Build and Save.
+    r = c.put("/tracks/maptrack/map", json=with_map_rev(c, "/tracks/maptrack/map", {
+        "corners": [{"number": 1, "name": "T1", "apex_dist": 50.0}], "sections": _SECTIONS}))
+    assert r.status_code == 200, r.text
+
+
+def _assert_refused(tmp_path, c, before):
+    r = c.post("/mapcapture/save", json={})
+    assert r.status_code == 409, r.text
+    assert "changed on disk" in r.json()["detail"]
+    assert _map_file(tmp_path).read_bytes() == before
+
+
+def test_save_ribbon_refuses_a_map_saved_since_build(tmp_path):
+    app, c = _mapped(tmp_path)
+    assert c.post("/mapcapture/build", json={}).status_code == 200
+    _put_sections(c)
+    before = _map_file(tmp_path).read_bytes()
+    _assert_refused(tmp_path, c, before)
+    assert len(app.state.map_buffer) == 2        # not promoted: Build again has its laps
+    # The way out the 409 names: Build again picks up the sections, and that Save lands.
+    assert c.post("/mapcapture/build", json={}).status_code == 200
+    assert c.post("/mapcapture/save", json={}).status_code == 200
+    assert json.loads(_map_file(tmp_path).read_text())["sections"] == _SECTIONS
+
+
+def test_save_ribbon_saves_when_only_notes_changed_since_build(tmp_path):
+    # No map write between Build and Save -> 200. A notes save is not a map conflict (the
+    # writer carries notes itself), so one landing in between must not 409 either.
+    _app, c = _mapped(tmp_path)
+    assert c.post("/mapcapture/build", json={}).status_code == 200
+    got = c.get("/tracks/maptrack/notes").json()
+    r = c.put("/tracks/maptrack/notes", json={"track": "MapTrack", "rev": got["rev"],
+                                              "notes": {"overview": "flat out"}})
+    assert r.status_code == 200, r.text
+    assert c.post("/mapcapture/save", json={}).status_code == 200
+    assert json.loads(_map_file(tmp_path).read_text())["notes"]["overview"] == "flat out"
+
+
+@pytest.mark.parametrize("rev", [None, "", "garbage", 123])
+def test_save_ribbon_refuses_an_unstamped_or_garbage_rev(tmp_path, rev):
+    # Build/Rebuild always stamp the rev server-side, so no client can omit it: a ribbon
+    # without a matching one can only be a staging path that forgot, and fails closed.
+    app, c = _mapped(tmp_path)
+    assert c.post("/mapcapture/build", json={}).status_code == 200
+    if rev is None:
+        del app.state.last_ribbon["rev"]
+    else:
+        app.state.last_ribbon["rev"] = rev
+    _assert_refused(tmp_path, c, _map_file(tmp_path).read_bytes())
+    assert len(app.state.map_buffer) == 2
+
+
+def test_rebuild_from_saved_capture_is_guarded_too(tmp_path):
+    # /mapcapture/rebuild snapshots sectors/sections the same way Build does.
+    _app, c = _mapped(tmp_path)
+    assert c.post("/mapcapture/rebuild", json={"slug": "maptrack"}).status_code == 200
+    _put_sections(c)
+    _assert_refused(tmp_path, c, _map_file(tmp_path).read_bytes())
+    assert c.post("/mapcapture/rebuild", json={"slug": "maptrack"}).status_code == 200
+    assert c.post("/mapcapture/save", json={}).status_code == 200
+    assert json.loads(_map_file(tmp_path).read_text())["sections"] == _SECTIONS

@@ -292,6 +292,8 @@
   let capLaps: { idx: number; samples: number; length: number }[] = $state([]);
   let ribbon: RibbonPreview | null = $state(null);
   let genErr: string | null = $state(null);
+  // Save ribbon was refused as stale (#178, 409): offer the rebuild that fixes it.
+  let ribbonStale = $state(false);
 
   // #106: capture progress was a mapCaptureStatus() poll on `pollMs`; the sidecar
   // now streams it, and only while a capture is running. Frames outside the
@@ -329,6 +331,7 @@
     capLaps = [];
     ribbon = null;
     genErr = null;
+    ribbonStale = false;
   }
 
   async function startGen() {
@@ -358,6 +361,7 @@
     if (capLaps.length < 1) return;
     genPhase = "building";
     genErr = null;
+    ribbonStale = false;
     try {
       ribbon = await buildRibbon();
       trackName = ribbon.track_name ?? "";
@@ -372,6 +376,7 @@
   async function rebuildGen() {
     genPhase = "building";
     genErr = null;
+    ribbonStale = false;
     ribbon = null;
     try {
       // Bind by slug when editing from the Tracks screen (no lap): otherwise the
@@ -398,7 +403,14 @@
       onSaved?.();
       resetGen();
       onClose?.();
-    } catch {
+    } catch (e) {
+      // #178: the track's map was saved elsewhere after this preview was built, and the
+      // preview carries that map's old sections/sectors. Build it again to pick them up.
+      if (/-> 409\b/.test(String((e as Error)?.message ?? ""))) {
+        ribbonStale = true;
+        genErr = "Not saved: this track's map changed on disk since this preview was built. Rebuild the preview to pick up the change, then save.";
+        return;
+      }
       genErr = "Save failed.";
     } finally {
       saving = false;
@@ -1192,6 +1204,9 @@
               <!-- Say what backs the geometry before it is committed: a map off 1-3
                    laps is thin (#41's Imola sector splits rest on a single lap). -->
               <span class="lapcount">{provenance}</span>
+            {/if}
+            {#if ribbonStale}
+              <button type="button" onclick={captured ? buildGen : rebuildGen}>Rebuild preview</button>
             {/if}
             <button type="button" class="primary" disabled={saving} onclick={saveGen}>
               {saving ? "Saving…" : "Save ribbon"}

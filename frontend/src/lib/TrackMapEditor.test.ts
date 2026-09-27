@@ -669,6 +669,48 @@ describe("TrackMapEditor — (re)generate map layout", () => {
     expect(screen.getAllByText("T1").length).toBeGreaterThan(0);
   });
 
+  it("a stale Save ribbon says the map changed on disk and rebuilds the preview on request", async () => {
+    // #178: a map save landed between Build and Save, so the server refuses (409) the
+    // preview's old sections/sectors. Nothing closes; Rebuild preview builds again.
+    const onSaved = vi.fn();
+    const onClose = vi.fn();
+    vi.mocked(saveRibbon).mockRejectedValueOnce(new Error(
+      "API request failed: POST /mapcapture/save -> 409: this track's map changed on disk since the ribbon was built"));
+    render(TrackMapEditor, { props: { lapId: 7, open: true, onSaved, onClose } });
+    await screen.findByText("First");
+    await fireEvent.click(screen.getByText("Generate map layout"));
+    pushCapture([{ idx: 0, samples: 500, length: 5000 }, { idx: 1, samples: 480, length: 4800 }]);
+    await waitFor(() => expect((screen.getByText("Build") as HTMLButtonElement).disabled).toBe(false));
+    await fireEvent.click(screen.getByText("Build"));
+    await fireEvent.click(await screen.findByText("Save ribbon"));
+
+    expect(await screen.findByText(/changed on disk since this preview was built/i)).toBeTruthy();
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Rebuild preview" }));
+    await waitFor(() => expect(buildRibbon).toHaveBeenCalledTimes(2));
+    await screen.findByText("Save ribbon");
+    expect(screen.queryByText(/changed on disk/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Rebuild preview" })).toBeNull();
+
+    await fireEvent.click(screen.getByText("Save ribbon"));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(saveRibbon).toHaveBeenCalledTimes(2);
+  });
+
+  it("a stale Save after Rebuild from saved capture rebuilds from the capture again", async () => {
+    vi.mocked(saveRibbon).mockRejectedValueOnce(new Error(
+      "API request failed: POST /mapcapture/save -> 409: this track's map changed on disk since the ribbon was built"));
+    render(TrackMapEditor, { props: { lapId: 7, open: true } });
+    await screen.findByText("First");
+    await fireEvent.click(screen.getByText("Rebuild from saved capture"));
+    await fireEvent.click(await screen.findByText("Save ribbon"));
+    await fireEvent.click(await screen.findByRole("button", { name: "Rebuild preview" }));
+    await waitFor(() => expect(rebuildFromCapture).toHaveBeenCalledTimes(2));
+    expect(buildRibbon).not.toHaveBeenCalled();
+  });
+
   it("Rebuild says how many laps back the geometry, before Save", async () => {
     // A map off 1-3 clouds is thin (#41), and the rebuild may be falling back to the
     // track's own live laps -- the driver has to see the count before committing it.

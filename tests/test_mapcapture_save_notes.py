@@ -59,6 +59,13 @@ def _ribbon(labels):
             "sectors": [], "sections": [], "track": TRACK}
 
 
+def _stamped(client, rib):
+    # Build/Rebuild stamp the ribbon with the rev of the file it was built from, and
+    # Save refuses a ribbon whose rev no longer matches the file (#178). A hand-staged
+    # ribbon stands in for a Build made NOW: stamp it with the file's current map rev.
+    return {**rib, "rev": client.get(f"/tracks/{SLUG}/map").json()["rev"]}
+
+
 def _put_notes(client, corners):
     return client.put(f"/tracks/{SLUG}/notes", json={
         "track": TRACK, "rev": client.get(f"/tracks/{SLUG}/notes").json()["rev"],
@@ -75,7 +82,7 @@ def test_mapcapture_save_preserves_authored_notes(tmp_path):
     # so EVERY authored field survives the ribbon save.
     app, client, tracks_dir = _client(tmp_path)
     assert _put_notes(client, {"1": "brake late", "2": "flat in 6th"}).status_code == 200
-    app.state.last_ribbon = _ribbon(["1", "2"])
+    app.state.last_ribbon = _stamped(client, _ribbon(["1", "2"]))
 
     r = client.post("/mapcapture/save", json={})
 
@@ -104,7 +111,7 @@ def test_mapcapture_save_drops_a_note_whose_nearest_corner_already_belongs_to_an
     rib = _ribbon(["1", "2", "3"])
     for c, apex in zip(rib["corners"][1:], (70.0, 90.0)):
         c.update(apex_dist=apex, start_dist=apex - 10.0, end_dist=apex + 10.0, apexes=[apex])
-    app.state.last_ribbon = rib
+    app.state.last_ribbon = _stamped(client, rib)
 
     with caplog.at_level(logging.WARNING, logger="simcoach.track_lookup"):
         r = client.post("/mapcapture/save", json={})
@@ -125,7 +132,7 @@ def test_mapcapture_save_moves_notes_onto_relabelled_corners(tmp_path, caplog):
     # follows it instead of being deleted (#64) -- and the move is surfaced in the log.
     app, client, tracks_dir = _client(tmp_path)
     assert _put_notes(client, {"1": "brake late", "2": "middle of the chicane"}).status_code == 200
-    app.state.last_ribbon = _ribbon(["1", "2A"])
+    app.state.last_ribbon = _stamped(client, _ribbon(["1", "2A"]))
 
     with caplog.at_level(logging.WARNING, logger="simcoach.track_lookup"):
         r = client.post("/mapcapture/save", json={})
@@ -146,7 +153,7 @@ def test_mapcapture_save_of_corner_less_rebuild_keeps_every_note(tmp_path):
     # can't rebind anything, so there is nothing to protect against: keep them all.
     app, client, tracks_dir = _client(tmp_path)
     assert _put_notes(client, {"1": "brake late", "2": "flat in 6th"}).status_code == 200
-    app.state.last_ribbon = _ribbon([])
+    app.state.last_ribbon = _stamped(client, _ribbon([]))
 
     r = client.post("/mapcapture/save", json={})
 
@@ -166,7 +173,7 @@ def test_mapcapture_save_keeps_range_keyed_notes(tmp_path):
     labels = ["1", "2", "3", "4"]
     app, client, tracks_dir = _client(tmp_path, labels)
     assert _put_notes(client, {"2-4": "the whole esses complex, one flowing arc"}).status_code == 200
-    app.state.last_ribbon = _ribbon(labels)
+    app.state.last_ribbon = _stamped(client, _ribbon(labels))
 
     assert client.post("/mapcapture/save", json={}).status_code == 200
 
@@ -204,7 +211,7 @@ def test_both_track_file_writers_agree_on_which_notes_survive(tmp_path):
     # Ribbon save (POST /mapcapture/save) -- _carry_notes is wired here.
     app_b, client_b, dir_b = _client(tmp_path / "ribbon", labels)
     assert _put_notes(client_b, prior).status_code == 200
-    app_b.state.last_ribbon = _ribbon(labels)
+    app_b.state.last_ribbon = _stamped(client_b, _ribbon(labels))
     assert client_b.post("/mapcapture/save", json={}).status_code == 200
 
     editor, ribbon = _written(dir_a)["notes"], _written(dir_b)["notes"]
@@ -229,7 +236,7 @@ def _save_via(writer, app, client, labels):
             {"number": i, "label": lab, "name": f"Turn {lab}", "apex_dist": 20.0 * i}
             for i, lab in enumerate(labels, 1)]}))
     if writer == "ribbon":
-        app.state.last_ribbon = _ribbon(labels)
+        app.state.last_ribbon = _stamped(client, _ribbon(labels))
         return client.post("/mapcapture/save", json={})
     if writer == "rotation":
         return client.post(f"/tracks/{SLUG}/rotation", json=with_map_rev(client, f"/tracks/{SLUG}/rotation", {"degrees": 90}))
@@ -318,7 +325,7 @@ def test_no_writer_commits_a_section_the_app_cannot_open(tmp_path, writer):
     with pytest.raises(ValueError):
         CornerMap.from_data({**data, "sections": junk})       # the failure is real
     if writer == "ribbon":
-        app.state.last_ribbon = {**_ribbon(_LABELS), "sections": junk}
+        app.state.last_ribbon = _stamped(client, {**_ribbon(_LABELS), "sections": junk})
     else:
         _disk(tracks_dir).write_text(json.dumps({**data, "sections": junk}))
     before = _disk(tracks_dir).read_bytes()
