@@ -39,7 +39,19 @@
     heading = "";
     clearRetry();
     const isLap = lapId != null;
-    const stored = isLap ? getLapSetup(lapId!) : sessionId ? getSessionSetup(sessionId) : null;
+    const id = lapId; // captured once: the timer below never reads the reactive prop
+    // #189 fix round: cancels the retry AND drops a response still in flight when
+    // this effect reruns or the component unmounts. clearRetry() alone isn't
+    // enough -- if the FIRST fetch (not yet a retry) is still in flight at that
+    // point, there's no timer to clear, but the response landing afterwards must
+    // still be dropped rather than scheduling a retry nobody will see. Bumping
+    // seq here (on top of the ++seq a fresh effect run does on its own) makes
+    // `my === seq` fail for that stale response too.
+    const cleanup = () => {
+      clearRetry();
+      seq++;
+    };
+    const stored = isLap ? getLapSetup(id!) : sessionId ? getSessionSetup(sessionId) : null;
     if (stored) {
       scope = isLap ? "lap" : "session";
       stored
@@ -53,7 +65,7 @@
           if (isLap && phase === "unrecorded") {
             retryTimer = setTimeout(() => {
               retryTimer = undefined;
-              getLapSetup(lapId!)
+              getLapSetup(id!)
                 .then((r) => my === seq && showStored(r))
                 .catch(() => {
                   if (my === seq) phase = "error";
@@ -64,7 +76,7 @@
         .catch(() => {
           if (my === seq) phase = "error";
         });
-      return clearRetry;
+      return cleanup;
     }
     getSetup()
       .then((res) => {
@@ -86,7 +98,7 @@
         setup = {};
         phase = "empty";
       });
-    return clearRetry;
+    return cleanup;
   });
 
   // Mirror simcoach/tiers.py adjustable_from_setup: only entries the coach

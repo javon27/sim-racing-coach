@@ -33,7 +33,10 @@ describe("SetupPanel", () => {
     vi.mocked(getSessionSetup).mockReset();
   });
 
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
 
   it("renders only isFreeSetting entries and drops the junk", async () => {
     vi.mocked(getSetup).mockResolvedValue(mixedPayload);
@@ -194,7 +197,6 @@ describe("SetupPanel", () => {
 
     expect(getLapSetup).toHaveBeenCalledTimes(2);
     expect(screen.getByText("P9")).toBeTruthy();
-    vi.useRealTimers();
   });
 
   it("stays unrecorded after the one retry, and never retries a second time", async () => {
@@ -210,8 +212,6 @@ describe("SetupPanel", () => {
 
     await vi.advanceTimersByTimeAsync(10000);
     expect(getLapSetup).toHaveBeenCalledTimes(2); // exactly one retry, ever
-
-    vi.useRealTimers();
   });
 
   it("changing the selection before 3s cancels the pending retry", async () => {
@@ -233,8 +233,6 @@ describe("SetupPanel", () => {
     const lap5Calls = vi.mocked(getLapSetup).mock.calls.filter(([id]) => id === 5);
     expect(lap5Calls).toHaveLength(1); // no cancelled (stale) retry for lap 5
     expect(getLapSetup).toHaveBeenCalledTimes(2); // just the two initial fetches
-
-    vi.useRealTimers();
   });
 
   it("never retries for a session (only a lap selection retries)", async () => {
@@ -247,8 +245,40 @@ describe("SetupPanel", () => {
     await vi.advanceTimersByTimeAsync(10000);
     expect(getSessionSetup).toHaveBeenCalledTimes(1);
     expect(getLapSetup).not.toHaveBeenCalled();
+  });
 
-    vi.useRealTimers();
+  // #189 fix round 1: unmounting while the FIRST fetch (not a retry) is still in
+  // flight left no timer for clearRetry() to cancel; the response landing after
+  // unmount passed the seq guard anyway and scheduled a retry nobody would ever
+  // see. The effect's cleanup now bumps seq too, so that stale response is
+  // dropped before it can schedule anything.
+  it("unmounting while the first fetch is in flight never leaks a retry", async () => {
+    let resolve!: (v: LapSetup) => void;
+    vi.mocked(getLapSetup).mockReturnValueOnce(new Promise((r) => (resolve = r)));
+    vi.useFakeTimers();
+
+    const { unmount } = render(SetupPanel, { props: { lapId: 5 } });
+    await vi.waitFor(() => expect(getLapSetup).toHaveBeenCalledTimes(1));
+
+    unmount();
+    resolve({ lap_id: 5, lap_no: 1, lap_time: 90, setup: null });
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(getLapSetup).toHaveBeenCalledTimes(1); // no leaked retry after unmount
+  });
+
+  // #189 fix round 1: a mutant that retried on a fetch error too survived every
+  // prior test (the guard only ever checked isLap; error never set phase to
+  // "unrecorded", but nothing pinned that). Pin it directly.
+  it("a fetch error never triggers a retry", async () => {
+    vi.mocked(getLapSetup).mockRejectedValue(new Error("API request failed: GET -> 404"));
+    vi.useFakeTimers();
+
+    render(SetupPanel, { props: { lapId: 5 } });
+    await vi.waitFor(() => expect(getLapSetup).toHaveBeenCalledTimes(1));
+
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(getLapSetup).toHaveBeenCalledTimes(1); // error is terminal, never retried
   });
 
   it("a stale response resolving after a newer selection's is dropped", async () => {
