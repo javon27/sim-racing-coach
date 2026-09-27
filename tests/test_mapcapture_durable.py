@@ -409,3 +409,4 @@ def test_an_untimed_whole_lap_is_persisted_but_never_buffered(tmp_path):
     _capture_loop(_Src([lap, _edge(-1)]), store, app.state)
     assert len(app.state.map_buffer) == 1 and app.state.map_buffer[0].lap_time == 90.0
     assert len(_pending(tmp_path)) == 1
+    assert store.conn.execute("SELECT COUNT(*) FROM laps WHERE mapping=1").fetchone()[0] == 2
