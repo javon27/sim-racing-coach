@@ -735,6 +735,47 @@ def test_ws_coach_context_carries_car_class_from_rest(tmp_path, monkeypatch):
     assert "Class: LMGT3" in fake.dispatched[0][2]
 
 
+def test_ws_coach_matches_stored_laps_by_the_scraped_class(tmp_path, monkeypatch):
+    # #190: REST says 'LMP2' for the ELMS Oreca; the scraped result-log class (the
+    # spelling stored laps are grouped by) picks the PB. REST stays the shown class.
+    # Real Sarthe rows (ids 4607, 4617) and entry names from the driver's DB.
+    from simcoach import car_lookup
+    from simcoach.lmu import live, smm
+    elms = "IDEC Sport #28:ELMS25"
+    monkeypatch.setattr(smm, "read_session_track_car", lambda: ("Circuit de la Sarthe", elms))
+    monkeypatch.setattr(live, "read_field_snapshot", lambda: 1 / 0)   # no live memory
+    monkeypatch.setattr(car_lookup, "_entry_table", lambda: {
+        "IDEC Sport 2025 #28:LM": ("Oreca 07", "LMP2"), elms: ("Oreca 07", "LMP2_ELMS")})
+
+    class FakeRest:
+        def get_setup(self):
+            return {"carClass": "LMP2"}
+
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    store.conn.executemany(
+        "INSERT INTO laps (ts, sim, track, car, lap_time, valid, phase, session_id, source, "
+        "mapping) VALUES (?, 'lmu', 'Circuit de la Sarthe', ?, ?, 1, 'practice', ?, "
+        "'result', 0)",
+        [(1777863757.0, "IDEC Sport 2025 #28:LM", 228.2574, "2026_05_03_22_20_13-46P1"),
+         (1777866304.0, elms, 215.8251, "2026_05_03_23_21_11-40R1")])
+    store.conn.commit()
+    fake = FakeModel(reply="ok", tool_script=[("get_personal_best", {}),
+                                              ("get_session_status", {})])
+    app = create_app(store, Coach(fake), rest=FakeRest())
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "what's my PB here?"})
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"):
+                break
+
+    pb, status = fake.dispatched[0][2], fake.dispatched[1][2]
+    assert "Oreca 07 (LMP2_ELMS): 3:35.825" in pb and "3:48.257" not in pb, pb
+    assert "Class: LMP2 |" in status, status
+
+
 def test_ws_coach_falls_back_to_newest_stored_lap_after_restart(tmp_path, synthetic_lap, monkeypatch):
     # #137: sidecar restarted with LMU sitting in the lobby -- no live SMM, and no
     # lap captured yet by THIS process (app.state.latest stays None). The coach

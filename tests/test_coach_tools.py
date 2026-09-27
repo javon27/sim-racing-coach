@@ -1322,6 +1322,103 @@ def test_personal_best_brand_with_several_timed_cars_lists_each(
     assert "Corvette C8.R GTE 4:01.500" in out
 
 
+# #190: real Sarthe rows from the driver's DB (ids 4607 LMP2, 4617/4622 LMP2_ELMS;
+# 5964 Z06): (ts, entry, lap_time, s1, s2, s3, result session).
+_ORECA_LMP2, _ORECA_ELMS = "IDEC Sport 2025 #28:LM", "IDEC Sport #28:ELMS25"
+_SARTHE_190 = [
+    (1777863757.0, _ORECA_LMP2, 228.2574, 35.7897, 89.4497, 103.0181, "2026_05_03_22_20_13-46P1"),
+    (1777866304.0, _ORECA_ELMS, 215.8251, 34.3793, 84.422, 97.0238, "2026_05_03_23_21_11-40R1"),
+    (1777866304.0, _ORECA_ELMS, 215.8557, 33.9222, 84.1343, 97.7992, "2026_05_03_23_21_11-40R1"),
+    (1785303279.0, _Z06_ENTRY, 240.0089, 37.6025, 94.0767, 108.3297, "2026_07_29_00_54_18-57P1")]
+
+
+def _sarthe_190(tmp_path, synthetic_lap, monkeypatch, live):
+    """The rows above plus one live telemetry lap per (entry, lap_time, sectors) in
+    `live` -- the times of the entry's next real laps (ids 4606, 4621; 7639 for the
+    Z06's other entry). Returns [(record, lap_id)] in `live` order."""
+    import dataclasses
+
+    from simcoach import car_lookup
+    monkeypatch.setattr(car_lookup, "_entry_table", lambda: {
+        **_ENTRIES, "13 Autosport 2026 #13:LM": ("Chevrolet Corvette Z06 LMGT3.R", "GT3")})
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    store.conn.executemany(
+        "INSERT INTO laps (ts, sim, track, car, lap_time, valid, telemetry_path, phase, "
+        "session_id, source, s1, s2, s3, mapping) VALUES "
+        "(?, 'lmu', ?, ?, ?, 1, NULL, 'practice', ?, 'result', ?, ?, ?, 0)",
+        [(ts, _SARTHE, e, t, sid, s1, s2, s3) for ts, e, t, s1, s2, s3, sid in _SARTHE_190])
+    store.conn.commit()
+    out = []
+    for i, (entry, t, sectors) in enumerate(live):
+        rec = dataclasses.replace(synthetic_lap, track=_SARTHE, car=entry, lap_time=t,
+                                  sectors=sectors, session_id=f"live-{i}--offline",
+                                  timestamp=1790000000.0 + 1000 * i)
+        out.append((rec, store.save(rec)))
+    return store, out
+
+
+def test_all_time_stays_in_the_laps_own_class(tmp_path, synthetic_lap, monkeypatch):
+    """#190: get_time_on_table's all-time best and the sector bests its all-time optimal
+    is built from never mix the Oreca 07's two classes (LMP2 and LMP2_ELMS, 12 s apart
+    at Sarthe) -- whatever class the context carries."""
+    store, ((lmp2, lmp2_id), (elms, elms_id)) = _sarthe_190(
+        tmp_path, synthetic_lap, monkeypatch,
+        [(_ORECA_LMP2, 230.0887, [35.9282, 90.4409, 103.7196]),
+         (_ORECA_ELMS, 216.4102, [33.7528, 85.2295, 97.4279])])
+    for cls in (None, "LMP2", "LMP2_ELMS"):
+        at = CoachContext(store, track=_SARTHE, car="Oreca 07", car_class=cls,
+                          session_id=lmp2.session_id)._all_time(lmp2, lmp2_id)
+        assert at["best"] == 228.2574 and not at["this_lap"], (cls, at)
+        assert at["other"] == [35.7897, 89.4497, 103.0181], (cls, at)
+        at = CoachContext(store, track=_SARTHE, car="Oreca 07", car_class=cls,
+                          session_id=elms.session_id)._all_time(elms, elms_id)
+        assert at["best"] == 215.8251 and at["other"] == [33.9222, 84.1343, 97.0238], at
+    # The reference "best lap" off-session (store.best_lap, telemetry laps only): the
+    # live class picks its own class's lap, not the other class's faster one.
+    for cls, lap in (("LMP2", lmp2), ("LMP2_ELMS", elms)):
+        ctx = CoachContext(store, track=_SARTHE, car="Oreca 07", match_class=cls)
+        assert ctx._resolve_lap("best")[0].car == lap.car, cls
+
+
+def test_reference_lap_available_counts_only_this_class(tmp_path, synthetic_lap, monkeypatch):
+    """#190: a telemetry lap in the OTHER class is no reference for this one."""
+    store, _ = _sarthe_190(tmp_path, synthetic_lap, monkeypatch,
+                           [(_ORECA_ELMS, 216.4102, [33.7528, 85.2295, 97.4279])])
+    status = lambda cls: CoachContext(store, track=_SARTHE, car="Oreca 07",
+                                      match_class=cls).dispatch("get_session_status", {})
+    assert "Reference (best) lap available: no" in status("LMP2")
+    assert "Reference (best) lap available: yes" in status("LMP2_ELMS")
+
+
+def test_all_time_of_a_single_class_car_still_spans_its_entries(
+        tmp_path, synthetic_lap, monkeypatch):
+    """#190: the class filter keeps every entry of a one-class model -- the Z06's live
+    lap (13 Autosport) still sees its result-log best under another team entry."""
+    import time
+    store, ((rec, lap_id),) = _sarthe_190(
+        tmp_path, synthetic_lap, monkeypatch,
+        [("13 Autosport 2026 #13:LM", 242.43310546875,
+          [38.0164794921875, 95.102783203125, 109.3138427734375])])
+    ctx = CoachContext(store, track=_SARTHE, car="Chevrolet Corvette Z06 LMGT3.R",
+                       car_class="GT3", session_id=rec.session_id)
+    assert ctx._all_time(rec, lap_id) == {
+        "best": 240.0089, "this_lap": False,
+        "when": time.strftime("%Y-%m-%d", time.localtime(1785303279.0)),
+        "other": [37.6025, 94.0767, 108.3297]}
+    assert ctx._resolve_lap("best")[0].car == "13 Autosport 2026 #13:LM"
+
+
+def test_match_class_picks_the_personal_best_over_a_rest_class(
+        tmp_path, synthetic_lap, monkeypatch):
+    """#190: REST may call the ELMS Oreca 'LMP2'; the scraped class (`match_class`)
+    picks which stored class answers, the REST one is only shown."""
+    store = _sarthe_store(tmp_path, synthetic_lap, monkeypatch)
+    ctx = CoachContext(store, track=_SARTHE, car="Oreca 07", car_class="LMP2",
+                       match_class="LMP2_ELMS")
+    out = ctx.dispatch("get_personal_best", {})
+    assert "Oreca 07 (LMP2_ELMS): 3:35.825" in out and "3:48.257" not in out, out
+
+
 def test_get_progress_lists_sessions_in_order(tmp_path, synthetic_lap):
     from simcoach.model_types import LapRecord
     store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
@@ -3323,6 +3420,13 @@ def test_pre_race_history_never_merges_a_model_across_classes(tmp_path, syntheti
     assert "from medians of 3 clean laps" in out, out
     assert "Fuel needed to the flag: 10 laps × 8.10 L/lap = 81.0 L" in out
     assert "7.20" not in out and "7.65" not in out
+    # #190: REST may call the ELMS car 'LMP2' -- the scraped class picks the history.
+    elms_out = CoachContext(store, track=_SARTHE, car="Oreca 07", car_class="LMP2",
+                            match_class="LMP2_ELMS", session_id=_RIG_SID, on_track=True,
+                            live_session=_live("qualifying")).dispatch(
+        "get_strategy", {"race_laps": 10})
+    assert "Fuel needed to the flag: 10 laps × 7.20 L/lap = 72.0 L" in elms_out, elms_out
+    assert "8.10" not in elms_out and "7.65" not in elms_out
     # The live class unknown and the model stored in two: no history rather than a mix.
     unknown = _z06_ctx(store, _live("qualifying"), car="Oreca 07",
                        car_class=None).dispatch("get_strategy", {"race_laps": 10})

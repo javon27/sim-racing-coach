@@ -107,7 +107,7 @@ def register(app, deps) -> None:
             # the reference lap work. Priority: live session -> most-recent lap ->
             # the lap the client is viewing (for track/car only, never pinned).
             track = car = cmap = None
-            car_class = None
+            car_class = match_class = None
             on_track = None
             try:
                 from ..lmu.smm import read_session_track_car
@@ -159,13 +159,15 @@ def register(app, deps) -> None:
                     cmap, car = _map_for(track), vehicle
                 # #108 item 5: REST didn't have a class (no REST, or no carClass on
                 # the payload) -- fall back to the scraped result-log table, still
-                # without a second REST call.
-                if car_class is None:
-                    try:
-                        from ..car_lookup import resolve_car_class
-                        car_class = resolve_car_class(vehicle)
-                    except Exception:
-                        car_class = None
+                # without a second REST call. #190: stored laps are MATCHED by the
+                # scraped class first (car_groups' spelling; REST may call the ELMS
+                # Oreca 'LMP2'); REST is the fallback there and stays the display.
+                try:
+                    from ..car_lookup import resolve_car_class
+                    match_class = resolve_car_class(vehicle)
+                except Exception:
+                    match_class = None
+                car_class = car_class or match_class
             if track is None and app.state.latest is not None:
                 lr = app.state.latest["record"]
                 track, car = lr.track, resolve_car(lr.car)
@@ -216,7 +218,7 @@ def register(app, deps) -> None:
                                car_notes=load_car_notes(
                                    car, user_dir=str(Path(store.data_dir) / "cars")),
                                setup_concepts=load_setup_concepts(),
-                               car_class=car_class,
+                               car_class=car_class, match_class=match_class,
                                # #152: only the race being driven now (live_race).
                                race=race_snap, race_note=race_note,
                                live_lap=live_meta, car_status=car_status,

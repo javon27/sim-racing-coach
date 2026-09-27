@@ -315,6 +315,15 @@ def test_class_benchmark_matches_the_class_not_a_substring(tmp_path, cls, refs, 
     assert (got[0] if got else None) == want
 
 
+def test_class_benchmark_matches_the_scraped_class_not_the_rest_one(tmp_path):
+    # #190: REST may call the ELMS Oreca 'LMP2'; Sarthe's WEC LMP2 time is not its
+    # benchmark. The scraped class (match_class) is matched; REST is only shown.
+    ctx = _ctx(_store(tmp_path), car_class="LMP2", match_class="LMP2_ELMS")
+    ctx.cmap.notes = {"reference_times": {"Hypercar": "3:12.881", "LMGT3": "3:55.763",
+                                          "LMP2": "3:25.285", "LMP3": "3:44.599"}}
+    assert ctx._class_benchmark() is None
+
+
 def test_lap_summary_best_is_never_compared_with_itself(tmp_path, synthetic_lap):
     store = _store(tmp_path)
     _save(store, synthetic_lap, 90.0, 1, 1)                                    # the best

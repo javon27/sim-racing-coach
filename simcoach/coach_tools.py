@@ -44,6 +44,7 @@ from simcoach.battle import (
     rival_matches,
     target_position,
 )
+from simcoach.car_lookup import resolve_car_class
 from simcoach.coach import _setup_lines, live_electronics
 from simcoach.corners import CornerMap
 from simcoach.format import (
@@ -802,7 +803,7 @@ class CoachContext:
                  allowed_adjustments=None, session_id=None,
                  car_notes=None, setup_concepts=None, car_class=None, race=None,
                  race_note=None, live_lap=None, car_status=None, live_session=None,
-                 live_field=None):
+                 live_field=None, match_class=None):
         self.store = store
         self.units = units
         self.record = record
@@ -814,6 +815,10 @@ class CoachContext:
         # #108 item 5: the car's CLASS, from data (REST carClass or the scraped
         # result-log table) -- never asserted from memory. None -> "unknown".
         self.car_class = car_class
+        # #190: the class stored laps are MATCHED by -- the scraped result-log class
+        # first (car_groups' own spelling: REST may call the ELMS Oreca 'LMP2'), REST
+        # only when that doesn't resolve. `car_class` stays what is displayed.
+        self.match_class = match_class or car_class
         # #152: the RaceSnapshot as of the last committed race lap, or None. The race
         # tools only read it -- nothing is computed while the driver waits.
         self.race = race
@@ -1215,8 +1220,9 @@ class CoachContext:
             # when the session has none (the all-time best is its own line).
             best = (self.store.best_lap(self.track, self.car, session_id=self.session_id)
                     if self.session_id else None)
-            if best is None:
-                best = self.store.best_lap(self.track, self.car)
+            if best is None:   # #190: this car's class only, when it can be told
+                best = self.store.best_lap(self.track, self.car,
+                                           car_class=self._stored_class() or None)
             # #173: resolve its id, or every comparison of the best lap excludes
             # nothing and picks the best lap itself as its own reference.
             return best, self._lap_id_for(best)
@@ -1279,7 +1285,8 @@ class CoachContext:
                  if (self.track and self.car) else 0)
         n_sess = (len(self.store.session_lap_ids(self.session_id, complete_only=True))
                   if self.session_id else None)
-        has_ref = bool(self.track and self.car and self.store.best_lap(self.track, self.car))
+        has_ref = bool(self.track and self.car and self.store.best_lap(
+            self.track, self.car, car_class=self._stored_class() or None))
         on = "on track" if self.on_track else ("unknown" if self.on_track is None else "not on track")
         cur_rec, _ = self._current_lap()
         lap = "yes" if cur_rec is not None else "no lap captured yet"
@@ -1570,7 +1577,7 @@ class CoachContext:
 
         def norm(x):
             return re.sub(r"[\s_-]+", "", str(x)).lower()
-        cls = norm(self.car_class or "")
+        cls = norm(self.match_class or "")
         if not cls:
             return None
         # Exact after normalising; else the game's short class name for a notes key:
@@ -1592,8 +1599,10 @@ class CoachContext:
         car (one query, `store.timed_laps`), or None with none. `other`: the best
         valid time per sector in OTHER sessions (None where there is none) -- the
         formatter builds the all-time optimal from it exactly the way it builds this
-        session's."""
-        rows = self.store.timed_laps(record.track, self.car or record.car)
+        session's. #190: in this lap's own class -- the Oreca 07 races as LMP2 AND
+        LMP2_ELMS, 12 s apart at Sarthe."""
+        rows = self.store.timed_laps(record.track, self.car or record.car,
+                                     resolve_car_class(record.car))
         if not rows:
             return None
         best = min(rows, key=lambda r: r["lap_time"])
@@ -2519,7 +2528,7 @@ class CoachContext:
         classes = {g["car_class"] for g in self.store.session_facets()["car_groups"]
                    if self.car in g["cars"]}
         mine = [c for c in classes
-                if not self.car_class or _norm_class(c) == _norm_class(self.car_class)]
+                if not self.match_class or _norm_class(c) == _norm_class(self.match_class)]
         if len(mine) != 1:
             return False
         return None if mine[0] == "Other" else mine[0]
@@ -2813,8 +2822,8 @@ class CoachContext:
         if len(rows) > 1 and not car_class and len({p[0] for p in rows}) == 1:
             # One model in several classes: the current car's class picks one, if it
             # matches (REST may spell it differently -- then list each class).
-            mine = {p: r for p, r in rows.items() if self.car_class
-                    and _norm_class(p[1]) == _norm_class(self.car_class)}
+            mine = {p: r for p, r in rows.items() if self.match_class
+                    and _norm_class(p[1]) == _norm_class(self.match_class)}
             rows = mine if len(mine) == 1 else rows
         if len(rows) == 1:
             (p, r), = rows.items()

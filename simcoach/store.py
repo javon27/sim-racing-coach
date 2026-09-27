@@ -1124,7 +1124,8 @@ class LapStore:
                               sectors=sectors if all(v is not None for v in sectors) else None)
 
     def best_lap(self, track: str, car: str, exclude_lap_id: int | None = None,
-                 phase: str | None = None, session_id: str | None = None) -> LapRecord | None:
+                 phase: str | None = None, session_id: str | None = None,
+                 car_class: str | None = None) -> LapRecord | None:
         with self._lock:
             # Exclude mapping-capture laps (slow weave/boundary laps) so a fresh
             # track with only mapping laps doesn't pick one as the reference best. The
@@ -1141,8 +1142,9 @@ class LapStore:
                 # `car` may be a resolved display model while laps store the raw entry
                 # name (see recent_laps) -- expand to every raw entry that resolves to
                 # it, same as _session_where. Falls back to the literal value when
-                # nothing resolves to it (an exact raw-name match, as before).
-                teams = [c for c in self._distinct_db_cars() if resolve_car(c) == car] or [car]
+                # nothing resolves to it (an exact raw-name match, as before). #190:
+                # `car_class` keeps one class of a model, as in `timed_laps`.
+                teams = self._teams(car, car_class)
                 query = (f"SELECT id FROM laps WHERE track = ? "
                          f"AND car IN ({','.join('?' * len(teams))}) AND valid = 1 "
                          "AND telemetry_path IS NOT NULL "
