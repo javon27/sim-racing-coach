@@ -394,6 +394,30 @@ def provisional_strategy(practice: list[LapFacts], laps_to_go: int | None,
     return strategy(rates + [start], laps_to_go)
 
 
+# #184: the history fallback reads at most this many of the newest clean laps -- each is
+# a full-rate .npz load (~40 ms on the rig) while the driver waits.
+HISTORY_LAPS = 20
+
+
+def history_burn(laps: list[LapFacts]) -> LapFacts | None:
+    """#184: one lap standing for this car's stored laps at this track -- the MEDIAN fuel
+    burn, virtual-energy burn and lap time over `laps` (clean laps; a lap under a yellow
+    or a lift can't drag it). A channel measured on fewer than MIN_STINT_LAPS laps is None,
+    never projected: a car with no virtual energy reads a flat 0 (DKR LMP3, Sarthe). None
+    when neither channel is. The tank size is the first lap's that reports one (callers
+    pass the laps newest first)."""
+    def med(xs):
+        xs = [x for x in xs if x]
+        return float(np.median(xs)) if len(xs) >= MIN_STINT_LAPS else None
+    fuel, energy = med(f.fuel_used for f in laps), med(f.energy_used for f in laps)
+    if fuel is None and energy is None:
+        return None
+    return LapFacts(lap_no=0, lap_time=med(f.lap_time for f in laps), clean=True,
+                    fuel_used=fuel, energy_used=energy,
+                    fuel_capacity=next((f.fuel_capacity for f in laps if f.fuel_capacity),
+                                       None))
+
+
 _WHEEL_NAME = {"fl": "front-left", "fr": "front-right", "rl": "rear-left", "rr": "rear-right"}
 
 
@@ -683,17 +707,20 @@ def format_strategy(snap: RaceSnapshot, damage: dict | None = None,
 
 
 def format_provisional(s: Strategy, as_of_lap: int, basis: str, n_practice: int,
-                       damage: dict | None = None, damage_lap: int | None = None) -> str:
+                       damage: dict | None = None, damage_lap: int | None = None,
+                       source: str | None = None) -> str:
     """#161: `provisional_strategy`'s plan, labelled as an estimate. `as_of_lap` 0 = no
-    race lap yet (a full fill is assumed); `basis` says where the race length came from."""
-    head = (f"PROVISIONAL — from your last {n_practice} clean practice/qualifying laps this "
-            f"session; firms up after {MIN_STINT_LAPS} clean race laps.")
+    race lap yet (a full fill is assumed); `basis` says where the race length came from;
+    `source` where the rates came from (#184), default this session's practice laps."""
+    source = source or (f"your last {n_practice} clean practice/qualifying laps this "
+                        "session")
+    head = f"PROVISIONAL — from {source}; firms up after {MIN_STINT_LAPS} clean race laps."
     if s.note:
         return f"{head} No projection: {s.note}."
     names = {r.name for r in s.resources}
     if as_of_lap:
         start = (f"As of race lap {as_of_lap}: what was on board at the line, burned at "
-                 "your practice/qualifying rates.")
+                 "those rates.")
     elif "energy" in names:
         start = ("Assumes you start on 100% virtual energy; the fuel on board is unknown "
                  "until race lap 1.")
@@ -701,8 +728,23 @@ def format_provisional(s: Strategy, as_of_lap: int, basis: str, n_practice: int,
         start = "Assumes you start on a full tank."
     else:
         start = "No start amount can be assumed (no tank size reported)."
+    # #184: before race lap 1, 'how much energy for this race' -- the start amount the
+    # race needs, with the arithmetic's inputs, so the model narrates it, never works it.
+    need, n = [], s.laps_to_go
+    rates = {} if as_of_lap else {r.name: r.per_lap for r in s.resources} | (s.burn_only or {})
+    for name, per in rates.items():
+        tot = per * n
+        if name == "energy":
+            need.append(f"Virtual energy needed to the flag: {n} laps × {per * 100:.1f}%/lap = "
+                        f"{tot * 100:.1f}%, {tot * (1 + REFILL_MARGIN) * 100:.1f}% with the "
+                        f"{REFILL_MARGIN:.0%} margin"
+                        + (" — more than a full charge." if tot > 1 else "."))
+        else:
+            need.append(f"Fuel needed to the flag: {n} laps × {per:.2f} L/lap = {tot:.1f} L, "
+                        f"{tot * (1 + REFILL_MARGIN):.1f} L with the {REFILL_MARGIN:.0%} "
+                        "margin.")
     # No fuel ratio read off an ASSUMED start: it needs what is really on board.
-    return "\n".join([head, f"Race length: {basis}.", start]
+    return "\n".join([head, f"Race length: {basis}.", start] + need
                      + _strategy_lines(s, as_of_lap)
                      + _pit_menu_lines(s, as_of_lap, damage, damage_lap, as_of_lap > 0))
 

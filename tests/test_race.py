@@ -18,6 +18,7 @@ from simcoach.race import (
     format_race_state,
     format_strategy,
     gap_slope,
+    history_burn,
     is_clean,
     lap_facts,
     laps_left,
@@ -661,3 +662,30 @@ def test_strategy_never_counts_stops_off_an_unknown_tank():
     snap = _road_atlanta_lap_11()
     snap.strategy.window = PitWindow(latest=20, earliest=None, binding="fuel", one_stop=True)
     assert "Stops to the flag: not known (tank size not reported)." in format_strategy(snap)
+
+
+# --- #184: pre-race plan from this car's stored laps at this track ---------------------
+
+def test_history_burn_is_the_median_and_never_projects_a_channel_measured_once():
+    # Sarthe Z06 shapes (ids 7425, 7426): a pit/yellow-slow lap can't drag the median.
+    laps = [LapFacts(3, 245.3115, True, fuel_used=7.4275, energy_used=0.0922),
+            LapFacts(4, 243.8760, True, fuel_used=7.3333, energy_used=None),
+            LapFacts(5, 300.0, True, fuel_used=4.0, energy_used=None)]
+    med = history_burn(laps)
+    assert med.fuel_used == pytest.approx(7.3333) and med.lap_time == pytest.approx(245.3115)
+    assert med.energy_used is None                 # measured on one lap: not projected
+    assert history_burn(laps[:1]) is None
+
+
+def test_the_pre_race_plan_states_what_the_race_needs_from_the_start():
+    """#184: 'how much energy for this race' -- laps x burn, with the margin, in code."""
+    text = format_provisional(provisional_strategy(_practice(), 14), 0, "14 laps", 3)
+    assert ("Virtual energy needed to the flag: 14 laps × 12.5%/lap = 175.0%, 183.8% with "
+            "the 5% margin — more than a full charge.") in text
+    assert ("Fuel needed to the flag: 14 laps × 2.50 L/lap = 35.0 L, 36.8 L with the 5% "
+            "margin.") in text
+    lap1 = LapFacts(lap_no=1, lap_time=None, clean=False, fuel_end=97.0,
+                    fuel_capacity=100.0, energy_end=0.88)
+    # After a race lap the on-board amounts answer it instead.
+    assert "needed to the flag" not in format_provisional(
+        provisional_strategy(_practice(), 13, start=lap1), 1, "14 laps", 3)

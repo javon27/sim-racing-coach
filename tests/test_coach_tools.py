@@ -3143,3 +3143,177 @@ def test_a_place_asked_for_never_picks_the_race_by_a_name_given_with_it(tmp_path
     out = ctx.dispatch("get_battle", {"rival": "Momo", "position": 3})
     assert out.startswith("Race 2 of this session (started ")
     assert "was not in race" not in out and "Momo" not in out
+
+
+# --- #184: pre-race energy/fuel from this car's stored laps at this track ---------------
+
+_Z06 = "Chevrolet Corvette Z06 LMGT3.R"
+_RIG_ENTRY = "13 Autosport 2026 #13:LM"
+_RIG_SID = "circuit-de-la-sarthe--13-autosport-2026-13-lm--online"
+_DKR_ENTRY = "DKR Engineering #4:ELMS25"
+_ENTRIES_184 = {**_ENTRIES, _RIG_ENTRY: (_Z06, "GT3"),
+                _DKR_ENTRY: ("Ginetta G61-LT-P325 Evo", "LMP3")}
+# Real Sarthe rows from the driver's DB: (ts, phase, lap_no, lap_time, pit, VE at the start
+# and end of the lap, fuel L at the start and end). Z06 2026-09-17, ids 7419-7428 (no
+# fuel_capacity channel then; 7424 is the lap he pitted and refilled on).
+_Z06_0917 = [
+    (1789698115.2209005, "qualifying", 2, 246.43133544921875, False, .2994, .2086, 26.1448, 18.8134),
+    (1789698359.825367, "qualifying", 3, 244.650146484375, False, .2086, .1173, 18.8126, 11.4492),
+    (1789699117.095224, "race", 2, 288.99652099609375, True, .2773, .6703, 24.6082, 58.7511),
+    (1789699362.308448, "race", 3, 245.3115234375, False, .6703, .5781, 58.7503, 51.3228),
+    (1789699606.305133, "race", 4, 243.87603759765625, False, .5781, .4873, 51.3212, 43.9879),
+    (1789699849.7064898, "race", 5, 243.48974609375, False, .4872, .3950, 43.9871, 36.5549),
+    (1789700092.6993349, "race", 6, 243.0732421875, False, .3950, .3033, 36.5541, 29.1529)]
+# The rig session, 2026-09-26 (ids 7629-7630): an out-lap and ONE clean qualy lap, 120 L tank.
+_Z06_0926 = [
+    (1790471313.6890562, "qualifying", 1, None, True, .34, .3077, 29.58, 27.0616),
+    (1790471560.2678397, "qualifying", 2, 246.568359375, False, .3077, .2138, 27.06, 19.4868)]
+# DKR LMP3, 2026-09-13 (ids 7382-7385): virtual energy flat 0.0 -- no VE on this car.
+# lap_no and pit are NULL on these older rows.
+_DKR_0913 = [
+    (1789359414.308917, "race", None, 245.3343505859375, None, 0.0, 0.0, 50.9048, 44.355),
+    (1789359653.9064894, "race", None, 239.614013671875, None, 0.0, 0.0, 44.3542, 37.8475),
+    (1789359891.3173418, "race", None, 237.3089599609375, None, 0.0, 0.0, 37.8475, 31.1877),
+    (1789360133.110592, "race", None, 241.7998046875, None, 0.0, 0.0, 31.187, 24.6199)]
+
+
+def _sarthe_laps(store, synthetic_lap, entry, sid, rows, cap=None):
+    import dataclasses
+
+    import numpy as np
+    n = len(synthetic_lap.channels["lap_distance"])
+    for ts, phase, lap_no, t, pit, ve0, ve1, f0, f1 in rows:
+        ch = dict(synthetic_lap.channels)
+        ch.update(fuel=np.linspace(f0, f1, n), virtual_energy=np.linspace(ve0, ve1, n))
+        if cap:
+            ch["fuel_capacity"] = np.full(n, cap)
+        store.save(dataclasses.replace(
+            synthetic_lap, channels=ch, track=_SARTHE, car=entry, session_id=sid,
+            phase=phase, lap_no=lap_no, lap_time=t, valid=t is not None, pit=pit,
+            partial=None if t else "out", timestamp=ts))
+
+
+def _z06_store(tmp_path, synthetic_lap, monkeypatch, history=True):
+    from simcoach import car_lookup
+    monkeypatch.setattr(car_lookup, "_entry_table", lambda: _ENTRIES_184)
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    if history:
+        _sarthe_laps(store, synthetic_lap, _Z06_ENTRY,
+                     "circuit-de-la-sarthe--racing-team-turkey-by-tf-2026-34-wec--online",
+                     _Z06_0917)
+    _sarthe_laps(store, synthetic_lap, _RIG_ENTRY, _RIG_SID, _Z06_0926, cap=120.0)
+    return store
+
+
+def _z06_ctx(store, live, car=_Z06, car_class="GT3", race=None):
+    return CoachContext(store, track=_SARTHE, car=car, car_class=car_class,
+                        session_id=_RIG_SID, on_track=True, race=race, live_session=live)
+
+
+def test_pre_race_plan_with_one_session_lap_projects_from_the_stored_median(
+        tmp_path, synthetic_lap, monkeypatch):
+    """#184, Sarthe 2026-09-26 (chat 266): 'How much energy for this 20-minute race?' got
+    'needs two clean laps' with one qualy lap this session -- and six clean Z06 laps here
+    from 09-17 in the store. The pit/refill lap and the out-lap are not clean."""
+    import time
+    store = _z06_store(tmp_path, synthetic_lap, monkeypatch)
+    out = _z06_ctx(store, _live("qualifying")).dispatch("get_strategy", {"race_minutes": 20})
+    days = sorted({time.strftime("%Y-%m-%d", time.localtime(r[0]))
+                   for r in _Z06_0917[:2] + _Z06_0926[1:]})
+    assert out.startswith(f"PROVISIONAL — from the median of 7 clean laps from your sessions "
+                          f"here in this car ({', '.join(days)}: 3 qualifying, 4 race); "
+                          "firms up after 2 clean race laps."), out
+    # Lap times sorted: 243.07 243.49 243.88 [244.65] 245.31 246.43 246.57 -> 244.650 s;
+    # 1200 / 244.65 = 4.9, and a lap started before the clock runs out is still driven.
+    assert ("Race length: 20 minutes (as you said) at the median lap time of those laps "
+            "(4:04.650) = about 5 laps.") in out
+    # VE burns .0908 .0908 .0913 [.0917] .0922 .0922 .0939 (5 x = 45.85, 48.14 with the
+    # margin); fuel [7.4012] L the same way.
+    assert ("Virtual energy needed to the flag: 5 laps × 9.2%/lap = 45.9%, 48.1% with the 5% "
+            "margin.") in out
+    assert ("Fuel needed to the flag: 5 laps × 7.40 L/lap = 37.0 L, 38.9 L with the 5% "
+            "margin.") in out
+    assert "no virtual-energy burn" not in out and "no fuel burn" not in out
+
+
+def test_pre_race_plan_with_no_stored_history_still_needs_laps(tmp_path, synthetic_lap,
+                                                               monkeypatch):
+    store = _z06_store(tmp_path, synthetic_lap, monkeypatch, history=False)
+    out = _z06_ctx(store, _live("qualifying")).dispatch("get_strategy", {"race_minutes": 20})
+    assert out.startswith("No live race projection yet"), out
+    assert ("it needs 2 clean laps with a measured fuel/energy burn at this track in this car "
+            "(found 1 across all your sessions here)") in out
+    assert "PROVISIONAL" not in out
+
+
+def test_after_two_clean_race_laps_the_live_figures_answer_not_the_history(
+        tmp_path, synthetic_lap, monkeypatch):
+    """Once the stint has MIN_STINT_LAPS clean laps its own burn is the measured fact:
+    the stored median is not shown beside it (two rates invite the model to pick)."""
+    from simcoach.model_types import RaceSample
+    from simcoach.race import LapFacts, build_snapshot
+    store = _z06_store(tmp_path, synthetic_lap, monkeypatch)
+    race = RaceSample(class_position=2, time_left=705.4)
+    stint = [LapFacts(1, 251.0758, True, race=race, fuel_used=7.5355, fuel_end=47.0037,
+                      fuel_capacity=120.0, energy_used=0.0922, energy_end=0.5578),
+             LapFacts(2, 243.5976, True, race=race, fuel_used=7.3840, fuel_end=39.6189,
+                      fuel_capacity=120.0, energy_used=0.0915, energy_end=0.4663)]
+    snap = build_snapshot(stint, _RIG_SID, _SARTHE, _RIG_ENTRY)   # rig laps 7636-7637
+    assert snap.strategy.note is None
+    out = _z06_ctx(store, _live(current_lap=3, end_time=1200.0, elapsed=494.6),
+                   race=snap).dispatch("get_strategy", {})
+    assert out.startswith("As of lap 2."), out
+    assert "PROVISIONAL" not in out and "median" not in out
+    assert "Virtual energy: 9.2%/lap, 47% left" in out         # (9.22 + 9.15) / 2, live
+
+
+def test_pre_race_history_never_merges_a_model_across_classes(tmp_path, synthetic_lap,
+                                                              monkeypatch):
+    """#182's lesson: the Oreca 07 races as LMP2 AND LMP2_ELMS. Fuel-only (VE flat 0 like
+    every non-VE car in the store); the two specs' burns must never merge."""
+    store = _z06_store(tmp_path, synthetic_lap, monkeypatch, history=False)
+    lmp2 = [(1777800000.0 + 300 * i, "race", i + 1, 228.2574, False, 0.0, 0.0,
+             80.0 - 8.1 * i, 71.9 - 8.1 * i) for i in range(3)]
+    elms = [(1778800000.0 + 300 * i, "race", i + 1, 215.825, False, 0.0, 0.0,
+             80.0 - 7.2 * i, 72.8 - 7.2 * i) for i in range(3)]
+    _sarthe_laps(store, synthetic_lap, "IDEC Sport 2025 #28:LM", "lmp2", lmp2)
+    _sarthe_laps(store, synthetic_lap, "IDEC Sport #28:ELMS25", "elms", elms)
+    out = _z06_ctx(store, _live("qualifying"), car="Oreca 07",
+                   car_class="LMP2").dispatch("get_strategy", {"race_laps": 10})
+    assert "from the median of 3 clean laps" in out, out
+    assert "Fuel needed to the flag: 10 laps × 8.10 L/lap = 81.0 L" in out
+    assert "7.20" not in out and "7.65" not in out
+    # The live class unknown and the model stored in two: no history rather than a mix.
+    unknown = _z06_ctx(store, _live("qualifying"), car="Oreca 07",
+                       car_class=None).dispatch("get_strategy", {"race_laps": 10})
+    assert unknown.startswith("No live race projection yet") and "found 0" in unknown, unknown
+
+
+def test_a_dead_virtual_energy_channel_is_said_not_projected(tmp_path, synthetic_lap,
+                                                            monkeypatch):
+    """DKR LMP3 at Sarthe: virtual_energy reads 0.0 on every lap. Say so; never project
+    it (a 0 %/lap burn reads as 'makes the flag on any charge')."""
+    store = _z06_store(tmp_path, synthetic_lap, monkeypatch, history=False)
+    _sarthe_laps(store, synthetic_lap, _DKR_ENTRY,
+                 "circuit-de-la-sarthe--dkr-engineering-4-elms25--online", _DKR_0913)
+    out = _z06_ctx(store, _live("qualifying"), car="Ginetta G61-LT-P325 Evo",
+                   car_class="LMP3").dispatch("get_strategy", {"race_minutes": 20})
+    assert ("4 race); no virtual-energy burn recorded in them (the channel is flat or "
+            "absent), so none is projected; firms up") in out, out
+    # Fuel burns 6.51 [6.55 6.57] 6.66 -> 6.56 L; laps 239.61 [239.61 241.80] -> 240.7 s.
+    assert "Fuel needed to the flag: 5 laps × 6.56 L/lap = 32.8 L" in out
+    assert "Virtual energy needed" not in out and "Virtual energy:" not in out
+
+
+def test_pre_race_plan_from_a_lap_count_race_and_never_the_grid_countdown(
+        tmp_path, synthetic_lap, monkeypatch):
+    """A lap-count race reads its length off the live session. A TIMED race's clock is
+    not its length before race lap 1: in the garage/grid it counts down to the start
+    (Sarthe 2026-09-26 lap-0 rows: 58, 26.8, 8.0 s left) -- 'about 1 lap' was the plan."""
+    store = _z06_store(tmp_path, synthetic_lap, monkeypatch)
+    laps = _z06_ctx(store, _live(max_laps=7)).dispatch("get_strategy", {})
+    assert "Race length: 7 laps (the live race's lap count)." in laps, laps
+    assert "Virtual energy needed to the flag: 7 laps × 9.2%/lap" in laps
+    grid = _z06_ctx(store, _live(end_time=500.0, elapsed=442.0)).dispatch("get_strategy", {})
+    assert "race length unknown. Ask the driver how long the race is" in grid, grid
+    assert "about 1 lap" not in grid
