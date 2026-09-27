@@ -171,7 +171,7 @@ tier costs nothing extra.
 **Slice 1 (one overnight run, no rig):** the tier on `run_stream` through base/fake/factory/
 claude; the hard gates + keyword floor (`thinking_tier()`) with tests; `Model.classify` on
 the seam with the JSON schema, wired for the Anthropic adapter and `FakeModel`; the router
-using it with the 800 ms timeout and fallback; the deep-tier acknowledgement line; the
+using it with the 1.5 s (#183; was 800 ms) timeout and fallback; the deep-tier acknowledgement line; the
 settings; the chat-panel "thinking…" label; INFO logging of thinking text and every
 classification.
 **Slice 2:** `eval_thinking.py` and the first graded run; the optional reasoning view; the

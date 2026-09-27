@@ -48,8 +48,8 @@ class FakeModel:
         self.last_messages = messages
         return self.reply
 
-    def classify(self, prompt: str, schema: dict,
-                 timeout: float = 0.8) -> tuple[dict | None, TokenUsage]:
+    def classify(self, prompt: str, schema: dict, *,
+                 timeout: float) -> tuple[dict | None, TokenUsage]:
         self.classified.append(prompt)
         self.classify_timeouts.append(timeout)
         if self.classify_delay:

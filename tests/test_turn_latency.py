@@ -1,5 +1,6 @@
 """#183: per-turn latency + routing on the coach_chat row, and the classifier's 1.5 s
 budget. Fake models only -- no network."""
+import inspect
 import sqlite3
 import time
 
@@ -9,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from simcoach.coach import Coach
+from simcoach.model.base import Model
 from simcoach.model.claude import ClaudeModel
 from simcoach.model.fake import FAKE_MODEL_ID, FakeModel
 from simcoach.server.app import create_app
@@ -106,7 +108,7 @@ def test_v26_db_gains_coach_chat_latency(tmp_path):
 # --- how the tier was chosen: every path ------------------------------------------
 
 class _Boom:
-    def classify(self, prompt, schema, timeout=0.8):
+    def classify(self, prompt, schema, *, timeout):
         raise RuntimeError("no key")
 
 
@@ -128,6 +130,31 @@ def test_route_reports_how_the_tier_was_chosen(kw, clf, via, asked):
 
 def test_route_without_a_classifier_factory_is_rules():
     assert route("what's my fuel?")[4] == {"via": "rules", "classify_ms": None}
+
+
+# --- #183: a voice question with an unknown speed never waits on the classifier -----
+
+@pytest.mark.parametrize("voice, status, gated", [
+    ("conversation", None, True),                               # no status read
+    ("ptt", {"state": "track", "speed": None}, True),           # no telemetry row
+    ("conversation", {"state": "pits", "speed": None}, True),
+    ("ptt", {"state": "garage", "speed": None}, False),         # in the garage: ask
+    (None, None, False),                                        # typed: unchanged
+    (None, {"state": "track", "speed": None}, False),
+])
+def test_ws_voice_with_unknown_speed_is_gated(tmp_path, monkeypatch, mem_keyring,
+                                              voice, status, gated):
+    from simcoach.lmu import smm
+    monkeypatch.setattr(smm, "read_session_track_car", lambda: ("T", "C"))
+    monkeypatch.setattr(smm, "read_live_status",
+                        lambda: status and {"track": "T", "car": "C", **status})
+    clf = FakeModel(classify_result={"tier": "standard"})
+    c, _ = _app(tmp_path, monkeypatch, FakeModel(reply="Brake later."), classifier=clf)
+    lat = _ask(c, "what's my fuel?", **({"voice": voice} if voice else {}))["latency"]
+    if gated:
+        assert (lat["tier"], lat["tier_via"], clf.classified) == ("quick", "gate", [])
+    else:
+        assert lat["tier_via"] == "classifier" and len(clf.classified) == 1
 
 
 # --- #183 part 3: the classifier's budget ------------------------------------------
@@ -167,5 +194,13 @@ def test_claude_classify_sends_the_budget_to_the_wire():
     m.client = anthropic.Anthropic(api_key="sk-test", http_client=httpx2.Client(
         transport=httpx2.MockTransport(handler)))
     assert m.classify("q", {}, timeout=CLASSIFY_TIMEOUT_S)[0] == {"tier": "deep"}
-    assert m.classify("q", {})[0] == {"tier": "deep"}
-    assert seen == [CLASSIFY_TIMEOUT_S, 0.8]       # the router's budget; the default
+    assert m.classify("q", {}, timeout=0.3)[0] == {"tier": "deep"}
+    assert seen == [CLASSIFY_TIMEOUT_S, 0.3]       # whatever the caller passes
+    with pytest.raises(TypeError):                 # no default to fall back on
+        m.classify("q", {})
+
+
+@pytest.mark.parametrize("cls", [Model, ClaudeModel, FakeModel])
+def test_classify_timeout_is_keyword_only_with_no_default(cls):
+    p = inspect.signature(cls.classify).parameters["timeout"]
+    assert p.kind is inspect.Parameter.KEYWORD_ONLY and p.default is inspect.Parameter.empty

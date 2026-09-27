@@ -113,7 +113,7 @@ def test_slow_classifier_falls_back_within_the_budget():
 
 def test_raising_classifier_falls_back(caplog):
     class Boom:
-        def classify(self, prompt, schema, timeout=0.8):
+        def classify(self, prompt, schema, *, timeout):
             raise RuntimeError("no key")
     with caplog.at_level(logging.INFO, logger="simcoach.thinking"):
         assert _route("analyze the stint in detail", Boom())[0] == "deep"
@@ -301,7 +301,7 @@ class _ClassifyClient:
 def test_claude_classify_parses_json_and_bills():
     m = _claude("claude-haiku-4-5-20251001")
     m.client = _ClassifyClient('```json\n{"tier": "deep", "intent": "setup"}\n```')
-    obj, usage = m.classify("q", {"type": "object"})
+    obj, usage = m.classify("q", {"type": "object"}, timeout=0.8)
     assert obj == {"tier": "deep", "intent": "setup"}
     assert usage == TokenUsage(input=50, output=12)
     assert m.client.options == {"timeout": 0.8, "max_retries": 0}
@@ -311,9 +311,9 @@ def test_claude_classify_parses_json_and_bills():
 def test_claude_classify_failures_are_none():
     m = _claude()
     m.client = _ClassifyClient("not json at all")
-    assert m.classify("q", {})[0] is None
+    assert m.classify("q", {}, timeout=0.8)[0] is None
     m.client = _ClassifyClient(exc=TimeoutError("slow"))
-    assert m.classify("q", {}) == (None, TokenUsage())
+    assert m.classify("q", {}, timeout=0.8) == (None, TokenUsage())
 
 
 # --- settings + the usage meter over the websocket ---------------------------------

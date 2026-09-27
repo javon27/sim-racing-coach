@@ -359,11 +359,16 @@ def register(app, deps) -> None:
                 try:
                     coach_cfg = cfg.get("coach") or {}
                     state_now = (live_status or {}).get("state")
-                    # Moving on track or down the pit lane. Backstop: a PTT question
-                    # while live with no status read (SMM hiccup) is from the car.
+                    # Moving on track or down the pit lane. Backstop (#183): a VOICE
+                    # question while live whose speed is unknown -- no status read (SMM
+                    # hiccup), or no telemetry row outside the garage -- is from the
+                    # car, so it never waits on the classifier. Typed ones are not.
                     moving = ((state_now in ("track", "pits")
                                and (live_status.get("speed") or 0) >= MOVING_KPH)
-                              or (voice == "ptt" and bool(live) and live_status is None))
+                              or (voice is not None and bool(live)
+                                  and (live_status is None
+                                       or (state_now != "garage"
+                                           and live_status.get("speed") is None))))
                     race_live = ctx.race is not None or bool(ctx.race_note)
                     live_phase = (live_session.phase if live_session is not None
                                   and live_session.live else None)
