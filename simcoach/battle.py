@@ -386,6 +386,12 @@ def _nobody_at(b: Battle, lap: str, direction: str | None,
             f"recorded at P{want} in class.")
 
 
+def same_car(o: CarLap, car: VehicleState) -> bool:
+    """#186: the lap's car `o` is the live `car` -- the mID AND the entry: a slot reused
+    by a new car is not the lap's car."""
+    return o.car_id == car.id and o.car == car.car
+
+
 def format_battle(b: Battle | None, as_of_lap: int, units: str = "metric",
                   rival: str | None = None, note: str | None = None,
                   direction: str | None = None, position: int | None = None,
@@ -407,16 +413,16 @@ def format_battle(b: Battle | None, as_of_lap: int, units: str = "metric",
     me = next(c for c in b.laps if c.is_player)
     others = [c for c in b.laps if not c.is_player]
 
-    def _same(o: CarLap, car: VehicleState) -> bool:
-        # The mID AND the entry: a slot reused by a new car is not the lap's car.
-        return o.car_id == car.id and o.car == car.car
-
     def _place(o: CarLap) -> str:
         if live_cars is None:
             return f"P{o.class_position} in class"
-        now = next((c for c in live_cars if _same(o, c)), None)
-        return (f"P{now.class_position} in class" if now else
-                f"P{o.class_position} in class at the end of lap {as_of_lap}")
+        now = next((c for c in live_cars if same_car(o, c)), None)
+        if now is None:
+            return f"P{o.class_position} in class at the end of lap {as_of_lap}"
+        # #193: a place changed since the lap is said in the present, never under
+        # "As of lap N." unlabelled.
+        return (f"P{now.class_position} in class"
+                + (" now (live)" if now.class_position != o.class_position else ""))
 
     side_why = hits = None
     if live_target is not None:
@@ -424,7 +430,7 @@ def format_battle(b: Battle | None, as_of_lap: int, units: str = "metric",
         if car is None:
             return f"{head} {side_why}"
         hits = [dataclasses.replace(c, class_position=car.class_position)
-                for c in others if _same(c, car)]
+                for c in others if same_car(c, car)]
         if not hits:
             return (f"{head} Rival ({side_why}): {car.driver} ({car.car}), "
                     f"P{car.class_position} in class, was not timed on lap {as_of_lap}: "

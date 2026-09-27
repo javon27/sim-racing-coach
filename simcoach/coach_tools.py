@@ -42,6 +42,7 @@ from simcoach.battle import (
     format_battle,
     format_race_battle,
     rival_matches,
+    same_car,
     target_position,
 )
 from simcoach.car_lookup import resolve_car_class
@@ -2662,20 +2663,21 @@ class CoachContext:
             lap_me = next((c for c in b.laps if c.is_player), None) if b else None
             moved = (live is not None and lap_me is not None
                      and live[1].class_position != lap_me.class_position)
-            if moved and rival and not (direction or position):
-                p = re.fullmatch(r"(?:the\s+)?p\s*(\d+)", str(rival).strip().lower())
-                if p:        # 'P3' is a class position: the live one, like position=3
-                    rival, position = None, int(p[1])
+            # 'P3' is a class position: the live one, like position=3, whenever the
+            # live car there is not the lap's (#193: also when only others moved).
+            p = (re.fullmatch(r"(?:the\s+)?p\s*(\d+)", str(rival).strip().lower())
+                 if rival else None)
+            ask = position or (int(p[1]) if p else None)
             target = None
-            if live is not None and lap_me is not None and (direction or position):
-                target = live_battle_target(live[0].cars, direction, position)
+            if live is not None and lap_me is not None and (direction or ask):
+                target = live_battle_target(live[0].cars, direction, ask)
                 if not moved:
                     # His place held, but the car there may have changed (a swap
                     # behind him): the live car only when it is not the lap's car.
-                    want = target_position(lap_me, direction, position)
+                    want = target_position(lap_me, direction, ask)
                     was = rival_matches([c for c in b.laps if not c.is_player],
                                         f"P{want}", lap_me) if want else []
-                    if target[0] is None or (was and was[0].car_id == target[0].id):
+                    if target[0] is None or (was and same_car(was[0], target[0])):
                         target = None
             text = format_battle(b, self.race.as_of_lap, self.units, rival,
                                  note=self.race.battle_note, direction=direction,

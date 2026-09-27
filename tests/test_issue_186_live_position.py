@@ -218,7 +218,7 @@ def test_after_a_pass_a_named_rival_is_stated_at_his_live_place(tmp_path):
     """Round 2: 'B, P2 in class' beside 'You're P2 in class now' put two cars at P2."""
     ctx = _ctx(tmp_path, _live(PASSED_B), _snap_lap3(_battle()))
     out = ctx.dispatch("get_battle", {"rival": "B"})
-    assert "Rival (the car you named): B (B Entry), P3 in class." in out
+    assert "Rival (the car you named): B (B Entry), P3 in class now (live)." in out
     assert "P2 in class." not in out.replace("You're P2 in class now", "")
     # No match: the field it lists is the lap's, and says so.
     assert ctx.dispatch("get_battle", {"rival": "Zed"}).startswith(
@@ -230,7 +230,7 @@ def test_after_a_pass_a_named_rival_is_stated_at_his_live_place(tmp_path):
 def test_after_a_pass_the_default_nearest_rival_is_stated_at_his_live_place(tmp_path):
     ctx = _ctx(tmp_path, _live(PASSED_B), _snap_lap3(_battle(without=("C", "D"))))
     out = ctx.dispatch("get_battle", {})
-    assert "Rival (nearest to you on lap 3): B (B Entry), P3 in class." in out
+    assert "Rival (nearest to you on lap 3): B (B Entry), P3 in class now (live)." in out
     assert "P2 in class." not in out.replace("You're P2 in class now", "")
 
 
@@ -260,9 +260,9 @@ def test_his_place_held_a_named_rival_who_swapped_is_stated_at_his_live_place(tm
     """Round 3: B passed A ahead of him; his own P3 held. A is P2 now, never 'P1'."""
     battle = _battle(without=())
     ctx = _ctx(tmp_path, _live(["B", "A", "You", "C", "D"]), _snap_lap3(battle))
-    assert "Rival (the car you named): A (A Entry), P2 in class." in ctx.dispatch(
+    assert "Rival (the car you named): A (A Entry), P2 in class now (live)." in ctx.dispatch(
         "get_battle", {"rival": "A"})
-    assert "Rival (the car you named): B (B Entry), P1 in class." in ctx.dispatch(
+    assert "Rival (the car you named): B (B Entry), P1 in class now (live)." in ctx.dispatch(
         "get_battle", {"rival": "B"})
     assert ctx.dispatch("get_battle", {"rival": "Zed"}).endswith(
         "Those are the places at the end of lap 3.")
