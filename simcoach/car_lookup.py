@@ -79,17 +79,21 @@ _warmed = threading.Event()
 _WARM_WAIT_TIMEOUT_S = 30.0  # generous margin over the slowest observed cold scan
 
 
-def _rescan(results_root: str) -> dict[str, tuple[str, str | None]]:
+def _rescan(results_root: str) -> dict[str, tuple[str, str | None]] | None:
     """Full incremental rescan: list the dir once (scandir, not glob+stat -- the
     listing already carries each entry's mtime on Windows, the same win #81 found
     for lmu/ingest.py), parse only new/changed files, drop removed ones from the
-    per-file cache, and merge in filename order (see `_scan_results`)."""
+    per-file cache, and merge in filename order (see `_scan_results`).
+
+    Returns None on a transient scandir failure -- the caller must not record the
+    new dir sig in that case (#202), or a real change that lands in the same window
+    as the failure stays frozen until the dir changes again."""
     try:
         with os.scandir(results_root) as it:
             entries = sorted((e for e in it if e.name.lower().endswith(".xml")),
                              key=lambda e: e.name)
     except OSError:
-        return _cache["table"]  # dir briefly unavailable -- serve the last scan
+        return None  # dir briefly unavailable -- caller keeps serving the last scan
     seen: set[str] = set()
     merged: dict[str, tuple[str, str | None]] = {}
     for entry in entries:
@@ -140,7 +144,14 @@ def _scan_if_stale() -> dict[str, tuple[str, str | None]]:
     # one atomic reference swap, so the worst case is a redundant parse, never a torn
     # table -- not worth a lock.
     if sig != _cache["sig"]:
-        _cache["table"] = _rescan(str(rd))
+        rescanned = _rescan(str(rd))
+        if rescanned is None:
+            # #202: a transient scandir failure -- don't record the new sig, or the
+            # real change that triggered this check stays frozen until the dir
+            # changes again. Keep serving the last table; retry next interval.
+            _cache["checked"] = monotonic()
+            return _cache["table"]
+        _cache["table"] = rescanned
         _cache["sig"] = sig
     # Stamped only once the table is in place, never before the scan: a caller whose
     # warm-up wait timed out must scan itself, not be served the empty table (#179).

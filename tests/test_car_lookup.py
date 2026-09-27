@@ -365,6 +365,41 @@ def test_a_warmup_waiter_that_times_out_scans_rather_than_serve_the_empty_table(
     assert car_lookup.resolve_car("Team X #1", "GT3") == "Car X"
 
 
+# --- #202: a transient scandir failure must not freeze the table on the new sig --------
+
+def test_transient_scandir_failure_does_not_record_the_new_sig(tmp_path, monkeypatch):
+    """#201 red-team: a scandir OSError right after a real dir change used to still
+    stamp the new sig, so the next check (sig unchanged) never retried -- the old
+    table froze until the dir changed again. It must keep serving the old table and
+    retry once the interval passes."""
+    (tmp_path / "a.xml").write_text(_one_driver_xml("A #1", "Car A", "GT3"))
+    clock, _ = _clocked(tmp_path, monkeypatch)
+    assert car_lookup._entry_table() == {"A #1": ("Car A", "GT3")}
+
+    (tmp_path / "b.xml").write_text(_one_driver_xml("B #2", "Car B", "Hyper"))
+    _bump_dir(tmp_path, 5)
+    clock[0] = 101.0
+
+    real_scandir = os.scandir
+    fail = {"once": True}
+
+    def _flaky_scandir(path, *a, **kw):
+        if fail["once"] and os.fspath(path) == os.fspath(tmp_path):
+            fail["once"] = False
+            raise OSError("transient AV lock")
+        return real_scandir(path, *a, **kw)
+    monkeypatch.setattr(car_lookup.os, "scandir", _flaky_scandir)
+
+    table = car_lookup._entry_table()
+    assert table == {"A #1": ("Car A", "GT3")}   # old table, never {}
+    assert "B #2" not in table
+
+    clock[0] = 102.0                              # past the retry interval
+    table = car_lookup._entry_table()
+    assert table.get("B #2") == ("Car B", "Hyper")   # B is now picked up
+    assert table.get("A #1") == ("Car A", "GT3")
+
+
 def test_no_results_dir_is_checked_once_per_interval_too(tmp_path, monkeypatch):
     """No results dir: a cold start that never scanned (no LMU install) is empty; after a
     scan it is a transient config-read failure (an atomic replace, an AV lock) -- the
