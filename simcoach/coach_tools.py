@@ -2486,7 +2486,7 @@ class CoachContext:
             text = format_battle(b, self.race.as_of_lap, self.units, rival,
                                  note=self.race.battle_note, direction=direction,
                                  position=position, live_target=target,
-                                 live_cars=live[0].cars if moved else None)
+                                 live_cars=live[0].cars if live else None)
             if moved:
                 text += (f"\nYou're P{live[1].class_position} in class now (live); this "
                          "read compares the field as it stood at the end of lap "

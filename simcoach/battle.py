@@ -397,9 +397,9 @@ def format_battle(b: Battle | None, as_of_lap: int, units: str = "metric",
     #186: `live_target` (race.live_battle_target) replaces them when the live field
     picks another car: the car picked in the LIVE field, found in the lap's timing by id
     and entry and stated at its live class place -- or why there is none. `live_cars`
-    (the live field, given once the driver's class place has changed since the lap):
-    every rival is stated at its live class place, or at its place 'at the end of the
-    lap' when it is not in the live field -- never a lap-old place unlabelled."""
+    (the live field, whenever there is one): every rival is stated at its live class
+    place, or at its place 'at the end of the lap' when it is not in the live field --
+    never a lap-old place unlabelled. Where no place changed, the text is #185's."""
     head = f"As of lap {as_of_lap}."
     if b is None:
         return (f"{head} No battle read for lap {as_of_lap}: "
@@ -443,9 +443,11 @@ def format_battle(b: Battle | None, as_of_lap: int, units: str = "metric",
         if not hits and rival_matches([me], rival):
             return f"{head} {rival} is you, not a rival."
         if not hits:
+            # Labelled only when a place in it (or his own) has changed since the lap.
+            moved = any(_place(o) != f"P{o.class_position} in class" for o in b.laps)
             return (f"{head} {_no_match(rival, others)}"
                     + (f" Those are the places at the end of lap {as_of_lap}."
-                       if live_cars is not None else ""))
+                       if moved else ""))
     if hits:
         hit = hits[0]
         if not hit.entry:

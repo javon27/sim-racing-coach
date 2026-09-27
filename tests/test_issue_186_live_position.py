@@ -256,6 +256,30 @@ def test_a_swap_behind_with_his_place_held_compares_the_car_behind_now(tmp_path)
                                                                              args), args
 
 
+def test_his_place_held_a_named_rival_who_swapped_is_stated_at_his_live_place(tmp_path):
+    """Round 3: B passed A ahead of him; his own P3 held. A is P2 now, never 'P1'."""
+    battle = _battle(without=())
+    ctx = _ctx(tmp_path, _live(["B", "A", "You", "C", "D"]), _snap_lap3(battle))
+    assert "Rival (the car you named): A (A Entry), P2 in class." in ctx.dispatch(
+        "get_battle", {"rival": "A"})
+    assert "Rival (the car you named): B (B Entry), P1 in class." in ctx.dispatch(
+        "get_battle", {"rival": "B"})
+    assert ctx.dispatch("get_battle", {"rival": "Zed"}).endswith(
+        "Those are the places at the end of lap 3.")
+
+
+def test_nothing_moved_every_battle_answer_is_byte_identical(tmp_path):
+    battle = _battle(without=())
+    live_ctx = _ctx(tmp_path, _live(["A", "B", "You", "C", "D"]), _snap_lap3(battle))
+    plain_ctx = _ctx(tmp_path, None, _snap_lap3(battle))
+    for args in ({}, {"rival": "A"}, {"rival": "B"}, {"rival": "D"}, {"rival": "Zed"},
+                 {"rival": "P4"}, {"direction": "ahead"}, {"direction": "behind"},
+                 {"position": 1}, {"position": 3}, {"position": 9}):
+        assert live_ctx.dispatch("get_battle", args) == plain_ctx.dispatch("get_battle",
+                                                                             args), args
+    assert "Those are the places" not in live_ctx.dispatch("get_battle", {"rival": "Zed"})
+
+
 def test_a_reused_mid_slot_is_not_the_laps_car(tmp_path):
     """Round 2 MINOR 3: A left and a new car E took A's mID slot -- A's lap timing is
     never stated as E's."""
