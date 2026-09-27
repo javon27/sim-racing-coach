@@ -1,5 +1,5 @@
-"""#183: per-turn latency + routing on the coach_chat row, and the classifier's longer
-budget for a typed question. Fake models only -- no network."""
+"""#183: per-turn latency + routing on the coach_chat row, and the classifier's 1.5 s
+budget. Fake models only -- no network."""
 import sqlite3
 import time
 
@@ -13,7 +13,7 @@ from simcoach.model.claude import ClaudeModel
 from simcoach.model.fake import FAKE_MODEL_ID, FakeModel
 from simcoach.server.app import create_app
 from simcoach.store import SCHEMA_VERSION, LapStore
-from simcoach.thinking import CLASSIFY_TIMEOUT_S, CLASSIFY_TIMEOUT_TYPED_S, route
+from simcoach.thinking import CLASSIFY_TIMEOUT_S, route
 
 _USAGE = {"type": "usage", "usage": {"input": 10, "output": 5, "cache_read": 0,
                                      "cache_write": 0}, "model": FAKE_MODEL_ID}
@@ -113,8 +113,8 @@ class _Boom:
 @pytest.mark.parametrize("kw, clf, via, asked", [
     ({"moving": True}, FakeModel(classify_result={"tier": "deep"}), "gate", False),
     ({}, FakeModel(classify_result={"tier": "deep"}), "classifier", True),
-    ({}, None, "rules", True),                  # coach.classifier_model "none"
-    ({}, FakeModel(classify_result={"tier": "deep"}, classify_delay=1.0),
+    ({}, None, "rules", False),                 # coach.classifier_model "none"
+    ({}, FakeModel(classify_result={"tier": "deep"}, classify_delay=2.0),
      "rules: classifier timeout", True),
     ({}, FakeModel(classify_result=None), "rules: classifier failed", True),
     ({}, FakeModel(classify_result={"tier": "banana"}), "rules: bad classifier output", True),
@@ -132,29 +132,23 @@ def test_route_without_a_classifier_factory_is_rules():
 
 # --- #183 part 3: the classifier's budget ------------------------------------------
 
-def test_a_typed_question_waits_longer_for_the_classifier():
+def test_a_rig_speed_classifier_lands_within_the_budget():
     """The effect, measured with a fake: a 1.0 s classifier round trip (the rig's is
-    ~0.85 s) times out on the voice budget and lands on the typed one."""
+    ~0.85 s; the old 0.8 s budget timed out 5 of 5) now decides the tier."""
     slow = FakeModel(classify_result={"tier": "deep", "intent": "setup"}, classify_delay=1.0)
-    typed = route("what's my fuel?", classifier=lambda: slow, typed=True)
-    assert (typed[0], typed[4]["via"]) == ("deep", "classifier")
-    assert CLASSIFY_TIMEOUT_TYPED_S * 1000 > typed[4]["classify_ms"] >= 1000
-    voice = route("what's my fuel?", classifier=lambda: slow)
-    assert (voice[0], voice[4]["via"]) == ("standard", "rules: classifier timeout")
-    assert voice[4]["classify_ms"] < 1000
-    assert slow.classify_timeouts == [CLASSIFY_TIMEOUT_TYPED_S, CLASSIFY_TIMEOUT_S]
+    tier, _, _, _, meta = route("what's my fuel?", classifier=lambda: slow)
+    assert (tier, meta["via"]) == ("deep", "classifier")
+    assert CLASSIFY_TIMEOUT_S * 1000 > meta["classify_ms"] >= 1000
+    assert slow.classify_timeouts == [CLASSIFY_TIMEOUT_S]
 
 
-@pytest.mark.parametrize("voice, budget", [
-    (None, CLASSIFY_TIMEOUT_TYPED_S), ("ptt", CLASSIFY_TIMEOUT_S),
-    ("conversation", CLASSIFY_TIMEOUT_S),
-])
-def test_ws_gives_only_a_typed_question_the_longer_budget(tmp_path, monkeypatch,
-                                                          mem_keyring, voice, budget):
+@pytest.mark.parametrize("voice", [None, "ptt", "conversation"])
+def test_ws_every_consulted_question_gets_the_same_budget(tmp_path, monkeypatch,
+                                                          mem_keyring, voice):
     clf = FakeModel(classify_result={"tier": "standard"})
     c, _ = _app(tmp_path, monkeypatch, FakeModel(reply="Brake later."), classifier=clf)
     lat = _ask(c, "what's my fuel?", **({"voice": voice} if voice else {}))["latency"]
-    assert clf.classify_timeouts == [budget]
+    assert clf.classify_timeouts == [CLASSIFY_TIMEOUT_S] == [1.5]
     assert lat["tier_via"] == "classifier" and lat["classify_ms"] is not None
 
 
@@ -172,6 +166,6 @@ def test_claude_classify_sends_the_budget_to_the_wire():
     m = ClaudeModel(model="claude-haiku-4-5", api_key="sk-test")
     m.client = anthropic.Anthropic(api_key="sk-test", http_client=httpx2.Client(
         transport=httpx2.MockTransport(handler)))
-    assert m.classify("q", {}, timeout=CLASSIFY_TIMEOUT_TYPED_S)[0] == {"tier": "deep"}
+    assert m.classify("q", {}, timeout=CLASSIFY_TIMEOUT_S)[0] == {"tier": "deep"}
     assert m.classify("q", {})[0] == {"tier": "deep"}
-    assert seen == [CLASSIFY_TIMEOUT_TYPED_S, CLASSIFY_TIMEOUT_S]
+    assert seen == [CLASSIFY_TIMEOUT_S, 0.8]       # the router's budget; the default

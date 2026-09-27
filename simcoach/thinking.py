@@ -1,8 +1,7 @@
 """#175: how hard the coach thinks before answering -- quick / standard / deep.
 
 Code gates first (0 ms: the on-track path never waits on a model), then a small
-classifier model behind the `Model` seam (<= 800 ms by voice, 1.5 s typed; JSON), with
-keyword rules as the
+classifier model behind the `Model` seam (<= 1.5 s, JSON), with keyword rules as the
 fallback when it is off, slow, or wrong-shaped. Provider-neutral: what a tier means
 for a given model is the adapter's business (simcoach/model/). A wrong tier costs a
 slower or shallower answer, never a wrong fact -- thinking never produces a figure.
@@ -24,12 +23,12 @@ _log = logging.getLogger(__name__)
 
 TIERS = ("quick", "standard", "deep")
 SETTINGS = ("auto", "off", "always")     # coach.thinking
-CLASSIFY_TIMEOUT_S = 0.8
-# #183: a TYPED question (not voice/PTT) waits longer. Rig 2026-09-26: 5 of 5 garage
-# classifications timed out at 0.8 s -- the API round trip on that rig is ~0.85 s even
-# for the coach's own requests, so a warm connection alone would not clear 0.8 s. A
-# typed garage answer takes seconds anyway; the voice path keeps the tight budget.
-CLASSIFY_TIMEOUT_TYPED_S = 1.5
+# #183: was 0.8 s. Rig 2026-09-26: 5 of 5 garage classifications timed out -- the API
+# round trip on that rig is ~0.85 s even for the coach's own requests, so a warm
+# connection alone would not clear 0.8 s. The classifier is only ever asked for a
+# STATIONARY question (moving goes to the quick gate first), typed or by voice, and a
+# stationary answer takes seconds anyway -- so one budget, no voice/typed split.
+CLASSIFY_TIMEOUT_S = 1.5
 MOVING_KPH = 10.0      # ponytail: fixed; below this the car is parked/crawling (pit box)
 # A result row describes the race being driven only if it started this close before
 # that race's first captured lap. ponytail: generous fixed bound (grid + formation +
@@ -196,16 +195,14 @@ def _prompt(question: str, history: list[dict], state: str) -> str:
 def route(question: str, *, setting: str = "auto", moving: bool = False,
           race_finished: bool = False, classifier: Callable | None = None,
           history: list[dict] | None = None, state: str = "",
-          cmap=None, typed: bool = False,
-          ) -> tuple[str, str | None, str, TokenUsage, dict]:
+          cmap=None) -> tuple[str, str | None, str, TokenUsage, dict]:
     """(tier, intent, one line of context for the coach or "", what the classifier
     billed, {"via", "classify_ms"} -- how the tier was chosen and how long the router
     waited on the classifier, None when it was not asked). `classifier` is a
     zero-argument callable returning the classifier Model (or None). It is built
     lazily -- only when no gate decided and the setting is auto -- and building it
-    counts against the budget (CLASSIFY_TIMEOUT_S, or CLASSIFY_TIMEOUT_TYPED_S for a
-    `typed` question), after which the keyword floor answers. `via` is one of "gate",
-    "classifier", "rules" (no classifier), "rules: classifier timeout" (the router's
+    counts against CLASSIFY_TIMEOUT_S, after which the keyword floor answers. `via` is
+    one of "gate", "classifier", "rules" (no classifier; classify_ms None), "rules: classifier timeout" (the router's
     budget ran out), "rules: classifier failed" (the call returned nothing: an API
     error or its own timeout), "rules: bad classifier output", "rules: classifier
     error" (it raised). Every classification is logged (INFO)."""
@@ -217,18 +214,18 @@ def route(question: str, *, setting: str = "auto", moving: bool = False,
     detail, classify_ms = "", None
     if gated is None and setting == "auto" and classifier is not None:
         prompt = _prompt(question, history or [], state)
-        budget = CLASSIFY_TIMEOUT_TYPED_S if typed else CLASSIFY_TIMEOUT_S
 
         def call():
             model = classifier()
-            return (model.classify(prompt, SCHEMA, timeout=budget) if model
+            return (model.classify(prompt, SCHEMA, timeout=CLASSIFY_TIMEOUT_S) if model
                     else (_OFF, TokenUsage()))
         # ponytail: 2 workers -- a burst of timed-out calls (each bounded by the
         # adapter's own SDK timeout) can queue the next one past its budget.
         c0 = time.monotonic()
         fut = _pool.submit(call)
+        raw = None
         try:
-            raw, usage = fut.result(timeout=budget)
+            raw, usage = fut.result(timeout=CLASSIFY_TIMEOUT_S)
             classified = _valid(raw)
             via = ("classifier" if classified else "rules" if raw is _OFF
                    else "rules: classifier failed" if raw is None
@@ -240,7 +237,8 @@ def route(question: str, *, setting: str = "auto", moving: bool = False,
             via = "rules: classifier timeout"
         except Exception as e:
             via, detail = "rules: classifier error", f" {type(e).__name__}: {e}"
-        classify_ms = round((time.monotonic() - c0) * 1000)
+        # "none": the classifier was not asked, so there is no wait to report
+        classify_ms = None if raw is _OFF else round((time.monotonic() - c0) * 1000)
     tier = thinking_tier(question, setting=setting, moving=moving,
                          race_finished=race_finished, classified=classified)
     intent = classified["intent"] if classified else None

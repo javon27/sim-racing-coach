@@ -350,6 +350,13 @@
       `total ${formatSecs(l.total_ms)}`].join(" · ");
   }
 
+  function latencyTitle(l: TurnLatency): string {
+    const clf = l.classify_ms === null ? "" : `, classifier ${l.classify_ms} ms`;
+    return `Last turn: routed tier via ${l.tier_via}${clf}, ${l.tools} tool call${l.tools === 1 ? "" : "s"}. `
+      + "First text = when the answer first appeared on screen, not the model's first token "
+      + "(a PTT or held answer appears at the end).";
+  }
+
   function formatTokens(n: number): string {
     return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
   }
@@ -428,8 +435,11 @@
         hist.push({ role: "coach", text: row.answer });
       }
       messages = hist;
+      // #183: the readout is this thread's last turn, never another chat's.
+      turnLatency = rows.at(-1)?.latency ?? null;
     } catch {
       messages = [];
+      turnLatency = null;
     }
     // Seed the meter so reopening a thread shows what it has already cost.
     // Best-effort, same shape as above: a sidecar hiccup hides the meter, it
@@ -537,6 +547,7 @@
         const message = snap.error ?? "Something went wrong.";
         messages = [...messages, { role: "coach", text: message }];
         waiting = false;
+        turnLatency = null; // #183: never show the previous turn's timing as this one's
         activeVoice?.onError(message);
       }
     });
@@ -592,7 +603,7 @@
       <span
         class="latency"
         data-testid="turn-latency"
-        title={`Last turn: tier via ${turnLatency.tier_via}${turnLatency.classify_ms === null ? "" : `, classifier ${turnLatency.classify_ms} ms`}, ${turnLatency.tools} tool call${turnLatency.tools === 1 ? "" : "s"}`}
+        title={latencyTitle(turnLatency)}
       >{formatLatency(turnLatency)}</span>
     {/if}
     {#if usedTokens > 0}

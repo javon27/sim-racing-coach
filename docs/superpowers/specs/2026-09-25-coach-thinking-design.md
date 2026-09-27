@@ -66,7 +66,7 @@ question, voice mode, live state
    │     "take your time"                                   │
    │   coach.thinking = "off" / "always"        → as set    │
    │                                                        │
-   └─ otherwise: classifier model (≤ 800 ms, JSON) ─────────┤
+   └─ otherwise: classifier model (≤ 1.5 s, #183, JSON) ────┤
         {tier: standard|deep, intent, entities}             │
         on timeout / error / bad JSON                       │
             └─ keyword rules (code)             → tier ─────┘

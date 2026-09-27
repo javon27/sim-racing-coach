@@ -73,8 +73,8 @@ def _cached_classifier(model_id: str, key: str) -> Model:
     # One client per (model, key), so questions asked in quick succession reuse a
     # warm connection. Only that: the SDK pool drops an idle connection after 5 s
     # (httpx2 keepalive_expiry), so a garage question minutes after the last one
-    # still pays a fresh TLS handshake inside the router's budget (#183: 1.5 s typed,
-    # 0.8 s by voice -- see thinking.CLASSIFY_TIMEOUT_TYPED_S).
+    # still pays a fresh TLS handshake inside the router's budget (#183: 1.5 s, see
+    # thinking.CLASSIFY_TIMEOUT_S).
 
     return ClaudeModel(model=model_id, api_key=key)
 

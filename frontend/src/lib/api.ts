@@ -1,6 +1,8 @@
 // Typed HTTP client for the SimCoach FastAPI server (simcoach/server/app.py).
 // UI-agnostic core rule: this file only fetches + shapes data, no analysis logic.
 
+import type { TurnLatency } from "./coach";
+
 const BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8765";
 
 export interface HealthResponse {
@@ -113,6 +115,7 @@ export interface ChatMessage {
   answer: string;
   tool_calls: unknown;
   spoken?: string | null;
+  latency?: TurnLatency | null; // #183: null on rows stored before v27
 }
 
 // Billed tokens for a whole chat. Computed by the core (simcoach/store.py +

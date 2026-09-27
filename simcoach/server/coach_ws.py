@@ -345,7 +345,7 @@ def register(app, deps) -> None:
             # answer, not the scrubbed history copy.)
             last_answer = (messages[-1]["answer"] if history and history[-1]["role"] == "assistant"
                            and is_repeat_request(question) else None)
-            # #175: how hard to think -- code gates, then the classifier (<= 800 ms),
+            # #175: how hard to think -- code gates, then the classifier (<= 1.5 s),
             # then keyword rules. Its tokens bill with this turn. ponytail: priced at
             # the coach model's rate (one model per chat row) -- overstates a sub-cent
             # classifier call; split it into its own row if that ever matters.
@@ -382,8 +382,7 @@ def register(app, deps) -> None:
                         question, setting=coach_cfg.get("thinking", "auto"), moving=moving,
                         race_finished=finished, history=history, state=state, cmap=ctx.cmap,
                         classifier=(lambda: classifier_for(coach_cfg.get("classifier_model")))
-                        if classifier_for is not None else None,
-                        typed=voice is None)       # #183: longer budget off the voice path
+                        if classifier_for is not None else None)
                     turn_usage = turn_usage + classify_usage
                 except Exception:
                     # Routing is an optimisation: a failure costs deliberation, never

@@ -111,11 +111,14 @@ def test_slow_classifier_falls_back_within_the_budget():
     assert (tier, intent, hint, usage) == ("standard", None, "", TokenUsage())
 
 
-def test_raising_classifier_falls_back():
+def test_raising_classifier_falls_back(caplog):
     class Boom:
-        def classify(self, prompt, schema):
+        def classify(self, prompt, schema, timeout=0.8):
             raise RuntimeError("no key")
-    assert _route("analyze the stint in detail", Boom())[0] == "deep"
+    with caplog.at_level(logging.INFO, logger="simcoach.thinking"):
+        assert _route("analyze the stint in detail", Boom())[0] == "deep"
+    # the double's own error, not a TypeError from a stale signature
+    assert any("RuntimeError: no key" in r.getMessage() for r in caplog.records)
 
 
 def test_gates_and_settings_never_call_the_classifier():

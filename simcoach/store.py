@@ -1354,8 +1354,12 @@ class LapStore:
         — a turn with no usage stores NULLs and sums as zero. `spoken` (added v19) is
         the PTT cue actually read aloud, so a later review can compare what was heard
         against what was written; NULL for a non-voice or non-PTT turn. `latency`
-        (added v27, #183) is the turn's timing and routing, stored as JSON: tier,
-        tier_via, classify_ms, first_text_ms, total_ms, rounds, tools."""
+        (added v27, #183) is the turn's timing and routing, stored as JSON: tier (the
+        ROUTED tier -- a #159 forced re-ask runs quick but is not reflected here),
+        tier_via, classify_ms, first_text_ms, total_ms, rounds, tools. first_text_ms is
+        when the first answer text was SHOWN to the driver, not the model's first
+        token: a PTT answer and a held tool-free draft are released whole at the end,
+        so there it is ~= total_ms."""
         if chat_id is None:
             raise ValueError("chat_id is required")
         tc_json = json.dumps([_capped_result(c) for c in tool_calls]) if tool_calls else None
