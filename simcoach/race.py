@@ -147,17 +147,39 @@ def laps_left(lap_no: int, max_laps: int | None, time_left: float | None,
     runs out is still driven, so at least 1), or the smaller when both apply. None when
     neither is known -- a timed race with no clean pace yet included.
 
-    ponytail: the driver's own laps, not the leader's. A timed race ends at the
-    driver's first crossing after the OVERALL LEADER takes the flag, and the leader
-    takes it at his first crossing after zero -- so a car he is ahead of on the road can
-    drive one lap MORE than this (never fewer). The pre-race plan states both counts
-    (#184); the live read does not yet."""
+    The driver's own laps, not the leader's. A timed race ends at the driver's first
+    crossing after the OVERALL LEADER takes the flag, and the leader takes it at his
+    first crossing after zero -- so a car he is ahead of on the road can drive one lap
+    MORE than this (never fewer). Both plans -- pre-race (#184) and live (#195) -- plan
+    on that longer count, stating both (`flag_counts`, `plans_longer`)."""
     cands = []
     if max_laps:
         cands.append(max(max_laps - lap_no, 0))
     if time_left is not None and pace:
         cands.append(max(1, math.ceil(time_left / pace)))
     return min(cands) if cands else None
+
+
+def flag_counts(n: int, last: int) -> str:
+    """#184: a timed race's two counts (see laps_left) -- `n` laps to go, the flag at the
+    end of lap `last` or one later."""
+    return (f"{n} lap{'s' if n != 1 else ''} if the overall leader takes the flag "
+            f"before you finish lap {last}, {n + 1} if not")
+
+
+# #195: said instead of flag_counts when the driver is P1 overall at the line: the
+# leader's flag is his own, so the clock's count is exact.
+YOU_LEAD = ("you lead overall (P1 at the end of lap {}), so the flag falls at your first "
+            "crossing after the clock runs out")
+
+
+def plans_longer(time_left: float, position: int | None) -> bool:
+    """#195: a timed race's plan counts laps_left + 1 (both plans, pre-race and live) --
+    unless the driver is P1 overall at the line (`position`, unknown = not the leader),
+    or the clock had already run out there: the leader's flag then comes within one of
+    his laps, never after this car's next crossing (every stored timed race ended on the
+    lap it ran out on)."""
+    return position != 1 and time_left > 0
 
 
 # Tire life runs the worst tire down to this much tread REMAINING. A chosen threshold,
@@ -633,6 +655,7 @@ class RaceState:
     ahead: GapRead | None
     behind: GapRead | None
     sampled: bool = True        # False: the race sample was missing on the latest lap
+    timed: bool = False         # #195: the clock, not a lap count, sets laps_to_go
 
 
 @dataclass
@@ -689,15 +712,19 @@ def build_snapshot(stint: list[LapFacts], session_id: str | None,
             if len(clean) >= MIN_STINT_LAPS else None)
     to_go = laps_left(latest.lap_no, r.max_laps, r.time_left, pace)
     final = latest.lap_no + to_go if to_go is not None else None
+    timed = bool(to_go is not None and pace and r.time_left is not None
+                 and not (r.max_laps and to_go == max(r.max_laps - latest.lap_no, 0)))
     state = RaceState(latest.position, r.class_position, r.max_laps, r.time_left, pace, to_go,
                       _gap_read(stint, "ahead", final), _gap_read(stint, "behind", final),
-                      latest.race is not None)
+                      latest.race is not None, timed)
+    # #195: a timed race is planned on the longer count, as the pre-race plan is (#184).
+    plan = to_go + 1 if timed and plans_longer(r.time_left, latest.position) else to_go
     try:
-        strat = strategy(stint, to_go)
+        strat = strategy(stint, plan)
     except Exception:
         # Computed apart from the race state, so one bad channel can't cost it too.
         logging.getLogger(__name__).warning("race strategy not computed", exc_info=True)
-        strat = Strategy("strategy unavailable this lap (a calculation failed)", to_go, [],
+        strat = Strategy("strategy unavailable this lap (a calculation failed)", plan, [],
                          None, None, None, None, None, None, None)
     return RaceSnapshot(latest.lap_no, session_id, state, strat, track, car, battle,
                         battle_note)
@@ -891,12 +918,19 @@ def format_strategy(snap: RaceSnapshot, damage: dict | None = None,
                     damage_lap: int | None = None) -> str:
     """The race stint's projection plus the stop as pit-menu settings (#164).
     `damage` is `analysis.damage_state` of lap `damage_lap` (None/{} = not captured)."""
-    s = snap.strategy
-    head = f"As of lap {snap.as_of_lap}."
+    s, st, lap = snap.strategy, snap.state, snap.as_of_lap
+    head = f"As of lap {lap}."
     if s.note:
         return f"{head} No projection: {s.note}."
-    return "\n".join([head] + _strategy_lines(s, snap.as_of_lap)
-                     + _pit_menu_lines(s, snap.as_of_lap, damage, damage_lap, True))
+    plan = _strategy_lines(s, lap)
+    if st.timed and s.laps_to_go != st.laps_to_go:
+        # #195: planned on the longer count (build_snapshot), worded as the pre-race plan.
+        plan[0] = (f"Laps to go: planned on {s.laps_to_go}, the longer count (the flag at "
+                   f"the end of lap {lap + s.laps_to_go} at the latest): "
+                   f"{flag_counts(st.laps_to_go, lap + st.laps_to_go)}.")
+    elif st.timed and st.position == 1 and st.time_left > 0:
+        plan[0] = plan[0][:-1] + ": " + YOU_LEAD.format(lap) + "."
+    return "\n".join([head] + plan + _pit_menu_lines(s, lap, damage, damage_lap, True))
 
 
 def format_provisional(s: Strategy, as_of_lap: int, basis: str, n_practice: int,

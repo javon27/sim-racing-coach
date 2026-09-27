@@ -3868,3 +3868,83 @@ def test_a_race_filled_at_another_fuel_ratio_drops_the_practice_ve(tmp_path, syn
     assert "not projected" not in same and "Virtual energy needed to the flag" in same
     before = plan(None)                 # no race row yet: nothing to compare, as before
     assert "not projected" not in before and "Virtual energy needed to the flag" in before
+
+
+def _race_lap_1_plan(tmp_path, synthetic_lap, monkeypatch, position):
+    """The rig race at the end of lap 1 (949 s left), placed `position` overall."""
+    from simcoach.race import RaceTracker
+    store = _z06_store(tmp_path, synthetic_lap, monkeypatch)
+    _sarthe_laps(store, synthetic_lap, _RIG_ENTRY, _RIG_SID,
+                 [_Z06_0926_FORMATION, _Z06_0926_LAP1], cap=120.0)
+    tracker = RaceTracker()
+    for row in store.session_laps(_RIG_SID):
+        if row["phase"] == "race":
+            rec = store.load(row["id"])
+            rec.position = position
+            snap = tracker.commit(rec)
+    assert snap.as_of_lap == 1 and snap.strategy.note is not None
+    return _z06_ctx(store, _live(current_lap=2, end_time=1949.0, elapsed=1000.0),
+                    race=snap).dispatch("get_strategy", {})
+
+
+def test_race_lap_1_plan_follows_the_live_rule_for_the_overall_leader(
+        tmp_path, synthetic_lap, monkeypatch):
+    """#195: the race-lap-1 plan and the live plan use one rule -- the longer count
+    unless P1 overall, where the clock's count is his own (race.plans_longer)."""
+    behind = _race_lap_1_plan(tmp_path / "p5", synthetic_lap, monkeypatch, 5)
+    assert "Laps to go: planned on 5, the longer count" in behind, behind
+    assert "= 4 laps if the overall leader takes the flag before you finish lap 5" in behind
+    lead = _race_lap_1_plan(tmp_path / "p1", synthetic_lap, monkeypatch, 1)
+    # 949 / 243.683 (the fastest sitting's median) = 3.9 -> 4 laps.
+    assert ("15:49 on the clock at 4:03.683 a lap = 4 laps to go: you lead overall (P1 at the end "
+            "of lap 1), so the flag falls at your first crossing after the clock runs out."
+            ) in lead, lead
+    assert "Laps to go: 4 (flag at the end of lap 5)." in lead and "planned on" not in lead
+
+
+def test_the_history_path_reads_each_stored_lap_once(tmp_path, synthetic_lap, monkeypatch):
+    """#195: a stored lap's .npz never changes, so a second get_strategy (the driver asks
+    again, another CoachContext) loads none -- it cost 1-3.5 s a question."""
+    from simcoach.store import LapStore
+    store = _z06_store(tmp_path, synthetic_lap, monkeypatch)
+    _sarthe_laps(store, synthetic_lap, _RIG_ENTRY, _RIG_SID, [_Z06_0926_FORMATION],
+                 cap=120.0)
+    loads = []
+    real = LapStore.load
+    monkeypatch.setattr(LapStore, "load", lambda self, i: loads.append(i) or real(self, i))
+    first = _z06_ctx(store, _live("qualifying")).dispatch("get_strategy", {"race_minutes": 20})
+    assert "medians of" in first and "Formation lap:" in first, first   # all three reads
+    assert loads and len(loads) == len(set(loads))
+    loads.clear()
+    again = _z06_ctx(store, _live("qualifying")).dispatch("get_strategy", {"race_minutes": 20})
+    assert again == first and loads == []
+
+
+def test_a_memoised_lap_read_is_keyed_on_its_file_not_its_id(tmp_path, synthetic_lap,
+                                                             monkeypatch):
+    """#195: lap ids restart in every store (another data dir, a test's), and a rewritten
+    .npz has a new mtime: either is read afresh, never served from another's memo."""
+    import dataclasses
+    import os
+
+    import numpy as np
+
+    from simcoach import coach_tools
+    from simcoach.store import LapStore
+    n = len(synthetic_lap.channels["lap_distance"])
+
+    def one(sub, burn):
+        store = LapStore(str(tmp_path / sub / "db.sqlite"), str(tmp_path / sub / "telem"))
+        ch = dict(synthetic_lap.channels, fuel=np.linspace(50.0, 50.0 - burn, n))
+        return store, store.save(dataclasses.replace(synthetic_lap, channels=ch))
+    a, ida = one("a", 2.5)
+    b, idb = one("b", 3.0)
+    assert ida == idb
+    assert coach_tools._lap_reads(a, ida)[0].fuel_used == pytest.approx(2.5)
+    assert coach_tools._lap_reads(b, idb)[0].fuel_used == pytest.approx(3.0)
+    path = a.telemetry_file(ida)
+    np.savez_compressed(path, **dict(synthetic_lap.channels,
+                                     fuel=np.linspace(50.0, 46.0, n)))
+    st = os.stat(path)
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    assert coach_tools._lap_reads(a, ida)[0].fuel_used == pytest.approx(4.0)

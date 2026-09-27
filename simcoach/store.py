@@ -1123,6 +1123,19 @@ class LapStore:
                               partial=partial, mapping=bool(mapping),
                               sectors=sectors if all(v is not None for v in sectors) else None)
 
+    def telemetry_file(self, lap_id: int) -> str:
+        """The lap's `.npz` path, without loading it (#195: the key a caller memoises a
+        read of it on). Raises as load() does: KeyError, or FileNotFoundError for a
+        result-log row."""
+        with self._lock:
+            row = self.conn.execute("SELECT telemetry_path FROM laps WHERE id = ?",
+                                    (lap_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"no lap with id {lap_id}")
+        if row[0] is None:
+            raise FileNotFoundError(f"lap {lap_id} has no telemetry (imported from a result log)")
+        return row[0]
+
     def best_lap(self, track: str, car: str, exclude_lap_id: int | None = None,
                  phase: str | None = None, session_id: str | None = None,
                  car_class: str | None = None) -> LapRecord | None:

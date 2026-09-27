@@ -9,6 +9,7 @@ current session (track/car/lap), which the live-session re-resolution keeps fres
 """
 from __future__ import annotations
 
+import os
 import re
 import time
 from collections import Counter, defaultdict
@@ -76,10 +77,12 @@ from simcoach.race import (
     NO_RACE_LAP_YET,
     PACE_LAPS,
     RATE_LAPS,
+    YOU_LEAD,
     HistLap,
     _clock,
     departure,
     fill_ratio,
+    flag_counts,
     format_provisional,
     format_race_state,
     format_strategy,
@@ -90,6 +93,7 @@ from simcoach.race import (
     live_battle_target,
     pick_formation,
     picked_up_mid_lap,
+    plans_longer,
     provisional_strategy,
     race_sample,
 )
@@ -115,6 +119,31 @@ _UNTIMED_NOTE = "no time \N{EM DASH} LMU didn't time it (invalidated)"
 _COOL_DOWN_RULE = ("the lap begun after the chequered flag is the cool-down (listed as an "
                    "in-lap or a partial lap), not a pit stop -- a lap marked invalidated "
                    "is never the cool-down")
+
+
+# #195: what get_strategy reads off a stored lap's .npz, kept in-process -- the history
+# path loads dozens of them (1-3.5 s) while the driver waits, and a lap's .npz is written
+# once at save and never replaced. Keyed on (path, mtime): a lap id is unique only within
+# one store's db (a test's, another data dir's), and an out-of-band rewrite changes mtime.
+# ponytail: FIFO-bounded at _LAP_READS_MAX laps (a few hundred bytes each); a real LRU
+# only if one question ever needs more laps than that.
+_LAP_READS: dict = {}
+_LAP_READS_MAX = 4096
+
+
+def _lap_reads(store, lap_id):
+    """(lap_facts, departure, formation_burn, (ts, phase, session_id)) of a stored lap,
+    memoised. Raises as store.load does (no row, no telemetry)."""
+    path = store.telemetry_file(lap_id)
+    key = (path, os.stat(path).st_mtime_ns)
+    got = _LAP_READS.get(key)
+    if got is None:
+        rec = store.load(lap_id)
+        got = _LAP_READS[key] = (lap_facts(rec), departure(rec), formation_burn(rec),
+                                 (rec.timestamp, rec.phase, rec.session_id))
+        while len(_LAP_READS) > _LAP_READS_MAX:
+            _LAP_READS.pop(next(iter(_LAP_READS)), None)
+    return got
 
 
 def _pre_green(phase, lap_no) -> bool:
@@ -2412,12 +2441,9 @@ class CoachContext:
             if not self._live_row(row):
                 continue
             try:
-                rec = self.store.load(row["id"])
+                f = _lap_reads(self.store, row["id"])[0]
             except Exception:
-                rec = None   # a result-log row with no telemetry
-            if rec is None:
-                continue
-            f = lap_facts(rec)
+                continue   # a result-log row with no telemetry
             if f.clean and (f.fuel_used or f.energy_used):
                 practice.append((row.get("phase"), f))
         phases = {ph for ph, _ in practice[-RATE_LAPS:]}
@@ -2476,12 +2502,6 @@ class CoachContext:
                 return no(f"race lap {self.race.as_of_lap} isn't readable from the store")
             start, lap_no = lap_facts(rec), rec.lap_no
             damage, damage_lap = damage_state(rec.channels), rec.lap_no
-
-        def either(n, last):
-            # #184: a timed race ends at your first crossing after the OVERALL leader's
-            # flag -- one lap more than counted when you finish lap `last` before him.
-            return (f"{n} lap{'s' if n != 1 else ''} if the overall leader takes the flag "
-                    f"before you finish lap {last}, {n + 1} if not")
         timed = False
         if race_laps is not None or race_minutes is not None:
             try:
@@ -2500,7 +2520,7 @@ class CoachContext:
             to_go, timed = max(total - lap_no, 0), race_laps is None
             basis = (f"{total} lap{'s' if total != 1 else ''} (as you said)" if not timed
                      else f"{float(race_minutes):g} minutes (as you said) {at_pace} = "
-                          f"{either(total, total)}")
+                          f"{flag_counts(total, total)}")
         elif sess is not None and sess.phase == "race":
             # #184: before race lap 1 is done the clock is not the race length -- in the
             # race session's garage/grid it counts down to the start (Sarthe 2026-09-26,
@@ -2509,9 +2529,16 @@ class CoachContext:
             to_go = laps_left(lap_no, sess.max_laps, clock, pace)
             by_laps = sess.max_laps and to_go == max(sess.max_laps - lap_no, 0)
             timed = not by_laps and clock is not None
+            # #195: the live plan's rule (race.plans_longer), so the two never differ.
+            pos = self.race.state.position if self.race is not None else None
             basis = (f"{sess.max_laps} laps (the live race's lap count)" if by_laps else
+                     None if not timed else
+                     "the clock has run out — this is the last lap" if clock <= 0 else
                      f"{_clock(clock)} on the clock {at_pace} = "
-                     f"{either(to_go, lap_no + to_go)} to go" if timed else None)
+                     + (f"{to_go} lap{'s' if to_go != 1 else ''} to go: "
+                        f"{YOU_LEAD.format(lap_no)}" if pos == 1
+                        else f"{flag_counts(to_go, lap_no + to_go)} to go"))
+            timed = timed and plans_longer(clock, pos)
         else:
             to_go = basis = None
         if to_go is None or basis is None:
@@ -2574,12 +2601,11 @@ class CoachContext:
         for row in rows[:HISTORY_LOADS]:
             read += 1
             try:
-                rec = self.store.load(row["id"])
+                f, _, _, meta = _lap_reads(self.store, row["id"])
             except Exception:
                 continue
-            f = lap_facts(rec)
             if f.clean and (f.fuel_used or f.energy_used):
-                out.append(HistLap(rec.timestamp, rec.phase, rec.session_id, f))
+                out.append(HistLap(*meta, f))
                 if len(out) == HISTORY_LAPS:
                     break
         return out, read, len(rows)
@@ -2606,7 +2632,7 @@ class CoachContext:
                     continue
                 seen[key] += 1
                 try:
-                    deps[key].append(departure(self.store.load(r["id"])))
+                    deps[key].append(_lap_reads(self.store, r["id"])[1])
                 except Exception:
                     continue    # a result-log row: no telemetry
         fills = {k: fill_ratio(v) for k, v in deps.items()}
@@ -2629,10 +2655,10 @@ class CoachContext:
         out = []
         for r in reversed(found[-HISTORY_LAPS:]):          # newest first
             try:
-                rec = self.store.load(r["id"])
+                burn = _lap_reads(self.store, r["id"])[2]
             except Exception:
                 continue
-            out.append((r["ts"], r["session_id"], formation_burn(rec)))
+            out.append((r["ts"], r["session_id"], burn))
         return pick_formation(out, energy_sessions) if out else None
 
     def get_battle(self, rival=None, which=None, direction=None, position=None):
