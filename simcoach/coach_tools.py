@@ -76,6 +76,7 @@ from simcoach.race import (
     MIN_STINT_LAPS,
     NO_RACE_LAP_YET,
     PACE_LAPS,
+    RACE_OVER,
     RATE_LAPS,
     YOU_LEAD,
     HistLap,
@@ -123,8 +124,9 @@ _COOL_DOWN_RULE = ("the lap begun after the chequered flag is the cool-down (lis
 
 # #195: what get_strategy reads off a stored lap's .npz, kept in-process -- the history
 # path loads dozens of them (1-3.5 s) while the driver waits, and a lap's .npz is written
-# once at save and never replaced. Keyed on (path, mtime): a lap id is unique only within
-# one store's db (a test's, another data dir's), and an out-of-band rewrite changes mtime.
+# once at save and never replaced. Keyed on (path, mtime, size): a lap id is unique only
+# within one store's db (a test's, another data dir's), and an out-of-band rewrite changes
+# the mtime or the size.
 # ponytail: FIFO-bounded at _LAP_READS_MAX laps (a few hundred bytes each); a real LRU
 # only if one question ever needs more laps than that.
 _LAP_READS: dict = {}
@@ -135,7 +137,8 @@ def _lap_reads(store, lap_id):
     """(lap_facts, departure, formation_burn, (ts, phase, session_id)) of a stored lap,
     memoised. Raises as store.load does (no row, no telemetry)."""
     path = store.telemetry_file(lap_id)
-    key = (path, os.stat(path).st_mtime_ns)
+    st = os.stat(path)
+    key = (path, st.st_mtime_ns, st.st_size)
     got = _LAP_READS.get(key)
     if got is None:
         rec = store.load(lap_id)
@@ -2502,7 +2505,7 @@ class CoachContext:
                 return no(f"race lap {self.race.as_of_lap} isn't readable from the store")
             start, lap_no = lap_facts(rec), rec.lap_no
             damage, damage_lap = damage_state(rec.channels), rec.lap_no
-        timed = False
+        timed = clock_out = False
         if race_laps is not None or race_minutes is not None:
             try:
                 if isinstance(race_laps, bool) or isinstance(race_minutes, bool):
@@ -2531,9 +2534,12 @@ class CoachContext:
             timed = not by_laps and clock is not None
             # #195: the live plan's rule (race.plans_longer), so the two never differ.
             pos = self.race.state.position if self.race is not None else None
+            clock_out = timed and clock <= 0
+            if clock_out and pos == 1:
+                return f"As of race lap {lap_no}. No projection: {RACE_OVER.format(lap_no)}."
             basis = (f"{sess.max_laps} laps (the live race's lap count)" if by_laps else
                      None if not timed else
-                     "the clock has run out — this is the last lap" if clock <= 0 else
+                     f"the clock ran out before the end of lap {lap_no}" if clock_out else
                      f"{_clock(clock)} on the clock {at_pace} = "
                      + (f"{to_go} lap{'s' if to_go != 1 else ''} to go: "
                         f"{YOU_LEAD.format(lap_no)}" if pos == 1
@@ -2544,13 +2550,14 @@ class CoachContext:
         if to_go is None or basis is None:
             return no("race length unknown. Ask the driver how long the race is, then "
                       "call get_strategy again with race_laps or race_minutes")
-        # A timed race is planned on the longer count (see `either`): running dry is the
+        # A timed race is planned on the longer count (flag_counts): running dry is the
         # costly error. Before the start, the formation lap comes off the assumed fill.
         formation = None if start is not None else self._formation(cls, energy_sessions)
         return format_provisional(
             provisional_strategy(practice, to_go + timed, start, ve, formation), lap_no,
             basis, len(practice), damage, damage_lap, source, notes,
-            measured=start is not None, timed=timed, ve_car=bool(ve), formation=formation)
+            measured=start is not None, timed=timed, ve_car=bool(ve), formation=formation,
+            clock_out=clock_out)
 
     def _stored_class(self, car=None):
         """#184: the stored class this car's laps are filed under (store.timed_laps'

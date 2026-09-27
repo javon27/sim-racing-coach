@@ -885,8 +885,13 @@ def test_an_assumed_start_loses_the_formation_lap_before_the_green():
     text = format_provisional(s, 0, "x", 3, timed=True, formation=(2.1, 0.024, "x", None))
     assert ("Assumes you start on 100% virtual energy (97.6% at the green, after the "
             "formation lap)") in text
-    # 0.976 / 0.09 = 10.8 laps for the planned 11: short.
-    assert "Stops to the flag: none" not in text
+    # 0.976 / 0.09 = 10.8 laps for the planned 11: short -- by a save (#195 round 1),
+    # never a bare "none".
+    assert "Stops to the flag: none if you save 0.1% energy/lap; otherwise one." in text
+    assert "Stops to the flag: none on these rates" not in text
+    # 10.8 laps: the stop is at the end of lap 10, the shorter count's flag lap.
+    assert ("Note: a stop at the end of lap 10 applies only if the overall leader hasn't "
+            "taken the flag by then") in text, text
 
 
 def test_a_start_read_off_the_formation_row_is_stated_not_assumed():
@@ -900,35 +905,95 @@ def test_a_start_read_off_the_formation_row_is_stated_not_assumed():
     assert "Assumes" not in text and "needed to the flag" not in text
 
 
-def _lgc(laps, position, time_left, max_laps=None):
-    """#195: two clean race laps of a stored 15-minute Algarve Logitech G Challenge race
+def _lgc(laps, position, time_left, max_laps=None, class_position=None):
+    """#195: clean race laps of a stored 15-minute Algarve Logitech G Challenge race
     (lap_facts of the rows; overall place and clock as stored at each line)."""
     return [LapFacts(n, t, True, position=position,
-                     race=RaceSample(class_position=position, time_left=left,
+                     race=RaceSample(class_position=class_position or position,
+                                     time_left=left,
                                      max_laps=max_laps),
                      fuel_used=fu, fuel_end=fe, fuel_capacity=120.0, energy_used=eu,
                      energy_end=ee)
             for (n, t, fu, fe, eu, ee), left in zip(laps, time_left)]
 
 
-# ids 7619-7620: P2 overall, 679.4 s left at the end of lap 2.
+# ids 7619-7621 (race 2): P2 overall, 679.4 s left at the end of lap 2, 573.6 at lap 3.
+# He took P1 at lap 5 and won in 9 laps with about 1.1 laps of fuel spare.
 _LGC_P2 = ((1, 113.4858, 2.874190, 24.857746, 0.0344858, 0.3055142),
            (2, 107.0182, 2.711848, 22.145138, 0.0333804, 0.2721243))
+_LGC_P2_LAP3 = (3, 105.8863, 2.738089, 19.405531, 0.0338191, 0.2382859)
 
 
 def test_a_timed_race_plans_the_live_figures_on_the_longer_count():
     """#195: after race lap 2 the live read planned N laps while the pre-race plan
     planned N+1 -- 'Stops: none' against the plan's count. 679.4 / 110.25 = 6.2 -> 7
     laps, or 8 when the leader's flag comes after this car's lap 9: 22.1 L at 2.79 L/lap
-    is 7.9 laps -- enough for 7, short of 8, so a stop is stated as on the pre-race plan."""
+    is 7.9 laps -- enough for 7, short of 8. Round 1 (R1b): 0.02 L/lap covers it, so the
+    Stops line says so -- a bare 'one' was repeated as 'pit on lap 9' (he won with fuel
+    to spare) -- and the pit menu is set only in case he doesn't save."""
     snap = build_snapshot(_lgc(_LGC_P2, 2, (786.4, 679.4)), "algarve--lgc--online")
     assert snap.state.laps_to_go == 7 and snap.strategy.laps_to_go == 8
     text = format_strategy(snap)
     assert ("Laps to go: planned on 8, the longer count (the flag at the end of lap 10 at "
             "the latest): 7 laps if the overall leader takes the flag before you finish lap "
             "9, 8 if not.") in text, text
-    assert "Fuel: 2.79 L/lap, 22.1 L on board = 7.9 laps: short by 0.1 laps" in text
-    assert "Stops to the flag: one." in text and "Stops to the flag: none" not in text
+    assert ("Fuel: 2.79 L/lap, 22.1 L on board = 7.9 laps: short by 0.1 laps; save 0.02 "
+            "L/lap to finish without stopping.") in text
+    assert "Stops to the flag: none if you save 0.02 L/lap; otherwise one." in text
+    assert "\nPit menu, only if you stop instead of saving: set virtual energy to 4%" in text
+
+
+def test_a_margin_under_a_twentieth_of_a_lap_either_way_is_right_on_the_limit():
+    """#195 round 1 (R1a), the same race at lap 3: 19.4 L at 2.77 L/lap = 6.998 laps for
+    the planned 7 printed 'short by 0.0 laps; save 0.00 L/lap' beside 'Stops: one'."""
+    snap = build_snapshot(_lgc(_LGC_P2 + (_LGC_P2_LAP3,), 2, (786.4, 679.4, 573.6)),
+                          "algarve--lgc--online")
+    assert snap.strategy.laps_to_go == 7
+    text = format_strategy(snap)
+    assert ("Fuel: 2.77 L/lap, 19.4 L on board = 7.0 laps: right on the limit — no "
+            "measurable margin to the flag.") in text, text
+    assert "short by 0.0" not in text and "save 0.00" not in text
+    assert ("Stops to the flag: none if you save a little (you're right on the limit); "
+            "otherwise one.") in text
+
+
+def test_a_save_never_stands_in_for_a_tire_change():
+    """#195 round 1: the same lap-3 stint with the tires wearing 10%/lap (derived: 70%
+    tread, 4 laps to the threshold) -- saving fuel can't avoid that stop."""
+    laps = _lgc(_LGC_P2 + (_LGC_P2_LAP3,), 2, (786.4, 679.4, 573.6))
+    for f, w in zip(laps, (0.9, 0.8, 0.7)):
+        f.wear_end = dict.fromkeys(("fl", "fr", "rl", "rr"), w)
+    text = format_strategy(build_snapshot(laps, "algarve"))
+    assert "Stops to the flag: one." in text, text
+    assert "\nPit menu: set" in text and "instead of saving" not in text
+
+
+def test_a_stop_at_the_end_of_the_shorter_counts_flag_lap_is_said_to_be_conditional():
+    """#195 round 1 (R1c): lap 9 is the flag lap if the leader's flag comes first -- a
+    stop there must never read as scheduled."""
+    text = format_strategy(build_snapshot(_lgc(_LGC_P2, 2, (786.4, 679.4)), "algarve"))
+    caveat = ("a stop at the end of lap 9 applies only if the overall leader hasn't taken "
+              "the flag by then — if he has, lap 9 is your last.")
+    assert ("(latest set by fuel; earliest is the first lap one full service reaches the "
+            f"flag from); {caveat}") in text, text
+    assert ("(the 1 laps from there to the flag, +5% margin); each lap earlier needs about "
+            f"3.6% more. Note: {caveat}") in text
+    # Derived from the same rows with 15 L on board (5.4 laps): the stop is at lap 7,
+    # before the shorter count's flag lap -- nothing to add.
+    laps = _LGC_P2[:1] + ((*_LGC_P2[1][:3], 15.0, *_LGC_P2[1][4:]),)
+    early = format_strategy(build_snapshot(_lgc(laps, 2, (786.4, 679.4)), "algarve"))
+    assert "for a stop at the end of lap 7" in early, early
+    assert "overall leader hasn't taken" not in early
+    assert "Stops to the flag: one." in early
+
+
+def test_the_class_leader_behind_the_overall_leader_still_plans_the_longer_count():
+    """#195 round 1: only OVERALL P1 makes the clock's count his own -- a class leader
+    overall P5 plans on N+1."""
+    snap = build_snapshot(_lgc(_LGC_P2, 5, (786.4, 679.4), class_position=1), "algarve")
+    assert snap.strategy.laps_to_go == 8
+    text = format_strategy(snap)
+    assert "planned on 8" in text and "you lead overall" not in text
 
 
 def test_the_overall_leader_plans_on_the_clocks_own_count_and_is_told_why():
@@ -961,5 +1026,23 @@ def test_once_the_clock_has_run_out_the_plan_never_adds_a_lap():
                                9, (25.0, -84.8)), "algarve--lgc--online")
     assert snap.strategy.laps_to_go == 1
     text = format_strategy(snap)
-    assert "Laps to go: 1 (flag at the end of lap 10)." in text and "planned on" not in text
+    # Round 1: never "this is the last lap" -- the race may already be over.
+    assert ("Laps to go: 1 — the clock ran out before the end of lap 9: one more lap unless "
+            "the overall leader has already taken the flag (then lap 9 was your last)."
+            ) in text, text
+    assert "planned on" not in text
     assert "Stops to the flag: none on these rates." in text
+    assert ("Remaining: the clock ran out before the end of lap 9: one more lap unless the "
+            "overall leader has already taken the flag") in format_race_state(snap)
+
+
+def test_the_overall_leader_crossing_after_the_clock_ran_out_took_the_flag():
+    """#195 round 1: ids 7727-7728, P1 with the clock at -64.2 s at the end of lap 9 --
+    his crossing was the chequered flag: the race is over, no plan."""
+    snap = build_snapshot(_lgc(((8, 106.5799, 2.6477, 6.075461, 0.0328856, 0.0728023),
+                                (9, 106.3484, 2.711057, 3.363644, 0.0335158, 0.0392767)),
+                               1, (42.2, -64.2)), "algarve--lgc--online")
+    over = ("the race is over: you lead overall and crossed the line after the clock ran "
+            "out (the end of lap 9) — that was the chequered flag.")
+    assert format_strategy(snap) == f"As of lap 9. No projection: {over}"
+    assert f"Remaining: none — {over}" in format_race_state(snap)

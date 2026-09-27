@@ -3691,7 +3691,10 @@ def test_a_timed_race_is_planned_on_the_longer_count_after_the_formation_lap(
     assert "Laps to go: planned on 11, the longer count" in out
     # .976 / .0917 = 10.6 laps for 11: short -- a save target, and one stop otherwise.
     assert "Virtual energy: 9.2%/lap, 98% left = 10.6 laps: short by 0.4 laps; save" in out
-    assert "Stops to the flag: one." in out and "Stops to the flag: none" not in out
+    # #195 round 1: a realistic save avoids the stop, and that is said -- never a bare
+    # "none" (#184 F3) nor a bare "one".
+    assert "Stops to the flag: none if you save 0.3% energy/lap; otherwise one." in out
+    assert "Stops to the flag: none on these rates" not in out
 
 
 def test_the_formation_lap_is_the_row_just_before_race_lap_1_never_a_countdown(
@@ -3870,8 +3873,9 @@ def test_a_race_filled_at_another_fuel_ratio_drops_the_practice_ve(tmp_path, syn
     assert "not projected" not in before and "Virtual energy needed to the flag" in before
 
 
-def _race_lap_1_plan(tmp_path, synthetic_lap, monkeypatch, position):
-    """The rig race at the end of lap 1 (949 s left), placed `position` overall."""
+def _race_lap_1_plan(tmp_path, synthetic_lap, monkeypatch, position, left=949.0):
+    """The rig race at the end of lap 1 (949 s left), placed `position` overall; `left`
+    the clock the live session reads now."""
     from simcoach.race import RaceTracker
     store = _z06_store(tmp_path, synthetic_lap, monkeypatch)
     _sarthe_laps(store, synthetic_lap, _RIG_ENTRY, _RIG_SID,
@@ -3883,7 +3887,7 @@ def _race_lap_1_plan(tmp_path, synthetic_lap, monkeypatch, position):
             rec.position = position
             snap = tracker.commit(rec)
     assert snap.as_of_lap == 1 and snap.strategy.note is not None
-    return _z06_ctx(store, _live(current_lap=2, end_time=1949.0, elapsed=1000.0),
+    return _z06_ctx(store, _live(current_lap=2, end_time=1000.0 + left, elapsed=1000.0),
                     race=snap).dispatch("get_strategy", {})
 
 
@@ -3900,6 +3904,23 @@ def test_race_lap_1_plan_follows_the_live_rule_for_the_overall_leader(
             "of lap 1), so the flag falls at your first crossing after the clock runs out."
             ) in lead, lead
     assert "Laps to go: 4 (flag at the end of lap 5)." in lead and "planned on" not in lead
+
+
+def test_race_lap_plan_after_the_clock_ran_out_never_says_last_lap(tmp_path, synthetic_lap,
+                                                                    monkeypatch):
+    """#195 round 1, Road Atlanta #2 lap 21 (-89.6 s; the race was over): it said 'the
+    clock has run out — this is the last lap ... Laps to go: 1'. Behind: one more lap
+    unless the leader already has the flag. P1: that crossing was the flag."""
+    behind = _race_lap_1_plan(tmp_path / "p5", synthetic_lap, monkeypatch, 5, left=-89.6)
+    assert "Race length: the clock ran out before the end of lap 1." in behind, behind
+    assert ("Laps to go: 1 — the clock ran out before the end of lap 1: one more lap unless "
+            "the overall leader has already taken the flag (then lap 1 was your last)."
+            ) in behind
+    assert "this is the last lap" not in behind and "planned on" not in behind
+    lead = _race_lap_1_plan(tmp_path / "p1", synthetic_lap, monkeypatch, 1, left=-89.6)
+    assert lead == ("As of race lap 1. No projection: the race is over: you lead overall and "
+                    "crossed the line after the clock ran out (the end of lap 1) — that was "
+                    "the chequered flag."), lead
 
 
 def test_the_history_path_reads_each_stored_lap_once(tmp_path, synthetic_lap, monkeypatch):
@@ -3948,3 +3969,10 @@ def test_a_memoised_lap_read_is_keyed_on_its_file_not_its_id(tmp_path, synthetic
     st = os.stat(path)
     os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
     assert coach_tools._lap_reads(a, ida)[0].fuel_used == pytest.approx(4.0)
+    # Rewritten within the same mtime tick (coarse filesystem clocks): the size differs.
+    st = os.stat(path)
+    np.savez_compressed(path, **dict(synthetic_lap.channels, fuel=np.full(n, 50.0),
+                                     extra=np.zeros(n)))
+    assert os.stat(path).st_size != st.st_size
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+    assert coach_tools._lap_reads(a, ida)[0].fuel_used is None

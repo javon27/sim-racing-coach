@@ -171,6 +171,15 @@ def flag_counts(n: int, last: int) -> str:
 # leader's flag is his own, so the clock's count is exact.
 YOU_LEAD = ("you lead overall (P1 at the end of lap {}), so the flag falls at your first "
             "crossing after the clock runs out")
+# #195 round 1: the clock had run out at the end of lap {} -- the leader may already have
+# taken the flag (every stored timed race ended on that lap). For P1 he took it there.
+CLOCK_OUT = ("the clock ran out before the end of lap {0}: one more lap unless the overall "
+             "leader has already taken the flag (then lap {0} was your last)")
+RACE_OVER = ("the race is over: you lead overall and crossed the line after the clock ran "
+             "out (the end of lap {}) — that was the chequered flag")
+# A stop scheduled at the end of the shorter count's flag lap (planned on the longer one).
+FLAG_LAP_STOP = ("a stop at the end of lap {0} applies only if the overall leader hasn't "
+                 "taken the flag by then — if he has, lap {0} is your last")
 
 
 def plans_longer(time_left: float, position: int | None) -> bool:
@@ -883,7 +892,10 @@ def format_race_state(snap: RaceSnapshot,
     if st.time_left is not None:
         clock_laps = max(1, math.ceil(st.time_left / st.pace)) if st.pace else None
         if st.time_left <= 0:
-            lines.append("Remaining: the clock has run out — this is the last lap.")
+            # #195 round 1: after the clock, the leader may already have taken the flag.
+            lines.append(f"Remaining: none — {RACE_OVER.format(snap.as_of_lap)}."
+                         if st.position == 1 else
+                         f"Remaining: {CLOCK_OUT.format(snap.as_of_lap)}.")
         elif st.pace and st.max_laps and max(st.max_laps - snap.as_of_lap, 0) < clock_laps:
             lines.append(f"Remaining: {_clock(st.time_left)} on the clock (the lap count "
                          "ends the race first).")
@@ -920,24 +932,31 @@ def format_strategy(snap: RaceSnapshot, damage: dict | None = None,
     `damage` is `analysis.damage_state` of lap `damage_lap` (None/{} = not captured)."""
     s, st, lap = snap.strategy, snap.state, snap.as_of_lap
     head = f"As of lap {lap}."
+    if st.timed and st.time_left <= 0 and st.position == 1:
+        return f"{head} No projection: {RACE_OVER.format(lap)}."
     if s.note:
         return f"{head} No projection: {s.note}."
-    plan = _strategy_lines(s, lap)
-    if st.timed and s.laps_to_go != st.laps_to_go:
+    longer = st.timed and s.laps_to_go != st.laps_to_go
+    first = lap + st.laps_to_go if longer else None
+    plan = _strategy_lines(s, lap, first)
+    if longer:
         # #195: planned on the longer count (build_snapshot), worded as the pre-race plan.
         plan[0] = (f"Laps to go: planned on {s.laps_to_go}, the longer count (the flag at "
                    f"the end of lap {lap + s.laps_to_go} at the latest): "
                    f"{flag_counts(st.laps_to_go, lap + st.laps_to_go)}.")
-    elif st.timed and st.position == 1 and st.time_left > 0:
+    elif st.timed and st.time_left <= 0:
+        plan[0] = f"Laps to go: 1 — {CLOCK_OUT.format(lap)}."
+    elif st.timed and st.position == 1:
         plan[0] = plan[0][:-1] + ": " + YOU_LEAD.format(lap) + "."
-    return "\n".join([head] + plan + _pit_menu_lines(s, lap, damage, damage_lap, True))
+    return "\n".join([head] + plan + _pit_menu_lines(s, lap, damage, damage_lap, True, first))
 
 
 def format_provisional(s: Strategy, as_of_lap: int, basis: str, n_practice: int,
                        damage: dict | None = None, damage_lap: int | None = None,
                        source: str | None = None, notes: tuple | list = (),
                        measured: bool | None = None, timed: bool = False,
-                       formation: tuple | None = None, ve_car: bool = False) -> str:
+                       formation: tuple | None = None, ve_car: bool = False,
+                       clock_out: bool = False) -> str:
     """#161: `provisional_strategy`'s plan, labelled as an estimate. `basis` says where
     the race length came from. #184: `source` where the rates came from (default this
     session's practice laps) and `notes` how they were picked; `measured` whether the
@@ -946,7 +965,8 @@ def format_provisional(s: Strategy, as_of_lap: int, basis: str, n_practice: int,
     lap longer than counted (see laps_left) -- `s` is then planned on the LONGER count
     and the need lines give both; `formation` pick_formation's (fuel L, energy
     fraction, where from, how) for the formation lap; `ve_car` the car has virtual
-    energy (the fuel ratio sets its fuel)."""
+    energy (the fuel ratio sets its fuel); `clock_out` (#195) the clock had run out at
+    the end of race lap `as_of_lap`."""
     measured = as_of_lap > 0 if measured is None else measured
     source = source or (f"your last {n_practice} clean practice/qualifying laps this "
                         "session")
@@ -976,17 +996,20 @@ def format_provisional(s: Strategy, as_of_lap: int, basis: str, n_practice: int,
                  "the fuel on board, unknown until race lap 1.")
     else:
         start = "No start amount can be assumed (no tank size reported)."
-    plan = _strategy_lines(s, as_of_lap)
+    first = as_of_lap + s.laps_to_go - 1 if timed else None
+    plan = _strategy_lines(s, as_of_lap, first)
     if timed:
         # The longer count is planned: a line saying the flag falls at its end as a fact
         # would read the shorter race as ruled out.
         plan[0] = (f"Laps to go: planned on {s.laps_to_go}, the longer count (the flag at "
                    f"the end of lap {as_of_lap + s.laps_to_go} at the latest).")
+    elif clock_out:
+        plan[0] = f"Laps to go: 1 — {CLOCK_OUT.format(as_of_lap)}."
     return "\n".join([head, *notes, f"Race length: {basis}.", start]
                      + ([] if measured else _need_lines(s, timed, formation))
                      + plan
                      # No fuel ratio read off an ASSUMED start: it needs what is on board.
-                     + _pit_menu_lines(s, as_of_lap, damage, damage_lap, measured))
+                     + _pit_menu_lines(s, as_of_lap, damage, damage_lap, measured, first))
 
 
 def _need_lines(s: Strategy, timed: bool, formation: tuple | None) -> list[str]:
@@ -1029,9 +1052,12 @@ def _need_lines(s: Strategy, timed: bool, formation: tuple | None) -> list[str]:
 
 
 def _pit_menu_lines(s: Strategy, as_of_lap: int, damage: dict | None,
-                    damage_lap: int | None, ratio: bool) -> list[str]:
+                    damage_lap: int | None, ratio: bool,
+                    first_flag: int | None = None) -> list[str]:
     """#164: a stop as the PIT-MENU settings the driver makes before it -- LMU has no crew
-    radio. Every figure is computed here from the measured rates.
+    radio. Every figure is computed here from the measured rates. #195: a stop a save
+    avoids is set only in case he doesn't save, and one at the end of `first_flag` (the
+    shorter count's flag lap, when planned on the longer) only if the flag hasn't fallen.
 
     Virtual energy % is the level the stop fills to (research on #164: TinyPedal reads
     the menu's "VIRTUAL ENERGY:" entry as the absolute refill). The fuel ratio is given as
@@ -1054,12 +1080,14 @@ def _pit_menu_lines(s: Strategy, as_of_lap: int, damage: dict | None,
     lines = []
     stop = max(w.latest, as_of_lap + 1)
     after = as_of_lap + s.laps_to_go - stop
+    pm = "Pit menu, only if you stop instead of saving:" if _save_instead(s) else "Pit menu:"
+    tail = f" Note: {FLAG_LAP_STOP.format(stop)}." if stop == first_flag else ""
     r = by.get("energy") or by.get("fuel")
     what = "virtual energy" if r is not None and r.name == "energy" else "fuel"
     if r is None:
         lines.append("Pit menu: no fuel/energy burn measured — no refill figure.")
     elif not w.one_stop:
-        lines.append(f"Pit menu: set {what} to "
+        lines.append(f"{pm} set {what} to "
                      + ("100%" if r.name == "energy" else "a full tank")
                      + " — one stop can't reach the flag from there.")
     else:
@@ -1073,18 +1101,18 @@ def _pit_menu_lines(s: Strategy, as_of_lap: int, damage: dict | None,
             spare = cap - r.per_lap * after
             full = "100%" if pct else f"a full tank ({cap:.0f} L)"
             left = f"{spare * 100:.1f}%" if pct else f"{spare:.1f} L"
-            lines.append(f"Pit menu: set {what} to {full} for a stop at the end of lap "
-                         f"{stop} — a full fill covers {cap / r.per_lap:.1f} laps for the "
+            lines.append(f"{pm} set {what} to {full} for a stop at the end of lap {stop} "
+                         f"— a full fill covers {cap / r.per_lap:.1f} laps for the "
                          f"{after} from there to the flag: only {left} spare, under the "
-                         f"{REFILL_MARGIN:.0%} margin.")
+                         f"{REFILL_MARGIN:.0%} margin.{tail}")
         else:
             amt, step = plan.start_amount, r.per_lap * (1 + REFILL_MARGIN)
             amount, step = ((f"{math.ceil(amt * 100 - 1e-9)}%", f"{step * 100:.1f}%") if pct
                             else (f"{math.ceil(amt - 1e-9)} L", f"{step:.1f} L"))
-            lines.append(f"Pit menu: set {what} to {amount} for a stop at the end of lap "
-                         f"{stop} (the {after} laps from there to the flag, "
+            lines.append(f"{pm} set {what} to {amount} for a stop at the end of lap {stop} "
+                         f"(the {after} laps from there to the flag, "
                          f"+{REFILL_MARGIN:.0%} margin); each lap earlier needs about "
-                         f"{step} more.")
+                         f"{step} more.{tail}")
     if "energy" in by and ("fuel" in by or "fuel" in (s.burn_only or {})):
         if not ratio or "fuel" not in by:
             lines.append("Fuel ratio: not read before a race lap (needs the fuel and "
@@ -1135,7 +1163,27 @@ def _pit_menu_lines(s: Strategy, as_of_lap: int, damage: dict | None,
     return lines
 
 
-def _strategy_lines(s: Strategy, as_of_lap: int) -> list[str]:
+# Under this many laps either side of the flag a margin isn't measurable: "short by 0.0
+# laps; save 0.00 L/lap" beside "Stops: one" (#195 round 1, Algarve lap 3) read as a stop.
+ON_LIMIT_LAPS = 0.05
+
+
+def _save_instead(s: Strategy) -> str | None:
+    """#195: what saving avoids the stop with ("save 0.02 L/lap"), or None when a stop
+    is needed whatever: no realistic save (MAX_SAVE_FRACTION) or a tire short of the
+    flag. Within ON_LIMIT_LAPS the amount is below what the line can state."""
+    if s.save_per_lap is None or (s.tire_laps is not None and s.tire_laps < s.laps_to_go):
+        return None
+    r = next(r for r in s.resources if r.name == s.advice.binding_resource)
+    if r.laps - s.laps_to_go > -ON_LIMIT_LAPS:
+        return "save a little (you're right on the limit)"
+    return (f"save {s.save_per_lap:.2f} L/lap" if r.name == "fuel"
+            else f"save {s.save_per_lap * 100:.1f}% energy/lap")
+
+
+def _strategy_lines(s: Strategy, as_of_lap: int, first_flag: int | None = None) -> list[str]:
+    """`first_flag` (#195): the shorter count's flag lap, when `s` is planned on the
+    longer -- a stop at its end is said to apply only if the flag hasn't fallen."""
     final = as_of_lap + s.laps_to_go
     lines = [f"Laps to go: {s.laps_to_go} (flag at the end of lap {final})."]
     binding = s.advice.binding_resource if s.advice and not s.advice.make_it else None
@@ -1149,9 +1197,9 @@ def _strategy_lines(s: Strategy, as_of_lap: int) -> list[str]:
             save = (f"save {s.save_per_lap * 100:.1f}% energy/lap"
                     if s.save_per_lap is not None else "")
         margin = r.laps - s.laps_to_go
-        if margin >= 0.05:
+        if margin >= ON_LIMIT_LAPS:
             txt += f": makes the flag with {margin:.1f} laps spare."
-        elif margin >= 0:
+        elif margin > -ON_LIMIT_LAPS:
             txt += ": right on the limit — no measurable margin to the flag."
         elif r.name != binding:
             txt += f": short by {-margin:.1f} laps."
@@ -1206,12 +1254,18 @@ def _strategy_lines(s: Strategy, as_of_lap: int) -> list[str]:
                   else f"latest set by {w.binding}")
         lines.append(f"Pit window: laps {w.earliest} to {w.latest} ({set_by}; earliest is the first lap one full service reaches the "
                      "flag from).")
+    if w is not None and first_flag == max(w.latest, as_of_lap + 1):
+        lines[-1] = lines[-1][:-1] + f"; {FLAG_LAP_STOP.format(first_flag)}."
     # #162: the stop COUNT is stated here, never left to the model -- "a stop is needed"
     # beside a one-stop window read as "one stop won't be enough" (Road Atlanta lap 11).
     if w is None and s.resources:
         lines.append("Stops to the flag: none on these rates.")
     elif w is not None:
-        lines.append("Stops to the flag: " + (
-            "more than one." if not w.one_stop else "one." if w.earliest is not None
-            else "not known (tank size not reported)."))
+        n = ("more than one." if not w.one_stop else "one." if w.earliest is not None
+             else "not known (tank size not reported).")
+        # #195 round 1: a stop a realistic save avoids is not "one" -- the model repeats
+        # this line (Algarve #12 lap 2: "Stops: one" for 0.02 L/lap; he won with 1.1 spare).
+        avoid = _save_instead(s)
+        lines.append("Stops to the flag: " + (f"none if you {avoid}; otherwise {n}" if avoid
+                                              else n))
     return lines
