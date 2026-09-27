@@ -14,7 +14,7 @@ def _pair(tmp_path, order):
             _ctx(tmp_path, None, _snap_lap3(battle)))
 
 
-@pytest.mark.parametrize("rival", ["P4", "p4", "the P4"])
+@pytest.mark.parametrize("rival", ["P4", "p4", "the P4", "that P4"])
 def test_his_place_held_a_swap_behind_p4_is_the_live_p4_car(tmp_path, rival):
     """D passed C behind him; his P3 held. 'P4' is D now, never C (P5 now) labelled
     'the car you named'."""
@@ -28,7 +28,7 @@ def test_his_place_held_a_swap_behind_p4_is_the_live_p4_car(tmp_path, rival):
 
 @pytest.mark.parametrize("order", [AT_LAP_3, ["B", "A", "You", "C", "D"]],
                          ids=["nothing-moved", "swap-ahead-p4-same-car"])
-@pytest.mark.parametrize("rival", ["P4", "p4", "the P4"])
+@pytest.mark.parametrize("rival", ["P4", "p4", "the P4", "that P4"])
 def test_the_same_p4_car_is_byte_identical_to_no_live_frame(tmp_path, order, rival):
     live_ctx, plain_ctx = _pair(tmp_path, order)
     out = live_ctx.dispatch("get_battle", {"rival": rival})

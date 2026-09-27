@@ -299,15 +299,26 @@ def _gap(me: CarLap, o: CarLap) -> float:
     return statistics.median(gaps) if gaps else math.inf
 
 
+def _rival_query(query: str) -> str:
+    return re.sub(r"^(the|that)\s+", "", query.strip().lower())
+
+
+def rival_position(query: str) -> int | None:
+    """The class position a rival query names ('P4', 'the p4', 'that P 4' -> 4), or None
+    when it names a car -- the one grammar for both get_battle and rival_matches."""
+    pos = re.fullmatch(r"p\s*(\d+)", _rival_query(query))
+    return int(pos[1]) if pos else None
+
+
 def rival_matches(others: list[CarLap], query: str,
                   me: CarLap | None = None) -> list[CarLap]:
     """Every car the driver's words name, the one nearest the driver on the lap first
     (then class order): 'P4' is a CLASS position (the field here is one class); anything
     else matches part of a driver, entry or car-model name."""
-    q = re.sub(r"^(the|that)\s+", "", query.strip().lower())
-    pos = re.fullmatch(r"p\s*(\d+)", q)
+    q = _rival_query(query)
+    pos = rival_position(query)
     hits = [o for o in others
-            if (o.class_position == int(pos[1]) if pos else
+            if (o.class_position == pos if pos is not None else
                 bool(q) and any(q in name.lower() for name in (o.driver, o.car, o.model)))]
     return sorted(hits, key=lambda o: (_gap(me, o) if me else 0.0, o.class_position))
 

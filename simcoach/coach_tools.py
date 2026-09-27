@@ -42,6 +42,7 @@ from simcoach.battle import (
     format_battle,
     format_race_battle,
     rival_matches,
+    rival_position,
     same_car,
     target_position,
 )
@@ -2665,9 +2666,7 @@ class CoachContext:
                      and live[1].class_position != lap_me.class_position)
             # 'P3' is a class position: the live one, like position=3, whenever the
             # live car there is not the lap's (#193: also when only others moved).
-            p = (re.fullmatch(r"(?:the\s+)?p\s*(\d+)", str(rival).strip().lower())
-                 if rival else None)
-            ask = position or (int(p[1]) if p else None)
+            ask = position or (rival_position(str(rival)) if rival else None)
             target = None
             if live is not None and lap_me is not None and (direction or ask):
                 target = live_battle_target(live[0].cars, direction, ask)
