@@ -13,7 +13,12 @@ import string
 import unicodedata
 from pathlib import Path
 
-from simcoach.analysis import APEX_GEOMETRY_KEYS, CORNER_GEOMETRY_KEYS, measurable_geometry
+from simcoach.analysis import (
+    APEX_GEOMETRY_KEYS,
+    CORNER_GEOMETRY_KEYS,
+    LAP_DISTANCE_GEOMETRY_KEYS,
+    measurable_geometry,
+)
 from simcoach.car_lookup import resolve_car
 from simcoach.corners import CornerMap
 from simcoach.mapbuild import build_map
@@ -296,7 +301,7 @@ def corner_apex_key(corner: dict) -> float | None:
     return round(a, 1) if math.isfinite(a) else None
 
 
-def carried_geometry(baked, corner) -> dict:
+def carried_geometry(baked, corner, *, path_changed: bool = False) -> dict:
     """The baked per-corner geometry of `baked` -- the stored corner matched to `corner`
     by `corner_apex_key` -- that still describes `corner`: {metric: value}, measurable
     values only.
@@ -317,6 +322,13 @@ def carried_geometry(baked, corner) -> dict:
     neighbour it overlaps to the midpoint between their apexes. A window-read metric
     dropped here is re-measured where a source exists (radius_m from the path) and is
     otherwise absent -- never stated -- until backfill_corner_geometry.py re-bakes it.
+
+    Same window is not the same measurement either when the PATH under it was replaced
+    (#198: the lap route re-averages a no-ribbon map's path from the laps). `path_changed`
+    then drops what was read off the path's shape -- radius_m, its curvature -- and keeps
+    only LAP_DISTANCE_GEOMETRY_KEYS, whose sources (ribbon/cloud width and bank, pos_y
+    elevation) are keyed on lap distance, not on the path. The caller owns the flag, so an
+    unchanged save (same stored path) passes False and stays byte-identical.
     Total: takes anything off disk and never raises.
     """
     if not isinstance(baked, dict) or not isinstance(corner, dict):
@@ -328,7 +340,9 @@ def carried_geometry(baked, corner) -> dict:
 
     same = window(baked) is not None and window(baked) == window(corner)
     return {k: baked[k] for k in CORNER_GEOMETRY_KEYS
-            if (same or k in APEX_GEOMETRY_KEYS) and measurable_geometry(k, baked.get(k))}
+            if (same or k in APEX_GEOMETRY_KEYS)
+            and (not path_changed or k in LAP_DISTANCE_GEOMETRY_KEYS)
+            and measurable_geometry(k, baked.get(k))}
 
 
 def _finite(value) -> float | None:

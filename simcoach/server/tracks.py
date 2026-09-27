@@ -303,6 +303,10 @@ def register(app, deps) -> None:
         # `existing` is the MERGED read, so on an installed build a corner that ships
         # carries the SHIPPED bake here, never the app-data copy's older one (#75).
         prior = {corner_apex_key(pc): pc for pc in (existing.get("corners") or [])}
+        # The lap route re-averages a no-ribbon map's path from the laps (#198): a bake
+        # read off the OLD path's shape no longer describes the corner on the new one.
+        # False whenever the stored path is kept, so an unchanged save stays a no-op.
+        path_changed = (path, dist) != (ep, epd)
         for i, c in enumerate(corners):
             baked = prior.get(corner_apex_key(c), {})
             # Direction is owned data too (#87): a corner matched by apex keeps its
@@ -319,7 +323,7 @@ def register(app, deps) -> None:
             # re-measured from `geo` -- radius from the path, width/banking from a stored
             # ribbon -- or left absent: elev_delta_m is never in `geo` here (no pos_y on
             # an editor save), so a changed window DROPS it until the backfill re-bakes.
-            kept = carried_geometry(baked, c)
+            kept = carried_geometry(baked, c, path_changed=path_changed)
             for k in CORNER_GEOMETRY_KEYS:
                 v = kept.get(k, geo.get(str(i), {}).get(k))
                 if v is not None:

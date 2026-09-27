@@ -1977,6 +1977,14 @@ SIGNED_GEOMETRY_KEYS = frozenset({"banking_deg", "elev_delta_m"})
 # above and not classified here is treated as window-read: dropped, never carried stale.
 APEX_GEOMETRY_KEYS = frozenset({"width_m", "banking_deg"})
 
+# Which of those are read from telemetry keyed on LAP DISTANCE rather than off the stored
+# path's shape, so they still describe a corner whose path was replaced (#198: the lap
+# route re-averages it). width_m/banking_deg come from a ribbon or the capture cloud's
+# reconstruction, elev_delta_m from binned pos_y -- each on its own lap-distance grid,
+# interpolated onto path_dist -- while radius_m is the path's own curvature. Listed
+# positively, like APEX_GEOMETRY_KEYS: an unclassified metric is dropped on a path change.
+LAP_DISTANCE_GEOMETRY_KEYS = frozenset({"width_m", "banking_deg", "elev_delta_m"})
+
 
 def measurable_geometry(key: str, value) -> bool:
     """Is a stored geometry value one that could have been MEASURED -- a finite number,

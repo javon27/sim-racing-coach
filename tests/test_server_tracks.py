@@ -2134,3 +2134,41 @@ def test_an_editor_shaped_split_clamps_and_re_measures_both_halves(tmp_path, dra
             == ({} if drag else {"width_m": 9.1, "banking_deg": -0.7}))
     assert not {"elev_delta_m", "width_m", "banking_deg"} & b.keys()
     assert _by_apex(written["corners"], 459.9)["elev_delta_m"] == -5.1   # T1 untouched
+
+
+# --- #198: the lap route replaces the path, so a bake read off the old path is re-measured --
+
+
+def test_a_lap_route_save_that_replaces_the_path_re_measures_radius_on_the_new_one(tmp_path):
+    # Laguna has no ribbon, so PUT /laps/{id}/map re-averages its path from the clean laps.
+    # The driven lap here is the real outline scaled 1.2x about its centroid, sampled at
+    # 2000 points on its own lap-distance axis: every window, apex and label is unchanged,
+    # only the path under them moved -- and every radius with it (x1.2).
+    client, store, data, f = _laguna_client(tmp_path)
+    p = np.asarray(data["path"], float)
+    p = p.mean(axis=0) + 1.2 * (p - p.mean(axis=0))
+    ld = np.linspace(0.0, data["path_dist"][-1], 2000)
+    ch = {"pos_x": np.interp(ld, data["path_dist"], p[:, 0]),
+          "pos_z": np.interp(ld, data["path_dist"], p[:, 1]), "lap_distance": ld}
+    lap = store.save(LapRecord("lmu", "WeatherTech Raceway Laguna Seca", "Porsche 963",
+                               82.0, True, 0.0, ch))
+    body = {"corners": [{k: c[k] for k in _EDITOR_KEYS if k in c} for c in data["corners"]],
+            "sectors": data.get("sectors") or [], "sections": data.get("sections") or [],
+            "name": data.get("name")}
+    r = client.put(f"/laps/{lap}/map", json=with_map_rev(client, f"/laps/{lap}/map", body))
+    assert r.status_code == 200, r.text
+    written = json.loads(f.read_text(encoding="utf-8"))
+    assert written["path"] != data["path"]                        # premise: path replaced
+    old = {c["apex_dist"]: c for c in data["corners"]}
+    for c in written["corners"]:
+        o = old[c["apex_dist"]]
+        assert (c["start_dist"], c["end_dist"]) == (o["start_dist"], o["end_dist"])
+        # Measured on the path it is stored with, not carried from the old one.
+        assert c["radius_m"] == _measured(written, c)["radius_m"]
+        # Keyed on lap distance (pos_y elevation, cloud width/banking), not on the path's
+        # shape: the same window and apex still describe the same stretch of track.
+        assert {k: c.get(k) for k in ("elev_delta_m", "width_m", "banking_deg")} == \
+               {k: o.get(k) for k in ("elev_delta_m", "width_m", "banking_deg")}
+    # T1's old 31.2 m, carried, would be the old path's radius on the new one.
+    t1 = _by_apex(written["corners"], 459.9)
+    assert t1["radius_m"] != 31.2 and abs(t1["radius_m"] / 31.2 - 1.2) < 0.05
