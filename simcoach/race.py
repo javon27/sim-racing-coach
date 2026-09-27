@@ -559,11 +559,13 @@ def _clock(seconds: float) -> str:
     return f"{s // 60}:{s % 60:02d}"
 
 
-def _gap_line(label: str, g: GapRead | None, side: str, placed: bool) -> str:
+def _gap_line(label: str, g: GapRead | None, side: str, placed: bool,
+              then: bool = False) -> str:
     if not placed:
         return f"{label}: not sampled this lap."
     if g is None:
-        return f"{label}: none" + (" — you lead your class." if side == "ahead" else ".")
+        return f"{label}: none" + (f" — you {'led' if then else 'lead'} your class."
+                                   if side == "ahead" else ".")
     if g.gap is None:
         return f"{label}: {g.who}, a lap or more away."
     head = f"{label}: {g.who}, {g.gap:.1f} s {side}"
@@ -586,11 +588,18 @@ def _gap_line(label: str, g: GapRead | None, side: str, placed: bool) -> str:
     return f"{head}; {trend}."
 
 
-def format_race_state(snap: RaceSnapshot) -> str:
+def format_race_state(snap: RaceSnapshot, live: tuple[int, int] | None = None) -> str:
+    """`live` = (overall, class) position read from the scoring feed as the tool answers
+    (#186), or None. The snapshot is up to a lap old: a place changed since its lap is
+    said as the position now, never the lap-old one against the driver's own word; the
+    car ahead/behind lines stay the lap's (their gaps and trends are per-lap figures)."""
     st = snap.state
-    pos = f"P{st.position}" if st.position else "unknown"
-    cls = f"P{st.class_position}" if st.class_position else "unknown"
-    lines = [f"As of lap {snap.as_of_lap} (race).", f"Position: {pos} overall, {cls} in class."]
+    moved = live is not None and live != (st.position, st.class_position)
+    pos, cls = live if moved else (st.position, st.class_position)
+    pos = f"P{pos}" if pos else "unknown"
+    cls = f"P{cls}" if cls else "unknown"
+    lines = [f"As of lap {snap.as_of_lap} (race).",
+             f"Position{' now (live)' if moved else ''}: {pos} overall, {cls} in class."]
     if not st.sampled:
         lines.append("Remaining: not sampled this lap.")
     if st.max_laps:
@@ -612,8 +621,9 @@ def format_race_state(snap: RaceSnapshot) -> str:
     if st.sampled and not st.max_laps and st.time_left is None:
         lines.append("Remaining: the game reports no lap count or clock for this race.")
     placed = st.sampled and st.class_position is not None
-    lines.append(_gap_line("Car ahead in class", st.ahead, "ahead", placed))
-    lines.append(_gap_line("Car behind in class", st.behind, "behind", placed))
+    at = f" at the end of lap {snap.as_of_lap}" if moved else ""
+    lines.append(_gap_line(f"Car ahead in class{at}", st.ahead, "ahead", placed, moved))
+    lines.append(_gap_line(f"Car behind in class{at}", st.behind, "behind", placed, moved))
     return "\n".join(lines)
 
 

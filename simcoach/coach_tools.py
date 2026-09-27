@@ -74,6 +74,7 @@ from simcoach.race import (
     laps_left,
     picked_up_mid_lap,
     provisional_strategy,
+    race_sample,
 )
 from simcoach.store import _SESSION_GAP_S, _session_base
 from simcoach.track_lookup import load_track_knowledge, note_key_binds
@@ -783,7 +784,8 @@ class CoachContext:
                  setup=None, track=None, car=None, on_track=None,
                  allowed_adjustments=None, session_id=None,
                  car_notes=None, setup_concepts=None, car_class=None, race=None,
-                 race_note=None, live_lap=None, car_status=None, live_session=None):
+                 race_note=None, live_lap=None, car_status=None, live_session=None,
+                 live_field=None):
         self.store = store
         self.units = units
         self.record = record
@@ -808,6 +810,10 @@ class CoachContext:
         # #161: the live session (lmu.live.SessionState: phase, max_laps, clock) when
         # the question came in -- the race length for a provisional pre-race plan.
         self.live_session = live_session
+        # #186: a zero-argument reader of one live scoring frame (lmu.live.
+        # read_field_snapshot in the sidecar; injected in tests), called as a race tool
+        # answers -- the snapshot's position is up to a lap old. None = no live read.
+        self.live_field = live_field
         self.on_track = on_track
         self.allowed_adjustments = allowed_adjustments
         # Authored car knowledge (merged shipped+overlay `notes` dict) and the shared
@@ -2250,8 +2256,31 @@ class CoachContext:
                     "a live race session, from its first completed lap.")
         return None
 
+    def _live_place(self) -> tuple[int, int] | None:
+        """#186: the driver's (overall, class) position NOW, from one scoring frame read
+        as the tool answers -- ranked in class by `race_sample`, exactly as the lap
+        commit ranks it. One bounded shared-memory copy (read_field_snapshot never
+        raises, and reads a dead buffer as not live, #147). None -- the snapshot's
+        position is said, as of its lap -- with no reader, no live placed player, not a
+        race, or a frame from another race than the snapshot's (same lap rule as
+        race.live_race)."""
+        if self.live_field is None or self.race is None:
+            return None
+        try:
+            field = self.live_field()
+            sample = race_sample(field)
+            me = next((c for c in field.cars if c.is_player), None)
+            lap = field.session.current_lap
+        except Exception:
+            return None
+        if (sample is None or sample.class_position is None or me is None
+                or field.session.phase != "race" or lap is None
+                or lap - 1 not in (self.race.as_of_lap, self.race.as_of_lap + 1)):
+            return None
+        return me.place, sample.class_position
+
     def get_race_state(self):
-        text = self._no_live_race() or format_race_state(self.race)
+        text = self._no_live_race() or format_race_state(self.race, self._live_place())
         # #162: the game's live penalty count (lmu.live.SessionState.penalties), read
         # when the question came in. What a penalty is for only reaches us in the result
         # log after the race (get_race_result). Only a positive count is said: the channel
@@ -2428,9 +2457,15 @@ class CoachContext:
         live = self._no_live_race()
         if live is None and which in ("", "latest", "last lap", "current",
                                       "last completed lap"):
-            return format_battle(self.race.battle, self.race.as_of_lap, self.units,
+            text = format_battle(self.race.battle, self.race.as_of_lap, self.units,
                                  rival, note=self.race.battle_note, direction=direction,
                                  position=position)
+            # #186: the read is the lap's field (#185); a place changed since is said.
+            now = self._live_place() if self.race.battle is not None else None
+            if now is not None and now[1] != self.race.state.class_position:
+                text += (f"\nYou're P{now[1]} in class now (live); this read compares the "
+                         f"field as it stood at the end of lap {self.race.as_of_lap}.")
+            return text
         if which in ("", "latest"):
             if self.on_track and self.race_note:
                 return live   # a race is live, its first lap not in: never the last race's
