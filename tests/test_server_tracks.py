@@ -1823,7 +1823,7 @@ def test_an_installed_build_writes_its_overlay_as_dump_track_json_bytes(tmp_path
 
 
 def test_mapcapture_save_writes_dump_track_json_bytes(tmp_path):
-    # #171, the one writer route that builds its payload from scratch: same bytes rule, and
+    # #171, the writer route that rebuilds a map's geometry from a capture: same bytes rule, and
     # a kept non-ASCII display name lands raw, not \\u-escaped.
     client, store = _make_client_with_fake_model(tmp_path, model_reply="{}")
     f = tmp_path / "tracks" / f"{_SLUG}.json"

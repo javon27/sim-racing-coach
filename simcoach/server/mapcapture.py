@@ -214,7 +214,13 @@ def register(app, deps) -> None:
         if rib.get("rev") != map_rev(existing):
             raise HTTPException(409, "this track's map changed on disk since the ribbon was "
                                      "built; build it again before saving")
-        out = {
+        # Start from the existing file, like _persist_map (#87, #203): Save replaces the
+        # geometry keys below and nothing else, so `pronunciations`, Spa's
+        # `_config_note`/`length_m` and any key added later survive a ribbon save.
+        # Built from scratch, it deleted every key not listed here. `notes` is left out
+        # for _write_track_json's guard -- see the comment under `built_from`.
+        out = {k: v for k, v in existing.items() if k != "notes"}
+        out.update({
             "track": track_slug(track),
             # Display name from the session (the live track), unless a custom name was
             # already set — so a saved layout carries its track name.
@@ -227,15 +233,15 @@ def register(app, deps) -> None:
             "sections": rib.get("sections", []),  # preserve existing named sections
             "length": world["dist"][-1] if world["dist"] else 0.0,
             "rotation": _track_rotation(track),  # preserve any existing rotation
-        }
+        })
         # Mark maps this app BUILT (from a capture or from driven laps). A live-lap rebuild
         # may replace only a marked map's corners -- an unmarked map with corners is a
         # curated layout (see mapcapture_rebuild).
         if rib.get("built_from"):
             out["built_from"] = rib["built_from"]
         # No `notes` key, deliberately -- see _persist_map. _write_track_json REPLACES
-        # the file, and this route builds its payload from scratch, which is how "Save
-        # ribbon" used to delete every authored note for the track (#65). The one writer
+        # the file, and this route used to build its payload from scratch, which is how
+        # "Save ribbon" deleted every authored note for the track (#65). The one writer
         # carries the overlay, including on a corner-less rebuild: a thin capture can
         # yield zero solver corners and this route still has a job to do (it exists to
         # persist the reconstructed SURFACE -- see test_mapcapture_save_writes_track_json),
