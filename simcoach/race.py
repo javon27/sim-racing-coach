@@ -198,8 +198,13 @@ WEAR_FLOOR_PCT = 30.0
 # Burn and wear rates average at most this many latest clean laps.
 RATE_LAPS = 5
 # A save target above this fraction of the per-lap burn is not a plan: the driver is
-# told a stop is needed instead. A judgement (lift-and-coast buys a few percent).
-MAX_SAVE_FRACTION = 0.15
+# told a stop is needed instead (and Stops says "one", never "none if you save").
+# #195 round 2: 5% is the observed ceiling at a 1-3% pace cost -- every full non-pit lap
+# in the store, burn saved vs its sitting's median: p90 3.2%, max 7.0% at +1-3% pace;
+# only laps >15% slow (yellows, incidents) saved more than ~8%. Road Atlanta #2 was
+# offered a 12.6% cut and pitted. PENDING RIG: no deliberate lift-and-coast stint is
+# stored, so the real ceiling of a committed save is unmeasured.
+MAX_SAVE_FRACTION = 0.05
 # The reserve kept on fuel/energy: the stint-1 stop lap and every refill figure plan
 # with it -- the same 5% `fuel.plan_stint` plans with by default. A judgement.
 REFILL_MARGIN = 0.05
@@ -1080,7 +1085,7 @@ def _pit_menu_lines(s: Strategy, as_of_lap: int, damage: dict | None,
     lines = []
     stop = max(w.latest, as_of_lap + 1)
     after = as_of_lap + s.laps_to_go - stop
-    pm = "Pit menu, only if you stop instead of saving:" if _save_instead(s) else "Pit menu:"
+    pm = f"Pit menu, {IF_NOT_SAVING}:" if _save_instead(s) else "Pit menu:"
     tail = f" Note: {FLAG_LAP_STOP.format(stop)}." if stop == first_flag else ""
     r = by.get("energy") or by.get("fuel")
     what = "virtual energy" if r is not None and r.name == "energy" else "fuel"
@@ -1166,6 +1171,8 @@ def _pit_menu_lines(s: Strategy, as_of_lap: int, damage: dict | None,
 # Under this many laps either side of the flag a margin isn't measurable: "short by 0.0
 # laps; save 0.00 L/lap" beside "Stops: one" (#195 round 1, Algarve lap 3) read as a stop.
 ON_LIMIT_LAPS = 0.05
+# Heads the pit window and pit menu when a save avoids the stop (`_save_instead`).
+IF_NOT_SAVING = "only if you stop instead of saving"
 
 
 def _save_instead(s: Strategy) -> str | None:
@@ -1177,8 +1184,17 @@ def _save_instead(s: Strategy) -> str | None:
     r = next(r for r in s.resources if r.name == s.advice.binding_resource)
     if r.laps - s.laps_to_go > -ON_LIMIT_LAPS:
         return "save a little (you're right on the limit)"
-    return (f"save {s.save_per_lap:.2f} L/lap" if r.name == "fuel"
-            else f"save {s.save_per_lap * 100:.1f}% energy/lap")
+    return _save_amount(s)
+
+
+def _save_amount(s: Strategy) -> str:
+    """The save target and its share of the burn (#195 round 2: "0.3% energy/lap" alone
+    read as trivial when it was 13% of the lap's energy)."""
+    frac = s.advice.save_per_lap_fraction
+    share = "under 1%" if frac < 0.005 else f"{frac:.0%}"
+    amt = (f"{s.save_per_lap:.2f} L/lap" if s.advice.binding_resource == "fuel"
+           else f"{s.save_per_lap * 100:.1f}% energy/lap")
+    return f"save {amt} ({share} of your burn)"
 
 
 def _strategy_lines(s: Strategy, as_of_lap: int, first_flag: int | None = None) -> list[str]:
@@ -1187,15 +1203,14 @@ def _strategy_lines(s: Strategy, as_of_lap: int, first_flag: int | None = None) 
     final = as_of_lap + s.laps_to_go
     lines = [f"Laps to go: {s.laps_to_go} (flag at the end of lap {final})."]
     binding = s.advice.binding_resource if s.advice and not s.advice.make_it else None
+    save = _save_amount(s) if s.save_per_lap is not None else ""   # the binding's unit
+    avoid = _save_instead(s)
     for r in s.resources:
         if r.name == "fuel":
             txt = f"Fuel: {r.per_lap:.2f} L/lap, {r.on_board:.1f} L on board = {r.laps:.1f} laps"
-            save = f"save {s.save_per_lap:.2f} L/lap" if s.save_per_lap is not None else ""
         else:
             txt = (f"Virtual energy: {r.per_lap * 100:.1f}%/lap, {r.on_board * 100:.0f}% left "
                    f"= {r.laps:.1f} laps")
-            save = (f"save {s.save_per_lap * 100:.1f}% energy/lap"
-                    if s.save_per_lap is not None else "")
         margin = r.laps - s.laps_to_go
         if margin >= ON_LIMIT_LAPS:
             txt += f": makes the flag with {margin:.1f} laps spare."
@@ -1256,6 +1271,9 @@ def _strategy_lines(s: Strategy, as_of_lap: int, first_flag: int | None = None) 
                      "flag from).")
     if w is not None and first_flag == max(w.latest, as_of_lap + 1):
         lines[-1] = lines[-1][:-1] + f"; {FLAG_LAP_STOP.format(first_flag)}."
+    if w is not None and avoid:
+        # #195 round 2: the same clause the pit menu carries -- a window a save avoids.
+        lines[-1] = lines[-1].replace("Pit window:", f"Pit window, {IF_NOT_SAVING}:", 1)
     # #162: the stop COUNT is stated here, never left to the model -- "a stop is needed"
     # beside a one-stop window read as "one stop won't be enough" (Road Atlanta lap 11).
     if w is None and s.resources:
@@ -1265,7 +1283,6 @@ def _strategy_lines(s: Strategy, as_of_lap: int, first_flag: int | None = None) 
              else "not known (tank size not reported).")
         # #195 round 1: a stop a realistic save avoids is not "one" -- the model repeats
         # this line (Algarve #12 lap 2: "Stops: one" for 0.02 L/lap; he won with 1.1 spare).
-        avoid = _save_instead(s)
         lines.append("Stops to the flag: " + (f"none if you {avoid}; otherwise {n}" if avoid
                                               else n))
     return lines

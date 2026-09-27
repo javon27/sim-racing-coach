@@ -169,7 +169,8 @@ def test_strategy_fuel_short_save_target_tire_life_and_window():
     assert not s.advice.make_it and s.advice.binding_resource == "fuel"
     # Stretching 10 laps over 12 is a 1/6 cut: over MAX_SAVE_FRACTION -> a stop, no target.
     assert s.advice.save_per_lap_fraction == pytest.approx(1 / 6) and s.save_per_lap is None
-    assert strategy(STINT, laps_to_go=11).save_per_lap == pytest.approx(2.5 / 11)
+    # 10 over 11 is a 9% cut: over it too since #195 round 2 (5%, the observed ceiling).
+    assert strategy(STINT, laps_to_go=11).save_per_lap is None
     assert s.tire_wheel == "fl" and s.tire_rate_pct == pytest.approx(2.0)
     assert s.tire_remaining_pct == pytest.approx(76.0)
     assert s.tire_laps == pytest.approx(23.0)                  # (76 - 30) / 2
@@ -887,7 +888,8 @@ def test_an_assumed_start_loses_the_formation_lap_before_the_green():
             "formation lap)") in text
     # 0.976 / 0.09 = 10.8 laps for the planned 11: short -- by a save (#195 round 1),
     # never a bare "none".
-    assert "Stops to the flag: none if you save 0.1% energy/lap; otherwise one." in text
+    assert ("Stops to the flag: none if you save 0.1% energy/lap (1% of your burn); "
+            "otherwise one.") in text
     assert "Stops to the flag: none on these rates" not in text
     # 10.8 laps: the stop is at the end of lap 10, the shorter count's flag lap.
     assert ("Note: a stop at the end of lap 10 applies only if the overall leader hasn't "
@@ -938,9 +940,44 @@ def test_a_timed_race_plans_the_live_figures_on_the_longer_count():
             "the latest): 7 laps if the overall leader takes the flag before you finish lap "
             "9, 8 if not.") in text, text
     assert ("Fuel: 2.79 L/lap, 22.1 L on board = 7.9 laps: short by 0.1 laps; save 0.02 "
-            "L/lap to finish without stopping.") in text
-    assert "Stops to the flag: none if you save 0.02 L/lap; otherwise one." in text
+            "L/lap (1% of your burn) to finish without stopping.") in text
+    assert ("Stops to the flag: none if you save 0.02 L/lap (1% of your burn); otherwise "
+            "one.") in text
     assert "\nPit menu, only if you stop instead of saving: set virtual energy to 4%" in text
+    assert "\nPit window, only if you stop instead of saving: laps 3 to 9" in text
+
+
+def test_road_atlanta_2_needed_a_stop_not_a_12_percent_save():
+    """#195 round 2, ids 7485-7487 (P38, 1484.6 s left at lap 3): 39% VE at 2.35%/lap
+    is 16.6 laps for the planned 19 -- a 12.6% cut every lap, where the store's laps saved
+    at most ~7% at a 1-3% pace cost. He pitted. Said: a stop, never 'none if you save'."""
+    stint = [LapFacts(1, 147.2163, False, position=45, fuel_end=43.705361,
+                      fuel_capacity=120.0, energy_end=0.4375405),
+             LapFacts(2, 84.2498, True, position=38, fuel_used=2.266273, fuel_end=41.437493,
+                      fuel_capacity=120.0, energy_used=0.0240079, energy_end=0.4135154),
+             LapFacts(3, 83.5526, True, position=38, race=RaceSample(time_left=1484.6),
+                      fuel_used=2.171507, fuel_end=39.265501, fuel_capacity=120.0,
+                      energy_used=0.0230446, energy_end=0.3904658)]
+    snap = build_snapshot(stint, "road-atlanta--tf-2--online")
+    assert snap.strategy.laps_to_go == 19
+    assert snap.strategy.advice.save_per_lap_fraction == pytest.approx(0.1265, abs=1e-3)
+    text = format_strategy(snap)
+    assert ("Virtual energy: 2.4%/lap, 39% left = 16.6 laps: short by 2.4 laps; a stop is "
+            "needed (saving that much — over 5% a lap — is not realistic).") in text, text
+    assert "Stops to the flag: one." in text
+    assert "if you save" not in text and "instead of saving" not in text
+
+
+@pytest.mark.parametrize("cut, saved", [(0.049, True), (0.051, False)])
+def test_a_save_is_offered_up_to_five_percent_of_the_burn(cut, saved):
+    """#195 round 2, at the MAX_SAVE_FRACTION boundary: the Algarve lap-2 stint with the
+    fuel on board set (derived; no stored lap lands near 5%) to 8 laps less `cut`."""
+    per = (2.874190 + 2.711848) / 2
+    laps = _LGC_P2[:1] + ((*_LGC_P2[1][:3], per * 8 * (1 - cut), *_LGC_P2[1][4:]),)
+    text = format_strategy(build_snapshot(_lgc(laps, 2, (786.4, 679.4)), "algarve"))
+    assert ("Stops to the flag: none if you save 0.14 L/lap (5% of your burn); otherwise "
+            "one." in text) is saved, text
+    assert ("Stops to the flag: one." in text) is not saved
 
 
 def test_a_margin_under_a_twentieth_of_a_lap_either_way_is_right_on_the_limit():

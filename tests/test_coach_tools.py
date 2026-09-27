@@ -3693,7 +3693,8 @@ def test_a_timed_race_is_planned_on_the_longer_count_after_the_formation_lap(
     assert "Virtual energy: 9.2%/lap, 98% left = 10.6 laps: short by 0.4 laps; save" in out
     # #195 round 1: a realistic save avoids the stop, and that is said -- never a bare
     # "none" (#184 F3) nor a bare "one".
-    assert "Stops to the flag: none if you save 0.3% energy/lap; otherwise one." in out
+    assert ("Stops to the flag: none if you save 0.3% energy/lap (3% of your burn); "
+            "otherwise one.") in out
     assert "Stops to the flag: none on these rates" not in out
 
 
