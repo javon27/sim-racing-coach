@@ -175,6 +175,82 @@ describe("SetupPanel", () => {
     expect(await screen.findByText("No setup recorded for this session.")).toBeTruthy();
   });
 
+  // #189: the pool links a lap's setup ~1-4s after the lap commits; a lap
+  // selected inside that window retries once after ~3s.
+  it("retries once after 3s and shows the setup once it lands", async () => {
+    vi.mocked(getLapSetup)
+      .mockResolvedValueOnce({ lap_id: 5, lap_no: 1, lap_time: 90, setup: null })
+      .mockResolvedValueOnce({
+        lap_id: 5,
+        lap_no: 1,
+        lap_time: 90,
+        setup: { VM_REAR_WING: { isFreeSetting: true, stringValue: "P9" } },
+      });
+    vi.useFakeTimers();
+
+    render(SetupPanel, { props: { lapId: 5 } });
+    await vi.waitFor(() => expect(getLapSetup).toHaveBeenCalledTimes(1));
+    await vi.advanceTimersByTimeAsync(3000);
+
+    expect(getLapSetup).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("P9")).toBeTruthy();
+    vi.useRealTimers();
+  });
+
+  it("stays unrecorded after the one retry, and never retries a second time", async () => {
+    vi.mocked(getLapSetup).mockResolvedValue({ lap_id: 5, lap_no: 1, lap_time: 90, setup: null });
+    vi.useFakeTimers();
+
+    render(SetupPanel, { props: { lapId: 5 } });
+    await vi.waitFor(() => expect(getLapSetup).toHaveBeenCalledTimes(1));
+    await vi.advanceTimersByTimeAsync(3000);
+
+    expect(getLapSetup).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(/no setup recorded for this lap/i)).toBeTruthy();
+
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(getLapSetup).toHaveBeenCalledTimes(2); // exactly one retry, ever
+
+    vi.useRealTimers();
+  });
+
+  it("changing the selection before 3s cancels the pending retry", async () => {
+    vi.mocked(getLapSetup).mockImplementation((id: number) =>
+      Promise.resolve({ lap_id: id, lap_no: id, lap_time: 90, setup: null }),
+    );
+    vi.useFakeTimers();
+
+    const { rerender } = render(SetupPanel, { props: { lapId: 5 } });
+    await vi.waitFor(() => expect(getLapSetup).toHaveBeenCalledTimes(1));
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await rerender({ lapId: 6 });
+    await vi.waitFor(() => expect(getLapSetup).toHaveBeenCalledTimes(2));
+
+    // Advance past when lap 5's cancelled retry would have fired (3s after its
+    // own fetch, i.e. t=3000), but short of lap 6's own retry (due at t=4000).
+    await vi.advanceTimersByTimeAsync(2100);
+    const lap5Calls = vi.mocked(getLapSetup).mock.calls.filter(([id]) => id === 5);
+    expect(lap5Calls).toHaveLength(1); // no cancelled (stale) retry for lap 5
+    expect(getLapSetup).toHaveBeenCalledTimes(2); // just the two initial fetches
+
+    vi.useRealTimers();
+  });
+
+  it("never retries for a session (only a lap selection retries)", async () => {
+    vi.mocked(getSessionSetup).mockResolvedValue({ lap_id: 4, lap_no: 5, lap_time: 90, setup: null });
+    vi.useFakeTimers();
+
+    render(SetupPanel, { props: { lapId: null, sessionId: "s1" } });
+    await vi.waitFor(() => expect(getSessionSetup).toHaveBeenCalledTimes(1));
+
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(getSessionSetup).toHaveBeenCalledTimes(1);
+    expect(getLapSetup).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+  });
+
   it("a stale response resolving after a newer selection's is dropped", async () => {
     let resolveOld!: (v: LapSetup) => void;
     let resolveNew!: (v: LapSetup) => void;

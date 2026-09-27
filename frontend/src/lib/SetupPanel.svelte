@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getSetup, captureSetup, getLapSetup, getSessionSetup, type LapSetup } from "./api";
-  import { formatTime } from "./LapList.svelte";
+  import { formatTime } from "./format";
 
   // #188: a selected lap shows the setup it was driven on; a reviewed session with no
   // lap selected shows its fastest lap's; neither -> the live setup, as before.
@@ -11,6 +11,14 @@
   let heading = $state("");
   let scope: "lap" | "session" = $state("lap");
   let seq = 0; // drops a response that a newer selection has superseded
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function clearRetry() {
+    if (retryTimer !== undefined) {
+      clearTimeout(retryTimer);
+      retryTimer = undefined;
+    }
+  }
 
   function showStored(res: Partial<LapSetup>) {
     const lap =
@@ -29,16 +37,34 @@
     const my = ++seq;
     phase = "loading";
     heading = "";
-    const stored =
-      lapId != null ? getLapSetup(lapId) : sessionId ? getSessionSetup(sessionId) : null;
+    clearRetry();
+    const isLap = lapId != null;
+    const stored = isLap ? getLapSetup(lapId!) : sessionId ? getSessionSetup(sessionId) : null;
     if (stored) {
-      scope = lapId != null ? "lap" : "session";
+      scope = isLap ? "lap" : "session";
       stored
-        .then((res) => my === seq && showStored(res))
+        .then((res) => {
+          if (my !== seq) return;
+          showStored(res);
+          // #189: the pool links a lap's setup ~1-4s after the lap commits, so a
+          // lap selected inside that window shows "unrecorded" and never
+          // refreshes on its own. Retry once, only for a lap selection (never
+          // session/live) -- a selection change or unmount cancels it below.
+          if (isLap && phase === "unrecorded") {
+            retryTimer = setTimeout(() => {
+              retryTimer = undefined;
+              getLapSetup(lapId!)
+                .then((r) => my === seq && showStored(r))
+                .catch(() => {
+                  if (my === seq) phase = "error";
+                });
+            }, 3000);
+          }
+        })
         .catch(() => {
           if (my === seq) phase = "error";
         });
-      return;
+      return clearRetry;
     }
     getSetup()
       .then((res) => {
@@ -60,6 +86,7 @@
         setup = {};
         phase = "empty";
       });
+    return clearRetry;
   });
 
   // Mirror simcoach/tiers.py adjustable_from_setup: only entries the coach
