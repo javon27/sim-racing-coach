@@ -664,8 +664,9 @@ def format_race_state(snap: RaceSnapshot,
             lines.append(_gap_line(f"{label} at the end of lap {snap.as_of_lap}", g, side,
                                    placed))
         else:
-            lines.append(f"{label} now (live): {now[side]}; gap and trend land at the end "
-                         "of this lap.")
+            lines.append(f"{label} now (live): {now[side]}; no gap to him yet — it's read "
+                         f"at the line, and a trend needs {MIN_STINT_LAPS} clean laps with "
+                         "him there.")
     return "\n".join(lines)
 
 

@@ -389,26 +389,42 @@ def _nobody_at(b: Battle, lap: str, direction: str | None,
 def format_battle(b: Battle | None, as_of_lap: int, units: str = "metric",
                   rival: str | None = None, note: str | None = None,
                   direction: str | None = None, position: int | None = None,
-                  live_target: tuple[VehicleState | None, str] | None = None) -> str:
+                  live_target: tuple[VehicleState | None, str] | None = None,
+                  live_cars: list[VehicleState] | None = None) -> str:
     """The battle text; `note` is why there is no battle (RaceSnapshot.battle_note).
     #185: `direction` ('ahead'/'behind') compares the car one class position away,
     `position` the car at that class position; either overrides `rival`.
-    #186: `live_target` (race.live_battle_target) replaces them once the driver's class
-    place has changed since the lap: the car picked in the LIVE field, found in the
-    lap's timing by id and stated at its live class place -- or why there is none."""
+    #186: `live_target` (race.live_battle_target) replaces them when the live field
+    picks another car: the car picked in the LIVE field, found in the lap's timing by id
+    and entry and stated at its live class place -- or why there is none. `live_cars`
+    (the live field, given once the driver's class place has changed since the lap):
+    every rival is stated at its live class place, or at its place 'at the end of the
+    lap' when it is not in the live field -- never a lap-old place unlabelled."""
     head = f"As of lap {as_of_lap}."
     if b is None:
         return (f"{head} No battle read for lap {as_of_lap}: "
                 f"{note or 'none was computed for that lap'}.")
     me = next(c for c in b.laps if c.is_player)
     others = [c for c in b.laps if not c.is_player]
+
+    def _same(o: CarLap, car: VehicleState) -> bool:
+        # The mID AND the entry: a slot reused by a new car is not the lap's car.
+        return o.car_id == car.id and o.car == car.car
+
+    def _place(o: CarLap) -> str:
+        if live_cars is None:
+            return f"P{o.class_position} in class"
+        now = next((c for c in live_cars if _same(o, c)), None)
+        return (f"P{now.class_position} in class" if now else
+                f"P{o.class_position} in class at the end of lap {as_of_lap}")
+
     side_why = hits = None
     if live_target is not None:
         car, side_why = live_target
         if car is None:
             return f"{head} {side_why}"
         hits = [dataclasses.replace(c, class_position=car.class_position)
-                for c in others if c.car_id == car.id]
+                for c in others if _same(c, car)]
         if not hits:
             return (f"{head} Rival ({side_why}): {car.driver} ({car.car}), "
                     f"P{car.class_position} in class, was not timed on lap {as_of_lap}: "
@@ -427,13 +443,15 @@ def format_battle(b: Battle | None, as_of_lap: int, units: str = "metric",
         if not hits and rival_matches([me], rival):
             return f"{head} {rival} is you, not a rival."
         if not hits:
-            return f"{head} {_no_match(rival, others)}"
+            return (f"{head} {_no_match(rival, others)}"
+                    + (f" Those are the places at the end of lap {as_of_lap}."
+                       if live_cars is not None else ""))
     if hits:
         hit = hits[0]
         if not hit.entry:
             return (f"{head} {f'Rival ({side_why}): ' if side_why else ''}"
-                    f"{hit.driver} ({hit.model or hit.car}), P{hit.class_position} "
-                    f"in class, was not timed on lap {as_of_lap}: its trace does not cover "
+                    f"{hit.driver} ({hit.model or hit.car}), {_place(hit)}, "
+                    f"was not timed on lap {as_of_lap}: its trace does not cover "
                     "your lap's corners.")
         why = side_why or ("the car you named" if len(hits) == 1 else
                            f"{len(hits)} cars in your class match {rival!r}; this is the one "
@@ -449,15 +467,14 @@ def format_battle(b: Battle | None, as_of_lap: int, units: str = "metric",
 
     lines = [head]
     for o in picks:
-        lines.append(f"Rival ({why}): {o.driver} ({o.model or o.car}), "
-                     f"P{o.class_position} in class.")
+        lines.append(f"Rival ({why}): {o.driver} ({o.model or o.car}), {_place(o)}.")
         all_zones = zone_deltas(me, o, b.corners)
         if not all_zones:
             # Unmeasured is not "even": nothing timed for both is nothing compared.
             lines.append(f"No corner was timed for both of you on lap {as_of_lap}.")
             continue
         if not _was_near(me, o):
-            far = (f"{o.driver} ({o.model or o.car}), P{o.class_position} in class, "
+            far = (f"{o.driver} ({o.model or o.car}), {_place(o)}, "
                    f"wasn't near you on lap {as_of_lap} (never within "
                    f"{BATTLE_RANGE_S:.0f} s) -- no corner-by-corner comparison.")
             if side_why:

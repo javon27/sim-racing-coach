@@ -40,6 +40,7 @@ from simcoach.battle import (
     format_battle,
     format_race_battle,
     rival_matches,
+    target_position,
 )
 from simcoach.coach import _setup_lines, live_electronics
 from simcoach.corners import CornerMap
@@ -2471,11 +2472,21 @@ class CoachContext:
                 p = re.fullmatch(r"(?:the\s+)?p\s*(\d+)", str(rival).strip().lower())
                 if p:        # 'P3' is a class position: the live one, like position=3
                     rival, position = None, int(p[1])
-            target = (live_battle_target(live[0].cars, direction, position)
-                      if moved and (direction or position) else None)
+            target = None
+            if live is not None and lap_me is not None and (direction or position):
+                target = live_battle_target(live[0].cars, direction, position)
+                if not moved:
+                    # His place held, but the car there may have changed (a swap
+                    # behind him): the live car only when it is not the lap's car.
+                    want = target_position(lap_me, direction, position)
+                    was = rival_matches([c for c in b.laps if not c.is_player],
+                                        f"P{want}", lap_me) if want else []
+                    if target[0] is None or (was and was[0].car_id == target[0].id):
+                        target = None
             text = format_battle(b, self.race.as_of_lap, self.units, rival,
                                  note=self.race.battle_note, direction=direction,
-                                 position=position, live_target=target)
+                                 position=position, live_target=target,
+                                 live_cars=live[0].cars if moved else None)
             if moved:
                 text += (f"\nYou're P{live[1].class_position} in class now (live); this "
                          "read compares the field as it stood at the end of lap "

@@ -13,7 +13,8 @@ from simcoach.race import LapFacts, build_snapshot
 from simcoach.store import LapStore
 
 # Stable mIDs: a CarLap's car_id and a VehicleState's id are both the game's mID.
-_ID = {"You": 5, "A": 10, "B": 11, "C": 12, "D": 13}
+_ID = {"You": 5, "A": 10, "B": 11, "C": 12, "D": 13,
+       "E": 10}     # E: a new car in A's reused mID slot
 
 
 def _veh(**kw) -> VehicleScoringInfoV01:
@@ -80,10 +81,10 @@ def test_the_live_place_leads_and_a_passed_cars_stale_gap_is_cut(tmp_path):
     out = _ctx(tmp_path, _live(PASSED_B)).dispatch("get_race_state", {})
     assert out.startswith("Position now (live): P4 overall, P2 in class.\n"
                           "As of lap 3 (race).")
-    assert "Car ahead in class now (live): A (A Entry); gap and trend land at the end of " \
-           "this lap." in out
-    assert "Car behind in class now (live): B (B Entry); gap and trend land at the end " \
-           "of this lap." in out
+    assert ("Car ahead in class now (live): A (A Entry); no gap to him yet — it's read at "
+            "the line, and a trend needs 2 clean laps with him there.") in out
+    assert ("Car behind in class now (live): B (B Entry); no gap to him yet — it's read at "
+            "the line, and a trend needs 2 clean laps with him there.") in out
     # B's lap-3 gap, closing trend and catch-lap are about a car he has passed: cut.
     for stale in ("P3 in class", "P5 overall", "1.5 s", "closing", "reach", "lap 9"):
         assert stale not in out, stale
@@ -94,7 +95,7 @@ def test_a_neighbour_swap_ahead_is_live_and_the_same_car_behind_keeps_its_trend(
     is ahead of him now, the same car is behind."""
     out = _ctx(tmp_path, _live(["B", "A", "You", "C"])).dispatch("get_race_state", {})
     assert out.startswith("Position now (live): P5 overall, P3 in class.\nAs of lap 3")
-    assert "Car ahead in class now (live): A (A Entry); gap and trend land" in out
+    assert "Car ahead in class now (live): A (A Entry); no gap to him yet" in out
     assert "Car behind in class at the end of lap 3: C (C Entry), 1.5 s behind" in out
 
 
@@ -149,10 +150,11 @@ def _lap(name, cls_pos, entry, exit_):
                   cls_pos, name == "You", entry={1: entry}, exit={1: exit_})
 
 
-def _battle(*, without=()):
-    """Lap 3's timing, class places as at the end of lap 3 (A, B, You, C)."""
+def _battle(*, without=("D",)):
+    """Lap 3's timing, class places as at the end of lap 3 (A, B, You, C, D)."""
     laps = [_lap("A", 1, 102.0, 104.0), _lap("B", 2, 103.0, 105.3),
-            _lap("You", 3, 104.0, 106.0), _lap("C", 4, 104.5, 106.9)]
+            _lap("You", 3, 104.0, 106.0), _lap("C", 4, 104.5, 106.9),
+            _lap("D", 5, 105.0, 107.4)]
     return build_battle([c for c in laps if c.driver not in without], [T1])
 
 
@@ -210,3 +212,55 @@ def test_get_battle_is_unchanged_when_his_place_has_not_moved(tmp_path):
                                                                              args), args
     assert "Rival (directly ahead of you in class at the end of lap 3, when you were P3): " \
            "B (B Entry)" in live_ctx.dispatch("get_battle", {"direction": "ahead"})
+
+
+def test_after_a_pass_a_named_rival_is_stated_at_his_live_place(tmp_path):
+    """Round 2: 'B, P2 in class' beside 'You're P2 in class now' put two cars at P2."""
+    ctx = _ctx(tmp_path, _live(PASSED_B), _snap_lap3(_battle()))
+    out = ctx.dispatch("get_battle", {"rival": "B"})
+    assert "Rival (the car you named): B (B Entry), P3 in class." in out
+    assert "P2 in class." not in out.replace("You're P2 in class now", "")
+    # No match: the field it lists is the lap's, and says so.
+    assert ctx.dispatch("get_battle", {"rival": "Zed"}).startswith(
+        "As of lap 3. No car in your class matches 'Zed'. In your class: A (A Entry), P1 "
+        "in class; B (B Entry), P2 in class; C (C Entry), P4 in class. Those are the "
+        "places at the end of lap 3.")
+
+
+def test_after_a_pass_the_default_nearest_rival_is_stated_at_his_live_place(tmp_path):
+    ctx = _ctx(tmp_path, _live(PASSED_B), _snap_lap3(_battle(without=("C", "D"))))
+    out = ctx.dispatch("get_battle", {})
+    assert "Rival (nearest to you on lap 3): B (B Entry), P3 in class." in out
+    assert "P2 in class." not in out.replace("You're P2 in class now", "")
+
+
+def test_after_a_pass_a_rival_gone_from_the_live_field_keeps_the_lap_label(tmp_path):
+    ctx = _ctx(tmp_path, _live(PASSED_B), _snap_lap3(_battle(without=())))
+    assert ("Rival (the car you named): D (D Entry), P5 in class at the end of lap 3."
+            in ctx.dispatch("get_battle", {"rival": "D"}))
+
+
+def test_a_swap_behind_with_his_place_held_compares_the_car_behind_now(tmp_path):
+    """Round 2 MINOR 1: D passed C behind him; get_race_state names D, so get_battle
+    'behind' compares D -- and 'ahead' (still B) is #185's answer, byte for byte."""
+    swapped = ["A", "B", "You", "D", "C"]
+    battle = _battle(without=())
+    live_ctx = _ctx(tmp_path, _live(swapped), _snap_lap3(battle))
+    plain_ctx = _ctx(tmp_path, None, _snap_lap3(battle))
+    behind = live_ctx.dispatch("get_battle", {"direction": "behind"})
+    assert ("Rival (directly behind you in class now (live), you're P3): D (D Entry), "
+            "P4 in class.") in behind
+    assert "C (C Entry)" not in behind and "now (live);" not in behind
+    for args in ({"direction": "ahead"}, {"position": 2}, {"position": 3}):
+        assert live_ctx.dispatch("get_battle", args) == plain_ctx.dispatch("get_battle",
+                                                                             args), args
+
+
+def test_a_reused_mid_slot_is_not_the_laps_car(tmp_path):
+    """Round 2 MINOR 3: A left and a new car E took A's mID slot -- A's lap timing is
+    never stated as E's."""
+    ctx = _ctx(tmp_path, _live(["E", "You", "B", "C"]), _snap_lap3(_battle()))
+    out = ctx.dispatch("get_battle", {"direction": "ahead"})
+    assert out.startswith("As of lap 3. Rival (directly ahead of you in class now (live), "
+                          "you're P2): E (E Entry), P1 in class, was not timed on lap 3: it "
+                          "is not in that lap's field.")
