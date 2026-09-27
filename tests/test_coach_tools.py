@@ -1378,6 +1378,23 @@ def test_all_time_stays_in_the_laps_own_class(tmp_path, synthetic_lap, monkeypat
     for cls, lap in (("LMP2", lmp2), ("LMP2_ELMS", elms)):
         ctx = CoachContext(store, track=_SARTHE, car="Oreca 07", match_class=cls)
         assert ctx._resolve_lap("best")[0].car == lap.car, cls
+    # ...and with the class unknown, no best lap rather than the faster class's.
+    assert CoachContext(store, track=_SARTHE, car="Oreca 07")._resolve_lap("best") == (
+        None, None)
+    # SYNTHETIC (no real LMP2 time beats an ELMS one): an LMP2 row in a third session,
+    # faster than every ELMS lap and with a faster S1, so a merge would show in the
+    # ELMS figures too. It is a valid, complete, timed result row: _all_time counts it.
+    store.conn.execute(
+        "INSERT INTO laps (ts, sim, track, car, lap_time, valid, phase, session_id, "
+        "source, s1, mapping) VALUES (1777900000.0, 'lmu', ?, ?, 215.0, 1, 'practice', "
+        "'synthetic-190', 'result', 33.0, 0)", (_SARTHE, _ORECA_LMP2))
+    store.conn.commit()
+    at = CoachContext(store, track=_SARTHE, car="Oreca 07",
+                      session_id=elms.session_id)._all_time(elms, elms_id)
+    assert at["best"] == 215.8251 and at["other"][0] == 33.9222, at
+    at = CoachContext(store, track=_SARTHE, car="Oreca 07",
+                      session_id=lmp2.session_id)._all_time(lmp2, lmp2_id)
+    assert at["best"] == 215.0 and at["other"][0] == 33.0, at
 
 
 def test_reference_lap_available_counts_only_this_class(tmp_path, synthetic_lap, monkeypatch):
@@ -1388,6 +1405,8 @@ def test_reference_lap_available_counts_only_this_class(tmp_path, synthetic_lap,
                                       match_class=cls).dispatch("get_session_status", {})
     assert "Reference (best) lap available: no" in status("LMP2")
     assert "Reference (best) lap available: yes" in status("LMP2_ELMS")
+    # The class unknown and the model stored in two: no, rather than the other's lap.
+    assert "Reference (best) lap available: no" in status(None)
 
 
 def test_all_time_of_a_single_class_car_still_spans_its_entries(
@@ -1417,6 +1436,87 @@ def test_match_class_picks_the_personal_best_over_a_rest_class(
                        match_class="LMP2_ELMS")
     out = ctx.dispatch("get_personal_best", {})
     assert "Oreca 07 (LMP2_ELMS): 3:35.825" in out and "3:48.257" not in out, out
+    # m3: the prompt states both, so 'LMP2' beside an '(LMP2_ELMS)' PB isn't a riddle.
+    assert "Class: LMP2 (result log: LMP2_ELMS) |" in ctx.dispatch("get_session_status", {})
+    same = CoachContext(store, track=_SARTHE, car="Oreca 07", car_class="LMP2",
+                        match_class="LMP2")
+    assert "Class: LMP2 |" in same.dispatch("get_session_status", {})
+    gt3 = CoachContext(store, track=_SARTHE, car="Chevrolet Corvette Z06 LMGT3.R",
+                       car_class="LMGT3", match_class="GT3")   # one class, two spellings
+    assert "Class: LMGT3 |" in gt3.dispatch("get_session_status", {})
+
+
+# #190 red-team M1: Oreca 07 sessions at Sarthe from the driver's DB -- (session, entry,
+# that session's best, its ts). The first three are LMP2, the rest LMP2_ELMS.
+_ORECA_CROWDSTRIKE = "Crowdstrike Racing by APR 2024 #45:LM"
+_SARTHE_SESSIONS = [
+    ("2025_08_16_21_58_16-33Q1", _ORECA_CROWDSTRIKE, 256.0998, 1755398861.0),
+    ("2025_08_16_22_46_46-54R1", _ORECA_CROWDSTRIKE, 241.231, 1755399504.0),
+    ("2026_05_03_22_20_13-46P1", _ORECA_LMP2, 228.2574, 1777863757.0),
+    ("2026_04_05_21_05_30-36R1", _ORECA_ELMS, 218.0759, 1775437062.0),
+    ("2026_05_03_22_29_58-26P1", _ORECA_ELMS, 218.0369, 1777864853.0),
+    ("2026_05_03_23_21_11-40R1", _ORECA_ELMS, 215.8251, 1777866304.0)]
+
+
+def _sessions_store(tmp_path, monkeypatch):
+    from simcoach import car_lookup
+    monkeypatch.setattr(car_lookup, "_entry_table", lambda: {
+        **_ENTRIES, _ORECA_CROWDSTRIKE: ("Oreca 07", "LMP2")})
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    store.conn.executemany(
+        "INSERT INTO laps (ts, sim, track, car, lap_time, valid, phase, session_id, "
+        "source, mapping) VALUES (?, 'lmu', ?, ?, ?, 1, 'practice', ?, 'result', 0)",
+        [(ts, _SARTHE, e, t, sid) for sid, e, t, ts in _SARTHE_SESSIONS])
+    store.conn.commit()
+    return store
+
+
+def test_progress_and_past_sessions_stay_in_this_cars_class(tmp_path, monkeypatch):
+    """#190: get_progress / list_past_sessions read only this car's class -- merged, the
+    LMP2 -> LMP2_ELMS switch read as 12 s of progress."""
+    store = _sessions_store(tmp_path, monkeypatch)
+    ctx = lambda cls: CoachContext(store, track=_SARTHE, car="Oreca 07", match_class=cls)
+    lmp2 = ctx("LMP2").dispatch("get_progress", {})
+    assert "(3 sessions)" in lmp2 and "4:16.100" in lmp2 and "3:48.257" in lmp2, lmp2
+    assert "3:35.825" not in lmp2 and "3:38.0" not in lmp2
+    assert lmp2.endswith(" 3:48.257."), lmp2
+    elms = ctx("LMP2_ELMS").dispatch("get_progress", {})
+    assert "(3 sessions)" in elms and "3:35.825" in elms and "3:48.257" not in elms, elms
+    past = ctx("LMP2").dispatch("list_past_sessions", {"limit": 10})
+    assert past.count("\n") == 3 and "best 3:48.257" in past and "3:35.825" not in past, past
+    past = ctx("LMP2_ELMS").dispatch("list_past_sessions", {"limit": 10})
+    assert past.count("\n") == 3 and "best 3:35.825" in past and "4:01.231" not in past, past
+    # The class unknown: refuse rather than mix.
+    for tool in ("get_progress", "list_past_sessions", "get_last_setup"):
+        out = ctx(None).dispatch(tool, {})
+        assert out == ("Can't tell which class of Oreca 07 this is: it is stored as LMP2 "
+                       "and LMP2_ELMS, and their times must not be mixed."), (tool, out)
+    # A one-class car is untouched: the Z06's two entries still read as one car.
+    z06 = CoachContext(store, track=_SARTHE, car="Chevrolet Corvette Z06 LMGT3.R")
+    assert "No session history yet" in z06.dispatch("get_progress", {})
+
+
+def test_sessions_screen_filters_are_unchanged_by_the_coachs_class_scope(tmp_path, monkeypatch):
+    """#190: the class scope is the coach tools' opt-in. The Sessions screen sends a car
+    OR a class (SessionsScreen.svelte filterArgs); its model filter still spans every
+    class of the model, and a car beside a class still wins, as before."""
+    from fastapi.testclient import TestClient
+
+    from simcoach.coach import Coach
+    from simcoach.model.fake import FakeModel
+    from simcoach.server.app import create_app
+    c = TestClient(create_app(_sessions_store(tmp_path, monkeypatch), Coach(FakeModel())),
+                   base_url="http://127.0.0.1")
+    sids = lambda **q: [r["session_id"] for r in c.get("/sessions", params=q).json()["rows"]]
+    newest_first = [s[0] for s in sorted(_SARTHE_SESSIONS, key=lambda s: -s[3])]
+    assert sids(track=_SARTHE, car="Oreca 07") == newest_first
+    assert sids(track=_SARTHE, car="Oreca 07", car_class="LMP2") == newest_first
+    assert sids(track=_SARTHE, car_class="LMP2") == [s for s in newest_first
+                                                     if s in {r[0] for r in _SARTHE_SESSIONS[:3]}]
+    summary = lambda **q: c.get("/sessions/summary", params=q).json()
+    assert summary(track=_SARTHE, car="Oreca 07")["count"] == 6
+    assert summary(track=_SARTHE, car="Oreca 07", car_class="LMP2_ELMS")["count"] == 6
+    assert summary(track=_SARTHE, car_class="LMP2_ELMS")["count"] == 3
 
 
 def test_get_progress_lists_sessions_in_order(tmp_path, synthetic_lap):

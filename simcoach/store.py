@@ -1488,17 +1488,23 @@ class LapStore:
                 "AND car IS NOT NULL").fetchall()]
 
     def _session_where(self, track: str | None, car_model: str | None,
-                       car_class: str | None = None) -> tuple[str, list]:
+                       car_class: str | None = None,
+                       model_class: str | None = None) -> tuple[str, list]:
         """WHERE clause for the session filters. `car_model` filters by resolved car
         MODEL, `car_class` by resolved CLASS -- each expanded to every raw entry name
         that resolves to it (several team entries share a model/class). No match ->
-        a clause that selects nothing. car_model wins if both are given."""
+        a clause that selects nothing. car_model wins if both are given.
+        #190: `model_class` (the coach tools only -- the Sessions UI sends a car OR a
+        class, never this) keeps one scraped class of `car_model`: the Oreca 07 races as
+        LMP2 AND LMP2_ELMS, and one model's two classes must not merge."""
         clauses = ["session_id IS NOT NULL"]
         params: list = []
         if track:
             clauses.append("track = ?"); params.append(track)
         teams: list[str] | None = None
-        if car_model:
+        if car_model and model_class:
+            teams = self._teams(car_model, model_class)
+        elif car_model:
             teams = [c for c in self._distinct_db_cars() if resolve_car(c) == car_model]
         elif car_class:
             teams = [c for c in self._distinct_db_cars() if resolve_car_class(c) == car_class]
@@ -1527,10 +1533,12 @@ class LapStore:
 
     def race_sessions_page(self, track: str | None = None, car: str | None = None,
                            offset: int = 0, limit: int = 30,
-                           car_class: str | None = None) -> dict:
+                           car_class: str | None = None,
+                           model_class: str | None = None) -> dict:
         """One page of sessions (newest first) matching the filters, plus the
-        total count so the client can render page controls."""
-        where, params = self._session_where(track, car, car_class)
+        total count so the client can render page controls. `model_class`: see
+        `_session_where`."""
+        where, params = self._session_where(track, car, car_class, model_class)
         with self._lock:
             total = self.conn.execute(
                 f"SELECT COUNT(*) FROM (SELECT session_id FROM laps WHERE {where} "
@@ -1569,13 +1577,14 @@ class LapStore:
         return self.race_sessions_page(offset=0, limit=limit)["rows"]
 
     def session_summary(self, track: str | None = None, car: str | None = None,
-                        car_class: str | None = None) -> dict:
+                        car_class: str | None = None,
+                        model_class: str | None = None) -> dict:
         """Aggregate stats + best-lap trend over the FULL filtered set (not one
         page), so the Sessions screen's cards/chart stay accurate under paging.
         The per-session trend series is only built when a track is selected
         (the chart is hidden otherwise), keeping the all-tracks case to pure
-        aggregates."""
-        where, params = self._session_where(track, car, car_class)
+        aggregates. `model_class`: see `_session_where`."""
+        where, params = self._session_where(track, car, car_class, model_class)
         per = ("SELECT session_id, car, "
                "MIN(CASE WHEN valid AND NOT COALESCE(mapping, 0) THEN lap_time END) AS best, "
                f"MIN(ts) AS started FROM laps WHERE {where} GROUP BY session_id")
@@ -2202,12 +2211,14 @@ class LapStore:
         return {**self._setup_view(row), "fastest": faster is None}
 
     def previous_fastest_setup(self, track: str, car: str,
-                               exclude_session_id: str | None = None) -> dict | None:
+                               exclude_session_id: str | None = None,
+                               car_class: str | None = None) -> dict | None:
         """session_fastest_setup of the most recent session at this track/car (other than
         `exclude_session_id`) that has a recorded per-lap setup; None when none has.
-        `car` expands like best_lap (a resolved model matches its raw entry names)."""
+        `car`/`car_class` expand like best_lap (a resolved model matches its raw entry
+        names; #190: `car_class` keeps one class of it)."""
         with self._lock:
-            teams = [c for c in self._distinct_db_cars() if resolve_car(c) == car] or [car]
+            teams = self._teams(car, car_class)
             sql = (f"SELECT l.session_id FROM laps l WHERE l.track = ? "
                    f"AND l.car IN ({','.join('?' * len(teams))}) AND l.session_id IS NOT NULL "
                    "AND " + _SETUP_FAST_LAP)

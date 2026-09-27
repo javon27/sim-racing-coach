@@ -11,7 +11,7 @@ from fastapi import WebSocket
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from .. import config
-from ..car_lookup import resolve_car
+from ..car_lookup import resolve_car, resolve_car_class
 from ..car_notes import load_car_notes, load_setup_concepts
 from ..coach import is_repeat_request
 from ..coach_tools import (
@@ -162,21 +162,21 @@ def register(app, deps) -> None:
                 # without a second REST call. #190: stored laps are MATCHED by the
                 # scraped class first (car_groups' spelling; REST may call the ELMS
                 # Oreca 'LMP2'); REST is the fallback there and stays the display.
-                try:
-                    from ..car_lookup import resolve_car_class
-                    match_class = resolve_car_class(vehicle)
-                except Exception:
-                    match_class = None
+                match_class = resolve_car_class(vehicle)
                 car_class = car_class or match_class
+            # Off track (#190 red-team m1): the lap's own entry still says its class --
+            # for MATCHING only; nothing is displayed as the class off track.
             if track is None and app.state.latest is not None:
                 lr = app.state.latest["record"]
                 track, car = lr.track, resolve_car(lr.car)
+                match_class = resolve_car_class(lr.car)
                 eff_session_id = eff_session_id or lr.session_id
                 cmap, on_track = _map_for(track), False
             if track is None and lap_id is not None:
                 try:
                     sr = app.state.store.load(lap_id)
                     track, car = sr.track, resolve_car(sr.car)
+                    match_class = resolve_car_class(sr.car)
                     eff_session_id = eff_session_id or sr.session_id
                     cmap, on_track = _map_for(track), False
                 except Exception:
@@ -189,6 +189,7 @@ def register(app, deps) -> None:
                 row = store.latest_lap_row(session_id) or store.latest_lap_row()
                 if row is not None:
                     track, car = row["track"], resolve_car(row["car"])
+                    match_class = resolve_car_class(row["car"])
                     eff_session_id = eff_session_id or row["session_id"]
                     cmap, on_track = _map_for(track), False
             # Backfill the current stint id from the latest lap when the client didn't

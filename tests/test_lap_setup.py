@@ -255,6 +255,25 @@ def test_get_last_setup_prefers_a_more_recent_legacy_session(tmp_path, synthetic
     assert "autosave" in out.lower() and "7.0:x" in out and "4.0:x" not in out
 
 
+def test_get_last_setup_stays_in_this_cars_class(tmp_path, synthetic_lap, monkeypatch):
+    """#190: the Oreca 07 races as LMP2 and LMP2_ELMS (entry names from the driver's
+    DB); the previous session's setup is this class's, never the other's -- here the
+    ELMS session is the more recent one."""
+    from simcoach import car_lookup
+    lmp2, elms = "IDEC Sport 2025 #28:LM", "IDEC Sport #28:ELMS25"
+    monkeypatch.setattr(car_lookup, "_entry_table", lambda: {
+        lmp2: ("Oreca 07", "LMP2"), elms: ("Oreca 07", "LMP2_ELMS")})
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    _stored(store, dataclasses.replace(synthetic_lap, car=lmp2), "lmp2", [(228.2574, True, 4)])
+    _stored(store, dataclasses.replace(synthetic_lap, car=elms,
+                                       timestamp=synthetic_lap.timestamp + 10_000),
+            "elms", [(215.8251, True, 9)])
+    out = lambda cls: CoachContext(store, track=synthetic_lap.track, car="Oreca 07",
+                                   match_class=cls, session_id="cur").get_last_setup()
+    assert "Brake Balance: 4.0:x" in out("LMP2") and "9.0:x" not in out("LMP2")
+    assert "Brake Balance: 9.0:x" in out("LMP2_ELMS") and "4.0:x" not in out("LMP2_ELMS")
+
+
 def test_get_last_setup_falls_back_to_the_legacy_autosave_named_as_such(tmp_path):
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
     store.save_session_setup("old", "spa", "gt3", _setup(brake=6))

@@ -1,5 +1,6 @@
 import importlib.util
 
+import pytest
 from fastapi.testclient import TestClient
 
 from simcoach.coach import Coach
@@ -773,7 +774,52 @@ def test_ws_coach_matches_stored_laps_by_the_scraped_class(tmp_path, monkeypatch
 
     pb, status = fake.dispatched[0][2], fake.dispatched[1][2]
     assert "Oreca 07 (LMP2_ELMS): 3:35.825" in pb and "3:48.257" not in pb, pb
-    assert "Class: LMP2 |" in status, status
+    assert "Class: LMP2 (result log: LMP2_ELMS) |" in status, status
+
+
+@pytest.mark.parametrize("via", ["stored_row", "latest", "lap_id"])
+def test_ws_coach_off_track_matches_by_the_last_laps_class(tmp_path, synthetic_lap, monkeypatch,
+                                                           via):
+    # #190 red-team m1: post-race lobby (no live SMM, sidecar restarted): the context
+    # comes from the newest stored live lap. Its entry's scraped class still picks the
+    # Oreca 07's class -- else the PB lists both and the best lap mixes them. Real
+    # Sarthe rows (ids 4607, 4617) and entry names; the live lap is 4621's time. `via`:
+    # each off-track source -- the newest stored lap, the in-process latest, the lap_id.
+    import dataclasses
+
+    from simcoach import car_lookup
+    lmp2, elms = "IDEC Sport 2025 #28:LM", "IDEC Sport #28:ELMS25"
+    monkeypatch.setattr(car_lookup, "_entry_table", lambda: {
+        lmp2: ("Oreca 07", "LMP2"), elms: ("Oreca 07", "LMP2_ELMS")})
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    store.conn.executemany(
+        "INSERT INTO laps (ts, sim, track, car, lap_time, valid, phase, session_id, source, "
+        "mapping) VALUES (?, 'lmu', 'Circuit de la Sarthe', ?, ?, 1, 'practice', ?, "
+        "'result', 0)",
+        [(1777863757.0, lmp2, 228.2574, "2026_05_03_22_20_13-46P1"),
+         (1777866304.0, elms, 215.8251, "2026_05_03_23_21_11-40R1")])
+    store.conn.commit()
+    rec = dataclasses.replace(synthetic_lap, track="Circuit de la Sarthe", car=elms,
+                              lap_time=216.4102, session_id="sarthe--elms--offline",
+                              timestamp=1790000000.0)
+    lap_id = store.save(rec)
+    fake = FakeModel(reply="ok", tool_script=[("get_personal_best", {}),
+                                              ("get_session_status", {})])
+    app = create_app(store, Coach(fake))
+    if via == "latest":
+        app.state.latest = {"record": rec, "lap_id": lap_id}
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "what's my PB here?",
+                      **({"lap_id": lap_id} if via == "lap_id" else {})})
+        while True:
+            ev = ws.receive_json()
+            if ev["type"] in ("done", "error"):
+                break
+
+    pb, status = fake.dispatched[0][2], fake.dispatched[1][2]
+    assert "Oreca 07 (LMP2_ELMS): 3:35.825" in pb and "3:48.257" not in pb, pb
+    assert "Class: LMP2_ELMS (result log) |" in status, status
 
 
 def test_ws_coach_falls_back_to_newest_stored_lap_after_restart(tmp_path, synthetic_lap, monkeypatch):

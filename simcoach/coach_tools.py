@@ -1220,9 +1220,9 @@ class CoachContext:
             # when the session has none (the all-time best is its own line).
             best = (self.store.best_lap(self.track, self.car, session_id=self.session_id)
                     if self.session_id else None)
-            if best is None:   # #190: this car's class only, when it can be told
-                best = self.store.best_lap(self.track, self.car,
-                                           car_class=self._stored_class() or None)
+            if best is None and (cls := self._class_scope()) is not False:
+                # #190: this car's class only; none when that can't be told
+                best = self.store.best_lap(self.track, self.car, car_class=cls)
             # #173: resolve its id, or every comparison of the best lap excludes
             # nothing and picks the best lap itself as its own reference.
             return best, self._lap_id_for(best)
@@ -1285,8 +1285,14 @@ class CoachContext:
                  if (self.track and self.car) else 0)
         n_sess = (len(self.store.session_lap_ids(self.session_id, complete_only=True))
                   if self.session_id else None)
-        has_ref = bool(self.track and self.car and self.store.best_lap(
-            self.track, self.car, car_class=self._stored_class() or None))
+        has_ref = bool(self.track and self.car and (cls := self._class_scope()) is not False
+                       and self.store.best_lap(self.track, self.car, car_class=cls))
+        # #190: the class stored laps are matched by (PB labels, history) is stated
+        # too when it isn't the shown one -- REST may call the ELMS Oreca 'LMP2'.
+        shown_class = self.car_class or "unknown"
+        if self.match_class and _norm_class(self.match_class) != _norm_class(self.car_class):
+            shown_class = (f"{self.car_class} (result log: {self.match_class})"
+                           if self.car_class else f"{self.match_class} (result log)")
         on = "on track" if self.on_track else ("unknown" if self.on_track is None else "not on track")
         cur_rec, _ = self._current_lap()
         lap = "yes" if cur_rec is not None else "no lap captured yet"
@@ -1348,7 +1354,7 @@ class CoachContext:
                 f"Latest stored lap: {latest_txt} | "
                 f"Complete laps ({laps_txt}){other_txt} | Corner map: {cmap_txt} | "
                 f"Reference (best) lap available: {'yes' if has_ref else 'no'} | "
-                f"Class: {self.car_class or 'unknown'} | "
+                f"Class: {shown_class} | "
                 f"ABS: {self._aid_status('VM_ANTILOCK_BRAKES')} | "
                 f"TC: {self._aid_status('VM_TRACTION_CONTROL')}{pos_txt}{races_txt}")
 
@@ -2517,21 +2523,42 @@ class CoachContext:
             basis, len(practice), damage, damage_lap, source, notes,
             measured=start is not None, timed=timed, ve_car=bool(ve), formation=formation)
 
-    def _stored_class(self):
+    def _stored_class(self, car=None):
         """#184: the stored class this car's laps are filed under (store.timed_laps'
         `car_class`; None = no scraped class), or False when it can't be told: a car is a
         (model, class) pair -- the Oreca 07 races as LMP2 AND LMP2_ELMS, and their burn
         must never merge (#182). The live class picks one stored class; with the live
-        class unknown, only a model stored in exactly one class is read."""
-        if not (self.track and self.car):
+        class unknown, only a model stored in exactly one class is read. #190: `car`
+        (default this car) may name another model a tool was asked about."""
+        car = car or self.car
+        if not (self.track and car):
             return False
         classes = {g["car_class"] for g in self.store.session_facets()["car_groups"]
-                   if self.car in g["cars"]}
+                   if car in g["cars"]}
         mine = [c for c in classes
                 if not self.match_class or _norm_class(c) == _norm_class(self.match_class)]
         if len(mine) != 1:
             return False
         return None if mine[0] == "Other" else mine[0]
+
+    def _class_scope(self, car=None):
+        """#190: the stored class a cross-session read of `car` (default this car) is
+        narrowed to: a class, None when there is nothing to narrow (the model is stored
+        in at most one class), or False when it is stored in several and which one is
+        unknown -- the caller then refuses rather than mix them, like #184's history."""
+        cls = self._stored_class(car)
+        if cls is not False:
+            return cls
+        car = car or self.car
+        return False if sum(car in g["cars"] for g in
+                            self.store.session_facets()["car_groups"]) > 1 else None
+
+    def _mixed_classes(self, car):
+        """#190: what a cross-session read says instead of mixing a model's classes."""
+        classes = sorted(g["car_class"] for g in self.store.session_facets()["car_groups"]
+                         if car in g["cars"])
+        return (f"Can't tell which class of {car} this is: it is stored as "
+                f"{' and '.join(classes)}, and their times must not be mixed.")
 
     def _burn_history(self, cls) -> tuple[list, int, int]:
         """#184: (the newest HISTORY_LAPS clean laps with a measured fuel/energy burn at
@@ -2866,7 +2893,9 @@ class CoachContext:
         track, car = track or self.track, car or self.car
         if not (track and car):
             return "No track/car resolved yet — no progress to show."
-        summary = self.store.session_summary(track=track, car=car)
+        if (cls := self._class_scope(car)) is False:
+            return self._mixed_classes(car)
+        summary = self.store.session_summary(track=track, car=car, model_class=cls)
         points = summary["series"][0]["points"] if summary["series"] else []
         if not points:
             return f"No session history yet for {track} / {car} to show progress."
@@ -2884,7 +2913,10 @@ class CoachContext:
         track, car = track or self.track, car or self.car
         if not (track and car):
             return "No track/car resolved yet — no past sessions to list."
-        rows = self.store.race_sessions_page(track=track, car=car, limit=int(limit or 5))["rows"]
+        if (cls := self._class_scope(car)) is False:
+            return self._mixed_classes(car)
+        rows = self.store.race_sessions_page(track=track, car=car, limit=int(limit or 5),
+                                             model_class=cls)["rows"]
         rows = [r for r in rows if r["session_id"] != self.session_id]
         if not rows:
             return f"No past sessions recorded for {track} / {car}."
@@ -2907,7 +2939,10 @@ class CoachContext:
         # ("what did we run here last time?"), not the one this session recorded.
         # #188: the previous session's fastest lap's setup; sessions from before per-lap
         # setups existed fall back to the old per-session autosave, named as such.
-        fast = self.store.previous_fastest_setup(track, car, exclude_session_id=self.session_id)
+        if (cls := self._class_scope(car)) is False:
+            return self._mixed_classes(car)
+        fast = self.store.previous_fastest_setup(track, car, exclude_session_id=self.session_id,
+                                                 car_class=cls)
         row = self.store.last_setup(track, car, exclude_session_id=self.session_id)
         # A legacy autosave from a MORE RECENT, different session is the previous session.
         if fast is not None and not (row is not None and row["session_id"] != fast["session_id"]
