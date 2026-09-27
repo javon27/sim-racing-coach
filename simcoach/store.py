@@ -1184,8 +1184,8 @@ class LapStore:
             # model ("BMW M4 LMGT3") while laps are stored under the raw entry name, so
             # matching on car would wrongly return nothing (matches the UI, which
             # scopes by session_id).
-            cols = ("SELECT id, lap_time, valid, phase, partial, position, pit, mapping "
-                    "FROM laps WHERE ")
+            cols = ("SELECT id, lap_time, valid, phase, partial, position, pit, mapping, "
+                    "lap_no FROM laps WHERE ")
             if session_id is not None:
                 query = cols + "session_id = ?"
                 params: list = [session_id]
@@ -1198,7 +1198,7 @@ class LapStore:
             params.append(limit)
             rows = self.conn.execute(query, params).fetchall()
             keys = ("lap_id", "lap_time", "valid", "phase", "partial", "position", "pit",
-                    "mapping")
+                    "mapping", "lap_no")
             out = [dict(zip(keys, r)) for r in rows]
             for d in out:
                 d["pit"] = None if d["pit"] is None else bool(d["pit"])
@@ -1622,6 +1622,10 @@ class LapStore:
         if phase is not None:
             query += " AND phase = ?"
             params.append(phase)
+        if phase == "race":
+            # #180: race lap 0 is the grid/garage and the formation lap, before the
+            # green flag -- its place is a grid shuffle, not a race position.
+            query += " AND (lap_no IS NULL OR lap_no >= 1)"
         if since is not None:
             query += " AND ts >= ?"
             params.append(since)

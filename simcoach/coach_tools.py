@@ -88,6 +88,13 @@ _MAX_EVENT_LAPS = 30
 _PARTIAL_WORD = {"out": "out-lap", "in": "in-lap", "partial": "partial lap"}
 _PARTIAL_LIST_WORD = {"out": "out lap", "in": "in lap", "partial": "partial"}
 
+
+def _pre_green(phase, lap_no) -> bool:
+    """#180: race lap 0 -- the grid/garage segments and the formation lap, before the
+    green flag (never timed: every real one is an out/in/partial lap). Its position is
+    a grid shuffle, not a race position, and it is not part of a race review."""
+    return phase == "race" and lap_no == 0
+
 # #169: a lap slower than this multiple of the subject's time is never its reference
 # or a form sample (Long Beach #237 compared a 1:23 lap with a 1:36 exploration lap).
 _PACE_GATE = 1.07
@@ -181,12 +188,20 @@ TOOLS = [
                        "mentions a spin, an off, a moment, a flat spot, or asks what "
                        "happened a few laps ago; never assume the latest lap is the one "
                        "they mean. It ends with THIS LAP SO FAR: the incidents on the lap "
-                       "being driven, corner by corner as each is completed (provisional).",
+                       "being driven, corner by corner as each is completed (provisional). "
+                       "For a question about the RACE (how it went, analyze the race, "
+                       "the start) pass phase='race': only the race's own laps from "
+                       "race lap 1, never qualifying or the grid/formation lap.",
         "input_schema": {
             "type": "object",
-            "properties": {"laps": {"type": "integer",
-                                    "description": "How many recent laps to scan "
-                                                   "(default 10, max 30)."}},
+            "properties": {
+                "laps": {"type": "integer",
+                         "description": "How many recent laps to scan (default 10, or "
+                                        "the whole race with phase='race'; max 30)."},
+                "phase": {"type": "string", "enum": ["race"],
+                          "description": "'race' to scan only the current or most "
+                                         "recent race's racing laps."},
+            },
         },
     },
     {
@@ -326,7 +341,8 @@ TOOLS = [
         "name": "get_race_result",
         "description": "The race outcome + racecraft context for this session — finishing "
                        "position, incidents, penalties. Call this for questions about the "
-                       "race/result/how it went overall.",
+                       "race/result/how it went overall; for the race lap by lap, "
+                       "get_stint_events with phase='race'.",
         "input_schema": {"type": "object", "properties": {}},
     },
     {
@@ -999,13 +1015,15 @@ class CoachContext:
         # boundary weave -- say so, or its time and corners read as a bad lap.
         if record.mapping:
             tail_bits.append(_MAPPING_NOTE)
-        if record.phase == "race" and lap_id is not None and self.session_id:
+        if (record.phase == "race" and lap_id is not None and self.session_id
+                and not _pre_green(record.phase, record.lap_no)):
             sess_laps = self._session_laps()
             idx = next((i for i, r in enumerate(sess_laps) if r["id"] == lap_id), None)
             cur_pos = sess_laps[idx]["position"] if idx is not None else None
             if cur_pos is not None:
                 prev_pos = next((r["position"] for r in reversed(sess_laps[:idx])
-                                 if r.get("phase") == "race" and r.get("position") is not None),
+                                 if r.get("phase") == "race" and r.get("position") is not None
+                                 and not _pre_green(r["phase"], r.get("lap_no"))),
                                 None)
                 pos_txt = f"position P{cur_pos} overall"   # laps.position is mPlace
                 if prev_pos is not None:
@@ -1279,7 +1297,8 @@ class CoachContext:
             )
             # #134: race-phase position, appended when the column is set.
             pos = (f" P{r['position']} overall" if r.get("phase") == "race"
-                   and r.get("position") is not None else "")
+                   and r.get("position") is not None
+                   and not _pre_green(r["phase"], r.get("lap_no")) else "")
             pit = " (pit)" if r.get("pit") else ""
             if r.get("mapping"):
                 pit += f" — {_MAPPING_NOTE}"
@@ -1634,12 +1653,18 @@ class CoachContext:
             incident.append(is_incident_lap(record, self.cmap or CornerMap([]), analysis))
         return analyses, lap_times, incident
 
-    def get_stint_events(self, laps=10):
+    def get_stint_events(self, laps=None, phase=None):
         """Incidents over the last N laps of this session, grouped by lap.
 
         Deliberately NOT filtered to valid laps -- a lap with a spin or an off is
         usually the INVALID one, which is exactly the lap the driver is asking
-        about."""
+        about.
+
+        #180: phase='race' is a race review -- the current (or most recent) race's
+        racing laps only, never qualifying or race lap 0 (grid/formation), and by
+        default the whole race rather than the last 10 laps of the session. Opt-in
+        (the model passes it for a race question), not automatic: 'that spin a few
+        laps ago' right after qualy must still reach the qualy lap."""
         if not self.session_id and not self.on_track:
             return "No active session — no stint to scan for incidents."
         if self.cmap is None:
@@ -1647,8 +1672,9 @@ class CoachContext:
         this_lap = self._this_lap_events()
         if not self.session_id:
             return this_lap or "No active session — no stint to scan for incidents."
+        race_only = phase == "race"
         try:
-            n = int(laps or 10)
+            n = int(laps or (_MAX_EVENT_LAPS if race_only else 10))
         except (TypeError, ValueError):
             n = 10
         n = max(1, min(n, _MAX_EVENT_LAPS))
@@ -1658,7 +1684,12 @@ class CoachContext:
         # "that spin a few laps ago" came back as race 1's spin during race 3. Scan
         # this race only; an earlier race's laps stay reachable by name ('race 1 lap 2').
         cur_race = self._current_race()
-        if cur_race is not None and len(self._race_windows()) > 1:
+        if race_only:
+            if cur_race is None:
+                return "No race in this session — no race laps to scan for incidents."
+            ids = set(cur_race["lap_ids"])
+            rows = [r for r in rows if r["id"] in ids and not _pre_green("race", r["lap_no"])]
+        elif cur_race is not None and len(self._race_windows()) > 1:
             rows = [r for r in rows if r["ts"] >= cur_race["start_ts"]]
         rows = rows[-n:]
         loaded = []
@@ -2521,7 +2552,8 @@ class CoachContext:
                                                         args.get("reference", "best")),
             "get_time_on_table": lambda: self.get_time_on_table(
                 args.get("which", "best"), bool(args.get("detail", False))),
-            "get_stint_events": lambda: self.get_stint_events(args.get("laps", 10)),
+            "get_stint_events": lambda: self.get_stint_events(args.get("laps"),
+                                                              args.get("phase")),
             "get_consistency": lambda: self.get_consistency(args.get("phase")),
             "get_tire_trend": lambda: self.get_tire_trend(args.get("phase")),
             "get_handling": lambda: self.get_handling(args.get("which", "latest")),
