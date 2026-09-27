@@ -366,14 +366,20 @@ def test_a_warmup_waiter_that_times_out_scans_rather_than_serve_the_empty_table(
 
 
 def test_no_results_dir_is_checked_once_per_interval_too(tmp_path, monkeypatch):
-    """No LMU install found (or its dir gone from the config): the table is empty, and
+    """No results dir: a cold start that never scanned (no LMU install) is empty; after a
+    scan it is a transient config-read failure (an atomic replace, an AV lock) -- the
+    last table stands, never a second of class fallbacks that get persisted. Either way
     the config load behind that answer is rate-limited like the stat."""
     (tmp_path / "a.xml").write_text(_one_driver_xml("A #1", "Car A", "GT3"))
     clock, _ = _clocked(tmp_path, monkeypatch)
-    assert car_lookup._entry_table() == {"A #1": ("Car A", "GT3")}
-    calls = []
-    monkeypatch.setattr(car_lookup, "results_dir", lambda: calls.append(1))
-    clock[0] = 101.0
-    assert car_lookup._entry_table() == {} and len(calls) == 1
-    clock[0] = 101.5
-    assert car_lookup._entry_table() == {} and len(calls) == 1
+    calls, where = [], [None]
+    monkeypatch.setattr(car_lookup, "results_dir", lambda: (calls.append(1), where[0])[1])
+    assert car_lookup._entry_table() == {} and len(calls) == 1   # cold, never scanned
+    where[0], clock[0] = tmp_path, 101.0
+    assert car_lookup._entry_table() == {"A #1": ("Car A", "GT3")} and len(calls) == 2
+    where[0], clock[0] = None, 102.0                              # the transient failure
+    assert car_lookup.resolve_car("A #1", "GT3") == "Car A" and len(calls) == 3
+    clock[0] = 102.5
+    assert car_lookup._entry_table() == {"A #1": ("Car A", "GT3")} and len(calls) == 3
+    clock[0] = 103.0
+    assert car_lookup._entry_table() == {"A #1": ("Car A", "GT3")} and len(calls) == 4

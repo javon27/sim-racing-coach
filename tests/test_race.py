@@ -1085,13 +1085,16 @@ def test_the_overall_leader_crossing_after_the_clock_ran_out_took_the_flag():
     assert f"Remaining: none — {over}" in format_race_state(snap)
 
 
-def _closing(gaps, position, time_left=950.0, max_laps=None):
-    """#201: laps 10-12, clean at 100 s, closing on the car ahead 0.3 s/lap. A timed race
-    with 950 s left at lap 12 is 10 laps to go (the flag at lap 22), or 11 (lap 23)."""
+def _closing(gaps, position, time_left=950.0, max_laps=None, side="ahead",
+             class_position=3):
+    """#201: laps 10-12, clean at 100 s, the gap to the in-class car on `side` shrinking
+    0.3 s/lap. A timed race with 950 s left at lap 12 is 10 laps to go (the flag at lap
+    22), or 11 (lap 23)."""
+    who = "A. Rival (Rival Entry)" if side == "ahead" else "B. Chaser (Chaser Entry)"
     return [LapFacts(n, 100.0, True, position=position,
-                     race=RaceSample(class_position=3, class_ahead="A. Rival (Rival Entry)",
-                                     class_gap_ahead=g, time_left=time_left,
-                                     max_laps=max_laps))
+                     race=RaceSample(class_position=class_position, time_left=time_left,
+                                     max_laps=max_laps,
+                                     **{f"class_{side}": who, f"class_gap_{side}": g}))
             for n, g in zip((10, 11, 12), gaps)]
 
 
@@ -1118,10 +1121,15 @@ def test_a_catch_on_the_longer_counts_flag_lap_is_said_conditionally():
 
 
 def test_the_overall_leader_is_past_the_flag_on_the_longer_counts_lap():
-    """#201: P1 overall -- the flag is his own at lap 22, so a lap-23 catch is past it."""
-    snap = build_snapshot(_closing((3.8, 3.5, 3.2), position=1), "s")
-    assert snap.state.ahead.catch_lap is None
-    assert "; not before the flag at this rate." in format_race_state(snap)
+    """#201: P1 overall (so P1 in class, a car behind closing) -- the flag is his own at
+    lap 22, so the chaser's lap-23 catch is past it."""
+    snap = build_snapshot(_closing((3.8, 3.5, 3.2), position=1, side="behind",
+                                   class_position=1), "s")
+    assert snap.state.ahead is None and snap.state.behind.catch_lap is None
+    text = format_race_state(snap)
+    assert "Car ahead in class: none — you lead your class." in text, text
+    assert ("B. Chaser (Chaser Entry), 3.2 s behind; he is closing 0.30 s/lap; not before "
+            "the flag at this rate.") in text
 
 
 def test_a_lap_count_race_keeps_its_own_catch_cutoff():

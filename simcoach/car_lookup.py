@@ -127,8 +127,10 @@ def _scan_if_stale() -> dict[str, tuple[str, str | None]]:
         return _cache["table"]
     rd = results_dir()
     if rd is None:
-        _cache["sig"], _cache["table"], _cache["checked"] = None, {}, monotonic()
-        return {}
+        # No dir: never scanned (no LMU install) -> {}; or a transient config-read
+        # failure -> the last table, not a second of class fallbacks that get persisted.
+        _cache["checked"] = monotonic()
+        return _cache["table"]
     try:
         sig = os.stat(rd).st_mtime_ns
     except OSError:
