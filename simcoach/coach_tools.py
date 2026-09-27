@@ -407,7 +407,9 @@ TOOLS = [
                        "median over the race laps compared, naming those laps. By default the "
                        "rival is the car the driver was nearest (it may name two live). Use for "
                        "'where is he quicker', 'where can I pass him', 'where could I have "
-                       "passed him'. One call answers it.",
+                       "passed him'. 'The car/guy in front', 'ahead' -> direction='ahead'; "
+                       "'behind' -> direction='behind'; 'P3', 'number three' -> position=3. "
+                       "One call answers it.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -415,6 +417,12 @@ TOOLS = [
                           "description": "Optional: a rival the driver named: 'P4' (CLASS "
                                          "position), a driver name, or a car/team name "
                                          "('the Ferrari')."},
+                "direction": {"type": "string", "enum": ["ahead", "behind"],
+                              "description": "Optional: the car one CLASS position ahead "
+                                             "of ('in front', 'ahead') or behind the driver."},
+                "position": {"type": "integer",
+                             "description": "Optional: a CLASS position the driver named "
+                                            "('P3', 'number three' -> 3)."},
                 "which": {"type": "string",
                           "description": "Optional: 'race' for the whole most recent race, "
                                          "or one stored race lap by its in-session number "
@@ -2398,16 +2406,27 @@ class CoachContext:
         return format_provisional(provisional_strategy(practice, to_go, start), lap_no,
                                   basis, len(practice), damage, damage_lap)
 
-    def get_battle(self, rival=None, which=None):
+    def get_battle(self, rival=None, which=None, direction=None, position=None):
         """#174: in a live race, the last completed lap's cached read (unchanged). With
         no race live -- or when the driver names a stored lap or 'race' -- the read is
-        rebuilt from the battle_laps rows stored at each race lap's commit."""
+        rebuilt from the battle_laps rows stored at each race lap's commit.
+        #185: `direction` ('ahead'/'behind') or `position` (a class position) picks the
+        rival instead of the nearest car."""
+        direction = str(direction or "").strip().lower() or None
+        if direction not in (None, "ahead", "behind"):
+            return f"direction must be 'ahead' or 'behind', not {direction!r}."
+        if position is not None:
+            n = str(position).strip().upper().removeprefix("P")
+            if not n.isdecimal() or int(n) < 1:
+                return f"position must be a class position like 3, not {position!r}."
+            position, direction = int(n), None
         which = (which or "").strip().lower()
         live = self._no_live_race()
         if live is None and which in ("", "latest", "last lap", "current",
                                       "last completed lap"):
             return format_battle(self.race.battle, self.race.as_of_lap, self.units,
-                                 rival, note=self.race.battle_note)
+                                 rival, note=self.race.battle_note, direction=direction,
+                                 position=position)
         if which in ("", "latest"):
             if self.on_track and self.race_note:
                 return live   # a race is live, its first lap not in: never the last race's
@@ -2422,7 +2441,7 @@ class CoachContext:
         target = next((w for w in windows if whole and w["index"] == int(whole[1])), None)
         if target is not None or which in ("race", "the race", "this race", "last race",
                                            "the whole race"):
-            return self._stored_race_battle(rival, target, corners)
+            return self._stored_race_battle(rival, target, corners, direction, position)
         label_by_id, _ = self._lap_numbering()
         record, lap_id = self._resolve_lap(which)
         if record is None:
@@ -2434,9 +2453,11 @@ class CoachContext:
             return (f"No battle read is stored for {name}: none is stored for a lap outside "
                     "a race, with a stop, an out-/in-lap, a partly captured lap, or a lap "
                     "the field was not recorded on.")
-        return f"Stored read for {name}.\n" + format_battle(b, record.lap_no, self.units, rival)
+        return f"Stored read for {name}.\n" + format_battle(b, record.lap_no, self.units, rival,
+                                                           direction=direction,
+                                                           position=position)
 
-    def _stored_race_battle(self, rival, target, corners):
+    def _stored_race_battle(self, rival, target, corners, direction=None, position=None):
         """#174: a whole race's stored battle read -- `target` (a race window), or the
         latest race with a stored read; a named rival who wasn't in it is looked for in
         this session's earlier races, newest first."""
@@ -2475,7 +2496,8 @@ class CoachContext:
             head += (f"{rival!r} was not in race {read[0][0]['index']} (the latest with a "
                      f"battle read); this is race {win['index']}, the most recent race he "
                      "was in. ")
-        return format_race_battle(laps, self.units, rival, head=head)
+        return format_race_battle(laps, self.units, rival, head=head, direction=direction,
+                                  position=position)
 
     def get_setup(self):
         if not self.setup:
@@ -2715,7 +2737,8 @@ class CoachContext:
             "get_race_state": lambda: self.get_race_state(),
             "get_strategy": lambda: self.get_strategy(args.get("race_laps"),
                                                       args.get("race_minutes")),
-            "get_battle": lambda: self.get_battle(args.get("rival"), args.get("which")),
+            "get_battle": lambda: self.get_battle(args.get("rival"), args.get("which"),
+                                                  args.get("direction"), args.get("position")),
             "get_car_status": lambda: self.get_car_status(),
             "get_setup": lambda: self.get_setup(),
             "record_driver_learning": lambda: self.record_driver_learning(

@@ -2566,6 +2566,38 @@ def test_get_battle_reads_the_cached_battle_and_takes_a_named_rival(tmp_path, sy
         "As of lap 12. No battle read for lap 12: there is no corner map for this track.")
 
 
+
+def test_get_battle_direction_and_position_pick_the_class_neighbour_live(tmp_path,
+                                                                         synthetic_lap):
+    """#185 (rig, Sarthe): asked for the car in front, the nearest car -- the one BEHIND
+    -- was compared. direction/position pick by class position instead."""
+    from simcoach.battle import CarLap, build_battle
+    from simcoach.corners import Corner
+    from simcoach.race import LapFacts, build_snapshot
+    t1 = Corner(1, "La Source", "right", 200.0, 250.0, 300.0, label="1")
+    me = CarLap(12, "Jayson G", "E12", 4, True, entry={1: 104.0}, exit={1: 106.0})
+    ahead = CarLap(0, "Pedro Lage", "E0", 3, False, entry={1: 102.5}, exit={1: 104.4})
+    behind = CarLap(19, "nahuel romano", "E19", 5, False, entry={1: 104.5}, exit={1: 106.6})
+    ctx, _, _ = _ctx(tmp_path, synthetic_lap)
+    ctx.race = build_snapshot([LapFacts(lap_no=2, lap_time=100.0, clean=True)], "s",
+                              battle=build_battle([me, ahead, behind], [t1]))
+    assert "Rival (nearest to you on lap 2): nahuel romano" in ctx.dispatch("get_battle", {})
+    assert ("Rival (directly ahead of you in class at the end of lap 2, when you were P4): "
+            "Pedro Lage") in ctx.dispatch("get_battle", {"direction": "ahead"})
+    assert ("Rival (directly behind you in class at the end of lap 2, when you were P4): "
+            "nahuel romano") in ctx.dispatch("get_battle", {"direction": "Behind"})
+    for pos in (3, "3", "P3"):
+        assert ("Rival (P3 in class at the end of lap 2): Pedro Lage (E0), P3 in class."
+                in ctx.dispatch("get_battle", {"position": pos})), pos
+    assert ctx.dispatch("get_battle", {"position": 4}) == "As of lap 2. P4 is you, not a rival."
+    assert ctx.dispatch("get_battle", {"position": 9}).startswith(
+        "As of lap 2. No car in your class matches 'P9'. In your class: Pedro Lage")
+    for bad in (0, True, "three"):
+        assert ctx.dispatch("get_battle", {"position": bad}).startswith(
+            "position must be a class position like 3"), bad
+    assert ctx.dispatch("get_battle", {"direction": "front"}) == (
+        "direction must be 'ahead' or 'behind', not 'front'.")
+
 # --- #174: get_battle after the race, from the stored battle_laps rows -----------
 
 def _post_race(tmp_path, synthetic_lap, on_track=False):
@@ -3080,3 +3112,24 @@ def test_get_consistency_reads_lap_times_without_a_corner_map(tmp_path, syntheti
     out = ctx.get_consistency()
     assert "Lap time" in out and "over 3 laps" in out
     assert "corner map" in out and "Least consistent" not in out
+
+
+
+def test_post_race_battle_takes_a_direction_and_a_position(tmp_path, synthetic_lap):
+    """#185 after the race: the driver is P4 on every stored lap, Momo P3, B. Other P6."""
+    ctx = _post_race(tmp_path, synthetic_lap)
+    ahead = ctx.dispatch("get_battle", {"direction": "ahead"})
+    assert ahead.startswith("Rival (directly ahead of you in class on 4 of the 4 race laps "
+                            "with a stored battle read): Momo Rossi")
+    mine = "(your class position on them: P4, P4, P4, P4)."
+    assert ctx.dispatch("get_battle", {"direction": "behind"}) == (
+        "No other car in your class was directly behind you on any of the 4 race laps with "
+        "a stored battle read " + mine)
+    assert ctx.dispatch("get_battle", {"position": 6}).startswith(
+        "Rival (P6 in class on 4 of the 4 race laps with a stored battle read): B. Other")
+    assert ctx.dispatch("get_battle", {"position": 4}) == (
+        "No other car in your class was P4 on any of the 4 race laps with a stored battle "
+        "read " + mine)
+    one = ctx.dispatch("get_battle", {"direction": "ahead", "which": "race lap 3"})
+    assert ("Rival (directly ahead of you in class at the end of lap 3, when you were P4): "
+            "Momo Rossi") in one
