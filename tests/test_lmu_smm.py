@@ -1046,14 +1046,17 @@ def _partial_rig(tag: str):
     tmap = mmap.mmap(-1, C.sizeof(rF2Telemetry), tagname=tn, access=mmap.ACCESS_WRITE)
     smap = mmap.mmap(-1, C.sizeof(rF2Scoring), tagname=sn, access=mmap.ACCESS_WRITE)
 
-    def write(dist, last_lap, total_laps=0, in_pits=False, spd=180.0):
+    def write(dist, last_lap, total_laps=0, in_pits=False, spd=180.0, length=0.0,
+              finished=0):
         t = rF2Telemetry(); t.mVersionUpdateBegin = t.mVersionUpdateEnd = 1; t.mNumVehicles = 1
         v = t.mVehicles[0]; v.mID = 1; v.mLocalVel.z = -spd / 3.6
         v.mTrackName = b"Test Circuit"; v.mVehicleName = b"Car"
         s = rF2Scoring(); s.mScoringInfo.mVersionUpdateBegin = s.mScoringInfo.mVersionUpdateEnd = 1
         s.mScoringInfo.mNumVehicles = 1; s.mScoringInfo.mSession = 2
+        s.mScoringInfo.mLapDist = length    # the track length (#181); 0 = unknown
         pv = s.mVehicles[0]; pv.mID = 1; pv.mIsPlayer = True; pv.mLapDist = dist
         pv.mLastLapTime = last_lap; pv.mTotalLaps = total_laps; pv.mInPits = in_pits
+        pv.mFinishStatus = finished
         tmap.seek(0); tmap.write(bytes(t)); smap.seek(0); smap.write(bytes(s))
 
     src = smm.LmuSource(poll_hz=60, now_fn=lambda: 1_700_000_000.0)
@@ -1143,6 +1146,91 @@ def test_garage_return_with_almost_no_telemetry_stores_nothing():
     close()
 
     assert records == []
+
+
+# --- issue #181: a WHOLE lap LMU invalidated is a completed lap, not a fragment -----
+# The real case: Sarthe race lap 5 (lap id 7640), forced off at 7A/7B. 11,161 samples,
+# lap_distance -2.09 -> 13,613.23 m; LMU's result log has `<Lap num="5" s1="38.5065">
+# --.----` (no time, no s2/s3), so capture saw no fresh mLastLapTime.
+_SARTHE_M = 13_626.0
+
+
+def _drive(write, step, start, end, n=250, **kw):
+    for i in range(n):
+        write(start + (end - start) * i / (n - 1), **kw); step()
+
+
+
+@pytest.mark.parametrize("at_wrap", [242.433, -1.0], ids=["stale-time", "sentinel"])
+def test_invalidated_whole_lap_is_stored_complete_invalid_untimed(at_wrap):
+    write, step, records, close = _partial_rig(uuid.uuid4().hex)
+    kw = {"length": _SARTHE_M}
+    _drive(write, step, 5.0, 13_612.4, last_lap=-1.0, total_laps=3, **kw)       # lap 4
+    write(-0.5, 242.433, total_laps=4, **kw); step()                              # timed
+    _drive(write, step, 27.1, 13_613.2, last_lap=242.433, total_laps=4, **kw)     # lap 5
+    write(-2.0, at_wrap, total_laps=5, **kw); step()          # the line, no fresh time
+    close()
+
+    assert [r.lap_time for r in records] == [242.433, None]
+    r = records[1]
+    assert r.partial is None            # a completed lap -- not 'partial'
+    assert r.valid is False
+    assert r.lap_no == 5
+    assert r.sectors is None
+
+
+def test_whole_lap_needs_a_known_track_length_else_it_stays_a_fragment():
+    write, step, records, close = _partial_rig(uuid.uuid4().hex)
+    _drive(write, step, 3.0, 13_613.2, last_lap=-1.0, total_laps=4)   # length 0 = unknown
+    write(-2.0, -1.0, total_laps=5); step()
+    close()
+    assert records[0].partial == "partial"
+
+
+@pytest.mark.parametrize("start, end, laps", [
+    (5.0, 3_989.0, 5), (5_000.0, 13_613.2, 5),
+    # Real race-lap-0 rows (7422/7635): the formation lap from the grid, -2038 m -> the
+    # line; mTotalLaps still 0 at the wrap. Each guard alone keeps it a fragment.
+    (-2_038.3, 13_556.0, 0), (-2_038.3, 13_556.0, 1), (-2.0, 13_613.2, 0)],
+    ids=["spin-short", "joined-mid-lap", "formation-lap", "grid-start", "lap-0"])
+def test_a_fragment_on_a_known_track_is_still_partial(start, end, laps):
+    write, step, records, close = _partial_rig(uuid.uuid4().hex)
+    _drive(write, step, start, end, last_lap=-1.0, total_laps=0, length=_SARTHE_M)
+    write(-2.0, -1.0, total_laps=laps, length=_SARTHE_M); step()
+    close()
+    assert records[0].partial == "partial" and records[0].lap_time is None
+
+
+def test_a_whole_out_lap_and_in_lap_keep_their_kind():
+    write, step, records, close = _partial_rig(uuid.uuid4().hex)
+    kw = {"last_lap": -1.0, "length": _SARTHE_M}
+    write(3.0, total_laps=0, in_pits=True, **kw); step()          # leaves the box
+    _drive(write, step, 20.0, 13_613.2, total_laps=0, **kw)
+    write(-2.0, total_laps=1, **kw); step()
+    _drive(write, step, 20.0, 13_613.2, total_laps=1, **kw)
+    write(-2.0, total_laps=2, in_pits=True, **kw); step()         # dives into the pits
+    close()
+    assert [r.partial for r in records] == ["out", "in"]
+
+
+def test_a_whole_lap_begun_after_the_flag_is_not_a_racing_lap():
+    """The cool-down lap crosses the line again with no time: never 'invalidated'."""
+    write, step, records, close = _partial_rig(uuid.uuid4().hex)
+    kw = {"last_lap": -1.0, "length": _SARTHE_M, "finished": 1}
+    _drive(write, step, 3.0, 13_613.2, total_laps=5, **kw)
+    write(-2.0, total_laps=5, **kw); step()
+    close()
+    assert records[0].partial == "partial"
+
+
+def test_build_lap_record_keeps_an_untimed_invalidated_whole_lap():
+    from simcoach.lmu.smm import build_lap_record
+
+    ch = {"speed": [100.0, 101.0], "lap_distance": [0.0, 10.0]}
+    rec = build_lap_record(sim="lmu", track="T", car="C", lap_time=-1.0, invalidated=True,
+                           timestamp=1.0, channels=ch, lap_no=5)
+    assert rec is not None and rec.partial is None
+    assert rec.lap_time is None and rec.valid is False   # never the -1 sentinel
 
 
 def test_build_lap_record_keeps_an_untimed_lap_when_it_is_flagged_partial():

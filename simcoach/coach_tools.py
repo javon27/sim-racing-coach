@@ -1010,6 +1010,9 @@ class CoachContext:
         # looked up from session_laps rather than `record` (store.load() doesn't
         # thread position onto LapRecord).
         tail_bits = [kind] if kind else []
+        # #181: a whole lap LMU invalidated has no time either -- never an out/in-lap.
+        if record.partial is None and not record.lap_time:
+            tail_bits.append("invalidated racing lap (LMU gave it no time)")
         # #180: race lap 0 is not racing -- said here so every lap read (lap list,
         # unscoped stint scan, lap summary) carries it even when a race question
         # forgot phase='race'.
@@ -1317,6 +1320,10 @@ class CoachContext:
             # time to print and is not "INVALID" -- it is unfinished (#77).
             if r.get("partial"):
                 out.append(f"{label}: {_PARTIAL_LIST_WORD[r['partial']]} (no time){pos}{pit}")
+            elif r["lap_time"] is None:
+                # #181: a whole lap LMU invalidated -- driven to the line, but untimed.
+                out.append(f"{label}: no time (INVALID -- a racing lap LMU didn't time)"
+                           f"{pos}{pit}")
             else:
                 out.append(f"{label}: {format_laptime(r['lap_time'])} {valid}{pos}{pit}")
         return "\n".join(out)
@@ -1592,7 +1599,7 @@ class CoachContext:
             return "No corner map for this track yet — can't break the lap into corners."
         lap_line = self._lap_line(record, lap_id)
         if not record.lap_time:
-            return lap_line + "\nThat lap has no lap time (out, in or partial lap)."
+            return lap_line + "\nThat lap has no lap time (see the Lap line for why)."
         sectors, bounds, optimal, laps = self._optimal_for_lap(record, lap_id)
         if not laps:
             _, msg = self._reference_lap(record, lap_id)
@@ -2160,7 +2167,7 @@ class CoachContext:
                 not self.on_track or (self.race is None and not self.race_note)):
             text += ("\nNo race is live now, so the race these positions describe is over "
                      "(its result log isn't read yet): talk about it as a finished race -- "
-                     "a last lap into the pits is the cool-down after the flag, not a pit "
+                     "a last lap marked in-lap is the cool-down after the flag, not a pit "
                      "stop; no pit-stop or strategy offers.")
         return "\n".join([h for h in head if h] + [text] + self._race_lap_positions(rr))
 
@@ -2177,14 +2184,21 @@ class CoachContext:
             win = next((w for w in windows if w["end_ts"] >= rr["race_ts"]), win)
         ids = set(win["lap_ids"])
         label_by_id, _ = self._lap_numbering()
-        laps = [f"{label_by_id.get(r['id'], 'lap id ' + str(r['id']))} P{r['position']}"
-                for r in self._session_laps()
+        rows = [r for r in self._session_laps()
                 if r["id"] in ids and r.get("position") is not None
                 and not _pre_green(r["phase"], r.get("lap_no"))]
-        if not laps:
+        if not rows:
             return []
-        return [f"Per-lap positions (overall) from race lap 1: {', '.join(laps)}.",
-                "Lap-by-lap incidents for this race: get_stint_events with phase='race'."]
+        # #181: a whole lap LMU invalidated (an off, a cut) has no time, like a cool-down
+        # -- name it, so an untimed last lap is never read as the lap after the flag.
+        bad = [not r["valid"] and not r.get("partial") for r in rows]
+        laps = [f"{label_by_id.get(r['id'], 'lap id ' + str(r['id']))} P{r['position']}"
+                + (" (invalidated)" if b else "") for r, b in zip(rows, bad)]
+        out = [f"Per-lap positions (overall) from race lap 1: {', '.join(laps)}."]
+        if any(bad):
+            out.append("An invalidated lap was RACED -- a racing lap LMU didn't time (an off "
+                       "or a cut), never the cool-down: only an in-lap after the flag is that.")
+        return out + ["Lap-by-lap incidents for this race: get_stint_events with phase='race'."]
 
     def _no_live_race(self) -> str | None:
         """#152 guard for the race tools: a snapshot exists only in a live race, from its

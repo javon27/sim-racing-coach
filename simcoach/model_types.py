@@ -21,7 +21,8 @@ class LapRecord:
     sim: str
     track: str
     car: str
-    lap_time: float | None   # None ONLY on a partial lap -- the game posts no time
+    # None on a partial lap, or a whole lap the game invalidated (#181) -- it posts no time
+    lap_time: float | None
     valid: bool
     timestamp: float
     channels: dict[str, np.ndarray]

@@ -33,7 +33,7 @@ from simcoach.lmu.rf2structs import (
     rF2Telemetry,
 )
 from simcoach.model_types import LapRecord
-from simcoach.race import race_sample
+from simcoach.race import PARTIAL_START_M, race_sample
 
 # Candidate MMF names, tried in order -- extensible so a future LMU/plugin
 # update that renames the interface is a config change here, not a code
@@ -636,14 +636,19 @@ def build_lap_record(
     corner tools can still read it. It lands with lap_time None and valid False --
     NOT the -1 sentinel, which would still poison `ORDER BY lap_time`, and not
     valid, so every consumer that filters on `valid = 1` skips it unchanged.
+
+    The other is a WHOLE lap the game invalidated (#181): untimed but `invalidated`,
+    stored complete (partial None) with lap_time None and valid False -- the same shape
+    the result-log import gives an invalid lap, so the two pair on import.
     """
-    if partial is None and (lap_time is None or lap_time <= 0):
+    untimed = lap_time is None or lap_time <= 0
+    if partial is None and untimed and not invalidated:
         return None
     return LapRecord(
         sim=sim,
         track=track,
         car=car,
-        lap_time=None if partial is not None else lap_time,
+        lap_time=None if partial is not None or untimed else lap_time,
         valid=(not invalidated) and partial is None,
         timestamp=timestamp,
         channels={k: np.array(v) for k, v in channels.items()},
@@ -796,6 +801,9 @@ class LmuSource:
         # makes a stored fragment an OUT-lap rather than a spin (#77). None until
         # that first frame lands.
         self._pit_at_lap_start: bool | None = None
+        # #181: the player's mFinishStatus was already set (flag taken) on that same
+        # first frame -- a lap begun after the flag is the cool-down, never a racing lap.
+        self._finished_at_lap_start = False
         # #152 get_battle: the same-class field over this lap, from each NEW scoring
         # frame. _trace_key/_trace_laps detect a new session or race (see _feed_trace).
         self._trace = FieldTrace()
@@ -852,6 +860,23 @@ class LmuSource:
             return "out"
         return "in" if player.mInPits else "partial"
 
+    def _whole_lap(self, player, scoring) -> bool:
+        """#181: the untimed buffer is a WHOLE racing lap -- LMU gives an invalidated lap
+        no time (its result log prints `--.----`), so it wraps untimed like a fragment.
+        Whole = the samples start at the line and reach the line again (within
+        PARTIAL_START_M, the same tolerance `picked_up_mid_lap` uses, of both ends of the
+        track's mLapDist length), never touching the pits at either end, and begun
+        before the flag. An unknown length (0) can't be confirmed: a fragment, as before.
+        Never race lap 0 (#180, mTotalLaps 0 at the wrap): the formation lap starts on
+        the grid ~2 km BEHIND the line (-2038 m on the real Sarthe rows) and reaches it."""
+        d = self._channels.get("lap_distance") or []
+        length = float(scoring.mScoringInfo.mLapDist)
+        return (bool(d) and length > 0 and abs(d[0]) <= PARTIAL_START_M
+                and player.mTotalLaps >= 1
+                and max(d) >= length - PARTIAL_START_M
+                and not self._pit_at_lap_start and not player.mInPits
+                and not self._finished_at_lap_start)
+
     def _poll_once(self, telemetry_name: str, scoring_name: str):
         """One read-and-decide step: read the current telemetry/scoring snapshot,
         update the in-progress lap buffer, and return a committed LapRecord if this
@@ -888,8 +913,11 @@ class LmuSource:
             # time; anything shorter (a garage return with a handful of samples) has
             # nothing to analyse and is still dropped.
             fresh = bool(self._channels) and lap_time > 0 and lap_time != self._committed_time
-            partial = None if fresh else self._partial_kind(player)
-            if fresh or partial is not None:
+            # #181: an untimed WHOLE lap is a completed racing lap LMU invalidated --
+            # stored complete (partial NULL), invalid, with no time (LMU gave none).
+            whole = not fresh and self._whole_lap(player, scoring)
+            partial = None if fresh or whole else self._partial_kind(player)
+            if fresh or whole or partial is not None:
                 track = vt.mTrackName.decode(errors="replace")
                 car = vt.mVehicleName.decode(errors="replace")
                 phase = session_phase(scoring.mScoringInfo.mSession)
@@ -912,7 +940,7 @@ class LmuSource:
                 record = build_lap_record(
                     sim="lmu", track=track, car=car,
                     lap_time=lap_time if fresh else None,
-                    invalidated=vt.mLapInvalidated, timestamp=self._now(),
+                    invalidated=vt.mLapInvalidated or whole, timestamp=self._now(),
                     channels=self._channels, phase=phase, session_id=session_id,
                     sectors=sectors, position=position, sector_bounds=sector_bounds,
                     lap_no=lap_no, pit=self._pit_during_lap, partial=partial,
@@ -936,6 +964,7 @@ class LmuSource:
             self._sector_seq = []
             self._pit_during_lap = False
             self._pit_at_lap_start = None
+            self._finished_at_lap_start = False
 
         sample = sample_from_telem(vt, dist)
         # Track-width usage lives on SCORING, not telemetry: path_lateral is the
@@ -951,6 +980,7 @@ class LmuSource:
         first = self._pit_at_lap_start is None
         if first:
             self._pit_at_lap_start = bool(player.mInPits)
+            self._finished_at_lap_start = player.mFinishStatus != 0
         for k, v in sample.items():
             self._channels.setdefault(k, []).append(v)
         if first:
