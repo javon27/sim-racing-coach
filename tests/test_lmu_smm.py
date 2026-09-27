@@ -1047,9 +1047,9 @@ def _partial_rig(tag: str):
     smap = mmap.mmap(-1, C.sizeof(rF2Scoring), tagname=sn, access=mmap.ACCESS_WRITE)
 
     def write(dist, last_lap, total_laps=0, in_pits=False, spd=180.0, length=0.0,
-              finished=0):
+              finished=0, et=0.0):
         t = rF2Telemetry(); t.mVersionUpdateBegin = t.mVersionUpdateEnd = 1; t.mNumVehicles = 1
-        v = t.mVehicles[0]; v.mID = 1; v.mLocalVel.z = -spd / 3.6
+        v = t.mVehicles[0]; v.mID = 1; v.mLocalVel.z = -spd / 3.6; v.mElapsedTime = et
         v.mTrackName = b"Test Circuit"; v.mVehicleName = b"Car"
         s = rF2Scoring(); s.mScoringInfo.mVersionUpdateBegin = s.mScoringInfo.mVersionUpdateEnd = 1
         s.mScoringInfo.mNumVehicles = 1; s.mScoringInfo.mSession = 2
@@ -1221,6 +1221,46 @@ def test_a_whole_lap_begun_after_the_flag_is_not_a_racing_lap():
     write(-2.0, total_laps=5, **kw); step()
     close()
     assert records[0].partial == "partial"
+
+
+def test_an_esc_to_the_garage_mid_lap_is_not_a_whole_lap():
+    """Red-team #181 (real 7416 shape): ESC a few hundred metres in jumps back < the wrap
+    threshold, so garage + drive-out + line crossing is ONE buffer, pits only mid-lap."""
+    write, step, records, close = _partial_rig(uuid.uuid4().hex)
+    kw = {"last_lap": -1.0, "length": _SARTHE_M, "total_laps": 1}
+    _drive(write, step, 1.0, 320.0, n=40, **kw)                       # sets off
+    for _ in range(60):
+        write(20.0, in_pits=True, spd=0.0, **kw); step()               # ESC: in the garage
+    _drive(write, step, 20.0, 13_613.2, **kw)                          # out, round
+    write(-2.0, **kw); step()                                          # the line, on track
+    close()
+    assert records[0].partial == "partial"
+
+
+def test_a_cool_down_whose_flag_status_lands_late_is_not_a_racing_lap():
+    """mFinishStatus set a few scoring updates after the rollover: still the cool-down."""
+    write, step, records, close = _partial_rig(uuid.uuid4().hex)
+    kw = {"last_lap": -1.0, "length": _SARTHE_M, "total_laps": 5}
+    for i in range(250):
+        write(3.0 + 13_610.0 * i / 249, finished=int(i >= 3), et=1000.0 + i * 0.2, **kw)
+        step()
+    write(-2.0, finished=1, et=1050.0, **kw); step()
+    close()
+    assert records[0].partial == "partial"
+
+
+def test_the_flag_lap_whose_last_frames_read_finished_is_still_a_whole_lap():
+    """LMU rolls the lap over a sample before our wrap (rig 7640): the flag lap's own
+    last frames may already read finished. That is the flag lap, not a cool-down."""
+    write, step, records, close = _partial_rig(uuid.uuid4().hex)
+    kw = {"last_lap": -1.0, "length": _SARTHE_M, "total_laps": 4}
+    for i in range(250):
+        write(3.0 + 13_610.0 * i / 249, finished=int(i >= 247), et=1000.0 + i, **kw)
+        step()
+    write(-2.0, finished=1, et=1250.0, last_lap=-1.0, length=_SARTHE_M, total_laps=5)
+    step()
+    close()
+    assert records[0].partial is None and records[0].valid is False
 
 
 def test_build_lap_record_keeps_an_untimed_invalidated_whole_lap():

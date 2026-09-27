@@ -31,15 +31,24 @@ def test_race_result_names_the_invalidated_lap_as_raced(tmp_path, synthetic_lap)
     out = _race(tmp_path, synthetic_lap).get_race_result()
     assert ("race lap 4 P2, race lap 5 P2 (invalidated), race lap 6 P2.") in out
     assert "An invalidated lap was RACED" in out and "never the cool-down" in out
-    # The genuine cool-down (an in-lap after the flag) keeps the cool-down wording.
-    assert "a last lap marked in-lap is the cool-down after the flag" in out
+    # The cool-down rule keys on the lap BEGUN after the flag, never on a missing time.
+    assert "the lap begun after the chequered flag is the cool-down" in out
+    assert "a lap marked invalidated is never the cool-down" in out
+
+
+def test_result_log_untimed_rows_are_not_called_raced(tmp_path, synthetic_lap):
+    """A result-import row with no time may be an out-lap: no 'invalidated'/'RACED'."""
+    ctx = _race(tmp_path, synthetic_lap)
+    ctx.store.conn.execute("UPDATE laps SET source = 'result' WHERE lap_no = 5")
+    out = ctx.get_race_result()
+    assert "(invalidated)" not in out and "RACED" not in out
 
 
 def test_no_invalidated_note_without_one(tmp_path, synthetic_lap):
     ctx = _race(tmp_path, synthetic_lap)
     ctx.store.conn.execute("UPDATE laps SET lap_time = 241.6, valid = 1 WHERE lap_no = 5")
     out = ctx.get_race_result()
-    assert "invalidated" not in out and "RACED" not in out
+    assert "(invalidated)" not in out and "RACED" not in out
 
 
 def test_the_invalidated_lap_counts_as_a_racing_lap(tmp_path, synthetic_lap):
@@ -52,9 +61,16 @@ def test_the_invalidated_lap_counts_as_a_racing_lap(tmp_path, synthetic_lap):
 def test_lap_reads_describe_it_as_invalidated_not_cool_down(tmp_path, synthetic_lap):
     ctx = _race(tmp_path, synthetic_lap)
     listing = ctx.list_recent_laps(limit=20)
-    assert "race lap 5: no time (INVALID -- a racing lap LMU didn't time) P2 overall" in listing
+    assert "race lap 5: no time — LMU didn't time it (invalidated) P2 overall" in listing
     assert "race lap 6: in lap (no time)" in listing
     lap5 = ctx.get_lap_summary("race lap 5").splitlines()[0]
-    assert "invalidated racing lap (LMU gave it no time)" in lap5
+    assert "no time — LMU didn't time it (invalidated)" in lap5
+    assert "racing" not in lap5 and "racing" not in listing   # neutral: any phase, any source
     lap6 = ctx.get_lap_summary("race lap 6").splitlines()[0]
     assert "in-lap" in lap6 and "invalidated" not in lap6
+
+
+def test_time_loss_refuses_an_untimed_lap(tmp_path, synthetic_lap):
+    out = _race(tmp_path, synthetic_lap).get_time_loss("race lap 5")
+    assert "no lap time" in out and "no time loss to measure" in out
+    assert "vs best" not in out

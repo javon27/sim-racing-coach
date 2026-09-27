@@ -60,6 +60,9 @@ def test_race_result_says_a_logged_race_is_finished(tmp_path, synthetic_lap):
     # #247's state: the result log is in.
     out = _race(tmp_path, synthetic_lap, logged=True)(on_track=True).get_race_result()
     assert "This race is FINISHED" in out and FINISHED in out
+    # #181: the cool-down rule rides with a logged race too, keyed on the lap begun
+    # after the flag -- never on a lap merely lacking a time.
+    assert "the lap begun after the chequered flag is the cool-down" in out
 
 
 def test_race_result_after_the_flag_before_the_log_is_finished_too(tmp_path, synthetic_lap):

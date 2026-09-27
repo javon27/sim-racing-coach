@@ -90,6 +90,13 @@ _PARTIAL_LIST_WORD = {"out": "out lap", "in": "in lap", "partial": "partial"}
 
 
 _PRE_GREEN_NOTE = "grid/formation lap before the green flag, not racing"
+# #181: a COMPLETE lap with no time (partial NULL, lap_time NULL).
+_UNTIMED_NOTE = "no time \N{EM DASH} LMU didn't time it (invalidated)"
+# #181: said wherever a finished race is described -- the cool-down is the lap BEGUN
+# after the flag; an untimed lap alone never makes one.
+_COOL_DOWN_RULE = ("the lap begun after the chequered flag is the cool-down (listed as an "
+                   "in-lap or a partial lap), not a pit stop -- a lap marked invalidated "
+                   "is never the cool-down")
 
 
 def _pre_green(phase, lap_no) -> bool:
@@ -1010,9 +1017,9 @@ class CoachContext:
         # looked up from session_laps rather than `record` (store.load() doesn't
         # thread position onto LapRecord).
         tail_bits = [kind] if kind else []
-        # #181: a whole lap LMU invalidated has no time either -- never an out/in-lap.
+        # #181: a complete lap with no time -- LMU didn't time it (an invalidated lap).
         if record.partial is None and not record.lap_time:
-            tail_bits.append("invalidated racing lap (LMU gave it no time)")
+            tail_bits.append(_UNTIMED_NOTE)
         # #180: race lap 0 is not racing -- said here so every lap read (lap list,
         # unscoped stint scan, lap summary) carries it even when a race question
         # forgot phase='race'.
@@ -1321,9 +1328,9 @@ class CoachContext:
             if r.get("partial"):
                 out.append(f"{label}: {_PARTIAL_LIST_WORD[r['partial']]} (no time){pos}{pit}")
             elif r["lap_time"] is None:
-                # #181: a whole lap LMU invalidated -- driven to the line, but untimed.
-                out.append(f"{label}: no time (INVALID -- a racing lap LMU didn't time)"
-                           f"{pos}{pit}")
+                # #181: a complete lap LMU gave no time (live: invalidated; a result-log
+                # row: any untimed lap, out-laps included) -- so no claim past that.
+                out.append(f"{label}: {_UNTIMED_NOTE}{pos}{pit}")
             else:
                 out.append(f"{label}: {format_laptime(r['lap_time'])} {valid}{pos}{pit}")
         return "\n".join(out)
@@ -1474,6 +1481,11 @@ class CoachContext:
             # through and report a delta that silently includes a pit-lane detour.
             return ("That lap can't be compared to the reference (partial lap, or a "
                     "different track length).")
+        if not record.lap_time:
+            # #181: a complete lap LMU didn't time (invalidated) -- no time to lose.
+            return (self._lap_line(record, lap_id) + "\nThat lap has no lap time (LMU "
+                    "didn't time it -- invalidated), so there's no time loss to measure "
+                    "against the reference.")
         ref, ref_label = self._reference_lap(record, lap_id, reference)
         if ref is None:
             if ref_label and ref_label.startswith("No comparable"):
@@ -2162,13 +2174,13 @@ class CoachContext:
         # sidecar restart mid-race) carries race_note instead: still live, not over.
         if rr:
             text += ("\nThis race is FINISHED (the result log is written after the flag): "
-                     "talk about it as a finished race -- no pit-stop or strategy offers.")
+                     f"talk about it as a finished race -- {_COOL_DOWN_RULE}; no pit-stop "
+                     "or strategy offers.")
         elif not text.startswith("No race result") and (
                 not self.on_track or (self.race is None and not self.race_note)):
             text += ("\nNo race is live now, so the race these positions describe is over "
                      "(its result log isn't read yet): talk about it as a finished race -- "
-                     "a last lap marked in-lap is the cool-down after the flag, not a pit "
-                     "stop; no pit-stop or strategy offers.")
+                     f"{_COOL_DOWN_RULE}; no pit-stop or strategy offers.")
         return "\n".join([h for h in head if h] + [text] + self._race_lap_positions(rr))
 
     def _race_lap_positions(self, rr) -> list[str]:
@@ -2191,13 +2203,15 @@ class CoachContext:
             return []
         # #181: a whole lap LMU invalidated (an off, a cut) has no time, like a cool-down
         # -- name it, so an untimed last lap is never read as the lap after the flag.
-        bad = [not r["valid"] and not r.get("partial") for r in rows]
+        # Live capture only: a result-log row with no time may be anything untimed.
+        bad = [r.get("source") == "live" and not r["valid"] and not r.get("partial")
+               and r["lap_time"] is None for r in rows]
         laps = [f"{label_by_id.get(r['id'], 'lap id ' + str(r['id']))} P{r['position']}"
                 + (" (invalidated)" if b else "") for r, b in zip(rows, bad)]
         out = [f"Per-lap positions (overall) from race lap 1: {', '.join(laps)}."]
         if any(bad):
             out.append("An invalidated lap was RACED -- a racing lap LMU didn't time (an off "
-                       "or a cut), never the cool-down: only an in-lap after the flag is that.")
+                       "or a cut), never the cool-down.")
         return out + ["Lap-by-lap incidents for this race: get_stint_events with phase='race'."]
 
     def _no_live_race(self) -> str | None:

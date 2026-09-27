@@ -38,7 +38,8 @@ export type PartialKind = "out" | "in" | "partial";
 
 export interface LapRow {
   id: number;
-  /** null ONLY on a partial lap — the game posts no time for one. */
+  /** null on a partial lap, or a complete lap the game didn't time (an invalidated
+   *  live lap, #181; an untimed result-log lap) — no time is posted for either. */
   lap_time: number | null;
   valid: number;
   ts: number;

@@ -62,6 +62,13 @@ _LAP_WRAP_M = 500.0
 _PARTIAL_MIN_SAMPLES = 200
 _PARTIAL_MIN_SPAN_M = 200.0
 
+# #181: mFinishStatus turning non-zero this soon into a lap means the lap began at the
+# flag (a cool-down), allowing LMU to set it a scoring update or two after the line.
+# Not "any time in the lap": LMU rolls the lap over (mLapStartET) a sample BEFORE our
+# lap-distance wrap (rig lap 7640), so the flag lap's own last frames may already read
+# finished -- a whole-lap check would then call the real last racing lap a cool-down.
+_FLAG_GRACE_S = 2.0
+
 
 class _PROCESSENTRY32W(C.Structure):
     _fields_ = [
@@ -801,8 +808,9 @@ class LmuSource:
         # makes a stored fragment an OUT-lap rather than a spin (#77). None until
         # that first frame lands.
         self._pit_at_lap_start: bool | None = None
-        # #181: the player's mFinishStatus was already set (flag taken) on that same
-        # first frame -- a lap begun after the flag is the cool-down, never a racing lap.
+        # #181: the player's mFinishStatus was set (flag taken) within _FLAG_GRACE_S of
+        # this lap's first frame -- a lap begun after the flag is the cool-down, never a
+        # racing lap.
         self._finished_at_lap_start = False
         # #152 get_battle: the same-class field over this lap, from each NEW scoring
         # frame. _trace_key/_trace_laps detect a new session or race (see _feed_trace).
@@ -865,7 +873,9 @@ class LmuSource:
         no time (its result log prints `--.----`), so it wraps untimed like a fragment.
         Whole = the samples start at the line and reach the line again (within
         PARTIAL_START_M, the same tolerance `picked_up_mid_lap` uses, of both ends of the
-        track's mLapDist length), never touching the pits at either end, and begun
+        track's mLapDist length), never in the pits at any sampled frame or the wrap (an
+        ESC to the garage a few hundred metres in jumps back < _LAP_WRAP_M, so no wrap
+        fires and the garage + drive-out + line crossing is one buffer), and begun
         before the flag. An unknown length (0) can't be confirmed: a fragment, as before.
         Never race lap 0 (#180, mTotalLaps 0 at the wrap): the formation lap starts on
         the grid ~2 km BEHIND the line (-2038 m on the real Sarthe rows) and reaches it."""
@@ -874,7 +884,8 @@ class LmuSource:
         return (bool(d) and length > 0 and abs(d[0]) <= PARTIAL_START_M
                 and player.mTotalLaps >= 1
                 and max(d) >= length - PARTIAL_START_M
-                and not self._pit_at_lap_start and not player.mInPits
+                and not self._pit_at_lap_start and not self._pit_during_lap
+                and not player.mInPits
                 and not self._finished_at_lap_start)
 
     def _poll_once(self, telemetry_name: str, scoring_name: str):
@@ -980,9 +991,11 @@ class LmuSource:
         first = self._pit_at_lap_start is None
         if first:
             self._pit_at_lap_start = bool(player.mInPits)
-            self._finished_at_lap_start = player.mFinishStatus != 0
         for k, v in sample.items():
             self._channels.setdefault(k, []).append(v)
+        if (player.mFinishStatus != 0
+                and vt.mElapsedTime - self._channels["elapsed_time"][0] <= _FLAG_GRACE_S):
+            self._finished_at_lap_start = True
         if first:
             # #160: published AFTER the first append, so every key already exists.
             # mTotalLaps counts FINISHED laps (a commit's lap_no), so this one is +1.

@@ -24,6 +24,7 @@ class ReplaySource:
     def laps(self) -> Iterator[LapRecord]:
         # Complete laps only: a replay stands in for live capture of finished laps.
         # An out/in/partial row (#77) has no lap time, so replaying it would feed a
-        # consumer a lap capture itself would never have handed it.
+        # consumer a lap capture itself would never have handed it. An invalidated
+        # whole lap (#181) IS complete and replays -- untimed, as capture hands it.
         for lap_id in self.store.list_lap_ids(self.track, self.car, complete_only=True):
             yield self.store.load(lap_id)

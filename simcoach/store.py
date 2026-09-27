@@ -1540,11 +1540,12 @@ class LapStore:
         with self._lock:
             rows = self.conn.execute(
                 "SELECT id, lap_time, valid, ts, s1, s2, s3, phase, track, car, lap_no, pit, "
-                "partial, position, mapping FROM laps WHERE session_id = ? ORDER BY ts",
+                "partial, position, mapping, source FROM laps WHERE session_id = ? "
+                "ORDER BY ts",
                 (session_id,),
             ).fetchall()
             keys = ("id", "lap_time", "valid", "ts", "s1", "s2", "s3", "phase", "track", "car",
-                    "lap_no", "pit", "partial", "position", "mapping")
+                    "lap_no", "pit", "partial", "position", "mapping", "source")
             out = []
             for r in rows:
                 d = dict(zip(keys, r))

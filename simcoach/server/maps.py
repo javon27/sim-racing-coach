@@ -41,11 +41,13 @@ def register(app, deps) -> None:
         # pit-lane pass or a half lap is exactly the shape #69's width/banking gate
         # exists to reject, and one guard here covers BOTH the /tracks badge counts
         # and the rebuild that consumes them, so the two can never disagree.
+        # `lap_time IS NOT NULL` (#181): a whole lap LMU invalidated is complete now but
+        # untimed -- its off/cut is not the line; kept out, as it was while 'partial'.
         with store._lock:   # store.py shares one connection with the capture thread
             rows = store.conn.execute(
                 "SELECT track, telemetry_path FROM laps "
                 "WHERE telemetry_path IS NOT NULL AND track IS NOT NULL "
-                "AND partial IS NULL ORDER BY id").fetchall()
+                "AND partial IS NULL AND lap_time IS NOT NULL ORDER BY id").fetchall()
         return [(track_slug(n), n, p) for n, p in rows if track_slug(n)]
 
     def _rebuild_clouds(track: str, rows=None, *, capture: bool = True,
@@ -124,7 +126,9 @@ def register(app, deps) -> None:
             ch = rec.channels
             if "pos_x" not in ch or "pos_z" not in ch or "lap_distance" not in ch:
                 continue
-            if best_t is not None and rec.lap_time and rec.lap_time > best_t * _CLEAN_LAP_RATIO:
+            if not rec.lap_time:
+                continue    # #181: an untimed (invalidated) whole lap is not a clean lap
+            if best_t is not None and rec.lap_time > best_t * _CLEAN_LAP_RATIO:
                 continue
             ld = ch["lap_distance"]
             if len(ld) < 2:

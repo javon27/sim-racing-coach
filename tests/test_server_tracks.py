@@ -1778,3 +1778,21 @@ def test_a_lone_surrogate_is_refused_with_422_not_a_500(tmp_path):
     put("map", {"corners": [{"number": 1, "label": "1", "apex_dist": 50.0}],
                 "sections": [{"name": lone, "start_dist": 10.0, "end_dist": 90.0}]})
     assert f.read_bytes() == before
+
+
+def test_an_untimed_invalidated_whole_lap_stays_off_the_outline_and_the_cloud(tmp_path):
+    """#181: an invalidated whole lap is complete (partial NULL) but untimed -- its off or
+    cut is not the line. Kept off the averaged outline and the rebuild cloud, as it was
+    while it was stored 'partial'."""
+    import dataclasses
+    client, store, _f = _spa_client(tmp_path)
+    lap = _circuit_lap(store, "Manthey #91")
+    _circuit_lap(store, "Manthey #91")
+    wide = _circuit_lap(store, "Manthey #91", rz=90.0)
+    store.conn.execute("UPDATE laps SET lap_time = NULL, valid = 0 WHERE id = ?", (wide,))
+    assert dataclasses.asdict(store.load(wide))["partial"] is None
+    m = client.get(f"/tracks/{_SPA}/map").json()
+    assert abs(m["width"] - m["height"]) < 1.0       # averaging it in would stretch it
+    assert m == client.get(f"/laps/{lap}/map").json()
+    row = next(t for t in client.get("/tracks").json() if t["slug"] == _SPA)
+    assert row["live_laps"] == 2
