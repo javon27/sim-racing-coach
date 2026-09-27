@@ -245,12 +245,18 @@ def test_get_last_setup_says_when_the_true_fastest_lap_has_no_setup(tmp_path, sy
     assert "fastest lap with a recorded setup (lap 1, 1:39.500)" in out
 
 
-def test_get_last_setup_prefers_a_more_recent_legacy_session(tmp_path, synthetic_lap):
+def test_get_last_setup_prefers_a_more_recent_legacy_session(tmp_path, synthetic_lap, monkeypatch):
+    """#199: the legacy autosave is stored under the raw entry name (Team WRT 2026
+    #32:WEC, from the driver's real DB), so a model-name query (BMW M4 LMGT3) must
+    still find it."""
+    from simcoach import car_lookup
+    entry = "Team WRT 2026 #32:WEC"
+    monkeypatch.setattr(car_lookup, "_entry_table", lambda: {entry: ("BMW M4 LMGT3", "GT3")})
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    _stored(store, synthetic_lap, "prev", [(99.5, True, 4)])
+    _stored(store, dataclasses.replace(synthetic_lap, car=entry), "prev", [(99.5, True, 4)])
     # A later session with only the legacy autosave IS the previous session.
-    store.save_session_setup("later", synthetic_lap.track, synthetic_lap.car, _setup(brake=7))
-    out = CoachContext(store, track=synthetic_lap.track, car=synthetic_lap.car,
+    store.save_session_setup("later", synthetic_lap.track, entry, _setup(brake=7))
+    out = CoachContext(store, track=synthetic_lap.track, car="BMW M4 LMGT3",
                        session_id="cur").get_last_setup()
     assert "autosave" in out.lower() and "7.0:x" in out and "4.0:x" not in out
 
@@ -274,10 +280,63 @@ def test_get_last_setup_stays_in_this_cars_class(tmp_path, synthetic_lap, monkey
     assert "Brake Balance: 9.0:x" in out("LMP2_ELMS") and "4.0:x" not in out("LMP2_ELMS")
 
 
-def test_get_last_setup_falls_back_to_the_legacy_autosave_named_as_such(tmp_path):
+def test_last_setup_expands_a_model_through_stored_entries_and_scopes_by_class(
+        tmp_path, synthetic_lap, monkeypatch):
+    """#199: `store.last_setup` must expand a resolved model through stored raw
+    entry names like `previous_fastest_setup` does, scoped by class -- the Oreca 07
+    races as LMP2 and LMP2_ELMS (entry names from the driver's real DB), and each
+    class's legacy autosave must be returned only for that class."""
+    from simcoach import car_lookup
+    lmp2, elms = "IDEC Sport 2025 #28:LM", "IDEC Sport #28:ELMS25"
+    monkeypatch.setattr(car_lookup, "_entry_table", lambda: {
+        lmp2: ("Oreca 07", "LMP2"), elms: ("Oreca 07", "LMP2_ELMS")})
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
-    store.save_session_setup("old", "spa", "gt3", _setup(brake=6))
-    out = CoachContext(store, track="spa", car="gt3").get_last_setup()
+    _stored(store, dataclasses.replace(synthetic_lap, car=lmp2), "lmp2", [(228.0, True, None)])
+    _stored(store, dataclasses.replace(synthetic_lap, car=elms), "elms", [(215.0, True, None)])
+    store.save_session_setup("lmp2", synthetic_lap.track, lmp2, _setup(brake=4))
+    store.save_session_setup("elms", synthetic_lap.track, elms, _setup(brake=9))
+    lmp2_row = store.last_setup(synthetic_lap.track, "Oreca 07", car_class="LMP2")
+    elms_row = store.last_setup(synthetic_lap.track, "Oreca 07", car_class="LMP2_ELMS")
+    assert lmp2_row["setup"]["VM_BRAKE_BALANCE"]["value"] == 4
+    assert elms_row["setup"]["VM_BRAKE_BALANCE"]["value"] == 9
+
+
+def test_get_last_setup_scopes_the_legacy_fallback_by_class(tmp_path, synthetic_lap, monkeypatch):
+    """#199: `get_last_setup` must pass its class scope into the legacy fallback too --
+    with only legacy autosaves on record (no per-lap setup, so `previous_fastest_setup`
+    never fires), the more recent OTHER class's autosave must not leak into this one's
+    answer."""
+    from simcoach import car_lookup
+    lmp2, elms = "IDEC Sport 2025 #28:LM", "IDEC Sport #28:ELMS25"
+    monkeypatch.setattr(car_lookup, "_entry_table", lambda: {
+        lmp2: ("Oreca 07", "LMP2"), elms: ("Oreca 07", "LMP2_ELMS")})
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    _stored(store, dataclasses.replace(synthetic_lap, car=lmp2), "lmp2", [(228.0, True, None)])
+    _stored(store, dataclasses.replace(synthetic_lap, car=elms), "elms", [(215.0, True, None)])
+    store.save_session_setup("lmp2", synthetic_lap.track, lmp2, _setup(brake=4))
+    # The ELMS autosave is saved LAST (newest updated_ts) -- an unscoped legacy lookup
+    # would wrongly pick it for the LMP2 question below.
+    store.save_session_setup("elms", synthetic_lap.track, elms, _setup(brake=9))
+    out = CoachContext(store, track=synthetic_lap.track, car="Oreca 07",
+                       match_class="LMP2", session_id="cur").get_last_setup()
+    assert "4.0:x" in out and "9.0:x" not in out
+
+
+def test_get_last_setup_falls_back_to_the_legacy_autosave_named_as_such(
+        tmp_path, synthetic_lap, monkeypatch):
+    """#199: an old session predates #188 per-lap setup tracking -- its lap has no
+    setup linked, only the legacy per-session autosave, under the raw entry name
+    (Heart of Racing Team 2026 #23:WEC, from the driver's real DB). A model-name
+    query (Aston Martin Vantage AMR LMGT3) must still find it."""
+    from simcoach import car_lookup
+    entry = "Heart of Racing Team 2026 #23:WEC"
+    monkeypatch.setattr(car_lookup, "_entry_table",
+                        lambda: {entry: ("Aston Martin Vantage AMR LMGT3", "GT3")})
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    _stored(store, dataclasses.replace(synthetic_lap, car=entry), "old", [(99.5, True, None)])
+    store.save_session_setup("old", synthetic_lap.track, entry, _setup(brake=6))
+    out = CoachContext(store, track=synthetic_lap.track,
+                       car="Aston Martin Vantage AMR LMGT3").get_last_setup()
     assert "6.0:x" in out and "autosave" in out.lower()
 
 

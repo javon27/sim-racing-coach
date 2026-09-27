@@ -165,7 +165,7 @@ def register(app, deps) -> None:
                 match_class = resolve_car_class(vehicle)
                 car_class = car_class or match_class
             # Off track (#190 red-team m1): the lap's own entry still says its class --
-            # for MATCHING only; nothing is displayed as the class off track.
+            # for MATCHING; the status line shows it too, as "Class: X (result log)".
             if track is None and app.state.latest is not None:
                 lr = app.state.latest["record"]
                 track, car = lr.track, resolve_car(lr.car)

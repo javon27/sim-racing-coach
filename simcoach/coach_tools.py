@@ -2560,7 +2560,7 @@ class CoachContext:
         classes = sorted(g["car_class"] for g in self.store.session_facets()["car_groups"]
                          if car in g["cars"])
         return (f"Can't tell which class of {car} this is: it is stored as "
-                f"{' and '.join(classes)}, and their times must not be mixed.")
+                f"{' and '.join(classes)}, and their data must not be mixed.")
 
     def _burn_history(self, cls) -> tuple[list, int, int]:
         """#184: (the newest HISTORY_LAPS clean laps with a measured fuel/energy burn at
@@ -2944,7 +2944,8 @@ class CoachContext:
             return self._mixed_classes(car)
         fast = self.store.previous_fastest_setup(track, car, exclude_session_id=self.session_id,
                                                  car_class=cls)
-        row = self.store.last_setup(track, car, exclude_session_id=self.session_id)
+        row = self.store.last_setup(track, car, exclude_session_id=self.session_id,
+                                    car_class=cls)
         # A legacy autosave from a MORE RECENT, different session is the previous session.
         if fast is not None and not (row is not None and row["session_id"] != fast["session_id"]
                                      and row["updated_ts"] > fast["ts"]):

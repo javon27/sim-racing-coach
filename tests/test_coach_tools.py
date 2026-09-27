@@ -1490,7 +1490,7 @@ def test_progress_and_past_sessions_stay_in_this_cars_class(tmp_path, monkeypatc
     for tool in ("get_progress", "list_past_sessions", "get_last_setup"):
         out = ctx(None).dispatch(tool, {})
         assert out == ("Can't tell which class of Oreca 07 this is: it is stored as LMP2 "
-                       "and LMP2_ELMS, and their times must not be mixed."), (tool, out)
+                       "and LMP2_ELMS, and their data must not be mixed."), (tool, out)
     # A one-class car is untouched: the Z06's two entries still read as one car.
     z06 = CoachContext(store, track=_SARTHE, car="Chevrolet Corvette Z06 LMGT3.R")
     assert "No session history yet" in z06.dispatch("get_progress", {})
