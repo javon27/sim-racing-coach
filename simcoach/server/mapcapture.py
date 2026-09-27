@@ -216,7 +216,7 @@ def register(app, deps) -> None:
                                      "built; build it again before saving")
         # Start from the existing file, like _persist_map (#87, #203): Save replaces the
         # geometry keys below and nothing else, so `pronunciations`, Spa's
-        # `_config_note`/`length_m` and any key added later survive a ribbon save.
+        # `_config_note` and any key added later survive a ribbon save.
         # Built from scratch, it deleted every key not listed here. `notes` is left out
         # for _write_track_json's guard -- see the comment under `built_from`.
         out = {k: v for k, v in existing.items() if k != "notes"}
@@ -234,6 +234,11 @@ def register(app, deps) -> None:
             "length": world["dist"][-1] if world["dist"] else 0.0,
             "rotation": _track_rotation(track),  # preserve any existing rotation
         })
+        # Describe the geometry just rebuilt: a stale `length_m` beside the new `length`
+        # (Spa: 7004 vs 6986.49) and a note on how the old distances were measured.
+        # `_config_note` stays -- the only record of driver-confirmed corner facts.
+        for k in ("length_m", "_distances_note"):
+            out.pop(k, None)
         # Mark maps this app BUILT (from a capture or from driven laps). A live-lap rebuild
         # may replace only a marked map's corners -- an unmarked map with corners is a
         # curated layout (see mapcapture_rebuild).

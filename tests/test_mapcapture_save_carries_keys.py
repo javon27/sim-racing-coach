@@ -138,3 +138,37 @@ def test_installed_save_ribbon_on_an_unshipped_track_keeps_its_keys(tmp_path, mo
     for k in ("pronunciations", "reference_times", "_future_key"):
         assert out[k] == shipped[k]
     assert not (tmp_path / "tracks" / f"{SLUG}.json").exists()
+
+
+def test_save_ribbon_drops_the_stale_length_and_distances_note_on_a_spa_shaped_map(
+        tmp_path, monkeypatch):
+    # Spa's shape: no outline, `length_m` instead of `length`, and two provenance notes.
+    # Save rebuilds the geometry, so `length_m` and the note on how the OLD distances were
+    # measured are stale; `_config_note` holds driver-confirmed corner facts and stays.
+    monkeypatch.setattr(core_mod.sys, "frozen", False, raising=False)
+    spa = "circuit_de_spa_francorchamps"
+    shipped = {"track": spa, "_config_note": "T9 is a LEFT (driver-confirmed).",
+               "_distances_note": "apex from lap-averaged steering peaks.", "length_m": 7004,
+               "corners": [{"number": 1, "label": "1", "name": "La Source",
+                            "direction": "right", "start_dist": 40.0, "apex_dist": 60.0,
+                            "end_dist": 80.0, "apexes": [60.0]}],
+               "pronunciations": {"La Source": "lˌɑː sˈɔːɹs"}}
+    tracks = tmp_path / "tracks"
+    tracks.mkdir()
+    (tracks / f"{spa}.json").write_bytes(dump_track_json(shipped))
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    app = create_app(store, Coach(FakeModel("{}")), tracks_dir=str(tracks))
+    c = TestClient(app, base_url="http://127.0.0.1")
+    a = np.linspace(0.0, 2 * np.pi, 300)
+    app.state.map_buffer = [
+        LapRecord("lmu", "Circuit de Spa-Francorchamps", "GT3", 140.0, True, 0.0,
+                  {"pos_x": r * np.cos(a), "pos_y": np.zeros(300), "pos_z": r * np.sin(a),
+                   "lap_distance": 100.0 * a})
+        for r in (94.0, 106.0)]
+    assert c.post("/mapcapture/build", json={}).status_code == 200
+    assert c.post("/mapcapture/save", json={}).status_code == 200
+    out = _read(tracks / f"{spa}.json")
+    assert "length_m" not in out and "_distances_note" not in out
+    assert out["length"] == app.state.last_ribbon["world"]["dist"][-1]
+    assert out["_config_note"] == shipped["_config_note"]
+    assert out["pronunciations"] == shipped["pronunciations"]
