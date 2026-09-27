@@ -108,7 +108,9 @@ def _capture_loop(source, store, app_state) -> None:
             # ponytail: RAM grows ~4.4 MB/lap (104 channels x 5284 samples at Spa;
             # _place_corners reads lap 0's); trim to _POS_CHANNELS past lap 0 if marathon
             # mapping sessions matter.
-            if lap.partial is None:
+            # An untimed whole lap (#181) is gated too: the off LMU invalidated it for
+            # would widen the ribbon, exactly as a 'partial' one used to.
+            if lap.partial is None and lap.lap_time:
                 try:
                     # Which file backs this lap, so Save promotes exactly the laps it
                     # saved (a lap driven after Build stays pending).

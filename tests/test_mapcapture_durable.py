@@ -398,3 +398,14 @@ def test_rig_sequence_start_failed_discard_rebuild_save_ends_mapping(tmp_path):
 def test_sidecar_restart_comes_up_with_mapping_off(tmp_path):
     app, _ = _app(tmp_path)
     assert app.state.mapping is False
+
+
+def test_an_untimed_whole_lap_is_persisted_but_never_buffered(tmp_path):
+    # #181: a whole lap LMU invalidated posts no time; its off must not reach the ribbon.
+    app, store = _app(tmp_path)
+    lap = _edge(1)
+    lap.lap_time, lap.valid = None, False
+    app.state.mapping = True
+    _capture_loop(_Src([lap, _edge(-1)]), store, app.state)
+    assert len(app.state.map_buffer) == 1 and app.state.map_buffer[0].lap_time == 90.0
+    assert len(_pending(tmp_path)) == 1
