@@ -16,7 +16,7 @@ import simcoach
 from simcoach.analysis import corner_geometry, geometry_clause
 from simcoach.coach import Coach
 from simcoach.coach_tools import CoachContext
-from simcoach.corners import CornerMap
+from simcoach.corners import CornerMap, in_window
 from simcoach.model.fake import FakeModel
 from simcoach.model_types import LapRecord
 from simcoach.server.app import create_app
@@ -1911,13 +1911,15 @@ def test_an_untimed_invalidated_whole_lap_stays_off_the_outline_and_the_cloud(tm
 _LAGUNA = "weathertech_raceway_laguna_seca"
 # Laguna's T1/T2 exactly as committed before the driver's merge edit (origin/main 46d85eb),
 # inline so the driver's uncommitted re-edit of the shipped file can't move the premise.
+# Old T2's width/banking are NOT the committed ones (10.3/-2.2, the same as T1's): they are
+# made distinct so a carried value names the corner it came from.
 _LAGUNA_OLD_T1_T2 = [
     {"number": 1, "label": "1", "name": "Turn 1", "direction": "left", "start_dist": 370.2,
      "apex_dist": 459.9, "end_dist": 495.8, "apexes": [459.9], "radius_m": 31.2,
      "elev_delta_m": -5.1, "width_m": 10.3, "banking_deg": -2.2},
     {"number": 2, "label": "2", "name": "Andretti Hairpin", "direction": "left",
      "start_dist": 495.8, "apex_dist": 531.8, "end_dist": 621.5, "apexes": [531.8],
-     "radius_m": 34.8, "elev_delta_m": -0.8, "width_m": 10.3, "banking_deg": -2.2},
+     "radius_m": 34.8, "elev_delta_m": -0.8, "width_m": 9.1, "banking_deg": -0.7},
 ]
 _EDITOR_KEYS = ("number", "label", "name", "apex_dist", "apexes", "start_dist", "end_dist")
 
@@ -1975,7 +1977,9 @@ def test_a_merged_corner_keeps_neither_old_corners_window_bake(tmp_path):
     # neither describes 423.9-549.6, and an editor save has no elevation source.
     assert "elev_delta_m" not in t2
     assert t2["radius_m"] == _measured(written, t2)["radius_m"]   # re-measured, own window
-    assert (t2["width_m"], t2["banking_deg"]) == (10.3, -2.2)     # read AT the apex: same
+    # Read AT the apex, and the merged T2's apex 459.9 is old T1's, so old T1's values --
+    # not old T2's 9.1/-0.7, measured at 531.8 (now only a secondary apex).
+    assert (t2["width_m"], t2["banking_deg"]) == (10.3, -2.2)
     t1 = _by_apex(written["corners"], 230.0)                       # brand-new corner
     assert not {"elev_delta_m", "width_m", "banking_deg"} & t1.keys()
     assert t1["radius_m"] == _measured(written, t1)["radius_m"]
@@ -2003,7 +2007,7 @@ def test_a_split_corner_re_measures_its_window_and_the_new_half_inherits_nothing
     corners = json.loads(f.read_text(encoding="utf-8"))["corners"]
     a, b = _by_apex(corners, 531.8), _by_apex(corners, 590.0)
     assert "elev_delta_m" not in a and a["radius_m"] == _measured(data, a)["radius_m"]
-    assert (a["width_m"], a["banking_deg"]) == (10.3, -2.2)
+    assert (a["width_m"], a["banking_deg"]) == (9.1, -0.7)        # old T2's own apex
     assert not {"elev_delta_m", "width_m", "banking_deg"} & b.keys()
     assert _by_apex(corners, 459.9)["elev_delta_m"] == -5.1       # T1 untouched: kept
 
@@ -2050,3 +2054,83 @@ def test_an_installed_builds_read_does_not_put_the_shipped_bake_back(tmp_path, m
     before = (user / f.name).read_bytes()
     assert _put_laguna(client, merged["corners"], data).status_code == 200
     assert (user / f.name).read_bytes() == before
+
+
+def _station(data, near):
+    # A click lands on a path station (TrackMapEditor: map.dist[nearestPathIndex]).
+    return min(data["path_dist"], key=lambda d: abs(d - near))
+
+
+def _click_added(apex):
+    # TrackMapEditor's click-add: no start_dist/end_dist, blank label and name.
+    return {"number": 0, "label": "", "name": "", "apex_dist": apex, "apexes": [apex]}
+
+
+def _renumbered(corners):
+    # The editor's renumber(): number = position in track order.
+    return [dict(c, number=i + 1)
+            for i, c in enumerate(sorted(corners, key=lambda c: c["apex_dist"]))]
+
+
+def _assert_stored_windows_are_the_read_windows(written):
+    # What the coach analyses (CornerMap.from_data re-clamps on read) is what was stored,
+    # so every carried or re-measured metric is about the window actually read.
+    read = {c.apex_dist: (c.start_dist, c.end_dist) for c in CornerMap.from_data(written).corners}
+    assert {c["apex_dist"]: (c["start_dist"], c["end_dist"]) for c in written["corners"]} == read
+
+
+def test_a_click_added_corner_inside_a_neighbour_clamps_it_and_drops_its_window_bake(tmp_path):
+    # Red-team #196 round 1: click-adding at ~1600 m got apex +/- pad (1510.3-1689.7)
+    # over T5 (1448.3-1627.7, elev +5.6). T5's STORED window was unchanged so +5.6
+    # carried, but the clamp on read cut T5 to 1448.3-1569.0 -- the coach said "uphill
+    # 6m" about a window whose capture re-bake is 3.7.
+    client, _store, data, f = _laguna_client(tmp_path)
+    new = _station(data, 1600.0)
+    r = _put_laguna(client, _renumbered(data["corners"] + [_click_added(new)]), data)
+    assert r.status_code == 200, r.text
+    written = json.loads(f.read_text(encoding="utf-8"))
+    _assert_stored_windows_are_the_read_windows(written)
+    t5 = _by_apex(written["corners"], 1538.0)
+    assert t5["end_dist"] < 1627.7                                 # premise: trimmed
+    assert "elev_delta_m" not in t5
+    assert t5["radius_m"] == _measured(written, t5)["radius_m"]
+    assert (t5["width_m"], t5["banking_deg"]) == (10.7, -4.3)      # apex unchanged
+    added = _by_apex(written["corners"], round(new, 1))
+    assert not in_window(1538.0, added["start_dist"], added["end_dist"])
+    assert not {"elev_delta_m", "width_m", "banking_deg"} & added.keys()
+    assert added["radius_m"] == _measured(written, added)["radius_m"]
+    ctx = CoachContext(store=None, cmap=CornerMap.from_data(written), track="Laguna Seca",
+                       car="GT3")
+    assert "uphill" not in ctx._corner_geometry_clause(t5["label"], "left")
+
+
+@pytest.mark.parametrize("drag", [0, 1])
+def test_an_editor_shaped_split_clamps_and_re_measures_both_halves(tmp_path, drag):
+    # The split as the editor makes it: Andretti left alone (drag=0) or dragged one path
+    # station (window translated with the apex, onPointerMove), plus an exit corner
+    # click-added inside its window.
+    client, _store, data, f = _laguna_client(tmp_path)
+    pd = data["path_dist"]
+    corners = [dict(c) for c in data["corners"]]
+    andretti = _by_apex(corners, 531.8)
+    if drag:
+        to = pd[pd.index(_station(data, 531.8)) + drag]
+        delta = to - andretti["apex_dist"]
+        andretti.update(apex_dist=to, apexes=[to], start_dist=andretti["start_dist"] + delta,
+                        end_dist=andretti["end_dist"] + delta)
+    exit_apex = _station(data, 590.0)
+    r = _put_laguna(client, _renumbered(corners + [_click_added(exit_apex)]), data)
+    assert r.status_code == 200, r.text
+    written = json.loads(f.read_text(encoding="utf-8"))
+    _assert_stored_windows_are_the_read_windows(written)
+    a = _by_apex(written["corners"], round(andretti["apex_dist"], 1))
+    b = _by_apex(written["corners"], round(exit_apex, 1))
+    assert a["end_dist"] == b["start_dist"] < 621.5                # clamped at the midpoint
+    assert "elev_delta_m" not in a
+    assert a["radius_m"] == _measured(written, a)["radius_m"]
+    # Kept only while the apex it was measured at is unchanged; a dragged apex has no
+    # ribbon to re-measure from.
+    assert ({k: a[k] for k in ("width_m", "banking_deg") if k in a}
+            == ({} if drag else {"width_m": 9.1, "banking_deg": -0.7}))
+    assert not {"elev_delta_m", "width_m", "banking_deg"} & b.keys()
+    assert _by_apex(written["corners"], 459.9)["elev_delta_m"] == -5.1   # T1 untouched

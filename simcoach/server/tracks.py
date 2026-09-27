@@ -7,7 +7,7 @@ import math
 from fastapi import Body, HTTPException
 
 from ..analysis import CORNER_GEOMETRY_KEYS, corner_geometry, geometry_clause
-from ..corners import in_window
+from ..corners import Corner, clamp_corner_windows, in_window
 from ..track_lookup import carried_geometry, corner_apex_key, fill_blank_labels, track_slug
 from ..trackmap import average_racing_line, direction_from_path
 from .trackfile import content_rev, map_rev
@@ -214,6 +214,19 @@ def register(app, deps) -> None:
             fill_blank_labels(corners, existing)   # unique, never str(number) blindly (#79)
         except ValueError as e:
             raise HTTPException(422, str(e)) from None
+        # Bake the window clamp into the file, as mapbuild and promote_map do (#196).
+        # CornerMap.from_data re-clamps on read, so a window stored unclamped is not the
+        # window the coach analyses: a click-added corner (no window sent -> apex +/- pad)
+        # overlapped T5 on Laguna, T5's stored window stayed "unchanged" and carried an
+        # elev_delta_m measured over the span the clamp had cut away. Clamped HERE, before
+        # the geometry below, every metric is measured on -- and carried against -- the
+        # window that is actually read. Shipped maps are already clamped: a no-op there.
+        objs = [Corner(c["number"], c["name"], c["direction"], c["start_dist"],
+                       c["apex_dist"], c["end_dist"], c["label"], c["apexes"])
+                for c in corners]
+        clamp_corner_windows(objs, length)
+        for c, o in zip(corners, objs):
+            c["start_dist"], c["end_dist"] = o.start_dist, o.end_dist
 
         # `sectors`/`sections` are validated by _write_track_json, the one writer, along
         # with every other writer's (#65) -- the same owners (`validated_sectors` /

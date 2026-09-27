@@ -308,10 +308,13 @@ def carried_geometry(baked, corner) -> dict:
     elev_delta_m -5.1, which the coach then stated as "downhill 5m".
 
     Unchanged means equal at the 1 dp every writer rounds windows to -- the same
-    resolution as the apex identity. That is the whole tolerance: the editor sends back
-    the stored window verbatim (its only window edit, a corner drag, moves the apex with
-    it), so an unchanged re-save shifts a window by nothing but sub-0.05 float noise,
-    and any real edit is at least a path station (~7 m on Laguna). A window-read metric
+    resolution as the apex identity. That is the whole tolerance: every writer stores the
+    CLAMPED window (the map PUT bakes the clamp before calling this, as mapbuild and
+    promote_map do), so an unchanged re-save gets its stored windows back verbatim and
+    shifts none by more than sub-0.05 float noise. A real change is at least one 1 dp
+    step: a corner drag translates its window with its apex, and a click-added corner
+    (no window sent -> apex +/- pad) gets its own window clamped and trims each
+    neighbour it overlaps to the midpoint between their apexes. A window-read metric
     dropped here is re-measured where a source exists (radius_m from the path) and is
     otherwise absent -- never stated -- until backfill_corner_geometry.py re-bakes it.
     Total: takes anything off disk and never raises.
