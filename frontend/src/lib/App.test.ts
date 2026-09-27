@@ -275,6 +275,24 @@ describe("Coach screen assembly", () => {
     expect(vi.mocked(getSessionChats)).toHaveBeenCalledWith("s1");
   });
 
+  it("#188: opening a session drops the lap picked in the previous one", async () => {
+    const { container } = render(App);
+    await screen.findByRole("navigation"); // shell mounts past the splash
+    const nav = within(container.querySelector(".nav") as HTMLElement);
+    await fireEvent.click(await screen.findByText("Lap 1"));
+    await vi.waitFor(() =>
+      expect(screen.getByText("Lap 1").closest(".lap-select")?.getAttribute("aria-pressed")).toBe("true"),
+    );
+
+    await fireEvent.click(nav.getByText("Sessions"));
+    await fireEvent.click(await screen.findByRole("button", { name: /Le Mans/i }));
+
+    const row = await screen.findByText("Lap 1");
+    await vi.waitFor(() =>
+      expect(row.closest(".lap-select")?.getAttribute("aria-pressed")).toBe("false"),
+    );
+  });
+
   it("#109/#167: a new live session unpins the lap list to follow it but keeps the chat; New session clears it", async () => {
     // #167: the chat used to reset here too -- an online server that read offline
     // between races flipped the live session id and wiped the driver's thread.

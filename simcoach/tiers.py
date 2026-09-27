@@ -31,6 +31,14 @@ def adjustable_from_setup(setup: dict) -> list[str]:
             if isinstance(val, dict) and val.get("isFreeSetting") is True]
 
 
+def blank_setup(setup: dict) -> bool:
+    """True when no entry has a non-blank stringValue: a garage payload with nothing
+    loaded (#188 -- a real one had 170 isFreeSetting keys, every stringValue ''). Such
+    a payload passes adjustable_from_setup but is not a setup, so it is never stored."""
+    return not any(isinstance(v, dict) and str(v.get("stringValue") or "").strip()
+                   for v in setup.values())
+
+
 def legal_adjustments(setup: dict) -> list[str] | None:
     """Tier-legal setup adjustments as prettified labels, for the coach's
     allowed_adjustments constraint. Returns None when the session is UNRESTRICTED

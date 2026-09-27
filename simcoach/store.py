@@ -232,9 +232,19 @@ CREATE TABLE IF NOT EXISTS setups (
     source TEXT
 );
 """
-# A lap a setup read may pick as a session's fastest: timed, valid, not a mapping lap.
-_SETUP_FAST_LAP = ("l.valid = 1 AND l.lap_time IS NOT NULL AND NOT COALESCE(l.mapping, 0) "
-                   "AND l.setup_id IS NOT NULL")
+# A lap that can be a session's fastest: timed, valid, not a mapping lap -- and, for a
+# setup read, one with a recorded setup.
+_TIMED_LAP = "l.valid = 1 AND l.lap_time IS NOT NULL AND NOT COALESCE(l.mapping, 0)"
+_SETUP_FAST_LAP = _TIMED_LAP + " AND l.setup_id IS NOT NULL"
+
+
+def _setup_key(setup: dict) -> str:
+    """What makes two stored setups the same (#188): each entry's `value` only. The
+    rest of an entry churns without the setup changing -- numChangesValue,
+    lastSavedStringValue, diffComparisonValue, and WM_COMPOUND-* stringValue embeds
+    live tyre wear ("96% Medium")."""
+    return json.dumps({k: v.get("value") if isinstance(v, dict) else v
+                       for k, v in setup.items()}, sort_keys=True)
 _SETUP_LAP_SELECT = ("SELECT l.id, l.lap_time, l.lap_no, l.session_id, l.ts, s.params_json "
                      "FROM laps l LEFT JOIN setups s ON s.id = l.setup_id ")
 
@@ -2097,8 +2107,8 @@ class LapStore:
 
     def link_lap_setup(self, lap_id: int, setup: dict) -> int | None:
         """#188: record the setup `lap_id` was driven on. A new `setups` row only when it
-        differs from the latest setup already linked in the lap's session; otherwise the
-        lap reuses that row. Returns the setup id, or None when the lap is gone."""
+        differs (by _setup_key) from the latest setup already linked in the lap's session;
+        otherwise the lap reuses that row. The full entries are stored either way. Returns the setup id, or None when the lap is gone."""
         params = json.dumps(setup, sort_keys=True)
         with self._lock, self.conn:
             lap = self.conn.execute("SELECT session_id, track, car, ts FROM laps WHERE id = ?",
@@ -2109,7 +2119,7 @@ class LapStore:
                 "SELECT s.id, s.params_json FROM laps l JOIN setups s ON s.id = l.setup_id "
                 "WHERE l.session_id = ? AND l.id != ? ORDER BY l.ts DESC, l.id DESC LIMIT 1",
                 (lap[0], lap_id)).fetchone()
-            if prev is not None and prev[1] == params:
+            if prev is not None and _setup_key(json.loads(prev[1])) == _setup_key(setup):
                 setup_id = prev[0]
             else:
                 setup_id = self.conn.execute(
@@ -2134,12 +2144,18 @@ class LapStore:
 
     def session_fastest_setup(self, session_id: str) -> dict | None:
         """The setup on a session's fastest valid lap that has one recorded (#188), in
-        lap_setup's shape; None when no lap of the session has a recorded setup."""
+        lap_setup's shape plus `fastest`: False when a faster valid lap exists with no
+        setup recorded (REST was down at its commit). None when no lap has a setup."""
         with self._lock:
             row = self.conn.execute(
                 _SETUP_LAP_SELECT + "WHERE l.session_id = ? AND " + _SETUP_FAST_LAP
                 + " ORDER BY l.lap_time ASC LIMIT 1", (session_id,)).fetchone()
-        return self._setup_view(row) if row else None
+            if row is None:
+                return None
+            faster = self.conn.execute(
+                "SELECT 1 FROM laps l WHERE l.session_id = ? AND " + _TIMED_LAP
+                + " AND l.lap_time < ? LIMIT 1", (session_id, row[1])).fetchone()
+        return {**self._setup_view(row), "fastest": faster is None}
 
     def previous_fastest_setup(self, track: str, car: str,
                                exclude_session_id: str | None = None) -> dict | None:

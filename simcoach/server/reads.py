@@ -8,7 +8,7 @@ from dataclasses import asdict
 from fastapi import Body, HTTPException
 
 from ..analysis import analyze_lap, input_traces
-from ..tiers import adjustable_from_setup
+from ..tiers import adjustable_from_setup, blank_setup
 from .serialize import _clean, _usage_view
 
 
@@ -221,6 +221,8 @@ def register(app, deps) -> None:
             st = status()
             if st["track"] and st["car"] and st["session_id"]:
                 free = {k: data[k] for k in adjustable_from_setup(data)}
+                if blank_setup(free):   # #188: nothing loaded in the garage yet
+                    return {"saved": False}
                 store.save_session_setup(st["session_id"], st["track"], st["car"], free)
                 return {"saved": True}
         except Exception:

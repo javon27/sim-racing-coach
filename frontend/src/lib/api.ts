@@ -581,7 +581,10 @@ export function getSetup(): Promise<Record<string, unknown>> {
 export interface LapSetup {
   lap_id: number;
   lap_time: number | null;
+  lap_no: number | null;
   setup: Record<string, unknown> | null;
+  /** Session view only: false when a faster valid lap has no recorded setup. */
+  fastest?: boolean;
 }
 
 export function getLapSetup(lapId: number): Promise<LapSetup> {

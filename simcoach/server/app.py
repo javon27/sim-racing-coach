@@ -17,7 +17,7 @@ from fastapi import FastAPI
 from .. import config
 from ..livelap import LiveLap
 from ..race import RaceTracker
-from ..tiers import adjustable_from_setup
+from ..tiers import adjustable_from_setup, blank_setup
 from . import (
     coach_ws,
     core,
@@ -81,8 +81,9 @@ def _setup_commit(app_state, store, lap_id) -> None:
         ensure = getattr(app_state, "ensure_rest", None)
         rest = ensure() if ensure else None
         data = rest.get_setup() if rest else None
-        if data:
-            store.link_lap_setup(lap_id, {k: data[k] for k in adjustable_from_setup(data)})
+        free = {k: data[k] for k in adjustable_from_setup(data)} if data else {}
+        if free and not blank_setup(free):
+            store.link_lap_setup(lap_id, free)
     except Exception:
         logging.getLogger(__name__).warning("lap setup not recorded", exc_info=True)
 

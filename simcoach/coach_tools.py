@@ -2594,15 +2594,19 @@ class CoachContext:
         # #188: the previous session's fastest lap's setup; sessions from before per-lap
         # setups existed fall back to the old per-session autosave, named as such.
         fast = self.store.previous_fastest_setup(track, car, exclude_session_id=self.session_id)
-        if fast is not None:
+        row = self.store.last_setup(track, car, exclude_session_id=self.session_id)
+        # A legacy autosave from a MORE RECENT, different session is the previous session.
+        if fast is not None and not (row is not None and row["session_id"] != fast["session_id"]
+                                     and row["updated_ts"] > fast["ts"]):
             when = time.strftime("%Y-%m-%d", time.localtime(fast["ts"]))
             lines = _setup_lines(fast["setup"])
-            head = (f"Setup on the fastest lap ({format_laptime(fast['lap_time'])}) of your "
+            which = "fastest lap" if fast["fastest"] else "fastest lap with a recorded setup"
+            lap = f"lap {fast['lap_no']}, " if fast["lap_no"] is not None else ""
+            head = (f"Setup on the {which} ({lap}{format_laptime(fast['lap_time'])}) of your "
                     f"previous session at {track} / {car} ({when})")
             if not lines:
                 return f"{head}: stored, but no adjustable parameters were captured."
             return f"{head}:\n" + "\n".join(lines)
-        row = self.store.last_setup(track, car, exclude_session_id=self.session_id)
         if row is None:
             return f"No stored setup for {track} / {car} yet."
         when = time.strftime("%Y-%m-%d", time.localtime(row["updated_ts"]))

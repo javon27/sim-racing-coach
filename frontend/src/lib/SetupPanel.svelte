@@ -1,19 +1,26 @@
 <script lang="ts">
   import { getSetup, captureSetup, getLapSetup, getSessionSetup, type LapSetup } from "./api";
+  import { formatTime } from "./LapList.svelte";
 
   // #188: a selected lap shows the setup it was driven on; a reviewed session with no
   // lap selected shows its fastest lap's; neither -> the live setup, as before.
   let { lapId = null, sessionId }: { lapId?: number | null; sessionId?: string } = $props();
 
   let setup: Record<string, unknown> = $state({});
-  let phase: "loading" | "ok" | "empty" | "none" | "unrecorded" = $state("loading");
+  let phase: "loading" | "ok" | "empty" | "none" | "unrecorded" | "error" = $state("loading");
   let heading = $state("");
+  let scope: "lap" | "session" = $state("lap");
   let seq = 0; // drops a response that a newer selection has superseded
 
-  function showStored(res: Partial<LapSetup>, label: string) {
-    const t = res.lap_time;
-    const m = t == null ? 0 : Math.floor(t / 60);
-    heading = t == null ? label : `${label} ${m}:${(t - m * 60).toFixed(3).padStart(6, "0")}`;
+  function showStored(res: Partial<LapSetup>) {
+    const lap =
+      res.lap_id == null
+        ? ""
+        : `${res.lap_no != null ? `Lap ${res.lap_no} · ` : "Lap "}${formatTime(res.lap_time ?? null)}`;
+    heading =
+      scope === "lap" || !lap
+        ? lap
+        : `${res.fastest ? "fastest lap" : "fastest lap with a recorded setup"} (${lap})`;
     setup = res.setup ?? {};
     phase = !res.setup ? "unrecorded" : adjustable(res.setup).length === 0 ? "none" : "ok";
   }
@@ -22,16 +29,15 @@
     const my = ++seq;
     phase = "loading";
     heading = "";
-    if (lapId != null) {
-      getLapSetup(lapId)
-        .then((res) => my === seq && showStored(res, "Lap"))
-        .catch(() => my === seq && showStored({}, "Selected lap"));
-      return;
-    }
-    if (sessionId) {
-      getSessionSetup(sessionId)
-        .then((res) => my === seq && showStored(res, "Fastest lap"))
-        .catch(() => my === seq && showStored({}, "Fastest lap"));
+    const stored =
+      lapId != null ? getLapSetup(lapId) : sessionId ? getSessionSetup(sessionId) : null;
+    if (stored) {
+      scope = lapId != null ? "lap" : "session";
+      stored
+        .then((res) => my === seq && showStored(res))
+        .catch(() => {
+          if (my === seq) phase = "error";
+        });
       return;
     }
     getSetup()
@@ -113,7 +119,9 @@
   {#if phase === "loading"}
     <p class="empty">Loading…</p>
   {:else if phase === "unrecorded"}
-    <p class="empty">{heading}: no setup recorded for this lap.</p>
+    <p class="empty">{heading ? `${heading}: no` : "No"} setup recorded for this {scope}.</p>
+  {:else if phase === "error"}
+    <p class="empty">Couldn't load the setup.</p>
   {:else if phase === "empty"}
     <p class="empty">No setup — LMU not connected</p>
   {:else if phase === "none"}

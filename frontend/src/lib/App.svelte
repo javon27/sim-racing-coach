@@ -191,6 +191,8 @@
     await tick();
     activeSessionId = sessionId;
     selectedSessionId = sessionId;
+    // A lap picked in the previous session must not outrank this one's view (#188).
+    selectedLapId = undefined;
     // Open the chat that discussed this session. A session with NO chat resolves
     // to null (empty new chat) — NOT undefined (which would fall back to "latest"
     // and confusingly open an unrelated chat). Clear-then-set so re-selecting the

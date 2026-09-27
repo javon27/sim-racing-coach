@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/svelte";
-import { getSetup, captureSetup, getLapSetup, getSessionSetup } from "./api";
+import { getSetup, captureSetup, getLapSetup, getSessionSetup, type LapSetup } from "./api";
 import SetupPanel from "./SetupPanel.svelte";
 
 vi.mock("./api", async () => {
@@ -86,10 +86,11 @@ describe("SetupPanel", () => {
     expect(await screen.findByText(/no adjustable settings/i)).toBeTruthy();
   });
   // #188: a selected lap shows the setup it was driven on, labelled with the lap.
-  it("shows the selected lap's stored setup, not the live one", async () => {
+  it("shows the selected lap's stored setup, labelled by lap number then time", async () => {
     vi.mocked(getSetup).mockResolvedValue(mixedPayload);
     vi.mocked(getLapSetup).mockResolvedValue({
       lap_id: 7,
+      lap_no: 12,
       lap_time: 101.234,
       setup: { VM_REAR_WING: { isFreeSetting: true, stringValue: "P9" } },
     });
@@ -97,40 +98,99 @@ describe("SetupPanel", () => {
     render(SetupPanel, { props: { lapId: 7 } });
 
     expect(await screen.findByText("P9")).toBeTruthy();
-    expect(screen.getByText(/setup on lap 1:41\.234/i)).toBeTruthy();
+    expect(screen.getByText("Setup on Lap 12 · 1:41.234")).toBeTruthy();
     expect(getLapSetup).toHaveBeenCalledWith(7);
     expect(getSetup).not.toHaveBeenCalled();
     expect(captureSetup).not.toHaveBeenCalled();
   });
 
+  it("rounds the lap time before splitting minutes (59.9996 is 1:00.000)", async () => {
+    vi.mocked(getLapSetup).mockResolvedValue({
+      lap_id: 7,
+      lap_no: 3,
+      lap_time: 59.9996,
+      setup: { VM_REAR_WING: { isFreeSetting: true, stringValue: "P9" } },
+    });
+
+    render(SetupPanel, { props: { lapId: 7 } });
+
+    expect(await screen.findByText("Setup on Lap 3 · 1:00.000")).toBeTruthy();
+  });
+
   it("says no setup was recorded for a lap driven before per-lap setups", async () => {
-    vi.mocked(getLapSetup).mockResolvedValue({ lap_id: 3, lap_time: 99, setup: null });
+    vi.mocked(getLapSetup).mockResolvedValue({ lap_id: 3, lap_no: 2, lap_time: 99, setup: null });
 
     render(SetupPanel, { props: { lapId: 3 } });
 
     expect(await screen.findByText(/no setup recorded for this lap/i)).toBeTruthy();
   });
 
+  it("a failed fetch is an error, not 'no setup recorded'", async () => {
+    vi.mocked(getLapSetup).mockRejectedValue(new Error("API request failed: GET -> 404"));
+
+    render(SetupPanel, { props: { lapId: 3 } });
+
+    expect(await screen.findByText(/couldn't load the setup/i)).toBeTruthy();
+    expect(screen.queryByText(/no setup recorded/i)).toBeNull();
+  });
+
   it("a reviewed session with no lap selected shows its fastest lap's setup", async () => {
     vi.mocked(getSessionSetup).mockResolvedValue({
       lap_id: 4,
+      lap_no: 5,
       lap_time: 95.5,
+      fastest: true,
       setup: { VM_BRAKE_BALANCE: { isFreeSetting: true, stringValue: "55.0:45.0" } },
     });
 
     render(SetupPanel, { props: { lapId: null, sessionId: "s1" } });
 
     expect(await screen.findByText("55.0:45.0")).toBeTruthy();
-    expect(screen.getByText(/setup on fastest lap 1:35\.500/i)).toBeTruthy();
+    expect(screen.getByText("Setup on fastest lap (Lap 5 · 1:35.500)")).toBeTruthy();
     expect(getSessionSetup).toHaveBeenCalledWith("s1");
     expect(getSetup).not.toHaveBeenCalled();
   });
 
-  it("a session with no recorded setup says so", async () => {
+  it("names a session's lap 'fastest lap with a recorded setup' when a faster one has none", async () => {
+    vi.mocked(getSessionSetup).mockResolvedValue({
+      lap_id: 4,
+      lap_no: 5,
+      lap_time: 95.5,
+      fastest: false,
+      setup: { VM_BRAKE_BALANCE: { isFreeSetting: true, stringValue: "55.0:45.0" } },
+    });
+
+    render(SetupPanel, { props: { lapId: null, sessionId: "s1" } });
+
+    expect(
+      await screen.findByText("Setup on fastest lap with a recorded setup (Lap 5 · 1:35.500)"),
+    ).toBeTruthy();
+  });
+
+  it("a session with no recorded setup says so for the session", async () => {
     vi.mocked(getSessionSetup).mockResolvedValue({});
 
     render(SetupPanel, { props: { lapId: null, sessionId: "s1" } });
 
-    expect(await screen.findByText(/no setup recorded for this lap/i)).toBeTruthy();
+    expect(await screen.findByText("No setup recorded for this session.")).toBeTruthy();
+  });
+
+  it("a stale response resolving after a newer selection's is dropped", async () => {
+    let resolveOld!: (v: LapSetup) => void;
+    let resolveNew!: (v: LapSetup) => void;
+    vi.mocked(getLapSetup)
+      .mockReturnValueOnce(new Promise((r) => (resolveOld = r)))
+      .mockReturnValueOnce(new Promise((r) => (resolveNew = r)));
+    const row = (v: string) => ({ VM_REAR_WING: { isFreeSetting: true, stringValue: v } });
+
+    const { rerender } = render(SetupPanel, { props: { lapId: 1 } });
+    await rerender({ lapId: 2 });
+    resolveNew({ lap_id: 2, lap_no: 2, lap_time: 90, setup: row("NEW") });
+    expect(await screen.findByText("NEW")).toBeTruthy();
+    resolveOld({ lap_id: 1, lap_no: 1, lap_time: 91, setup: row("OLD") });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(screen.queryByText("OLD")).toBeNull();
+    expect(screen.getByText("NEW")).toBeTruthy();
   });
 });
