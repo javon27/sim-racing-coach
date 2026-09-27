@@ -314,9 +314,11 @@ def test_get_last_setup_scopes_the_legacy_fallback_by_class(tmp_path, synthetic_
     _stored(store, dataclasses.replace(synthetic_lap, car=lmp2), "lmp2", [(228.0, True, None)])
     _stored(store, dataclasses.replace(synthetic_lap, car=elms), "elms", [(215.0, True, None)])
     store.save_session_setup("lmp2", synthetic_lap.track, lmp2, _setup(brake=4))
-    # The ELMS autosave is saved LAST (newest updated_ts) -- an unscoped legacy lookup
-    # would wrongly pick it for the LMP2 question below.
+    store.conn.execute("UPDATE session_setups SET updated_ts = 1 WHERE session_id = 'lmp2'")
+    # The ELMS autosave has the NEWER updated_ts -- an unscoped legacy lookup would
+    # wrongly pick it for the LMP2 question below.
     store.save_session_setup("elms", synthetic_lap.track, elms, _setup(brake=9))
+    store.conn.execute("UPDATE session_setups SET updated_ts = 2 WHERE session_id = 'elms'")
     out = CoachContext(store, track=synthetic_lap.track, car="Oreca 07",
                        match_class="LMP2", session_id="cur").get_last_setup()
     assert "4.0:x" in out and "9.0:x" not in out
