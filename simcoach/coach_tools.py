@@ -72,6 +72,7 @@ from simcoach.race import (
     format_strategy,
     lap_facts,
     laps_left,
+    live_battle_target,
     picked_up_mid_lap,
     provisional_strategy,
     race_sample,
@@ -2256,14 +2257,13 @@ class CoachContext:
                     "a live race session, from its first completed lap.")
         return None
 
-    def _live_place(self) -> tuple[int, int] | None:
-        """#186: the driver's (overall, class) position NOW, from one scoring frame read
-        as the tool answers -- ranked in class by `race_sample`, exactly as the lap
+    def _live(self):
+        """#186: (field, race_sample, the player's VehicleState) of one scoring frame
+        read as the tool answers -- the class ranked by `race_sample`, exactly as the lap
         commit ranks it. One bounded shared-memory copy (read_field_snapshot never
-        raises, and reads a dead buffer as not live, #147). None -- the snapshot's
-        position is said, as of its lap -- with no reader, no live placed player, not a
-        race, or a frame from another race than the snapshot's (same lap rule as
-        race.live_race)."""
+        raises, and reads a dead buffer as not live, #147). None -- the snapshot is said,
+        as of its lap -- with no reader, no live placed player, not a race, or a frame
+        from another race than the snapshot's (same lap rule as race.live_race)."""
         if self.live_field is None or self.race is None:
             return None
         try:
@@ -2277,10 +2277,13 @@ class CoachContext:
                 or field.session.phase != "race" or lap is None
                 or lap - 1 not in (self.race.as_of_lap, self.race.as_of_lap + 1)):
             return None
-        return me.place, sample.class_position
+        return field, sample, me
 
     def get_race_state(self):
-        text = self._no_live_race() or format_race_state(self.race, self._live_place())
+        text = self._no_live_race()
+        if text is None:
+            live = self._live()
+            text = format_race_state(self.race, (live[2].place, live[1]) if live else None)
         # #162: the game's live penalty count (lmu.live.SessionState.penalties), read
         # when the question came in. What a penalty is for only reaches us in the result
         # log after the race (get_race_result). Only a positive count is said: the channel
@@ -2457,14 +2460,26 @@ class CoachContext:
         live = self._no_live_race()
         if live is None and which in ("", "latest", "last lap", "current",
                                       "last completed lap"):
-            text = format_battle(self.race.battle, self.race.as_of_lap, self.units,
-                                 rival, note=self.race.battle_note, direction=direction,
-                                 position=position)
-            # #186: the read is the lap's field (#185); a place changed since is said.
-            now = self._live_place() if self.race.battle is not None else None
-            if now is not None and now[1] != self.race.state.class_position:
-                text += (f"\nYou're P{now[1]} in class now (live); this read compares the "
-                         f"field as it stood at the end of lap {self.race.as_of_lap}.")
+            # #186: the read is the lap's field (#185). Once his class place has changed
+            # since, the car asked for is picked from the live field, and that is said.
+            b = self.race.battle
+            live = self._live() if b is not None else None
+            lap_me = next((c for c in b.laps if c.is_player), None) if b else None
+            moved = (live is not None and lap_me is not None
+                     and live[1].class_position != lap_me.class_position)
+            if moved and rival and not (direction or position):
+                p = re.fullmatch(r"(?:the\s+)?p\s*(\d+)", str(rival).strip().lower())
+                if p:        # 'P3' is a class position: the live one, like position=3
+                    rival, position = None, int(p[1])
+            target = (live_battle_target(live[0].cars, direction, position)
+                      if moved and (direction or position) else None)
+            text = format_battle(b, self.race.as_of_lap, self.units, rival,
+                                 note=self.race.battle_note, direction=direction,
+                                 position=position, live_target=target)
+            if moved:
+                text += (f"\nYou're P{live[1].class_position} in class now (live); this "
+                         "read compares the field as it stood at the end of lap "
+                         f"{self.race.as_of_lap}.")
             return text
         if which in ("", "latest"):
             if self.on_track and self.race_note:

@@ -15,7 +15,7 @@ from dataclasses import dataclass, replace
 import numpy as np
 
 from simcoach.analysis import _MIN_TIRE_TREND_LAPS, _WHEELS
-from simcoach.battle import Battle, build_battle, car_laps
+from simcoach.battle import _SIDE, Battle, build_battle, car_laps
 from simcoach.car_lookup import resolve_car
 from simcoach.corners import CornerMap
 from simcoach.format import format_laptime
@@ -96,6 +96,28 @@ def race_sample(snap: FieldSnapshot) -> RaceSample | None:
         time_left=clock,
         max_laps=s.max_laps,
     )
+
+
+def live_battle_target(cars: list[VehicleState], direction: str | None,
+                       position: int | None) -> tuple[VehicleState | None, str]:
+    """#186: the car a get_battle `direction`/`position` asks for in the LIVE field --
+    used once the driver's class place has changed since the battle's lap, so the car
+    he just passed is never 'the car ahead'. (car, why it was picked), or (None, why
+    there is none). Class order as the lap commit ranks it (read_field)."""
+    me = next(c for c in cars if c.is_player)
+    if position:
+        if position == me.class_position:
+            return None, f"P{position} is you now (live), not a rival."
+        hit = next((c for c in cars if c.place > 0 and c.cls == me.cls
+                    and c.class_position == position), None)
+        return hit, (f"P{position} in class now (live)" if hit else
+                     f"No car in your class is P{position} now (live).")
+    ahead, _, behind, _ = class_neighbours(cars)
+    hit = ahead if direction == "ahead" else behind
+    if hit is None:
+        return None, (f"You're P{me.class_position} in class now (live): nobody in your "
+                      f"class is {'ahead of' if direction == 'ahead' else 'behind'} you.")
+    return hit, f"{_SIDE[direction]} in class now (live), you're P{me.class_position}"
 
 
 def gap_slope(points: list[tuple[int, float]]) -> float | None:
@@ -559,13 +581,11 @@ def _clock(seconds: float) -> str:
     return f"{s // 60}:{s % 60:02d}"
 
 
-def _gap_line(label: str, g: GapRead | None, side: str, placed: bool,
-              then: bool = False) -> str:
+def _gap_line(label: str, g: GapRead | None, side: str, placed: bool) -> str:
     if not placed:
         return f"{label}: not sampled this lap."
     if g is None:
-        return f"{label}: none" + (f" — you {'led' if then else 'lead'} your class."
-                                   if side == "ahead" else ".")
+        return f"{label}: none" + (" — you lead your class." if side == "ahead" else ".")
     if g.gap is None:
         return f"{label}: {g.who}, a lap or more away."
     head = f"{label}: {g.who}, {g.gap:.1f} s {side}"
@@ -588,18 +608,30 @@ def _gap_line(label: str, g: GapRead | None, side: str, placed: bool,
     return f"{head}; {trend}."
 
 
-def format_race_state(snap: RaceSnapshot, live: tuple[int, int] | None = None) -> str:
-    """`live` = (overall, class) position read from the scoring feed as the tool answers
-    (#186), or None. The snapshot is up to a lap old: a place changed since its lap is
-    said as the position now, never the lap-old one against the driver's own word; the
-    car ahead/behind lines stay the lap's (their gaps and trends are per-lap figures)."""
+def format_race_state(snap: RaceSnapshot,
+                      live: tuple[int, RaceSample] | None = None) -> str:
+    """`live` = (overall place, race_sample) of the scoring frame read as the tool
+    answers (#186), or None. The snapshot is up to a lap old: when the place or a class
+    neighbour has changed since its lap, the position now leads the answer -- never the
+    lap-old one against the driver's own word -- and a neighbour that is a different car
+    now is named with its lap-old gap and trend CUT (a stale value is cut, not hedged).
+    A neighbour still the same car keeps the lap's gap and trend, labelled with the lap."""
     st = snap.state
-    moved = live is not None and live != (st.position, st.class_position)
-    pos, cls = live if moved else (st.position, st.class_position)
-    pos = f"P{pos}" if pos else "unknown"
-    cls = f"P{cls}" if cls else "unknown"
-    lines = [f"As of lap {snap.as_of_lap} (race).",
-             f"Position{' now (live)' if moved else ''}: {pos} overall, {cls} in class."]
+    who = {side: g.who if g else None for side, g in (("ahead", st.ahead),
+                                                        ("behind", st.behind))}
+    now = None
+    if live is not None:
+        now = {"ahead": live[1].class_ahead, "behind": live[1].class_behind}
+        if (live[0], live[1].class_position, now) == (st.position, st.class_position, who):
+            now = None      # nothing moved: the lap's answer, unchanged
+    lines = [f"As of lap {snap.as_of_lap} (race)."]
+    if now is None:
+        pos = f"P{st.position}" if st.position else "unknown"
+        cls = f"P{st.class_position}" if st.class_position else "unknown"
+        lines.append(f"Position: {pos} overall, {cls} in class.")
+    else:
+        lines.insert(0, f"Position now (live): P{live[0]} overall, "
+                        f"P{live[1].class_position} in class.")
     if not st.sampled:
         lines.append("Remaining: not sampled this lap.")
     if st.max_laps:
@@ -621,9 +653,19 @@ def format_race_state(snap: RaceSnapshot, live: tuple[int, int] | None = None) -
     if st.sampled and not st.max_laps and st.time_left is None:
         lines.append("Remaining: the game reports no lap count or clock for this race.")
     placed = st.sampled and st.class_position is not None
-    at = f" at the end of lap {snap.as_of_lap}" if moved else ""
-    lines.append(_gap_line(f"Car ahead in class{at}", st.ahead, "ahead", placed, moved))
-    lines.append(_gap_line(f"Car behind in class{at}", st.behind, "behind", placed, moved))
+    for side, g in (("ahead", st.ahead), ("behind", st.behind)):
+        label = f"Car {side} in class"
+        if now is None:
+            lines.append(_gap_line(label, g, side, placed))
+        elif now[side] is None:
+            lines.append(f"{label} now (live): none"
+                         + (" — you lead your class." if side == "ahead" else "."))
+        elif placed and now[side] == who[side]:
+            lines.append(_gap_line(f"{label} at the end of lap {snap.as_of_lap}", g, side,
+                                   placed))
+        else:
+            lines.append(f"{label} now (live): {now[side]}; gap and trend land at the end "
+                         "of this lap.")
     return "\n".join(lines)
 
 

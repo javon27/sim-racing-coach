@@ -1143,7 +1143,13 @@ def _ask_race_state(tmp_path, monkeypatch, live, phase, current_lap, tool="get_r
     from simcoach.race import LapFacts, build_snapshot
     monkeypatch.setattr(smm, "read_session_track_car", lambda: live)
     field = lmu_live.empty_snapshot()
-    field = dataclasses.replace(field, session=dataclasses.replace(
+    # #186: the driver is P2 overall and in class NOW; the snapshot has him P3 in class.
+    you = lmu_live.VehicleState(
+        id=1, place=2, class_position=2, driver="You", car="test_car", cls="GT3",
+        lap_dist=0.0, speed=0.0, sector=0, laps=current_lap - 1, in_pits=False,
+        is_player=True, best_lap=None, last_lap=None, best_s1=None, best_s2=None,
+        gap_leader=None, laps_behind_leader=0, gap_next=None, laps_behind_next=0)
+    field = dataclasses.replace(field, cars=[you], session=dataclasses.replace(
         field.session, live=True, phase=phase, current_lap=current_lap))
     monkeypatch.setattr(lmu_live, "read_field_snapshot", lambda: field)
 
@@ -1173,7 +1179,9 @@ def test_ws_coach_race_tool_reads_the_live_race_snapshot(tmp_path, monkeypatch):
     for current_lap in (13, 14):
         text = _ask_race_state(tmp_path / str(current_lap), monkeypatch,
                                ("test_track", "test_car"), "race", current_lap)
-        assert text.startswith("As of lap 12 (race)."), current_lap
+        # #186: the sidecar hands the tool the live reader -- the place now leads.
+        assert text.startswith("Position now (live): P2 overall, P2 in class.\n"
+                               "As of lap 12 (race)."), current_lap
 
 
 def test_ws_coach_race_tool_never_serves_another_sessions_snapshot(tmp_path, monkeypatch):

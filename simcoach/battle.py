@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 
 from simcoach.corners import Corner
 from simcoach.format import unit_fns
-from simcoach.lmu.live import FieldSnapshot
+from simcoach.lmu.live import FieldSnapshot, VehicleState
 
 # A rival within this many seconds of the driver at a corner entry is "in the fight"
 # there. PENDING RIG (#152).
@@ -388,18 +388,32 @@ def _nobody_at(b: Battle, lap: str, direction: str | None,
 
 def format_battle(b: Battle | None, as_of_lap: int, units: str = "metric",
                   rival: str | None = None, note: str | None = None,
-                  direction: str | None = None, position: int | None = None) -> str:
+                  direction: str | None = None, position: int | None = None,
+                  live_target: tuple[VehicleState | None, str] | None = None) -> str:
     """The battle text; `note` is why there is no battle (RaceSnapshot.battle_note).
     #185: `direction` ('ahead'/'behind') compares the car one class position away,
-    `position` the car at that class position; either overrides `rival`."""
+    `position` the car at that class position; either overrides `rival`.
+    #186: `live_target` (race.live_battle_target) replaces them once the driver's class
+    place has changed since the lap: the car picked in the LIVE field, found in the
+    lap's timing by id and stated at its live class place -- or why there is none."""
     head = f"As of lap {as_of_lap}."
     if b is None:
         return (f"{head} No battle read for lap {as_of_lap}: "
                 f"{note or 'none was computed for that lap'}.")
     me = next(c for c in b.laps if c.is_player)
     others = [c for c in b.laps if not c.is_player]
-    side_why = None
-    if direction or position:
+    side_why = hits = None
+    if live_target is not None:
+        car, side_why = live_target
+        if car is None:
+            return f"{head} {side_why}"
+        hits = [dataclasses.replace(c, class_position=car.class_position)
+                for c in others if c.car_id == car.id]
+        if not hits:
+            return (f"{head} Rival ({side_why}): {car.driver} ({car.car}), "
+                    f"P{car.class_position} in class, was not timed on lap {as_of_lap}: "
+                    "it is not in that lap's field.")
+    elif direction or position:
         nobody = _nobody_at(b, f"lap {as_of_lap}", direction, position)
         if nobody:
             return f"{head} {nobody}"
@@ -408,12 +422,13 @@ def format_battle(b: Battle | None, as_of_lap: int, units: str = "metric",
         side_why = (f"{_SIDE[direction]} in class at the end of lap {as_of_lap}, when you "
                     f"were P{me.class_position}" if direction else
                     f"P{want} in class at the end of lap {as_of_lap}")
-    if rival:
+    if rival and hits is None:
         hits = rival_matches(others, rival, me)
         if not hits and rival_matches([me], rival):
             return f"{head} {rival} is you, not a rival."
         if not hits:
             return f"{head} {_no_match(rival, others)}"
+    if hits:
         hit = hits[0]
         if not hit.entry:
             return (f"{head} {f'Rival ({side_why}): ' if side_why else ''}"
