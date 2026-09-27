@@ -289,7 +289,7 @@ def test_events_laps_frame_is_not_delayed_by_a_slow_optimal_compute(
     app.state.latest = {"record": rec, "lap_id": lap_id}
 
     def _slow(self, which="best"):
-        time.sleep(0.3)
+        time.sleep(1.0)
         return 90.0
     monkeypatch.setattr(core_mod.CoachContext, "get_optimal_seconds", _slow)
 
@@ -308,11 +308,11 @@ def test_events_laps_frame_is_not_delayed_by_a_slow_optimal_compute(
         t_opt2 = time.perf_counter() - t0
 
     assert f_laps is not None and f_laps["data"]["laps"]
-    assert t_laps < 0.15                  # laps arrives fast, well inside the 0.3s sleep
+    assert t_laps < 0.5                   # laps arrives fast, well inside the 1.0s sleep
     assert f_opt1 is not None and f_opt1["data"]["optimal"] is None
-    assert t_opt1 < 0.15                   # the "nothing yet" push doesn't wait either
+    assert t_opt1 < 0.5                    # the "nothing yet" push doesn't wait either
     assert f_opt2 is not None and f_opt2["data"]["optimal"] == 90.0
-    assert t_opt2 >= 0.25                  # the real value only after the compute finished
+    assert t_opt2 >= 0.9                   # the real value only after the compute finished
 
 
 # --- failure isolation: a raising compute never breaks laps or /events ---------------

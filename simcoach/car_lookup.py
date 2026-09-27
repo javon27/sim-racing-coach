@@ -57,13 +57,18 @@ def _scan_results(results_root: str | None) -> dict[str, tuple[str, str | None]]
 _file_cache: dict[str, tuple[tuple[int, int], dict[str, tuple[str, str | None]]]] = {}
 _cache: dict = {"sig": None, "table": {}}
 
-# Background warm-up (#179 part 2): a fresh sidecar's first scan is still ~5 s cold.
-# `warm_entry_table_async` runs it once on a daemon thread from main() (real installs
-# only -- tests never call it), and `_entry_table` serves the last-cached table
-# (empty, pre-warm) instead of running that same cold scan again on a request thread.
+# Background warm-up (#179 part 2): a fresh sidecar's first scan can take several
+# seconds cold (worse alongside the rest of the app importing/compiling -- up to ~23 s
+# measured on a first run after a fresh compile). `warm_entry_table_async` runs it once
+# on a daemon thread from main() (real installs only -- tests monkeypatch it to a
+# no-op). `_entry_table` WAITS for that warm scan rather than ever handing back an
+# empty table while it's mid-flight: an empty table resolves a known car as "unknown"/
+# class-fallback, and that wrong guess gets persisted (coach_chat.car, learnings) --
+# a stale answer briefly shown is fine, a wrong one written to storage is not.
 _warm_started = False
 _warm_lock = threading.Lock()
 _warmed = threading.Event()
+_WARM_WAIT_TIMEOUT_S = 30.0  # generous margin over the slowest observed cold scan
 
 
 def _rescan(results_root: str) -> dict[str, tuple[str, str | None]]:
@@ -93,10 +98,19 @@ def _rescan(results_root: str) -> dict[str, tuple[str, str | None]]:
             parsed = _parse_one(entry.path)
             _file_cache[entry.path] = (stamp, parsed)
         merged.update(parsed)  # filename order -> later file wins a duplicate VehName
+    _evict_stale(seen)
+    return merged
+
+
+def _evict_stale(seen: set[str]) -> None:
+    """Drop `_file_cache` entries for files no longer present (not in `seen`).
+    `.pop(path, None)`, not `del`: two overlapping rescans (e.g. the warm thread and
+    a request thread) can each snapshot `_file_cache` before either evicts, so both
+    try to drop the same now-missing entry -- the second must not raise (#179
+    red-team round 2: "never raises" covers this too)."""
     for path in list(_file_cache):
         if path not in seen:
-            del _file_cache[path]
-    return merged
+            _file_cache.pop(path, None)
 
 
 def _scan_if_stale() -> dict[str, tuple[str, str | None]]:
@@ -118,10 +132,12 @@ def _scan_if_stale() -> dict[str, tuple[str, str | None]]:
 
 
 def _entry_table() -> dict[str, tuple[str, str | None]]:
-    # A background warm scan (#179) is running: don't pay for that same cold scan a
-    # second time on this thread, serve whatever's cached (empty, pre-warm) instead.
+    # A background warm scan (#179) is running: wait for it (bounded) rather than
+    # ever handing back an empty/incomplete table -- see the comment on `_warm_started`
+    # above. If it somehow hasn't finished within the timeout, `_scan_if_stale` below
+    # just scans synchronously on this thread instead (redundant work, correct result).
     if _warm_started and not _warmed.is_set():
-        return _cache["table"]
+        _warmed.wait(timeout=_WARM_WAIT_TIMEOUT_S)
     return _scan_if_stale()
 
 

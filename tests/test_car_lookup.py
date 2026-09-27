@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 
 import pytest
@@ -214,3 +215,72 @@ def test_real_results_dir_incremental_scan_is_much_faster_than_a_cold_scan(monke
 
     assert warm_nothing_changed < cold
     assert incremental_add < cold
+
+
+# --- #179 red-team round 2 -------------------------------------------------------------
+
+def test_resolve_car_waits_out_a_warmup_scan_instead_of_the_class_fallback(tmp_path, monkeypatch):
+    """A caller mid-warm-up must never see the empty table: that resolves a KNOWN car
+    to the class fallback ("GT3 car"), and the wrong guess gets persisted (coach_chat.car,
+    learnings). resolve_car must block until the warm scan lands, then return the real
+    model -- not race ahead with a wrong answer."""
+    monkeypatch.setattr(car_lookup, "results_dir", lambda: tmp_path)
+    (tmp_path / "a.xml").write_text(_one_driver_xml("Team X #1", "Car X", "GT3"))
+
+    real_parse = car_lookup._parse_one
+    entered = threading.Event()
+    release = threading.Event()
+
+    def _slow_parse(path):
+        entered.set()
+        assert release.wait(timeout=5), "test setup: release was never signalled"
+        return real_parse(path)
+    monkeypatch.setattr(car_lookup, "_parse_one", _slow_parse)
+
+    car_lookup.warm_entry_table_async()
+    assert entered.wait(timeout=5)  # the warm thread is inside the (slow) parse now
+
+    result: dict = {}
+
+    def _resolve():
+        result["car"] = car_lookup.resolve_car("Team X #1", "GT3")
+    t = threading.Thread(target=_resolve)
+    t.start()
+    time.sleep(0.1)  # resolve_car should be blocked in _warmed.wait(), not returned yet
+    assert t.is_alive()
+    assert "car" not in result
+
+    release.set()
+    t.join(timeout=5)
+    assert not t.is_alive()
+    assert result["car"] == "Car X"  # the resolved model -- never "GT3 car"
+
+
+class _EvictsUnderneathYou(dict):
+    """Reproduces the exact TOCTOU: `_evict_stale` snapshots keys with `list(...)`,
+    then loops that snapshot evicting each one. `__iter__` (what `list()` calls) hands
+    back today's keys as normal, but ALSO evicts `victim` from the live dict right
+    then -- simulating a second, overlapping rescan winning that race and evicting it
+    first. By the time `_evict_stale`'s loop reaches `victim`, it's already gone."""
+
+    def __init__(self, *a, victim, **kw):
+        super().__init__(*a, **kw)
+        self._victim = victim
+
+    def __iter__(self):
+        keys = list(super().__iter__())
+        dict.pop(self, self._victim, None)  # the "other" rescan's eviction, mid-snapshot
+        return iter(keys)
+
+
+def test_concurrent_eviction_of_the_same_stale_entry_never_raises(tmp_path, monkeypatch):
+    """Two overlapping `_rescan` calls after a file's removed can each snapshot
+    `_file_cache` before either evicts, so both try to drop the same now-missing
+    entry -- `del` on the second would raise (#179 red-team round 2); `.pop(..., None)`
+    must not. Deterministic replay (no real threads, see `_EvictsUnderneathYou`)."""
+    victim = str(tmp_path / "a.xml")
+    fake_cache = _EvictsUnderneathYou({victim: ((0, 0), {})}, victim=victim)
+    monkeypatch.setattr(car_lookup, "_file_cache", fake_cache)
+
+    car_lookup._evict_stale(set())  # `victim` not in `seen` -> gone before AND after
+    assert victim not in fake_cache

@@ -273,6 +273,9 @@ def test_main_starts_the_result_poller_on_a_daemon_thread_before_serving(tmp_pat
         served.append((a, running.wait(5)))
 
     monkeypatch.setattr(entry, "poll_results", fake_poll)
+    # #179: main() also warms car_lookup's entry table from the real install --
+    # same reasoning as poll_results above, patched the same way.
+    monkeypatch.setattr(entry, "warm_entry_table_async", lambda: None)
     monkeypatch.setattr(entry, "build_app", lambda: app)
     monkeypatch.setattr(uvicorn, "run", fake_run)
 
