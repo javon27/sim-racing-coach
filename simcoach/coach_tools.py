@@ -2416,10 +2416,14 @@ class CoachContext:
         if direction not in (None, "ahead", "behind"):
             return f"direction must be 'ahead' or 'behind', not {direction!r}."
         if position is not None:
-            n = str(position).strip().upper().removeprefix("P")
+            if isinstance(position, float) and position.is_integer():
+                position = int(position)
+            n = "".join(str(position).split()).upper().removeprefix("P")
             if not n.isdecimal() or int(n) < 1:
                 return f"position must be a class position like 3, not {position!r}."
             position, direction = int(n), None
+        if direction or position:
+            rival = None    # the place asked for, never a name's race window
         which = (which or "").strip().lower()
         live = self._no_live_race()
         if live is None and which in ("", "latest", "last lap", "current",

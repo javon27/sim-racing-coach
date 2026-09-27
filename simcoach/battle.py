@@ -363,6 +363,29 @@ def target_position(me: CarLap, direction: str | None, position: int | None) -> 
     return me.class_position + (-1 if direction == "ahead" else 1)
 
 
+def _nobody_at(b: Battle, lap: str, direction: str | None,
+               position: int | None) -> str | None:
+    """#185: why no rival holds the asked-for place at the end of `lap` ('lap 2',
+    'race lap 7'), or None when one does."""
+    me = next(c for c in b.laps if c.is_player)
+    others = [c for c in b.laps if not c.is_player]
+    want = target_position(me, direction, position)
+    if want is None:
+        return (f"Your class position was not recorded on {lap}, so the car "
+                f"{_SIDE[direction]} is unknown; name the car or its position.")
+    if want == me.class_position:
+        return f"P{want} is you, not a rival."
+    if any(o.class_position == want for o in others):
+        return None
+    if position:
+        return _no_match(f"P{want}", others)
+    if want < 1 or want > max(o.class_position for o in b.laps):
+        return (f"You were P{me.class_position} in class at the end of {lap}: nobody in "
+                f"your class was {'ahead of' if direction == 'ahead' else 'behind'} you.")
+    return (f"You were P{me.class_position} in class at the end of {lap}; no car was "
+            f"recorded at P{want} in class.")
+
+
 def format_battle(b: Battle | None, as_of_lap: int, units: str = "metric",
                   rival: str | None = None, note: str | None = None,
                   direction: str | None = None, position: int | None = None) -> str:
@@ -377,21 +400,10 @@ def format_battle(b: Battle | None, as_of_lap: int, units: str = "metric",
     others = [c for c in b.laps if not c.is_player]
     side_why = None
     if direction or position:
+        nobody = _nobody_at(b, f"lap {as_of_lap}", direction, position)
+        if nobody:
+            return f"{head} {nobody}"
         want = target_position(me, direction, position)
-        if want is None:
-            return (f"{head} Your class position was not recorded on lap {as_of_lap}, so "
-                    f"the car {_SIDE[direction]} is unknown; name the car or its position.")
-        if want == me.class_position:
-            return f"{head} P{want} is you, not a rival."
-        if not any(o.class_position == want for o in others):
-            if position:
-                return f"{head} {_no_match(f'P{want}', others)}"
-            if want < 1 or want > max(o.class_position for o in b.laps):
-                return (f"{head} You were P{me.class_position} in class at the end of lap "
-                        f"{as_of_lap}: nobody in your class was "
-                        f"{'ahead of' if direction == 'ahead' else 'behind'} you.")
-            return (f"{head} You were P{me.class_position} in class at the end of lap "
-                    f"{as_of_lap}; no car was recorded at P{want} in class.")
         rival = f"P{want}"
         side_why = (f"{_SIDE[direction]} in class at the end of lap {as_of_lap}, when you "
                     f"were P{me.class_position}" if direction else
@@ -404,7 +416,8 @@ def format_battle(b: Battle | None, as_of_lap: int, units: str = "metric",
             return f"{head} {_no_match(rival, others)}"
         hit = hits[0]
         if not hit.entry:
-            return (f"{head} {hit.driver} ({hit.model or hit.car}), P{hit.class_position} "
+            return (f"{head} {f'Rival ({side_why}): ' if side_why else ''}"
+                    f"{hit.driver} ({hit.model or hit.car}), P{hit.class_position} "
                     f"in class, was not timed on lap {as_of_lap}: its trace does not cover "
                     "your lap's corners.")
         why = side_why or ("the car you named" if len(hits) == 1 else
@@ -479,24 +492,28 @@ def format_race_battle(laps: list[tuple[str, Battle | None]], units: str = "metr
     field_: dict[tuple, CarLap] = {}    # each car as last recorded
     for _, b in have:
         field_.update((ident(c), c) for c in b.laps if not c.is_player)
+    holds = None
     if direction or position:
-        # #185: each lap's own car at that place -- positions change over a race -- and
-        # the car that held it on the most laps is the one compared.
-        def at(b: Battle) -> list[CarLap]:
+        # #185: the car at that place at the end of the race (the last stored lap), and
+        # only the laps he held it on are compared -- positions change over a race.
+        def at(b: Battle) -> set[tuple]:
             want = target_position(me_of(b), direction, position)
-            return [c for c in b.laps if not c.is_player and c.class_position == want]
+            return {ident(c) for c in b.laps if not c.is_player and c.class_position == want}
+        last_name, last = have[-1]
+        nobody = _nobody_at(last, last_name, direction, position)
+        if nobody:
+            return (f"{head}{last_name} is the last race lap with a stored battle read. "
+                    + nobody)
         what = _SIDE[direction] if direction else f"P{position}"
-        votes = Counter(ident(h[0]) for h in (at(b) for _, b in have) if h)
-        if not votes:
-            mine = ", ".join(f"P{me_of(b).class_position}" if me_of(b).class_position > 0
-                             else "not recorded" for _, b in have)
-            return (f"{head}No other car in your class was {what} on any of the "
-                    f"{len(have)} race laps with a stored battle read (your class position "
-                    f"on them: {mine}).")
-        why = (f"{what} in class on {votes.most_common(1)[0][1]} of the "
-               f"{len(have)} race laps with a stored battle read")
-        if len(votes) > 1:
-            why += f"; {len(votes)} different cars held that place over the race"
+        held = [at(b) for _, b in have]
+        key = min(held[-1])     # one car per place; min() only makes a duplicate stable
+        votes = Counter({key: 1})
+        why = (f"{what} in class at the end of {last_name}; he held that place on "
+               f"{sum(key in h for h in held)} of the {len(have)} race laps with a stored "
+               "battle read")
+        if len(set().union(*held)) > 1:
+            why += f", {len(set().union(*held))} different cars over the race"
+        holds = dict(zip((name for name, _ in have), held))
     elif rival:
         hits = [rival_matches([c for c in b.laps if not c.is_player], rival, me_of(b))
                 for _, b in have]
@@ -519,13 +536,15 @@ def format_race_battle(laps: list[tuple[str, Battle | None]], units: str = "metr
     key = votes.most_common(1)[0][0]
     o = field_[key]
     per_zone: dict[str, list[tuple[str, Zone]]] = {}
-    compared, far, untimed, absent, pitted = [], 0, 0, 0, 0
+    compared, far, untimed, absent, pitted, elsewhere = [], 0, 0, 0, 0, 0
     for name, b in have:
         me = me_of(b)
         his = next((c for c in b.laps if not c.is_player and ident(c) == key), None)
         zones = zone_deltas(me, his, b.corners) if his is not None else []
         if his is None:
             absent += 1
+        elif holds is not None and key not in holds[name]:
+            elsewhere += 1  # #185: that lap he was not at the place asked about
         elif not zones and zone_deltas(dataclasses.replace(me, pit=[]),
                                        dataclasses.replace(his, pit=[]), b.corners):
             pitted += 1     # timed for both, but every zone overlapped a pit-lane span
@@ -540,6 +559,7 @@ def format_race_battle(laps: list[tuple[str, Battle | None]], units: str = "metr
     skipped = [f"{n} {why_}" for n, why_ in (
         (len(laps) - len(have), "with no stored battle read"),
         (absent, "with him not recorded"),
+        (elsewhere, f"with him not {_SIDE[direction] if direction else f'P{position}'}"),
         (pitted, "with you or him in the pit lane"),
         (far, f"with him never within {BATTLE_RANGE_S:.0f} s of you"),
         (untimed, "with no corner timed for both of you")) if n]

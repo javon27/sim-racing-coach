@@ -2586,13 +2586,13 @@ def test_get_battle_direction_and_position_pick_the_class_neighbour_live(tmp_pat
             "Pedro Lage") in ctx.dispatch("get_battle", {"direction": "ahead"})
     assert ("Rival (directly behind you in class at the end of lap 2, when you were P4): "
             "nahuel romano") in ctx.dispatch("get_battle", {"direction": "Behind"})
-    for pos in (3, "3", "P3"):
+    for pos in (3, "3", "P3", " P 3", 3.0):
         assert ("Rival (P3 in class at the end of lap 2): Pedro Lage (E0), P3 in class."
                 in ctx.dispatch("get_battle", {"position": pos})), pos
     assert ctx.dispatch("get_battle", {"position": 4}) == "As of lap 2. P4 is you, not a rival."
     assert ctx.dispatch("get_battle", {"position": 9}).startswith(
         "As of lap 2. No car in your class matches 'P9'. In your class: Pedro Lage")
-    for bad in (0, True, "three"):
+    for bad in (0, True, "three", 3.5):
         assert ctx.dispatch("get_battle", {"position": bad}).startswith(
             "position must be a class position like 3"), bad
     assert ctx.dispatch("get_battle", {"direction": "front"}) == (
@@ -3119,17 +3119,27 @@ def test_post_race_battle_takes_a_direction_and_a_position(tmp_path, synthetic_l
     """#185 after the race: the driver is P4 on every stored lap, Momo P3, B. Other P6."""
     ctx = _post_race(tmp_path, synthetic_lap)
     ahead = ctx.dispatch("get_battle", {"direction": "ahead"})
-    assert ahead.startswith("Rival (directly ahead of you in class on 4 of the 4 race laps "
-                            "with a stored battle read): Momo Rossi")
-    mine = "(your class position on them: P4, P4, P4, P4)."
+    assert ahead.startswith("Rival (directly ahead of you in class at the end of race lap 5; "
+                            "he held that place on 4 of the 4 race laps with a stored battle "
+                            "read): Momo Rossi")
+    last = "race lap 5 is the last race lap with a stored battle read. "
     assert ctx.dispatch("get_battle", {"direction": "behind"}) == (
-        "No other car in your class was directly behind you on any of the 4 race laps with "
-        "a stored battle read " + mine)
+        last + "You were P4 in class at the end of race lap 5; no car was recorded at P5 in "
+        "class.")
     assert ctx.dispatch("get_battle", {"position": 6}).startswith(
-        "Rival (P6 in class on 4 of the 4 race laps with a stored battle read): B. Other")
-    assert ctx.dispatch("get_battle", {"position": 4}) == (
-        "No other car in your class was P4 on any of the 4 race laps with a stored battle "
-        "read " + mine)
+        "Rival (P6 in class at the end of race lap 5; he held that place on 4 of the 4 race "
+        "laps with a stored battle read): B. Other")
+    assert ctx.dispatch("get_battle", {"position": 4}) == last + "P4 is you, not a rival."
     one = ctx.dispatch("get_battle", {"direction": "ahead", "which": "race lap 3"})
     assert ("Rival (directly ahead of you in class at the end of lap 3, when you were P4): "
             "Momo Rossi") in one
+
+
+def test_a_place_asked_for_never_picks_the_race_by_a_name_given_with_it(tmp_path,
+                                                                        synthetic_lap):
+    """#185 round 1: {'rival': 'Momo', 'position': 3} is a question about P3 -- not a
+    reason to go back to race 1 because Momo raced there."""
+    ctx = _race2(tmp_path, synthetic_lap)
+    out = ctx.dispatch("get_battle", {"rival": "Momo", "position": 3})
+    assert out.startswith("Race 2 of this session (started ")
+    assert "was not in race" not in out and "Momo" not in out

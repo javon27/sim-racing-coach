@@ -493,21 +493,32 @@ def test_a_far_car_ahead_still_says_which_car_it_is():
     assert "Pedro Lage (Model 0), P3 in class, wasn't near you on lap 2" in text
 
 
-def test_race_ahead_follows_each_laps_positions_and_says_the_place_changed_hands():
-    """Laps 1-2 Pedro is P3 ahead of the driver's P4; on lap 3 the driver passed him, so
-    Sean (P2) is the car ahead. Pedro held the place on the most laps."""
+def test_race_ahead_is_the_car_there_at_the_end_compared_only_where_he_was_there():
+    """Laps 1-2 Pedro is P3, ahead of the driver's P4; on lap 3 the driver passed him, so
+    Pedro is behind and Sean ahead. The car that held the place on the MOST laps (Pedro,
+    ahead) is not the car in front at the end -- and Pedro's two laps ahead are never
+    counted as laps behind."""
     passed = dataclasses.replace(JG, class_position=3)
-    pedro4 = dataclasses.replace(PEDRO, class_position=4)
+    pedro4 = dataclasses.replace(PEDRO, class_position=4, entry={1: 104.6, 2: 112.6},
+                                 exit={1: 106.6, 2: 114.6})
+    sean = dataclasses.replace(SEAN, entry={1: 102.8, 2: 110.8}, exit={1: 104.8, 2: 112.8})
     laps = [("race lap 1", build_battle(RIG, [T1, T2])),
             ("race lap 2", build_battle(RIG, [T1, T2])),
-            ("race lap 3", build_battle([LEAD, SEAN, passed, pedro4, NAHUEL], [T1, T2]))]
-    text = format_race_battle(laps, direction="ahead")
-    assert text.startswith(
-        "Rival (directly ahead of you in class on 2 of the 3 race laps with a stored battle "
-        "read; 2 different cars held that place over the race): Pedro Lage (Model 0)")
-    behind = format_race_battle(laps, direction="behind")
-    assert behind.startswith("Rival (directly behind you in class on 2 of the 3 race laps")
-    assert "nahuel romano" in behind
+            ("race lap 3", build_battle([LEAD, sean, passed, pedro4, NAHUEL], [T1, T2]))]
+    ahead = format_race_battle(laps, direction="ahead").splitlines()
+    assert ahead[:2] == [(
+        "Rival (directly ahead of you in class at the end of race lap 3; he held that place "
+        "on 1 of the 3 race laps with a stored battle read, 2 different cars over the "
+        "race): Sean Haggan (Model 9), P2 in class on the last lap he was recorded."),
+        ("Compared on 1 of 3 race laps (race lap 3); skipped 2 with him not directly ahead "
+        "of you.")]
+    behind = format_race_battle(laps, direction="behind").splitlines()
+    assert behind[:2] == [(
+        "Rival (directly behind you in class at the end of race lap 3; he held that place "
+        "on 1 of the 3 race laps with a stored battle read, 2 different cars over the "
+        "race): Pedro Lage (Model 0), P4 in class on the last lap he was recorded."),
+        ("Compared on 1 of 3 race laps (race lap 3); skipped 2 with him not directly behind "
+        "you.")]
 
 
 def test_race_leader_all_race_has_nobody_ahead():
@@ -515,8 +526,25 @@ def test_race_leader_all_race_has_nobody_ahead():
     b = build_battle([lead, dataclasses.replace(LEAD, class_position=2)], [T1, T2])
     assert format_race_battle([("race lap 1", b), ("race lap 2", None), ("race lap 3", b)],
                               direction="ahead") == (
-        "No other car in your class was directly ahead of you on any of the 2 race laps "
-        "with a stored battle read (your class position on them: P1, P1).")
+        "race lap 3 is the last race lap with a stored battle read. You were P1 in class at "
+        "the end of race lap 3: nobody in your class was ahead of you.")
+
+
+def test_race_gap_in_positions_reads_like_the_live_answer():
+    b = build_battle([LEAD, SEAN, PEDRO, JG, dataclasses.replace(NAHUEL, class_position=6)],
+                     [T1, T2])
+    assert format_race_battle([("race lap 4", b)], direction="behind") == (
+        "race lap 4 is the last race lap with a stored battle read. You were P4 in class at "
+        "the end of race lap 4; no car was recorded at P5 in class.")
+
+
+def test_a_car_ahead_that_was_not_timed_still_says_it_is_the_car_ahead():
+    untimed = dataclasses.replace(PEDRO, entry={}, exit={}, apex_kph={}, lap={})
+    b = build_battle([JG, untimed, NAHUEL], [T1, T2])
+    assert format_battle(b, 2, direction="ahead") == (
+        "As of lap 2. Rival (directly ahead of you in class at the end of lap 2, when you "
+        "were P4): Pedro Lage (Model 0), P3 in class, was not timed on lap 2: its trace does "
+        "not cover your lap's corners.")
 
 
 def test_a_position_names_that_place_and_the_race_follows_who_held_it():
@@ -530,6 +558,8 @@ def test_a_position_names_that_place_and_the_race_follows_who_held_it():
                             dataclasses.replace(PEDRO, class_position=2), JG, NAHUEL],
                            [T1, T2])
     laps = [("race lap 1", b), ("race lap 2", swapped), ("race lap 3", b)]
-    assert format_race_battle(laps, position=3).startswith(
-        "Rival (P3 in class on 2 of the 3 race laps with a stored battle read; 2 different "
-        "cars held that place over the race): Pedro Lage (Model 0)")
+    assert format_race_battle(laps, position=3).splitlines()[:2] == [(
+        "Rival (P3 in class at the end of race lap 3; he held that place on 2 of the 3 race "
+        "laps with a stored battle read, 2 different cars over the race): Pedro Lage "
+        "(Model 0), P3 in class on the last lap he was recorded."),
+        ("Compared on 2 of 3 race laps (race lap 1, race lap 3); skipped 1 with him not P3.")]
