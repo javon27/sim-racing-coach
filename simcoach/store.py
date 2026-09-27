@@ -1186,17 +1186,20 @@ class LapStore:
 
     def timed_laps(self, track: str, car: str) -> list[dict]:
         """#169: every valid, complete, non-pit, non-mapping timed lap for a track/car
-        as {id, ts, session_id, lap_time, s1, s2, s3} -- one query, no telemetry -- for the
-        all-time best lap and best sectors. `car` expands like `best_lap`."""
+        as {id, ts, session_id, lap_time, s1, s2, s3, telemetry} -- one query, no telemetry
+        loaded -- for the all-time best lap and best sectors. `car` expands like `best_lap`.
+        Unlike `best_lap` it counts result-log laps (#182: the game's own times);
+        `telemetry` is False for those, which have no channels to analyse."""
         teams = [c for c in self._distinct_db_cars() if resolve_car(c) == car] or [car]
         with self._lock:
             rows = self.conn.execute(
-                f"SELECT id, ts, session_id, lap_time, s1, s2, s3 FROM laps WHERE track = ? "
+                "SELECT id, ts, session_id, lap_time, s1, s2, s3, "
+                f"telemetry_path IS NOT NULL FROM laps WHERE track = ? "
                 f"AND car IN ({','.join('?' * len(teams))}) AND valid = 1 "
                 "AND lap_time IS NOT NULL AND partial IS NULL AND NOT COALESCE(pit, 0) "
                 "AND NOT COALESCE(mapping, 0)", [track, *teams]).fetchall()
-        return [dict(zip(("id", "ts", "session_id", "lap_time", "s1", "s2", "s3"), r))
-                for r in rows]
+        return [dict(zip(("id", "ts", "session_id", "lap_time", "s1", "s2", "s3", "telemetry"),
+                         (*r[:7], bool(r[7])))) for r in rows]
 
     def recent_laps(self, track: str, car: str, limit: int = 10,
                     session_id: str | None = None,

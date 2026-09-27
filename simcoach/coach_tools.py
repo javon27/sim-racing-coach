@@ -466,12 +466,18 @@ TOOLS = [
         "name": "get_personal_best",
         "description": "The all-time fastest recorded lap for a track/car (defaults to the "
                        "current one) and when it was set, contrasted with this session's best "
-                       "if different. Use for 'what's my personal best / all-time fastest here'.",
+                       "if different. Use for 'what's my personal best / all-time fastest here'. "
+                       "Counts the game's result-log laps too. A brand/model word in car= "
+                       "('McLaren', 'Z06') or car_class= ('GT3', for 'any GT3') returns one "
+                       "best per matching car.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "track": {"type": "string", "description": "Optional: defaults to the current track."},
-                "car": {"type": "string", "description": "Optional: defaults to the current car."},
+                "car": {"type": "string", "description": "Optional: a model or brand/model "
+                        "word; defaults to the current car."},
+                "car_class": {"type": "string", "description": "Optional: every car of this "
+                              "class (e.g. 'GT3', 'Hyper', 'LMP2')."},
             },
         },
     },
@@ -2523,29 +2529,61 @@ class CoachContext:
             return "No saved memories yet."
         return "\n".join(f"- {r['text']}" for r in rows)
 
-    def get_personal_best(self, track=None, car=None):
-        track, car = track or self.track, car or self.car
-        if not (track and car):
+    def get_personal_best(self, track=None, car=None, car_class=None):
+        # #182: counts result-log laps (store.timed_laps, the game's own times), and
+        # `car` may be a brand/model word ('McLaren', 'Z06') or `car_class` a class
+        # ('GT3') -- several matching cars answer with one best per car.
+        track = track or self.track
+        car = car or (None if car_class else self.car)
+        if not (track and (car or car_class)):
             return "No track/car resolved yet — no personal best available."
-        best = self.store.best_lap(track, car)
-        if best is None:
+        groups = self.store.session_facets()["car_groups"]
+        if car and not car_class and any(car in g["cars"] for g in groups):
+            return self._personal_best_one(track, car, self.store.timed_laps(track, car))
+        cls = lambda s: s.strip().upper().removeprefix("LM").split("_")[0]  # LMGT3 = GT3
+        models = dict.fromkeys(m for g in groups for m in g["cars"]
+                               if (not car or car.lower() in m.lower())
+                               and (not car_class or cls(g["car_class"]) == cls(car_class)))
+        rows = {m: r for m in models if (r := self.store.timed_laps(track, m))}
+        if not models and car and not car_class and (r := self.store.timed_laps(track, car)):
+            rows = {car: r}  # a raw entry name
+        if len(rows) == 1:
+            return self._personal_best_one(track, *next(iter(rows.items())))
+        if not rows:
+            here = {m: g["car_class"] for g in groups for m in g["cars"]
+                    if self.store.timed_laps(track, m)}
+            return (f"No recorded laps yet for {track} / {car or car_class}."
+                    + (" Cars with laps here: " + ", ".join(f"{m} ({c})" for m, c in here.items())
+                       + "." if here else ""))
+        bests = sorted(((min(r, key=lambda x: (x["lap_time"], not x["telemetry"])), m)
+                        for m, r in rows.items()), key=lambda bm: bm[0]["lap_time"])
+        return (f"Personal bests at {track} ({' '.join(filter(None, (car, car_class)))}), "
+                "one per car: " + "; ".join(
+                    f"{m} {format_laptime(b['lap_time'])} (set "
+                    f"{time.strftime('%Y-%m-%d', time.localtime(b['ts']))}"
+                    f"{'' if b['telemetry'] else ', result log only, no telemetry'})"
+                    for b, m in bests) + ".")
+
+    def _personal_best_one(self, track, car, rows):
+        if not rows:
             return f"No recorded laps yet for {track} / {car}."
-        prefix = f"All-time personal best at {track} in {car}: {format_laptime(best.lap_time)}"
-        if self.session_id and best.session_id == self.session_id:
+        best = min(rows, key=lambda r: (r["lap_time"], not r["telemetry"]))
+        prefix = f"All-time personal best at {track} in {car}: {format_laptime(best['lap_time'])}"
+        if not best["telemetry"]:
+            prefix += (" (from the game's result log -- no telemetry, so it can't be analysed "
+                       "lap by lap)")
+        if self.session_id and best["session_id"] == self.session_id:
             # #130: the PB *is* the lap just driven -- "set <date>" reads as history
             # when it's actually this session, so name the lap and say how long ago.
-            label_by_id, _ = self._lap_numbering()
-            lap_id = next((lap["id"] for lap in self.store.session_laps(self.session_id)
-                           if lap["ts"] == best.timestamp), None)
-            label = label_by_id.get(lap_id) if lap_id is not None else None
+            label = self._lap_numbering()[0].get(best["id"])
             this_lap = f"this session's {label}" if label else "this session"
-            return f"{prefix} — that's {this_lap}, set {_lap_age(best.timestamp)}."
-        when = time.strftime("%Y-%m-%d", time.localtime(best.timestamp))
+            return f"{prefix} — that's {this_lap}, set {_lap_age(best['ts'])}."
+        when = time.strftime("%Y-%m-%d", time.localtime(best["ts"]))
         out = f"{prefix}, set {when}."
-        if self.session_id:
-            session_best = self.store.best_lap(track, car, session_id=self.session_id)
-            if session_best is not None and session_best.lap_time != best.lap_time:
-                out += f" This session's best so far: {format_laptime(session_best.lap_time)}."
+        session = [r["lap_time"] for r in rows if self.session_id
+                   and r["session_id"] == self.session_id]
+        if session and min(session) != best["lap_time"]:
+            out += f" This session's best so far: {format_laptime(min(session))}."
         return out
 
     def get_progress(self, track=None, car=None):
@@ -2662,7 +2700,8 @@ class CoachContext:
                 args.get("text", ""), args.get("track"), args.get("car"), args.get("replaces")),
             "get_driver_memories": lambda: self.get_driver_memories(
                 args.get("track"), args.get("car"), args.get("topic")),
-            "get_personal_best": lambda: self.get_personal_best(args.get("track"), args.get("car")),
+            "get_personal_best": lambda: self.get_personal_best(args.get("track"), args.get("car"),
+                                                                args.get("car_class")),
             "get_progress": lambda: self.get_progress(args.get("track"), args.get("car")),
             "list_past_sessions": lambda: self.list_past_sessions(
                 args.get("track"), args.get("car"), args.get("limit", 5)),
