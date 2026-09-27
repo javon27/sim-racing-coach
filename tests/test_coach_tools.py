@@ -1199,7 +1199,9 @@ def test_get_personal_best_finds_laps_under_raw_entry_name(tmp_path, synthetic_l
 
 # #182: real-shaped Sarthe rows (copied from the driver's DB). Live AND result-log laps
 # store the same raw team ENTRY name; only car_lookup's result-log table maps it to a
-# model/class, and a brand word can match a car with no timed laps (Corvette GTE).
+# model/class. Real traps: a brand word can match a car with no timed laps here
+# (Corvette GTE, Porsche GT3 R), and one model races in two classes (Oreca 07 as
+# LMP2 and LMP2_ELMS, 12 s apart at Sarthe).
 _SARTHE = "Circuit de la Sarthe"
 _Z06_ENTRY = "Racing Team Turkey by TF 2026 #34:WEC"
 _ENTRIES = {
@@ -1207,7 +1209,22 @@ _ENTRIES = {
     "United Autosports 2025 #95:LM": ("McLaren 720S LMGT3 Evo", "GT3"),
     "Corvette Racing #33:LM": ("Corvette C8.R GTE", "GTE"),
     "Cadillac Racing #3:LM": ("Cadillac V-Series.R", "Hyper"),
+    "IDEC Sport 2025 #28:LM": ("Oreca 07", "LMP2"),
+    "IDEC Sport #28:ELMS25": ("Oreca 07", "LMP2_ELMS"),
+    "Proton Competition #88:LM": ("Porsche 911 RSR-19", "GTE"),
+    "Manthey 1st Phorm 2025 #92:LM": ("Porsche 911 GT3 R LMGT3", "GT3"),
 }
+
+
+def _result_laps(store, rows):
+    # lap 5964's shape: source='result', telemetry_path NULL, mapping 0, pit/partial NULL;
+    # an invalid result row always has lap_time NULL (1,634/1,634 on the real store)
+    store.conn.executemany(
+        "INSERT INTO laps (ts, sim, track, car, lap_time, valid, telemetry_path, phase, "
+        "session_id, source, s1, s2, s3, mapping) "
+        "VALUES (?, 'lmu', ?, ?, ?, ?, NULL, 'practice', ?, 'result', NULL, NULL, NULL, 0)",
+        rows)
+    store.conn.commit()
 
 
 def _sarthe_store(tmp_path, synthetic_lap, monkeypatch):
@@ -1218,17 +1235,17 @@ def _sarthe_store(tmp_path, synthetic_lap, monkeypatch):
     store.save(LapRecord(**{**synthetic_lap.__dict__, "track": _SARTHE, "car": _Z06_ENTRY,
                             "session_id": "Circuit de la Sarthe|x--offline",
                             "timestamp": 1790000000.0, "lap_time": 242.14111328125}))
-    # lap 5964's shape: source='result', telemetry_path NULL, mapping 0, pit/partial NULL
-    store.conn.executemany(
-        "INSERT INTO laps (ts, sim, track, car, lap_time, valid, telemetry_path, phase, "
-        "session_id, source, s1, s2, s3, mapping) "
-        "VALUES (?, 'lmu', ?, ?, ?, ?, NULL, 'practice', ?, 'result', NULL, NULL, NULL, 0)",
-        [(1785303279.0, _SARTHE, _Z06_ENTRY, 240.0089, 1, "2026_07_29_00_54_18-57P1"),
-         (1785303000.0, _SARTHE, _Z06_ENTRY, 239.0, 0, "2026_07_29_00_54_18-57P1"),  # invalid
-         (1782300000.0, _SARTHE, "United Autosports 2025 #95:LM", 244.4586, 1, "R2"),
-         (1782300000.0, _SARTHE, "Corvette Racing #33:LM", None, 0, "R3"),
-         (1782300000.0, _SARTHE, "Cadillac Racing #3:LM", 200.3782, 1, "R4")])
-    store.conn.commit()
+    _result_laps(store, [
+        (1785303279.0, _SARTHE, _Z06_ENTRY, 240.0089, 1, "2026_07_29_00_54_18-57P1"),
+        (1785303000.0, _SARTHE, _Z06_ENTRY, None, 0, "2026_07_29_00_54_18-57P1"),
+        (1782300000.0, _SARTHE, "United Autosports 2025 #95:LM", 244.4586, 1, "R2"),
+        (1782300000.0, _SARTHE, "Corvette Racing #33:LM", None, 0, "R3"),
+        (1782300000.0, _SARTHE, "Cadillac Racing #3:LM", 200.3782, 1, "R4"),
+        (1777800000.0, _SARTHE, "IDEC Sport 2025 #28:LM", 228.2574, 1, "R5"),
+        (1777800000.0, _SARTHE, "IDEC Sport #28:ELMS25", 215.8251, 1, "R6"),
+        (1757500000.0, _SARTHE, "Proton Competition #88:LM", 242.3839, 1, "R7"),
+        (1757500000.0, "Bahrain Outer Circuit", "Manthey 1st Phorm 2025 #92:LM",
+         76.2952, 1, "R8")])
     return store
 
 
@@ -1238,9 +1255,17 @@ def test_personal_best_counts_result_log_lap_and_flags_no_telemetry(
     z06 = "Chevrolet Corvette Z06 LMGT3.R"
     out = CoachContext(store, track=_SARTHE, car=z06).dispatch("get_personal_best", {})
     assert "4:00.009" in out and "no telemetry" in out, out
-    assert "3:59.000" not in out   # the invalid result lap is still excluded
     # best_lap is unchanged: telemetry-only, so analysis still gets the live lap
     assert store.best_lap(_SARTHE, z06).lap_time == pytest.approx(242.1411, abs=1e-3)
+
+
+def test_personal_best_tie_prefers_the_telemetry_lap(tmp_path, synthetic_lap, monkeypatch):
+    store = _sarthe_store(tmp_path, synthetic_lap, monkeypatch)
+    store.conn.execute("DELETE FROM laps WHERE lap_time = 240.0089")
+    _result_laps(store, [(1785303279.0, _SARTHE, _Z06_ENTRY, 242.14111328125, 1, "R9")])
+    out = CoachContext(store, track=_SARTHE, car="Chevrolet Corvette Z06 LMGT3.R").dispatch(
+        "get_personal_best", {})
+    assert "4:02.141" in out and "no telemetry" not in out, out
 
 
 def test_personal_best_class_mode_lists_one_best_per_car(tmp_path, synthetic_lap, monkeypatch):
@@ -1251,6 +1276,21 @@ def test_personal_best_class_mode_lists_one_best_per_car(tmp_path, synthetic_lap
     assert "Chevrolet Corvette Z06 LMGT3.R 4:00.009" in out
     assert "McLaren 720S LMGT3 Evo 4:04.459" in out
     assert "Cadillac" not in out and "3:20.378" not in out   # Hyper, not GT3
+    hyper = ctx.dispatch("get_personal_best", {"car_class": "Hypercar"})
+    assert "in Cadillac V-Series.R: 3:20.378" in hyper, hyper
+
+
+def test_personal_best_never_merges_one_model_across_classes(
+        tmp_path, synthetic_lap, monkeypatch):
+    store = _sarthe_store(tmp_path, synthetic_lap, monkeypatch)
+    ctx = CoachContext(store, track=_SARTHE, car="Oreca 07", car_class="LMP2")
+    lmp2 = ctx.dispatch("get_personal_best", {"car_class": "LMP2"})
+    assert "Oreca 07 (LMP2): 3:48.257" in lmp2 and "3:35.825" not in lmp2, lmp2
+    mine = ctx.dispatch("get_personal_best", {})   # the current car's class picks one
+    assert "3:48.257" in mine and "3:35.825" not in mine, mine
+    unsure = CoachContext(store, track=_SARTHE, car="Oreca 07").dispatch(
+        "get_personal_best", {})   # no class to go on: each class, separately
+    assert "Oreca 07 (LMP2_ELMS) 3:35.825" in unsure and "Oreca 07 (LMP2) 3:48.257" in unsure
 
 
 def test_personal_best_resolves_a_brand_word(tmp_path, synthetic_lap, monkeypatch):
@@ -1261,9 +1301,25 @@ def test_personal_best_resolves_a_brand_word(tmp_path, synthetic_lap, monkeypatc
     # 'Corvette' also names the GTE car, which has no timed laps here
     assert "in Chevrolet Corvette Z06 LMGT3.R: 4:00.009" in ctx.dispatch(
         "get_personal_best", {"car": "Corvette"})
+    porsche = ctx.dispatch("get_personal_best", {"car": "Porsche"})
+    assert "in Porsche 911 RSR-19: 4:02.384" in porsche, porsche
+    assert "Also matched, no laps here: Porsche 911 GT3 R LMGT3" in porsche
     # an unmatched word lists what IS here, so the coach can retry without asking
     miss = ctx.dispatch("get_personal_best", {"car": "any GT3"})
     assert "McLaren 720S LMGT3 Evo (GT3)" in miss, miss
+    # ...but an unidentified CURRENT car (the class fallback) stays a plain no
+    plain = CoachContext(store, track=_SARTHE, car="GT3 car").dispatch("get_personal_best", {})
+    assert "No recorded laps yet" in plain and "Cars with laps here" not in plain, plain
+
+
+def test_personal_best_brand_with_several_timed_cars_lists_each(
+        tmp_path, synthetic_lap, monkeypatch):
+    store = _sarthe_store(tmp_path, synthetic_lap, monkeypatch)
+    _result_laps(store, [(1757500000.0, _SARTHE, "Corvette Racing #33:LM", 241.5, 1, "R10")])
+    out = CoachContext(store, track=_SARTHE, car="Oreca 07").dispatch(
+        "get_personal_best", {"car": "Corvette"})
+    assert "one per car: Chevrolet Corvette Z06 LMGT3.R 4:00.009" in out, out
+    assert "Corvette C8.R GTE 4:01.500" in out
 
 
 def test_get_progress_lists_sessions_in_order(tmp_path, synthetic_lap):

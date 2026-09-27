@@ -1184,13 +1184,16 @@ class LapStore:
                 return vals
         return None
 
-    def timed_laps(self, track: str, car: str) -> list[dict]:
+    def timed_laps(self, track: str, car: str, car_class: str | None = None) -> list[dict]:
         """#169: every valid, complete, non-pit, non-mapping timed lap for a track/car
         as {id, ts, session_id, lap_time, s1, s2, s3, telemetry} -- one query, no telemetry
         loaded -- for the all-time best lap and best sectors. `car` expands like `best_lap`.
         Unlike `best_lap` it counts result-log laps (#182: the game's own times);
-        `telemetry` is False for those, which have no channels to analyse."""
-        teams = [c for c in self._distinct_db_cars() if resolve_car(c) == car] or [car]
+        `telemetry` is False for those, which have no channels to analyse. `car_class`
+        keeps only entries of that scraped class: one model can race in two (the Oreca 07
+        is both LMP2 and LMP2_ELMS), and their times must not merge."""
+        teams = [c for c in self._distinct_db_cars() if resolve_car(c) == car
+                 and (car_class is None or resolve_car_class(c) == car_class)] or [car]
         with self._lock:
             rows = self.conn.execute(
                 "SELECT id, ts, session_id, lap_time, s1, s2, s3, "

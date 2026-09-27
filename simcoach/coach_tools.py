@@ -737,6 +737,17 @@ def race_result_text(store, session_id) -> str:
     return "\n".join(lines)
 
 
+_CLASS_ALIASES = {"HYPERCAR": "HYPER", "H": "HYPER", "DH": "HYPER"}  # LMH / LMDh
+
+
+def _norm_class(name: str | None) -> str:
+    """#182: a class word as the driver/REST/result log may spell it -> one key
+    ('LMGT3' = 'GT3', 'Hypercar' = 'LMDh' = 'Hyper'). 'LMP2_ELMS' stays distinct
+    from 'LMP2': a different spec of the same car."""
+    key = (name or "").strip().upper().removeprefix("LM")
+    return _CLASS_ALIASES.get(key, key)
+
+
 def _lap_age(ts: float) -> str:
     """'13 s ago' / '5 min ago' for a lap set moments ago this session (#130); once
     it's no longer fresh (>= 2h), falls back to the date, same as the all-time-best
@@ -2534,29 +2545,42 @@ class CoachContext:
         # `car` may be a brand/model word ('McLaren', 'Z06') or `car_class` a class
         # ('GT3') -- several matching cars answer with one best per car.
         track = track or self.track
+        explicit = bool(car or car_class)
         car = car or (None if car_class else self.car)
         if not (track and (car or car_class)):
             return "No track/car resolved yet — no personal best available."
-        groups = self.store.session_facets()["car_groups"]
-        if car and not car_class and any(car in g["cars"] for g in groups):
-            return self._personal_best_one(track, car, self.store.timed_laps(track, car))
-        cls = lambda s: s.strip().upper().removeprefix("LM").split("_")[0]  # LMGT3 = GT3
-        models = dict.fromkeys(m for g in groups for m in g["cars"]
-                               if (not car or car.lower() in m.lower())
-                               and (not car_class or cls(g["car_class"]) == cls(car_class)))
-        rows = {m: r for m in models if (r := self.store.timed_laps(track, m))}
-        if not models and car and not car_class and (r := self.store.timed_laps(track, car)):
-            rows = {car: r}  # a raw entry name
+        # A car is a (model, class) pair: the Oreca 07 races as LMP2 AND LMP2_ELMS, and
+        # those times must never merge into one PB. "Other" = no scraped class.
+        pairs = list(dict.fromkeys((m, g["car_class"]) for g in self.store.session_facets()
+                                   ["car_groups"] for m in g["cars"]))
+        laps = lambda p: self.store.timed_laps(track, p[0], None if p[1] == "Other" else p[1])
+        label = lambda p: (f"{p[0]} ({p[1]})" if sum(q[0] == p[0] for q in pairs) > 1
+                           else p[0])
+        matched = (car and not car_class and [p for p in pairs if p[0] == car]) or [
+            p for p in pairs if (not car or car.lower() in p[0].lower())
+            and (not car_class or _norm_class(p[1]) == _norm_class(car_class))]
+        rows = {p: r for p in matched if (r := laps(p))}
+        if not matched and car and not car_class and (r := self.store.timed_laps(track, car)):
+            rows = {(car, None): r}  # a raw entry name
+        # A brand word that also names cars with no laps here says so (car_class= would
+        # list the whole class's garage, which is noise).
+        others = [label(q) for q in matched if q not in rows] if car and not car_class else []
+        if len(rows) > 1 and not car_class and len({p[0] for p in rows}) == 1:
+            # One model in several classes: the current car's class picks one, if it
+            # matches (REST may spell it differently -- then list each class).
+            mine = {p: r for p, r in rows.items() if self.car_class
+                    and _norm_class(p[1]) == _norm_class(self.car_class)}
+            rows = mine if len(mine) == 1 else rows
         if len(rows) == 1:
-            return self._personal_best_one(track, *next(iter(rows.items())))
+            (p, r), = rows.items()
+            return self._personal_best_one(track, label(p), r) + (
+                f" (Also matched, no laps here: {', '.join(others)}.)" if others else "")
         if not rows:
-            here = {m: g["car_class"] for g in groups for m in g["cars"]
-                    if self.store.timed_laps(track, m)}
+            here = [f"{p[0]} ({p[1]})" for p in pairs if explicit and laps(p)]
             return (f"No recorded laps yet for {track} / {car or car_class}."
-                    + (" Cars with laps here: " + ", ".join(f"{m} ({c})" for m, c in here.items())
-                       + "." if here else ""))
-        bests = sorted(((min(r, key=lambda x: (x["lap_time"], not x["telemetry"])), m)
-                        for m, r in rows.items()), key=lambda bm: bm[0]["lap_time"])
+                    + (f" Cars with laps here: {', '.join(here)}." if here else ""))
+        bests = sorted(((min(r, key=lambda x: (x["lap_time"], not x["telemetry"])), label(p))
+                        for p, r in rows.items()), key=lambda bm: bm[0]["lap_time"])
         return (f"Personal bests at {track} ({' '.join(filter(None, (car, car_class)))}), "
                 "one per car: " + "; ".join(
                     f"{m} {format_laptime(b['lap_time'])} (set "
@@ -2565,8 +2589,6 @@ class CoachContext:
                     for b, m in bests) + ".")
 
     def _personal_best_one(self, track, car, rows):
-        if not rows:
-            return f"No recorded laps yet for {track} / {car}."
         best = min(rows, key=lambda r: (r["lap_time"], not r["telemetry"]))
         prefix = f"All-time personal best at {track} in {car}: {format_laptime(best['lap_time'])}"
         if not best["telemetry"]:
