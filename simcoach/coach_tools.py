@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 import time
 from collections import Counter, defaultdict
+from dataclasses import replace
 from itertools import pairwise
 from types import SimpleNamespace
 
@@ -65,6 +66,7 @@ from simcoach.fuel import laps_remaining
 from simcoach.livelap import impact_text, incident_lines
 from simcoach.race import (
     FILL_ROWS,
+    FILL_TOL,
     HISTORY_LAPS,
     HISTORY_LOADS,
     MIN_STINT_LAPS,
@@ -2400,14 +2402,34 @@ class CoachContext:
                 continue
             f = lap_facts(rec)
             if f.clean and (f.fuel_used or f.energy_used):
-                practice.append(f)
-        practice, source, notes, energy_sessions = practice[-RATE_LAPS:], None, [], {sid}
+                practice.append((row.get("phase"), f))
+        phases = {ph for ph, _ in practice[-RATE_LAPS:]}
+        practice, source, notes, energy_sessions = (
+            [f for _, f in practice[-RATE_LAPS:]], None, [], {sid})
         ve = None
         cls = self._stored_class()
         if len(practice) >= MIN_STINT_LAPS:
             recent = practice[-PACE_LAPS:]
             pace = sum(f.lap_time for f in recent) / len(recent)
             at_pace = f"at your practice pace of {format_laptime(pace)}"
+            # #184 red-team R2: VE per lap follows the fuel ratio, and the pit menu may
+            # set another for the race. Once the race sitting shows its fill (a garage or
+            # grid row) and a practice sitting used here filled differently, its VE/lap
+            # would be off by the change: not projected. Fuel L/lap still holds.
+            fills, _ = self._fills([], sid)
+            race = fills.get((sid, "race"))
+            off = sorted((fills[(sid, ph)], ph) for ph in phases
+                         if race and fills.get((sid, ph))
+                         and abs(fills[(sid, ph)] / race - 1) > FILL_TOL)
+            if off:
+                practice = [replace(f, energy_used=None) for f in practice]
+                ve = True
+                notes.append(
+                    f"Virtual energy: not projected -- your race fill is at fuel ratio "
+                    f"{race:.2f} L per 1% (read off the tank on the grid), your "
+                    + " and ".join(f"{ph} laps ran at {r:.2f}" for r, ph in off)
+                    + "; virtual energy per lap changes with the ratio. Fuel per lap "
+                    "still holds.")
         else:
             # #184 (Sarthe 2026-09-26: one qualy lap, 'that doesn't help me'): this car's
             # stored burn at this track, every session -- practice, qualifying AND race.
@@ -2519,24 +2541,24 @@ class CoachContext:
                 continue
             f = lap_facts(rec)
             if f.clean and (f.fuel_used or f.energy_used):
-                out.append(HistLap(rec.timestamp, rec.phase, rec.session_id, f,
-                                   departure(rec)))
+                out.append(HistLap(rec.timestamp, rec.phase, rec.session_id, f))
                 if len(out) == HISTORY_LAPS:
                     break
         return out, read, len(rows)
 
     def _fills(self, hist, sid) -> tuple[dict, float | None]:
-        """#184: ({(session, phase): fuel ratio}, the live session's ratio or None) --
-        race.fill_ratio over each sitting's departures: its clean laps' (already read) and
-        its pit/out/in/partial rows', where fills happen (at most FILL_ROWS of those a
-        sitting, newest first). The live ratio is its newest sitting's that shows one: a
-        grid or out-lap row is enough, no clean lap needed."""
+        """#184: ({(session, phase): fuel ratio}, the live session's ratio or None) for
+        the sittings of `hist` and of the live session -- race.fill_ratio over the
+        departures of each sitting's pit/out/in/partial rows, where fills happen (at most
+        FILL_ROWS a sitting, newest first). Only those: a ratio read off clean laps alone
+        drifts +11% / -4% (the 09-03..09-13 sittings, stored before those rows were), so
+        a sitting without one is "not recorded" and no ratio is ever stated for it. The
+        live ratio is its newest sitting's that shows one: a grid or out-lap row is
+        enough, no clean lap needed."""
         deps: dict = defaultdict(list)
-        for h in hist:
-            deps[(h.session, h.phase)].append(h.dep)
         live = [r for r in self.store.session_laps(sid) if self._live_row(r)] if sid else []
         mine = list(dict.fromkeys((sid, r["phase"]) for r in reversed(live)))
-        want = set(deps) | set(mine)
+        want = {(h.session, h.phase) for h in hist} | set(mine)
         for session in {k[0] for k in want}:
             seen: Counter = Counter()
             for r in reversed(live if session == sid else self.store.session_laps(session)):

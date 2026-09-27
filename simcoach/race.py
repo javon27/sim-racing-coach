@@ -431,12 +431,11 @@ FUEL_STEP_L = 0.5
 
 @dataclass
 class HistLap:
-    """One stored clean lap the history fallback reads. `dep`: its `departure`."""
+    """One stored clean lap the history fallback reads."""
     ts: float
     phase: str | None
     session: str | None
     facts: LapFacts
-    dep: tuple | None = None
 
 
 def departure(record: LapRecord) -> tuple[float, float] | None:

@@ -2884,6 +2884,12 @@ def test_get_strategy_provisional_needs_two_clean_practice_laps(tmp_path, synthe
     assert out.startswith("No live race projection yet") and "2 clean" in out, out
 
 
+def test_prompt_keeps_the_fuel_ratio_caveat():
+    """#184: the VE figure is only good at the ratio it was measured at."""
+    from simcoach.coach import AGENTIC_SYSTEM_PROMPT as AGENTIC_SYSTEM
+    assert "fuel-ratio caveat" in AGENTIC_SYSTEM and "never drop it" in AGENTIC_SYSTEM
+
+
 def test_prompt_says_lmu_has_no_crew_radio(tmp_path, synthetic_lap):
     from simcoach.coach import AGENTIC_SYSTEM_PROMPT as AGENTIC_SYSTEM
     assert "no crew radio" in AGENTIC_SYSTEM and "never say 'tell the crew'" in AGENTIC_SYSTEM
@@ -3161,9 +3167,12 @@ _ENTRIES_184 = {**_ENTRIES, _RIG_ENTRY: (_Z06, "GT3"), _TF_ENTRY: (_Z06, "GT3"),
                 _DKR_ENTRY: ("Ginetta G61-LT-P325 Evo", "LMP3")}
 # Real rows from the driver's DB: (ts, phase, lap_no, lap_time, pit, VE at the start and
 # end of the lap, fuel L at the start and end[, partial, time_left]). Sarthe Z06
-# 2026-09-17, ids 7419-7428 (no fuel_capacity channel then; 7424 is the lap he pitted
-# and refilled on).
+# 2026-09-17/18, ids 7419-7428 (no fuel_capacity channel then; 7424 is the lap he pitted
+# and refilled on) and 7450, the 09-18 qualifying out-lap -- its driven stretch, from
+# the fill it left the pits on (34.78 L at 40%, fuel ratio 0.87; the garage preview
+# before it is covered in test_race).
 _Z06_0917 = [
+    (1789708646.6670177, "qualifying", 1, None, True, .40, .3126, 34.7782, 27.5831),
     (1789698115.2209005, "qualifying", 2, 246.43133544921875, False, .2994, .2086, 26.1448, 18.8134),
     (1789698359.825367, "qualifying", 3, 244.650146484375, False, .2086, .1173, 18.8126, 11.4492),
     (1789699117.095224, "race", 2, 288.99652099609375, True, .2773, .6703, 24.6082, 58.7511),
@@ -3245,7 +3254,7 @@ def test_pre_race_plan_with_one_session_lap_projects_from_the_stored_median(
     store = _z06_store(tmp_path, synthetic_lap, monkeypatch)
     out = _z06_ctx(store, _live("qualifying")).dispatch("get_strategy", {"race_minutes": 20})
     days = sorted({time.strftime("%Y-%m-%d", time.localtime(r[0]))
-                   for r in _Z06_0917[:2] + _Z06_0926[1:]})
+                   for r in _Z06_0917[1:3] + _Z06_0926[1:]})
     assert out.startswith(f"PROVISIONAL — from medians of 7 clean laps stored here in this "
                           f"car ({', '.join(days)}: 3 qualifying, 4 race); firms up after 2 "
                           "clean race laps."), out
@@ -3368,6 +3377,9 @@ def _ra_store(tmp_path, synthetic_lap, monkeypatch, evening):
     store = _z06_store(tmp_path, synthetic_lap, monkeypatch, history=False)
     _sarthe_laps(store, synthetic_lap, _TF_ENTRY,
                  "michelin-raceway-road-atlanta--tf-sport-2026-2-lm--online", [
+                     # 7485, race lap 1 through the pits: driven off on 45.87 L at 46%
+                     (1790188125.1731977, "race", 1, 147.2163, True, .46, .4375, 45.8734,
+                      43.7054),
                      (1790188209.3709934, "race", 2, 84.2498, False, .43752, .41352,
                       43.70377, 41.43749),
                      (1790188292.969675, "race", 3, 83.5526, False, .41351, .39047,
@@ -3561,3 +3573,94 @@ def test_race_lap_1_in_progress_states_the_start_read_off_the_formation_row(
     assert "As of the start line: 65% virtual energy, 54.5 L on board." in out, out
     assert "Assumes" not in out and "needed to the flag" not in out
     assert "Virtual energy: 9.2%/lap, 65% left = 7.1 laps" in out
+
+
+# Algarve Z06 (real rows, ids 15-22 of 2026-09-03 and 7061-7063 of 09-07): stored before
+# pit/out/formation rows were, so no fill was ever read for them. Their clean laps' own
+# start ratios drift with the tank (0.83 at 13.8 L, 0.85 at 38.8 L): not a measurement.
+_ALGARVE = "Algarve International Circuit"
+_ALG_0903 = "algarve-international-circuit--racing-team-turkey-by-tf-2026-34-wec--online"
+_ALG_ROWS = {
+    _ALG_0903: [
+        (1788492177.115706, "qualifying", None, 110.118, None, .1659, .1329, 13.776, 11.089),
+        (1788492285.7247965, "qualifying", None, 108.610, None, .1329, .1001, 11.089, 8.424),
+        (1788492393.7328954, "qualifying", None, 107.961, None, .1001, .0671, 8.423, 5.736),
+        (1788492746.2211847, "race", None, 117.042, None, .4581, .4236, 38.834, 36.029),
+        (1788492855.219348, "race", None, 108.931, None, .4236, .3894, 36.029, 33.258),
+        (1788492963.433117, "race", None, 108.227, None, .3894, .3562, 33.257, 30.566),
+        (1788493085.0270486, "race", None, 121.607, None, .3562, .3230, 30.565, 27.847),
+        (1788493193.6289673, "race", None, 108.485, None, .3230, .2903, 27.846, 25.185)],
+    _ALG_0903 + "~20260907T2223": [
+        (1788837826.5548463, "qualifying", None, 108.444, None, .1950, .1621, 16.414, 13.740),
+        (1788837933.3577704, "qualifying", None, 106.858, None, .1620, .1282, 13.739, 10.997),
+        (1788838040.1505263, "qualifying", None, 106.707, None, .1282, .0945, 10.996, 8.267)]}
+
+
+def _algarve(tmp_path, synthetic_lap, monkeypatch, sid):
+    store = _z06_store(tmp_path, synthetic_lap, monkeypatch, history=False)
+    for session, rows in _ALG_ROWS.items():
+        _sarthe_laps(store, synthetic_lap, _Z06_ENTRY, session, rows, track=_ALGARVE)
+    return store, _z06_ctx(store, _live("qualifying"), track=_ALGARVE, sid=sid)
+
+
+def test_a_fuel_ratio_never_read_off_a_fill_is_never_stated(tmp_path, synthetic_lap,
+                                                            monkeypatch):
+    """#184 red-team R1, Algarve Z06, no session yet: read off clean laps alone, the 09-03
+    race sitting's 'fill' drifted to 0.92 and the plan said '3 at fuel ratio 0.92 ... left
+    out' -- it was a 0.85 sitting. Unread is 'not recorded', with no number."""
+    _, ctx = _algarve(tmp_path, synthetic_lap, monkeypatch, "brand-new-session")
+    out = ctx.dispatch("get_strategy", {"race_minutes": 20})
+    assert ("Virtual energy: the fuel ratio these laps ran at isn't recorded -- at another "
+            "ratio this figure is wrong.") in out, out
+    assert "at fuel ratio" not in out and "measured at" not in out
+    assert "Virtual energy needed to the flag" in out
+
+
+def test_a_session_with_only_clean_laps_has_no_recorded_fuel_ratio(tmp_path, synthetic_lap,
+                                                                   monkeypatch):
+    """#184 red-team R1, Algarve Z06 cut after lap 55 (09-04 offline practice, its only
+    lap -- 82.24 L at 96.8%): the plan said '3 at fuel ratio 0.83 ... qualifying left
+    out', the same setting read off a nearly empty tank."""
+    sid = "algarve-international-circuit--racing-team-turkey-by-tf-2026-34-wec--offline"
+    store, ctx = _algarve(tmp_path, synthetic_lap, monkeypatch, sid)
+    _sarthe_laps(store, synthetic_lap, _Z06_ENTRY, sid, [
+        (1788575631.340824, "practice", None, 113.612, None, .9676, .9358, 82.240, 79.649)],
+        track=_ALGARVE)
+    out = ctx.dispatch("get_strategy", {"race_minutes": 20})
+    assert "the fuel ratio these laps ran at isn't recorded" in out, out
+    assert "at fuel ratio" not in out and "left out" not in out
+
+
+def test_a_race_filled_at_another_fuel_ratio_drops_the_practice_ve(tmp_path, synthetic_lap,
+                                                                   monkeypatch):
+    """#184 red-team R2, Road Atlanta #13 2026-09-23 (real rows 7530-7535, 7537): five
+    clean qualy laps at fuel ratio 0.75 give the #161 plan its VE/lap. If the race is
+    filled at another ratio -- here the grid row 7537 as refuelled to 90 L at 100%, 0.90
+    -- that VE/lap is off by the change: not projected; fuel per lap still holds."""
+    sid = "michelin-raceway-road-atlanta--13-autosport-2026-13-lm--online"
+    qualy = [
+        (1790215210.2885888, "qualifying", 1, None, True, .31, .21324, 23.25, 16.04079),
+        (1790215297.686399, "qualifying", 2, 87.3708, False, .21323, .17901, 16.04007, 13.77587),
+        (1790215383.4888265, "qualifying", 3, 85.7913, False, .1790, .1451, 13.7751, 11.5265),
+        (1790215467.2781734, "qualifying", 4, 83.7621, False, .1450, .1105, 11.5249, 9.2444),
+        (1790215549.6745043, "qualifying", 5, 82.4679, False, .1105, .0762, 9.2436, 6.9757),
+        (1790215632.2844899, "qualifying", 6, 82.5916, False, .0762, .0411, 6.9749, 4.6662)]
+
+    def plan(fuel):
+        store = _z06_store(tmp_path / str(fuel), synthetic_lap, monkeypatch, history=False)
+        _sarthe_laps(store, synthetic_lap, _RIG_ENTRY, sid, qualy + ([
+            (1790215868.4586358, "race", 0, None, True, 1.0, 1.0, fuel, fuel - 1.2, "out",
+             3599.6)] if fuel else []), cap=120.0, track=_RA_TRACK)
+        return _z06_ctx(store, _live(current_lap=1), track=_RA_TRACK, sid=sid).dispatch(
+            "get_strategy", {"race_minutes": 60})
+    out = plan(90.0)
+    assert out.startswith("PROVISIONAL — from your last 5 clean practice/qualifying laps"), out
+    assert ("Virtual energy: not projected -- your race fill is at fuel ratio 0.90 L per 1% "
+            "(read off the tank on the grid), your qualifying laps ran at 0.75; virtual "
+            "energy per lap changes with the ratio. Fuel per lap still holds.") in out
+    assert "Virtual energy needed" not in out and "Fuel needed to the flag" in out
+    assert "full tank" not in out
+    same = plan(75.0)                   # the real grid row: 75 L at 100%, the same 0.75
+    assert "not projected" not in same and "Virtual energy needed to the flag" in same
+    before = plan(None)                 # no race row yet: nothing to compare, as before
+    assert "not projected" not in before and "Virtual energy needed to the flag" in before
