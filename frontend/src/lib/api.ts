@@ -577,6 +577,22 @@ export function getSetup(): Promise<Record<string, unknown>> {
   return request<Record<string, unknown>>("/setup");
 }
 
+// #188: the setup a stored lap was driven on (`setup` null = none recorded).
+export interface LapSetup {
+  lap_id: number;
+  lap_time: number | null;
+  setup: Record<string, unknown> | null;
+}
+
+export function getLapSetup(lapId: number): Promise<LapSetup> {
+  return request<LapSetup>(`/laps/${lapId}/setup`);
+}
+
+// The session's fastest lap with a recorded setup; `{}` when none has one.
+export function getSessionSetup(sid: string): Promise<Partial<LapSetup>> {
+  return request<Partial<LapSetup>>(`/sessions/${sid}/setup`);
+}
+
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
 // Explicit persistence of what the sim CURRENTLY reports (#51: GET is

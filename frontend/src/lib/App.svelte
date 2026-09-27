@@ -292,7 +292,7 @@
               onpointermove={railResizeMove}
               onpointerup={railResizeUp}
             ></div>
-            <CornerSetupTabs lapId={selectedLapId ?? null} />
+            <CornerSetupTabs lapId={selectedLapId ?? null} sessionId={activeSessionId} />
             <div
               class="rail-resizer"
               class:dragging={draggingMap}

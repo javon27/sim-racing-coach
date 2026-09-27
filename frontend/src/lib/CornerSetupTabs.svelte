@@ -2,7 +2,7 @@
   import CornerPanel from "./CornerPanel.svelte";
   import SetupPanel from "./SetupPanel.svelte";
 
-  let { lapId }: { lapId: number | null } = $props();
+  let { lapId, sessionId }: { lapId: number | null; sessionId?: string } = $props();
 
   let activeTab: "corners" | "setup" = $state("corners");
   // SetupPanel fetches on mount; only mount it once the Setup tab is first
@@ -43,6 +43,6 @@
 </div>
 {#if setupVisited}
   <div class="tab-pane" hidden={activeTab !== "setup"}>
-    <SetupPanel />
+    <SetupPanel {lapId} {sessionId} />
   </div>
 {/if}

@@ -174,6 +174,8 @@ def register(app, deps) -> None:
         app.state.rest = rest
         return rest
 
+    app.state.ensure_rest = _ensure_rest   # #188: the setup worker reads each lap's setup
+
     def _live_track():
         # Current track: prefer the live SMM read so a track change is detected
         # immediately (else mapping a new track would save under the OLD one). Fall

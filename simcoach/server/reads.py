@@ -184,6 +184,19 @@ def register(app, deps) -> None:
         except Exception:
             return {}
 
+    @app.get("/laps/{lap_id}/setup")
+    def lap_setup(lap_id: int):
+        # #188: the setup this lap was driven on; `setup` null = none recorded.
+        row = store.lap_setup(lap_id)
+        if row is None:
+            raise HTTPException(404, "lap not found")
+        return row
+
+    @app.get("/sessions/{sid}/setup")
+    def session_setup(sid: str):
+        # #188: the setup on the session's fastest lap that has one; {} = none recorded.
+        return store.session_fastest_setup(sid) or {}
+
     @app.post("/setup/capture")
     def setup_capture(body: dict = Body(...)):
         # Continuous capture: persists what the sim CURRENTLY reports via

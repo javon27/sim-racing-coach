@@ -505,8 +505,9 @@ TOOLS = [
     },
     {
         "name": "get_last_setup",
-        "description": "The most recently saved setup for a track/car (defaults to the current "
-                       "one), from a PAST session — not the live current setup (use get_setup "
+        "description": "The setup on the fastest lap of the previous session at a track/car "
+                       "(defaults to the current one; older sessions fall back to their last "
+                       "autosave, labelled so) — not the live current setup (use get_setup "
                        "for that). Use for 'what setup did we run here last time'.",
         "input_schema": {
             "type": "object",
@@ -2589,7 +2590,18 @@ class CoachContext:
         if not (track and car):
             return "No track/car resolved yet — no setup on record."
         # Exclude the current session so this returns the PRIOR session's setup
-        # ("what did we run here last time?"), not the one this session autosaved.
+        # ("what did we run here last time?"), not the one this session recorded.
+        # #188: the previous session's fastest lap's setup; sessions from before per-lap
+        # setups existed fall back to the old per-session autosave, named as such.
+        fast = self.store.previous_fastest_setup(track, car, exclude_session_id=self.session_id)
+        if fast is not None:
+            when = time.strftime("%Y-%m-%d", time.localtime(fast["ts"]))
+            lines = _setup_lines(fast["setup"])
+            head = (f"Setup on the fastest lap ({format_laptime(fast['lap_time'])}) of your "
+                    f"previous session at {track} / {car} ({when})")
+            if not lines:
+                return f"{head}: stored, but no adjustable parameters were captured."
+            return f"{head}:\n" + "\n".join(lines)
         row = self.store.last_setup(track, car, exclude_session_id=self.session_id)
         if row is None:
             return f"No stored setup for {track} / {car} yet."
@@ -2597,7 +2609,8 @@ class CoachContext:
         lines = _setup_lines(row["setup"])
         if not lines:
             return f"Setup stored for {track} / {car} ({when}) but no adjustable parameters were captured."
-        return f"Last setup run at {track} / {car} ({when}):\n" + "\n".join(lines)
+        return (f"Last autosaved setup at {track} / {car} ({when}; no per-lap setup "
+                "recorded, so not tied to a lap):\n" + "\n".join(lines))
 
     def dispatch(self, name: str, args: dict) -> str:
         """Execute one tool call by name. Unknown tool -> error string. The call AND

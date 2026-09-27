@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from .. import config
 from ..livelap import LiveLap
 from ..race import RaceTracker
+from ..tiers import adjustable_from_setup
 from . import (
     coach_ws,
     core,
@@ -70,6 +71,20 @@ def _race_commit(app_state, store, lap, lap_id) -> None:
             store.save_battle(lap_id, snap.battle.laps)
     except Exception:
         logging.getLogger(__name__).warning("race snapshot not refreshed", exc_info=True)
+
+
+def _setup_commit(app_state, store, lap_id) -> None:
+    """Link a stored lap to the setup LMU REST reports now (#188), with the same
+    isFreeSetting filter as POST /setup/capture. Runs on setup_pool, never the capture
+    thread; REST down (or any failure) leaves the lap with no setup, logged not raised."""
+    try:
+        ensure = getattr(app_state, "ensure_rest", None)
+        rest = ensure() if ensure else None
+        data = rest.get_setup() if rest else None
+        if data:
+            store.link_lap_setup(lap_id, {k: data[k] for k in adjustable_from_setup(data)})
+    except Exception:
+        logging.getLogger(__name__).warning("lap setup not recorded", exc_info=True)
 
 
 def _capture_loop(source, store, app_state) -> None:
@@ -132,6 +147,12 @@ def _capture_loop(source, store, app_state) -> None:
                 # The pool is shut down (app/interpreter exit): skip the snapshot,
                 # never stop capture over it.
                 logging.getLogger(__name__).warning("race pool closed; snapshot skipped")
+        pool = getattr(app_state, "setup_pool", None)
+        if pool is not None:
+            try:
+                pool.submit(_setup_commit, app_state, store, lap_id)
+            except RuntimeError:
+                logging.getLogger(__name__).warning("setup pool closed; lap setup skipped")
 
 
 def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_factory=None,
@@ -192,6 +213,9 @@ def create_app(store, coach, cmap=None, rest=None, map_resolver=None, rest_facto
     app.state.race = RaceTracker()   # #152: the race tools' snapshot, one per lap commit
     # One worker: commits are processed in lap order, and never on the capture thread.
     app.state.race_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="race-state")
+    # #188: each lap's setup read (a REST call, up to its timeout). Its own single
+    # worker, in lap order, so a hung LMU never delays capture or the race snapshot.
+    app.state.setup_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="lap-setup")
     app.state.mapping = False        # mapping-capture mode: buffer laps, don't persist
     app.state.map_buffer = []        # LapRecords captured while mapping (transient)
     app.state.last_ribbon = None     # last built ribbon {world, corners, sectors} for save

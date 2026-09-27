@@ -1,12 +1,42 @@
 <script lang="ts">
-  import { getSetup, captureSetup } from "./api";
+  import { getSetup, captureSetup, getLapSetup, getSessionSetup, type LapSetup } from "./api";
+
+  // #188: a selected lap shows the setup it was driven on; a reviewed session with no
+  // lap selected shows its fastest lap's; neither -> the live setup, as before.
+  let { lapId = null, sessionId }: { lapId?: number | null; sessionId?: string } = $props();
 
   let setup: Record<string, unknown> = $state({});
-  let phase: "loading" | "ok" | "empty" | "none" = $state("loading");
+  let phase: "loading" | "ok" | "empty" | "none" | "unrecorded" = $state("loading");
+  let heading = $state("");
+  let seq = 0; // drops a response that a newer selection has superseded
+
+  function showStored(res: Partial<LapSetup>, label: string) {
+    const t = res.lap_time;
+    const m = t == null ? 0 : Math.floor(t / 60);
+    heading = t == null ? label : `${label} ${m}:${(t - m * 60).toFixed(3).padStart(6, "0")}`;
+    setup = res.setup ?? {};
+    phase = !res.setup ? "unrecorded" : adjustable(res.setup).length === 0 ? "none" : "ok";
+  }
 
   $effect(() => {
+    const my = ++seq;
+    phase = "loading";
+    heading = "";
+    if (lapId != null) {
+      getLapSetup(lapId)
+        .then((res) => my === seq && showStored(res, "Lap"))
+        .catch(() => my === seq && showStored({}, "Selected lap"));
+      return;
+    }
+    if (sessionId) {
+      getSessionSetup(sessionId)
+        .then((res) => my === seq && showStored(res, "Fastest lap"))
+        .catch(() => my === seq && showStored({}, "Fastest lap"));
+      return;
+    }
     getSetup()
       .then((res) => {
+        if (my !== seq) return;
         setup = res;
         if (Object.keys(res).length === 0) {
           phase = "empty";
@@ -20,6 +50,7 @@
         }
       })
       .catch(() => {
+        if (my !== seq) return;
         setup = {};
         phase = "empty";
       });
@@ -81,11 +112,14 @@
 <div class="panel">
   {#if phase === "loading"}
     <p class="empty">Loading…</p>
+  {:else if phase === "unrecorded"}
+    <p class="empty">{heading}: no setup recorded for this lap.</p>
   {:else if phase === "empty"}
     <p class="empty">No setup — LMU not connected</p>
   {:else if phase === "none"}
     <p class="empty">No adjustable settings for this car.</p>
   {:else}
+    {#if heading}<p class="empty">Setup on {heading}</p>{/if}
     {#each adjustable(setup) as [key, value] (key)}
       <div class="setrow">
         <span class="lbl">{label(key)}</span>

@@ -92,7 +92,7 @@ def _session_base(sid: str) -> str:
     """The (track, car, mode) base of a session id, dropping any ~<instance> suffix."""
     return sid.split(_SESSION_SEP, 1)[0]
 
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
@@ -217,6 +217,27 @@ CREATE INDEX IF NOT EXISTS live_corners_age ON live_corners (start_ts);
 """
 _LIVE_LAP_ROW = "_lap"
 
+# #188: the setup each lap was driven on. One row per setup CHANGE within a session
+# (link_lap_setup), linked from laps.setup_id; params_json is the isFreeSetting subset
+# of LMU's garage data, canonical (sorted-key) JSON so equal setups compare equal. The
+# table itself dates from the first store (unused until #188), so the v26 step only
+# re-creates it defensively.
+_SETUPS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS setups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL,
+    track TEXT,
+    car TEXT,
+    params_json TEXT,
+    source TEXT
+);
+"""
+# A lap a setup read may pick as a session's fastest: timed, valid, not a mapping lap.
+_SETUP_FAST_LAP = ("l.valid = 1 AND l.lap_time IS NOT NULL AND NOT COALESCE(l.mapping, 0) "
+                   "AND l.setup_id IS NOT NULL")
+_SETUP_LAP_SELECT = ("SELECT l.id, l.lap_time, l.lap_no, l.session_id, l.ts, s.params_json "
+                     "FROM laps l LEFT JOIN setups s ON s.id = l.setup_id ")
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS laps (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -245,21 +266,15 @@ CREATE TABLE IF NOT EXISTS laps (
     class_gap_behind REAL,
     time_left REAL,
     max_laps INTEGER,
-    mapping INTEGER DEFAULT 0
+    mapping INTEGER DEFAULT 0,
+    setup_id INTEGER
 );
 CREATE INDEX IF NOT EXISTS laps_session ON laps (session_id);
 CREATE TABLE IF NOT EXISTS ingested_files (
     path TEXT PRIMARY KEY,
     mtime REAL
 );
-CREATE TABLE IF NOT EXISTS setups (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts REAL,
-    track TEXT,
-    car TEXT,
-    params_json TEXT,
-    source TEXT
-);
+""" + _SETUPS_SCHEMA + """
 CREATE TABLE IF NOT EXISTS corner_metrics (
     lap_id INTEGER,
     corner_no INTEGER,
@@ -772,6 +787,13 @@ class LapStore:
                     "PRAGMA table_info(laps)").fetchone():
                 self.conn.execute(
                     "CREATE INDEX IF NOT EXISTS laps_session ON laps (session_id)")
+            if current_version < 26:
+                # v25 -> v26: link each lap to the setup it was driven on (#188).
+                # Existing laps stay NULL ("no setup recorded"). Guarded like v18-v25.
+                self.conn.executescript(_SETUPS_SCHEMA)
+                cols = [r[1] for r in self.conn.execute("PRAGMA table_info(laps)")]
+                if cols and "setup_id" not in cols:
+                    _add_column(self.conn, "laps", "setup_id INTEGER")
         if current_version != stamp:
             self.conn.execute(f"PRAGMA user_version = {stamp}")
         self.conn.commit()
@@ -2072,3 +2094,66 @@ class LapStore:
             "setup": json.loads(setup_json),
             "updated_ts": updated_ts,
         }
+
+    def link_lap_setup(self, lap_id: int, setup: dict) -> int | None:
+        """#188: record the setup `lap_id` was driven on. A new `setups` row only when it
+        differs from the latest setup already linked in the lap's session; otherwise the
+        lap reuses that row. Returns the setup id, or None when the lap is gone."""
+        params = json.dumps(setup, sort_keys=True)
+        with self._lock, self.conn:
+            lap = self.conn.execute("SELECT session_id, track, car, ts FROM laps WHERE id = ?",
+                                    (lap_id,)).fetchone()
+            if lap is None:
+                return None
+            prev = self.conn.execute(
+                "SELECT s.id, s.params_json FROM laps l JOIN setups s ON s.id = l.setup_id "
+                "WHERE l.session_id = ? AND l.id != ? ORDER BY l.ts DESC, l.id DESC LIMIT 1",
+                (lap[0], lap_id)).fetchone()
+            if prev is not None and prev[1] == params:
+                setup_id = prev[0]
+            else:
+                setup_id = self.conn.execute(
+                    "INSERT INTO setups (ts, track, car, params_json, source) "
+                    "VALUES (?, ?, ?, ?, 'lap')", (lap[3], lap[1], lap[2], params)).lastrowid
+            self.conn.execute("UPDATE laps SET setup_id = ? WHERE id = ?", (setup_id, lap_id))
+        return setup_id
+
+    @staticmethod
+    def _setup_view(row) -> dict:
+        lap_id, lap_time, lap_no, session_id, ts, params = row
+        return {"lap_id": lap_id, "lap_time": lap_time, "lap_no": lap_no,
+                "session_id": session_id, "ts": ts,
+                "setup": json.loads(params) if params else None}
+
+    def lap_setup(self, lap_id: int) -> dict | None:
+        """The setup a lap was driven on (#188): {lap_id, lap_time, ..., setup}, with
+        setup None when none was recorded. None when the lap doesn't exist."""
+        with self._lock:
+            row = self.conn.execute(_SETUP_LAP_SELECT + "WHERE l.id = ?", (lap_id,)).fetchone()
+        return self._setup_view(row) if row else None
+
+    def session_fastest_setup(self, session_id: str) -> dict | None:
+        """The setup on a session's fastest valid lap that has one recorded (#188), in
+        lap_setup's shape; None when no lap of the session has a recorded setup."""
+        with self._lock:
+            row = self.conn.execute(
+                _SETUP_LAP_SELECT + "WHERE l.session_id = ? AND " + _SETUP_FAST_LAP
+                + " ORDER BY l.lap_time ASC LIMIT 1", (session_id,)).fetchone()
+        return self._setup_view(row) if row else None
+
+    def previous_fastest_setup(self, track: str, car: str,
+                               exclude_session_id: str | None = None) -> dict | None:
+        """session_fastest_setup of the most recent session at this track/car (other than
+        `exclude_session_id`) that has a recorded per-lap setup; None when none has.
+        `car` expands like best_lap (a resolved model matches its raw entry names)."""
+        with self._lock:
+            teams = [c for c in self._distinct_db_cars() if resolve_car(c) == car] or [car]
+            sql = (f"SELECT l.session_id FROM laps l WHERE l.track = ? "
+                   f"AND l.car IN ({','.join('?' * len(teams))}) AND l.session_id IS NOT NULL "
+                   "AND " + _SETUP_FAST_LAP)
+            params: list = [track, *teams]
+            if exclude_session_id is not None:
+                sql += " AND l.session_id != ?"
+                params.append(exclude_session_id)
+            row = self.conn.execute(sql + " ORDER BY l.ts DESC LIMIT 1", params).fetchone()
+        return self.session_fastest_setup(row[0]) if row else None
