@@ -199,6 +199,25 @@ def _no_live_game(monkeypatch):
     monkeypatch.setattr(smm, "_lmu_alive", lambda: True, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _isolated_car_lookup(monkeypatch):
+    """The suite must not read the driver's real LMU Results dir (#179): car_lookup's
+    entry-table cache would scan however many thousand real result XMLs live there,
+    and a timing-sensitive test would pass or fail on the OS file cache instead of the
+    code under test (a real, reproduced failure -- see #176's
+    test_events_laps_frame_is_not_delayed_by_a_slow_optimal_compute). Point
+    car_lookup.results_dir at nothing and reset its caches for every test; a test that
+    deliberately wants the real dir overrides `car_lookup.results_dir` itself (e.g.
+    `monkeypatch.setattr(car_lookup, "results_dir", install.results_dir)`)."""
+    from simcoach import car_lookup
+    monkeypatch.setattr(car_lookup, "results_dir", lambda: None)
+    car_lookup._cache["sig"] = None
+    car_lookup._cache["table"] = {}
+    car_lookup._file_cache.clear()
+    car_lookup._warm_started = False
+    car_lookup._warmed.clear()
+
+
 @pytest.fixture
 def mem_keyring():
     prev = _keyring.get_keyring()

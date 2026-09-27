@@ -1,8 +1,11 @@
 import os
 import time
 
+import pytest
+
 from simcoach import car_lookup
 from simcoach.car_lookup import _scan_results, resolve_car, resolve_car_class
+from simcoach.lmu import install as lmu_install
 
 _RESULT_XML = """<?xml version="1.0"?>
 <rFactorXML>
@@ -75,3 +78,139 @@ def test_entry_table_refreshes_when_results_dir_changes(tmp_path, monkeypatch):
     table = car_lookup._entry_table()
     assert table.get("B #2") == ("Car B", "Hyper")
     assert table.get("A #1") == ("Car A", "GT3")
+
+
+# --- #179: incremental per-file cache -------------------------------------------------
+
+def _bump_dir(path, offset):
+    """Force a distinct, deterministic dir-mtime signature (see the test above)."""
+    t = time.time() + offset
+    os.utime(path, (t, t))
+
+
+def _count_parses(monkeypatch):
+    """Wrap car_lookup._parse_one to record every path it's actually called on."""
+    calls: list[str] = []
+    real = car_lookup._parse_one
+    monkeypatch.setattr(car_lookup, "_parse_one", lambda p: (calls.append(p), real(p))[1])
+    return calls
+
+
+def test_adding_one_file_reparses_only_that_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(car_lookup, "results_dir", lambda: tmp_path)
+    (tmp_path / "a.xml").write_text(_one_driver_xml("A #1", "Car A", "GT3"))
+    car_lookup._entry_table()  # first scan parses a.xml -- not counted below
+
+    calls = _count_parses(monkeypatch)
+    (tmp_path / "b.xml").write_text(_one_driver_xml("B #2", "Car B", "Hyper"))
+    _bump_dir(tmp_path, 5)
+    table = car_lookup._entry_table()
+
+    assert [os.path.basename(p) for p in calls] == ["b.xml"]
+    assert table["A #1"] == ("Car A", "GT3")
+    assert table["B #2"] == ("Car B", "Hyper")
+
+
+def test_a_changed_file_reparses(tmp_path, monkeypatch):
+    monkeypatch.setattr(car_lookup, "results_dir", lambda: tmp_path)
+    (tmp_path / "a.xml").write_text(_one_driver_xml("A #1", "Car A", "GT3"))
+    car_lookup._entry_table()
+
+    calls = _count_parses(monkeypatch)
+    (tmp_path / "a.xml").write_text(_one_driver_xml("A #1", "Car A2", "GT3"))
+    _bump_dir(tmp_path, 5)
+    table = car_lookup._entry_table()
+
+    assert len(calls) == 1
+    assert table["A #1"] == ("Car A2", "GT3")
+
+
+def test_a_removed_files_entries_disappear(tmp_path, monkeypatch):
+    monkeypatch.setattr(car_lookup, "results_dir", lambda: tmp_path)
+    (tmp_path / "a.xml").write_text(_one_driver_xml("A #1", "Car A", "GT3"))
+    (tmp_path / "b.xml").write_text(_one_driver_xml("B #2", "Car B", "Hyper"))
+    table = car_lookup._entry_table()
+    assert "A #1" in table and "B #2" in table
+
+    os.remove(tmp_path / "a.xml")
+    _bump_dir(tmp_path, 5)
+    table = car_lookup._entry_table()
+
+    assert "A #1" not in table
+    assert table["B #2"] == ("Car B", "Hyper")
+    assert str(tmp_path / "a.xml") not in car_lookup._file_cache  # evicted, not just unmerged
+
+
+def test_duplicate_vehname_resolves_to_the_alphabetically_later_file(tmp_path, monkeypatch):
+    """LMU names result logs so filename order is also chronological order (see the
+    test fixture's `2026_01_01-R1.xml`) -- today's `_scan_results` merges glob order,
+    which the driver's real (NTFS) Results dir returns name-sorted; the incremental
+    path sorts explicitly instead of relying on that, but the resolved winner for a
+    duplicate VehName across two files must be the same: the later filename."""
+    monkeypatch.setattr(car_lookup, "results_dir", lambda: tmp_path)
+    (tmp_path / "2026_01_01-R1.xml").write_text(_one_driver_xml("Team X #1", "Car Old", "GT3"))
+    (tmp_path / "2026_02_01-R1.xml").write_text(_one_driver_xml("Team X #1", "Car New", "GT3"))
+
+    table = car_lookup._entry_table()
+    assert table["Team X #1"] == ("Car New", "GT3")
+    # The one-shot scan (used elsewhere, and as the "ground truth" below) agrees.
+    assert _scan_results(str(tmp_path))["Team X #1"] == ("Car New", "GT3")
+
+
+def test_incremental_table_matches_a_full_rescan_after_adds_changes_removes(tmp_path, monkeypatch):
+    monkeypatch.setattr(car_lookup, "results_dir", lambda: tmp_path)
+    (tmp_path / "a.xml").write_text(_one_driver_xml("A #1", "Car A", "GT3"))
+    car_lookup._entry_table()
+
+    (tmp_path / "b.xml").write_text(_one_driver_xml("B #2", "Car B", "Hyper"))
+    _bump_dir(tmp_path, 5)
+    car_lookup._entry_table()
+
+    (tmp_path / "a.xml").write_text(_one_driver_xml("A #1", "Car A2", "GT3"))  # changed
+    _bump_dir(tmp_path, 10)
+    car_lookup._entry_table()
+
+    os.remove(tmp_path / "b.xml")  # removed
+    (tmp_path / "c.xml").write_text(_one_driver_xml("C #3", "Car C", "LMP2"))  # added
+    _bump_dir(tmp_path, 15)
+    incremental = car_lookup._entry_table()
+
+    assert incremental == _scan_results(str(tmp_path))
+    assert incremental == {"A #1": ("Car A2", "GT3"), "C #3": ("Car C", "LMP2")}
+
+
+def test_real_results_dir_incremental_scan_is_much_faster_than_a_cold_scan(monkeypatch, capsys):
+    """Read-only measurement against the driver's actual LMU Results dir (#179).
+    Skips where no such dir exists (CI). Reports the numbers with `-s`."""
+    real_dir = lmu_install.results_dir()
+    if real_dir is None or not os.path.isdir(real_dir):
+        pytest.skip("no real LMU Results dir on this machine")
+    monkeypatch.setattr(car_lookup, "results_dir", lambda: real_dir)
+
+    t0 = time.perf_counter()
+    car_lookup._entry_table()  # full cold scan: every file is a cache miss
+    cold = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    car_lookup._entry_table()  # dir mtime unchanged -> the cheap dir-stat fast path
+    warm_nothing_changed = time.perf_counter() - t0
+
+    with os.scandir(real_dir) as it:
+        names = sorted(e.name for e in it if e.name.lower().endswith(".xml"))
+    assert names, "expected at least one real result log"
+    # Simulate "one file just landed": evict one file's per-file cache entry (as if
+    # it had never been scanned) and force a rescan -- only that file should re-parse.
+    held_back = os.path.join(str(real_dir), names[-1])
+    car_lookup._file_cache.pop(held_back, None)
+    car_lookup._cache["sig"] = None
+    t0 = time.perf_counter()
+    car_lookup._entry_table()
+    incremental_add = time.perf_counter() - t0
+
+    with capsys.disabled():
+        print(f"\n#179 real Results dir ({len(names)} files): cold={cold:.3f}s, "
+             f"warm(nothing changed)={warm_nothing_changed:.3f}s, "
+             f"incremental(1 file added)={incremental_add:.3f}s")
+
+    assert warm_nothing_changed < cold
+    assert incremental_add < cold

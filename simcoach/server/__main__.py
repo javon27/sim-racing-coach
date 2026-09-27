@@ -8,6 +8,7 @@ import threading
 import time
 from pathlib import Path
 
+from ..car_lookup import warm_entry_table_async
 from ..coach import Coach
 from ..config import load_config
 from ..corners import CornerMap
@@ -73,6 +74,10 @@ def main():
     # build_app has returned, so LapStore.__init__ (every migration) is finished first.
     threading.Thread(target=poll_results, args=(app.state.store,), name="result-import",
                      daemon=True).start()
+    # Warm car_lookup's entry table (#179) so the first cold Results-dir scan (~5 s
+    # on a real install) happens here, not on the first /status tick. Same reasoning
+    # as poll_results: real install only, never started from build_app/create_app.
+    warm_entry_table_async()
     # Port comes from app.py so the origin allowlist can't silently drift from the
     # port we actually serve on (#60) -- change it in one place, both follow.
     uvicorn.run(app, host="127.0.0.1", port=SIDECAR_PORT, log_config=None)
