@@ -151,6 +151,11 @@ def race_reviewable(windows: list[dict], laps: list[dict], live_phase: str | Non
     there is about the session just driven. Args as `race_finished`."""
     if (live_phase and live_phase != "race") or not windows:
         return False
+    # A non-race lap after the last race (race_finished's rule): that race is over and
+    # the next one -- the quali -> race boundary of race 2 -- has no lap yet.
+    if any(lap.get("phase") != "race" and (lap.get("ts") or 0) > windows[-1]["end_ts"]
+           for lap in laps):
+        return False
     ids = set(windows[-1]["lap_ids"])
     return any(lap["id"] in ids and lap.get("lap_no") != 0 and not lap.get("partial")
                for lap in laps)

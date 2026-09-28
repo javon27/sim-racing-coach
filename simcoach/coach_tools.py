@@ -110,6 +110,7 @@ from simcoach.track_lookup import load_track_knowledge, note_key_binds
 # load plus a full analysis, so a model asking for "the whole stint" must not walk a
 # 60-lap race. Raise it if a rig endurance run genuinely needs a longer look-back.
 _MAX_EVENT_LAPS = 30
+_PHASES = ("practice", "qualifying", "warmup", "race")    # the store's phase labels
 # The words for "the (latest) race as a whole" -- get_battle's `which`, and #204's race
 # grammar (_race_pick) reads them as no particular race.
 _WHOLE_RACE = ("race", "the race", "this race", "last race", "the whole race")
@@ -2021,8 +2022,13 @@ class CoachContext:
         lap, as get_consistency) -- so a qualy question gets neither practice laps nor
         the race's lap 0 that follows it. Right after qualy (no complete race lap yet)
         the current lap is still qualy's: 'that spin a few laps ago' reaches it. A
-        non-race phase reads its most recent consecutive run (one session id spans
-        the evening); the race default, the current race's laps, lap 0 included."""
+        non-race phase reads its most recent consecutive run only (one session id
+        spans the evening: an earlier qualy is not reachable by phase=); the race
+        default, the current race's laps, lap 0 included. A defaulted scan also keeps
+        every lap stored after that run (a new phase's out-lap, a spin partial) and
+        says so in a header. The scope limits the LISTING, not the wear baseline: a
+        pool under 3 laps can't flag a step (a 2-lap median holds the step lap), so it
+        falls back to the track/car baseline."""
         if not self.session_id and not self.on_track:
             return "No active session — no stint to scan for incidents."
         if self.cmap is None:
@@ -2034,6 +2040,10 @@ class CoachContext:
         # lap-ish which ('latest', 'last lap') is no race selector here and is ignored,
         # as before #204 -- the scan already covers the recent laps.
         race_which = which if "race" in str(which or "").lower().split() else None
+        if phase is not None:
+            phase = str(phase).strip().lower()
+            if phase not in _PHASES:
+                return f"phase must be one of {', '.join(_PHASES)} -- not {phase!r}."
         race_only = phase == "race" or race is not None or race_which is not None
         try:
             # A race review is the WHOLE race: `laps` is ignored, or laps=10 (what the
@@ -2065,14 +2075,19 @@ class CoachContext:
             if len(rows) > n:
                 cut.append(f"(last {n} of {len(rows)} race laps)")
         else:
-            if phase is None:
-                # ponytail: the latest COMPLETE lap's phase -- a new phase's stored
-                # out-lap before its first complete lap is scanned under the old
-                # phase (pass phase= to reach it); key off the live phase if that bites.
+            defaulted = phase is None
+            if defaulted:
+                # The latest COMPLETE lap's phase (as get_consistency); laps stored
+                # after it are kept below, so a new phase's out-lap is not lost.
                 cur_rec, _ = self._current_lap()
                 phase = cur_rec.phase if cur_rec is not None else None
+                if phase is not None:
+                    cut.append(f"Scanned: the {phase} laps (the latest completed lap's "
+                               "phase) + anything stored since.")
             if phase == "race" and cur_race is not None:
-                rows = [r for r in rows if r["id"] in set(cur_race["lap_ids"])]
+                ids = set(cur_race["lap_ids"])
+                rows = [r for r in rows if r["id"] in ids
+                        or (defaulted and r["ts"] > cur_race["end_ts"])]
             elif phase is not None:
                 end = max((i for i, r in enumerate(rows) if r.get("phase") == phase),
                           default=None)
@@ -2082,7 +2097,7 @@ class CoachContext:
                 start = end
                 while start and rows[start - 1].get("phase") == phase:
                     start -= 1
-                rows = rows[start:end + 1]
+                rows = rows[start:] if defaulted else rows[start:end + 1]
             elif cur_race is not None and len(self._race_windows()) > 1:
                 rows = [r for r in rows if r["ts"] >= cur_race["start_ts"]]
         rows = rows[-n:]
@@ -2096,7 +2111,8 @@ class CoachContext:
                 loaded.append((record, row["id"]))
         if not loaded:
             return this_lap or "No telemetry-backed laps in this session yet — nothing to scan."
-        baseline = stint_wear_baseline([rec for rec, _ in loaded])
+        baseline = (stint_wear_baseline([rec for rec, _ in loaded]) if len(loaded) >= 3
+                    else self._wear_baseline())
         out = cut
         contact = False
         unscanned = 0

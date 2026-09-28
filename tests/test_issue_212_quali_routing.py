@@ -36,11 +36,15 @@ CLASSIFIED = {"tier": "deep", "intent": "race_review", "corner": None, "lap": No
               "rival": None, "wants_detail": True}
 
 
-def _store(tmp_path, synthetic_lap, shape):
+def _store(tmp_path, synthetic_lap, shape, flat_spot=()):
+    """`flat_spot`: ts offsets of laps given a 9-point FL wear step at 1000 m (the
+    #180 fixture's real incident) -- every other lap wears evenly."""
+    from tests.test_issue_180_race_scope import _wear_step
     store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
     for phase, lap_no, partial, t, dt in shape:
+        lap = _wear_step(synthetic_lap, "fl") if dt in flat_spot else synthetic_lap
         store.save(dataclasses.replace(
-            synthetic_lap, session_id=SID, phase=phase, lap_no=lap_no, partial=partial,
+            lap, session_id=SID, phase=phase, lap_no=lap_no, partial=partial,
             lap_time=t, valid=t is not None, timestamp=T0 + dt))
     return store
 
@@ -64,6 +68,20 @@ def test_race_review_needs_a_completed_race_lap(tmp_path, synthetic_lap, extra,
                                                 live_phase, ok):
     assert _reviewable(_store(tmp_path, synthetic_lap, LONG_BEACH + extra),
                        live_phase) is ok
+
+
+R1 = [RACE_LAP_0, RACE_LAP_1, ("race", 2, None, 83.0, 1130)]
+Q2 = [("qualifying", 1, "out", None, 3000), ("qualifying", 2, None, 82.0, 3090)]
+
+
+@pytest.mark.parametrize("extra, ok", [
+    ([], False),     # race 2's quali -> race boundary: race 1 is over, race 2 has no lap
+    ([("race", 0, "out", None, 3300)], False),
+    ([("race", 0, "out", None, 3300), ("race", 1, None, 97.0, 3400)], True),
+])
+def test_race_review_at_the_second_race_boundary(tmp_path, synthetic_lap, extra, ok):
+    store = _store(tmp_path, synthetic_lap, LONG_BEACH + R1 + Q2 + extra)
+    assert _reviewable(store, "race") is ok
 
 
 def test_route_downgrades_race_review_to_a_session_review():
@@ -156,12 +174,44 @@ def _laps(out):
 QUALY = [f"qualifying lap {n}" for n in range(1, 7)]
 
 
-@pytest.mark.parametrize("extra", [[], [RACE_LAP_0]])
-def test_stint_events_default_to_the_current_phase(tmp_path, synthetic_lap, extra):
+@pytest.mark.parametrize("extra, tail", [([], []), ([RACE_LAP_0], ["race lap 0"])])
+def test_stint_events_default_to_the_current_phase(tmp_path, synthetic_lap, extra, tail):
     """In qualy -- and at the boundary, race lap 0 stored but no race lap complete --
-    the unscoped scan is the qualy laps: no practice lap, no race lap 0."""
+    the unscoped scan is the qualy laps (no practice lap) plus anything stored since:
+    race lap 0, labelled not racing."""
     ctx = _ctx(_store(tmp_path, synthetic_lap, LONG_BEACH + extra), synthetic_lap)
-    assert _laps(ctx.dispatch("get_stint_events", {})) == QUALY
+    out = ctx.dispatch("get_stint_events", {})
+    assert _laps(out) == QUALY + tail
+    assert out.startswith("Scanned: the qualifying laps (the latest completed lap's "
+                          "phase) + anything stored since.")
+
+
+def test_stint_events_default_keeps_a_newer_lap_with_its_incident(tmp_path, synthetic_lap):
+    """Red team #212: a practice partial after the race (a spin lap at the rig: 7447,
+    7690) is newer than the latest complete lap -- the default scan must report it."""
+    spin = ("practice", 1, "partial", None, 3000)
+    store = _store(tmp_path, synthetic_lap, LONG_BEACH + R1 + [spin], flat_spot=(3000,))
+    out = _ctx(store, synthetic_lap).dispatch("get_stint_events", {})
+    assert _laps(out) == ["race lap 0", "race lap 1", "race lap 2", "practice lap 1"]
+    tail = out.split("Lap: practice lap 1")[1]
+    assert "FL wear step" in tail and "FL wear step" not in out.split("Lap: practice")[0]
+
+
+def test_stint_events_flat_spot_on_a_short_scoped_run(tmp_path, synthetic_lap):
+    """A 2-lap run's own median holds the step lap: the baseline falls back to the
+    track/car laps, so the flat spot is still flagged."""
+    store = _store(tmp_path, synthetic_lap, LONG_BEACH, flat_spot=(85,))   # practice lap 2
+    out = _ctx(store, synthetic_lap).dispatch("get_stint_events", {"phase": "practice"})
+    assert _laps(out) == ["practice lap 1", "practice lap 2"]
+    assert "FL wear step" in out.split("Lap: practice lap 2")[1]
+
+
+def test_stint_events_phase_is_case_folded_and_checked(tmp_path, synthetic_lap):
+    ctx = _ctx(_store(tmp_path, synthetic_lap, LONG_BEACH), synthetic_lap)
+    assert ctx.dispatch("get_stint_events", {"phase": "Practice"}) == ctx.dispatch(
+        "get_stint_events", {"phase": "practice"})
+    assert ctx.dispatch("get_stint_events", {"phase": "qualy"}) == (
+        "phase must be one of practice, qualifying, warmup, race -- not 'qualy'.")
 
 
 def test_stint_events_explicit_phase(tmp_path, synthetic_lap):

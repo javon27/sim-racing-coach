@@ -84,9 +84,9 @@ def test_unscoped_stint_events_read_the_current_phase(tmp_path, synthetic_lap):
     assert "RL wear step" not in out and "FR wear step" in out
     # ...but a race lap 0 still carries no position: the formation lap's P9 is not one.
     assert "P9" not in out
-    # (not "RL wear step": a two-lap median baseline includes the step lap itself)
     qualy = ctx.dispatch("get_stint_events", {"phase": "qualifying"})
     assert _laps(qualy) == ["qualifying lap 1", "qualifying lap 2"]
+    assert "RL wear step" in qualy
 
 
 def test_race_result_positions_start_at_race_lap_1(tmp_path, synthetic_lap):
