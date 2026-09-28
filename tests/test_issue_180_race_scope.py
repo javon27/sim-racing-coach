@@ -47,8 +47,9 @@ def _sarthe(tmp_path, synthetic_lap):
         store.save(dataclasses.replace(
             lap, session_id=SID, phase=phase, lap_no=lap_no, partial=partial, pit=pit,
             position=pos, lap_time=t, valid=t is not None, timestamp=T0 + dt))
+    # car: a display name, as coach_ws passes (resolve_car) -- not the stored one
     return CoachContext(store, cmap=CornerMap.load("simcoach/tracks/test_track.json"),
-                        track=synthetic_lap.track, car=synthetic_lap.car, session_id=SID)
+                        track=synthetic_lap.track, car="Display Model GT3", session_id=SID)
 
 
 def _laps(out):

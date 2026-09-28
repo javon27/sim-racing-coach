@@ -2028,7 +2028,7 @@ class CoachContext:
         every lap stored after that run (a new phase's out-lap, a spin partial) and
         says so in a header. The scope limits the LISTING, not the wear baseline: a
         pool under 3 laps can't flag a step (a 2-lap median holds the step lap), so it
-        falls back to the track/car baseline."""
+        falls back to this session's recent complete laps."""
         if not self.session_id and not self.on_track:
             return "No active session — no stint to scan for incidents."
         if self.cmap is None:
@@ -2111,8 +2111,15 @@ class CoachContext:
                 loaded.append((record, row["id"]))
         if not loaded:
             return this_lap or "No telemetry-backed laps in this session yet — nothing to scan."
-        baseline = (stint_wear_baseline([rec for rec, _ in loaded]) if len(loaded) >= 3
-                    else self._wear_baseline())
+        pool = [rec for rec, _ in loaded]
+        if len(pool) < 3:
+            # This SESSION's recent complete laps -- by session_id alone: ctx.car is
+            # the display name, laps are stored under the raw entry name (#212 r2).
+            pool = [rec for row in self.store.recent_laps(
+                        self.track, self.car, 10, session_id=self.session_id,
+                        complete_only=True)
+                    if (rec := self._load(row["lap_id"])) is not None]
+        baseline = stint_wear_baseline(pool)
         out = cut
         contact = False
         unscanned = 0

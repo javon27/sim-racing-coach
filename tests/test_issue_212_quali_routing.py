@@ -161,9 +161,14 @@ def test_router_log_bounds_the_state(caplog):
 
 # --- get_stint_events' phase scope ---------------------------------------------------
 
+# What coach_ws hands CoachContext: resolve_car's display model, not the stored entry
+# name ('Racing Team Turkey by TF 2026 #34:LM') -- a car-matched query finds nothing.
+DISPLAY_CAR = "Chevrolet Corvette Z06 LMGT3.R"
+
+
 def _ctx(store, synthetic_lap):
     return CoachContext(store, cmap=CornerMap.load("simcoach/tracks/test_track.json"),
-                        track=synthetic_lap.track, car=synthetic_lap.car, session_id=SID)
+                        track=synthetic_lap.track, car=DISPLAY_CAR, session_id=SID)
 
 
 def _laps(out):
@@ -199,7 +204,8 @@ def test_stint_events_default_keeps_a_newer_lap_with_its_incident(tmp_path, synt
 
 def test_stint_events_flat_spot_on_a_short_scoped_run(tmp_path, synthetic_lap):
     """A 2-lap run's own median holds the step lap: the baseline falls back to the
-    track/car laps, so the flat spot is still flagged."""
+    session's complete laps -- matched by session id, not by ctx.car (a display name
+    in the app, never the stored entry name) -- so the flat spot is still flagged."""
     store = _store(tmp_path, synthetic_lap, LONG_BEACH, flat_spot=(85,))   # practice lap 2
     out = _ctx(store, synthetic_lap).dispatch("get_stint_events", {"phase": "practice"})
     assert _laps(out) == ["practice lap 1", "practice lap 2"]
