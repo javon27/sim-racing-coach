@@ -61,7 +61,9 @@ def class_neighbours(cars: list[VehicleState]):
     player's own gap_next is not the class gap. A lapped link (read_field sets gap_next
     None when laps_behind_next > 0) makes the gap None: that car is a lap or more away,
     and a seconds figure would be false. Unplaced cars (place 0) are ignored."""
-    order = sorted((c for c in cars if c.place > 0), key=lambda c: c.place)
+    # (place, id): read_field's class-rank order, so the class neighbours' class places
+    # are the player's -/+ 1 even on a tied place (#208: format_race_state states them).
+    order = sorted((c for c in cars if c.place > 0), key=lambda c: (c.place, c.id))
     me = next((i for i, c in enumerate(order) if c.is_player), None)
     if me is None:
         return None, None, None, None
@@ -885,6 +887,8 @@ def format_race_state(snap: RaceSnapshot,
     who = {side: g.who if g else None for side, g in (("ahead", st.ahead),
                                                         ("behind", st.behind))}
     now = None
+    if live is not None and live[1].class_position is None:
+        live = None     # #208: an unplaced frame (formation, a reset) has no class order
     if live is not None:
         now = {"ahead": live[1].class_ahead, "behind": live[1].class_behind}
         if (live[0], live[1].class_position, now) == (st.position, st.class_position, who):

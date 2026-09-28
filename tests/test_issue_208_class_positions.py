@@ -72,11 +72,11 @@ def test_race_result_leads_with_class(tmp_path, synthetic_lap):
     assert "Started P18 in class (P31 overall) on the grid." in out
     assert "Finished P9 in class (P17 overall); status: Finished Normally." in out
     # The low is the lowest CLASS place with that lap's overall place (laps 4-7); the
-    # in-lap sampled no class place, so it says overall only -- never a made-up class.
+    # in-lap sampled no class place, so it says so -- never a made-up class place.
     assert _line(out, "Live per-lap") == (
         "Live per-lap positions over 23 captured lap(s): P12 in class (P24 overall) on the "
-        "first captured lap, as low as P17 in class (P26 overall), P17 overall on the most "
-        "recent.")
+        "first captured lap, as low as P17 in class (P26 overall), P17 overall (class place "
+        "not sampled) on the most recent.")
     assert _line(out, "Per-lap positions") == (
         "Per-lap positions (in class, the overall place in brackets) from race lap 1: race "
         "lap 1 P12 (P24), race lap 2 P11 (P21), race lap 3 P12 (P21), race lap 4 P17 (P26), "
@@ -85,7 +85,7 @@ def test_race_result_leads_with_class(tmp_path, synthetic_lap):
         "lap 12 P14 (P23), race lap 13 P14 (P23), race lap 14 P13 (P21), race lap 15 P12 "
         "(P19), race lap 16 P12 (P19), race lap 17 P11 (P18), race lap 18 P10 (P17), race "
         "lap 19 P10 (P17), race lap 20 P10 (P17), race lap 21 P10 (P18), race lap 22 P10 "
-        "(P18), race lap 22 P17 overall (in-lap).")
+        "(P18), race lap 22 P17 overall, class place not sampled (in-lap).")
 
 
 def test_lap_lines_and_session_status_lead_with_class(tmp_path, synthetic_lap):
@@ -96,12 +96,36 @@ def test_lap_lines_and_session_status_lead_with_class(tmp_path, synthetic_lap):
     assert _pos(ctx, "race lap 1") == "P12 in class (P24 overall)" + FIRST
     assert _pos(ctx, "race lap 2") == "P11 in class (P21 overall) (from P12 in class, P24 overall)"
     assert _pos(ctx, "race lap 4") == "P17 in class (P26 overall) (from P12 in class, P21 overall)"
+    # M1: after the flag the in-lap (committed in the garage stall) has no class place:
+    # the finish is the result log's P9 -- never lap 22's P10, nor a bare "P17".
     assert _line(ctx.get_session_status(), "Track:").endswith(
-        " | Position: P17 overall (P12 in class, P24 overall on the first captured lap; low "
-        "P17 in class, P26 overall)")
+        " | Position: finished P9 in class (P17 overall) (result log) (P12 in class, P24 "
+        "overall on the first captured lap; low P17 in class, P26 overall)")
     events = ctx.get_stint_events(phase="race")
     assert "— position P10 in class (P18 overall) (from P10 in class, P17 overall)" in _line(
         events, "Lap: race lap 21 ")
+    assert next(line for line in events.splitlines() if "in-lap;" in line).endswith(
+        "in-lap; position P17 overall (class place not sampled) (from P10 in class, P18 "
+        "overall)")
+
+
+def test_status_with_no_log_says_the_class_place_was_not_sampled(tmp_path, synthetic_lap):
+    ctx = _ctx(tmp_path, synthetic_lap, log=False)
+    assert _line(ctx.get_session_status(), "Track:").endswith(
+        " | Position: P17 overall (class place not sampled) (P12 in class, P24 overall on "
+        "the first captured lap; low P17 in class, P26 overall)")
+
+
+def test_recent_laps_lead_with_class(tmp_path, synthetic_lap):
+    """M2: "how's my race going" routes here -- its rig output was the symptom verbatim
+    ("race lap 1 ... P24 overall ... race lap 18 ... P17 overall")."""
+    out = _ctx(tmp_path, synthetic_lap).list_recent_laps(limit=30).splitlines()
+    first = next(line for line in out if line.startswith("race lap 1:"))
+    assert first == "race lap 1: 1:22.000 valid P12 in class (P24 overall)" + FIRST
+    assert "race lap 18: 1:22.000 valid P10 in class (P17 overall)" in out
+    assert "race lap 2: 1:22.000 valid P11 in class (P21 overall)" in out
+    assert ("race lap 22: in lap (no time) P17 overall (class place not sampled)" in out), out
+    assert sum(FIRST in line for line in out) == 1
 
 
 def test_grid_start_reads_the_class_grid_slot_first(tmp_path, synthetic_lap):
@@ -118,7 +142,7 @@ def test_no_result_log_lap_1_is_never_a_start(tmp_path, synthetic_lap):
 
 def test_one_class_race_is_unchanged(tmp_path, synthetic_lap):
     """Class place = overall place on every lap and in the log: one number, the pre-#208
-    wording exactly."""
+    wording exactly -- plus the lap-1 guard, the one line a single-class race gains."""
     ctx = _ctx(tmp_path, synthetic_lap, one_class=True)
     out = ctx.get_race_result()
     assert "Started P31 overall on the grid." in out
@@ -133,8 +157,15 @@ def test_one_class_race_is_unchanged(tmp_path, synthetic_lap):
     assert _pos(ctx, "race lap 2") == "P21 overall (from P24 overall)"
     assert _line(ctx.get_session_status(), "Track:").endswith(
         " | Position: P17 overall (P24 overall on the first captured lap, low P26 overall)")
+    laps = ctx.list_recent_laps(limit=30).splitlines()
+    assert "race lap 1: 1:22.000 valid P24 overall" + FIRST in laps
+    assert "race lap 18: 1:22.000 valid P17 overall" in laps
+    assert "race lap 22: in lap (no time) P17 overall" in laps
+    ctx.session_id = "another--online"
+    assert "finished P17 overall)" in ctx.list_past_sessions()
     one = _ctx(tmp_path / "grid", synthetic_lap, one_class=True, pit_start=False)
     assert _pos(one, "race lap 1") == "P24 overall (from P31 overall on the grid)"
+    assert FIRST not in one.list_recent_laps(limit=30)
 
 
 def test_past_sessions_finish_leads_with_class(tmp_path, synthetic_lap):
@@ -186,3 +217,50 @@ def test_the_class_low_is_paired_with_its_own_laps_overall_place():
     assert _arc_places(arc, True) == ("P12 in class (P24 overall)", "P17 in class (P26 overall)",
                                       "P9 in class (P20 overall)")
     assert _arc_places(arc, False)[1] == "P30 overall"
+
+
+def test_equal_class_and_overall_places_say_so_once():
+    from simcoach.coach_tools import _place
+    assert _place(19, 19, True) == "P19 in class and overall"
+    assert _place(19, 19, True, inner=True) == "P19 in class and overall"
+    assert _place(19, 19, False) == "P19 overall"
+
+
+def test_rival_places_hold_on_a_tied_place():
+    """Minor 1: the gap line's rival place is yours -/+ 1, which needs class_neighbours
+    to walk read_field's class-rank order -- (place, mID) -- even on a tied place."""
+    from simcoach.lmu.live import read_field
+    from simcoach.lmu.rf2structs import VehicleScoringInfoV01, rF2Scoring
+    from simcoach.race import class_neighbours
+
+    def veh(mid, place, cls, me=False):
+        v = VehicleScoringInfoV01()
+        v.mID, v.mPlace, v.mVehicleClass, v.mIsPlayer = mid, place, cls.encode(), me
+        v.mDriverName, v.mTimeBehindNext = f"D{mid}".encode(), 1.0
+        return v
+    # mIDs listed against their order: a tie at P4 between 9 and 3, the player in it.
+    for me in (9, 3, 7):
+        cars = [veh(9, 4, "GT3", me == 9), veh(1, 1, "Hyper"), veh(3, 4, "GT3", me == 3),
+                veh(7, 6, "GT3", me == 7), veh(2, 2, "GT3"), veh(8, 5, "Hyper")]
+        s = rF2Scoring()
+        s.mScoringInfo.mSession, s.mScoringInfo.mNumVehicles = 12, len(cars)
+        for i, v in enumerate(cars):
+            s.mVehicles[i] = v
+        field = read_field(s)
+        you = next(c for c in field.cars if c.is_player)
+        ahead, _, behind, _ = class_neighbours(field.cars)
+        assert ahead.class_position == you.class_position - 1, me
+        assert behind is None or behind.class_position == you.class_position + 1, me
+
+
+def test_an_unplaced_live_frame_is_not_rendered():
+    """Minor 4: an unplaced live frame (formation, a reset) has no class place -- never
+    'PNone in class' or 'you lead your class'; the lap's answer stands."""
+    from simcoach.race import GapRead, RaceSnapshot, RaceState, format_race_state
+    st = RaceState(position=25, class_position=16, max_laps=30, time_left=None, pace=None,
+                   laps_to_go=None, ahead=GapRead("A. Rival (A Entry)", 1.2, None, None),
+                   behind=None)
+    snap = RaceSnapshot(8, SID, st, None)
+    text = format_race_state(snap, (0, RaceSample(time_left=None, max_laps=30)))
+    assert text == format_race_state(snap)
+    assert "PNone" not in text and "you lead your class" not in text

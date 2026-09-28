@@ -295,7 +295,10 @@ def test_race_position_in_recent_laps_lap_line_and_status(tmp_path, synthetic_la
     listing = ctx.list_recent_laps()
     for label, pos in zip(("race lap 1", "race lap 2", "race lap 3", "race lap 4"), positions):
         line = next(l for l in listing.splitlines() if l.startswith(label + ":"))
-        assert line.endswith(f"P{pos} overall"), line  # #162: never a bare P
+        # #162: never a bare P. #208: race lap 1 (no grid slot) is not the start.
+        note = (" (the first captured lap of this race: where it ENDED, NOT the "
+                "starting position)") if label == "race lap 1" else ""
+        assert line.endswith(f"P{pos} overall{note}"), line
 
     # The spin's cost: lap 3 (P20) shown against the previous race lap's position (P25).
     lap_line = ctx.get_lap_summary("race lap 3").splitlines()[0]
