@@ -284,3 +284,5 @@ def test_main_starts_the_result_poller_on_a_daemon_thread_before_serving(tmp_pat
     assert served == [(app, True)]
     assert polled["store"] is store
     assert polled["thread"].daemon and polled["thread"] is not threading.main_thread()
+    # #209: the coach turn's result-log nudge is the poller's wake.
+    assert app.state.scan_results is entry.scan_now

@@ -24,7 +24,7 @@ T0 = 1_790_564_614.0
 LAST = T0 + 1980.03          # the in-lap after the flag: the race window's end
 LOGGED = T0 + 2031.87        # when LMU wrote the result log
 _SAMPLE = Path(__file__).parent / "fixtures" / "lmu_results" / "sample_race.xml"
-PROVISIONAL = "The result log isn't written yet -- this review is PROVISIONAL"
+PROVISIONAL = "The result log isn't imported yet -- this review is PROVISIONAL"
 
 
 class _Clock:
@@ -39,14 +39,19 @@ class _Clock:
         self.slept += s
 
 
-def _setup(tmp_path, monkeypatch, synthetic_lap, now, lmu_writes_at=LOGGED, **ctx_kw):
-    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+def _save_laps(store, synthetic_lap, t0=T0, positions=True):
     for dt, lap_no, partial, pos in [(1965.45, 22, None, 18), (1980.03, 22, "in", 17),
-                                     (1883.44, 21, None, 18), (219.03, 1, None, 24)]:
+                                     (1883.44, 21, None, 18)]:
         store.save(dataclasses.replace(
             synthetic_lap, session_id=SID, phase="race", lap_no=lap_no, partial=partial,
-            position=pos, valid=partial is None, lap_time=None if partial else 82.0,
-            timestamp=T0 + dt))
+            position=pos if positions else None, valid=partial is None,
+            lap_time=None if partial else 82.0, timestamp=t0 + dt))
+
+
+def _setup(tmp_path, monkeypatch, synthetic_lap, now, lmu_writes_at=LOGGED, positions=True,
+           **ctx_kw):
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    _save_laps(store, synthetic_lap, positions=positions)
     results = tmp_path / "UserData" / "Log" / "Results"
     results.mkdir(parents=True)
     log = results / "2026_09_27_22_37_25-56R1.xml"
@@ -92,7 +97,7 @@ def test_log_never_arrives_the_wait_is_bounded(tmp_path, monkeypatch, synthetic_
     out = ctx.get_race_result()
     assert clock.slept == pytest.approx(25.0)
     assert len(scans) == 25
-    assert PROVISIONAL in out and "ask again in a minute" in out
+    assert PROVISIONAL in out and "LMU writes the log when the driver leaves the session" in out
     assert "on the grid" not in out and "Incidents" not in out
     assert "No race is live now" in out
 
@@ -100,7 +105,7 @@ def test_log_never_arrives_the_wait_is_bounded(tmp_path, monkeypatch, synthetic_
 def test_wait_ends_when_the_flag_is_no_longer_recent(tmp_path, monkeypatch, synthetic_lap):
     # 80 s after the last race lap only 10 s of the 90 s window remain.
     ctx, clock, _, _ = _setup(tmp_path, monkeypatch, synthetic_lap, now=LAST + 80,
-                                  lmu_writes_at=None)
+                              lmu_writes_at=None)
     assert PROVISIONAL in ctx.get_race_result()
     assert clock.slept == pytest.approx(10.0)
 
@@ -119,6 +124,25 @@ def test_no_wait_when_the_flag_is_old_or_the_race_is_live(tmp_path, monkeypatch,
     assert PROVISIONAL not in out and "on the grid" not in out
 
 
+def test_one_wait_per_turn(tmp_path, monkeypatch, synthetic_lap):
+    # The model re-calling get_race_result in one turn (a race=1 follow-up, a retry)
+    # must not block the driver 25 s each time; the row is still re-checked.
+    ctx, clock, scans, _ = _setup(tmp_path, monkeypatch, synthetic_lap, now=LAST + 10,
+                                  lmu_writes_at=None)
+    assert PROVISIONAL in ctx.get_race_result()
+    assert PROVISIONAL in ctx.get_race_result(race=1)
+    assert PROVISIONAL in ctx.get_race_result()
+    assert clock.slept == pytest.approx(25.0) and len(scans) == 25
+
+
+def test_no_wait_when_the_race_has_no_positions(tmp_path, monkeypatch, synthetic_lap):
+    ctx, clock, scans, _ = _setup(tmp_path, monkeypatch, synthetic_lap, now=LAST + 33,
+                                  lmu_writes_at=None, positions=False)
+    out = ctx.get_race_result()
+    assert "No race result recorded" in out and PROVISIONAL not in out
+    assert scans == [] and clock.slept == 0
+
+
 def test_no_wait_and_no_scan_when_the_log_is_already_in(tmp_path, monkeypatch, synthetic_lap):
     ctx, clock, scans, scan = _setup(tmp_path, monkeypatch, synthetic_lap, now=LOGGED + 5)
     scan()                           # the poller imported it before the question
@@ -126,6 +150,10 @@ def test_no_wait_and_no_scan_when_the_log_is_already_in(tmp_path, monkeypatch, s
     out = ctx.get_race_result()
     assert scans == [] and clock.slept == 0
     assert "P8 in class" in out and "reported contact" in out and PROVISIONAL not in out
+
+
+class _Stop(BaseException):
+    """Not an Exception, so poll_results' retry doesn't swallow it."""
 
 
 def test_scan_now_wakes_the_sidecar_poller(monkeypatch):
@@ -136,11 +164,59 @@ def test_scan_now_wakes_the_sidecar_poller(monkeypatch):
         n.append(1)
         calls.put(1)
         if len(n) > 1:
-            raise SystemExit   # ends the poller thread quietly (not an Exception)
+            raise _Stop   # the second pass: end the poller thread
         return {"imported": 0}
 
+    def poller():
+        try:
+            ingest.poll_results(None)
+        except _Stop:
+            pass
+
     monkeypatch.setattr(ingest, "ingest_all", fake_ingest_all)
-    threading.Thread(target=ingest.poll_results, args=(None,), daemon=True).start()
+    threading.Thread(target=poller, daemon=True).start()
     calls.get(timeout=5)                      # the pass at start
     ingest.scan_now()
     calls.get(timeout=5)                      # woken, well inside POLL_INTERVAL_S
+
+
+def test_the_sidecar_coach_turn_wakes_the_importer(tmp_path, monkeypatch, synthetic_lap):
+    """The production wiring: coach_ws hands CoachContext app.state.scan_results (main()
+    sets it to ingest.scan_now), and a turn that calls get_race_result right after the
+    flag, off track, triggers it. The spy stands in for the poller importing the log."""
+    from fastapi.testclient import TestClient
+
+    from simcoach import coach_tools
+    from simcoach.coach import Coach
+    from simcoach.lmu.results import parse_result
+    from simcoach.model.fake import FakeModel
+    from simcoach.server.app import create_app
+
+    monkeypatch.setattr(coach_tools, "_RESULT_LOG_POLL_S", 0.01)
+    t0 = time.time() - 2000.0          # the in-lap committed 20 s ago
+    store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
+    _save_laps(store, synthetic_lap, t0=t0)
+    xml = tmp_path / "log.xml"
+    xml.write_text(_SAMPLE.read_text()
+                   .replace("Sebring International Raceway", synthetic_lap.track)
+                   .replace("Team WRT #41:LM", synthetic_lap.car)
+                   .replace("<DateTime>1750473029</DateTime>", f"<DateTime>{int(t0)}</DateTime>"))
+    scans = []
+
+    def spy():
+        scans.append(1)
+        store.save_result_session(parse_result(xml, {"jayson g"}), session_id="log",
+                                  logged_ts=time.time())
+
+    fake = FakeModel(reply="ok", tool_script=[("get_race_result", {})])
+    app = create_app(store, Coach(fake))
+    app.state.scan_results = spy
+    client = TestClient(app, base_url="http://127.0.0.1")
+    with client.websocket_connect("/coach", headers={"host": "127.0.0.1"}) as ws:
+        ws.send_json({"question": "how was that race?", "session_id": SID})
+        while ws.receive_json()["type"] not in ("done", "error"):
+            pass
+    assert scans == [1]
+    name, _, out = fake.dispatched[0]
+    assert name == "get_race_result"
+    assert "P4 in class" in out and "reported contact" in out and PROVISIONAL not in out

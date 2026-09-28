@@ -949,6 +949,7 @@ class CoachContext:
         # #209: a zero-argument nudge that makes the result-log importer scan now (the
         # sidecar's poller wake). None = no importer to wait on (tests, dev builds).
         self.scan_results = scan_results
+        self._result_log_waited = False   # #209: waited once this turn (see _await_result_log)
         self.units = units
         self.record = record
         self.lap_id = lap_id
@@ -2566,7 +2567,6 @@ class CoachContext:
         if err:
             return err
         n = picked["index"] if picked else None
-        waited = self._await_result_log(picked, n)
         # Name the track of the session these figures DESCRIBE, taken from that session's
         # own laps -- never self.track, which follows the live game or the last capture
         # and can be another track entirely (reviewing Silverstone while the game sat at
@@ -2574,6 +2574,10 @@ class CoachContext:
         # the model use these figures only for the same race, so a wrong label is worse
         # than none.
         text = race_result_text(self.store, self.session_id, n)
+        # #209: no positions and no row is no race to review -- nothing to wait for.
+        waited = None if text.startswith("No race result") else self._await_result_log(picked, n)
+        if waited is False:   # the log landed during the wait
+            text = race_result_text(self.store, self.session_id, n)
         laps = self.store.session_laps(self.session_id) if self.session_id else []
         track = laps[0].get("track") if laps else None
         head = [f"Session track: {track}." if track else ""]
@@ -2604,24 +2608,33 @@ class CoachContext:
                      "(its result log isn't read yet): talk about it as a finished race -- "
                      f"{_COOL_DOWN_RULE}; no pit-stop or strategy offers.")
         if waited:
-            text += ("\nThe result log isn't written yet -- this review is PROVISIONAL: no "
-                     "class result, grid slot or car-to-car contacts until it is. Say so, and "
-                     "tell the driver to ask again in a minute for them.")
+            # Measured: no result row is LINKED after the wait -- not that LMU hasn't
+            # written it (no alias, a name/car/mode mismatch). LMU writes the log when the
+            # driver leaves the session (ingest.POLL_INTERVAL_S), so re-asking while still
+            # in it gets nothing new.
+            text += ("\nThe result log isn't imported yet -- this review is PROVISIONAL (no "
+                     "class result, grid slot or car-to-car contacts). LMU writes the log "
+                     "when the driver leaves the session; tell them to ask again after that.")
         return "\n".join([h for h in head if h] + [text] + self._race_lap_positions(win, rr))
 
-    def _await_result_log(self, picked, n) -> bool:
+    def _await_result_log(self, picked, n) -> bool | None:
         """#209: the latest race is over with no live race attached (get_race_result's
         'No race is live now' case) and its result log isn't imported yet: nudge the
-        importer and re-check until it is, bounded (see _RESULT_LOG_WAIT_S). True when it
-        waited and the log still isn't in; False with no wait, or once it lands."""
+        importer and re-check until it is, bounded (see _RESULT_LOG_WAIT_S). None: no
+        wait. True: the log still isn't in after a wait -- this one, or (once per
+        context: a re-call must not block the turn again) an earlier one. False: it
+        landed during this wait."""
         win = self._current_race()
         if (self.scan_results is None or win is None or picked not in (None, win)
                 or (self.on_track and (self.race is not None or self.race_note))
                 or self.store.race_session(self.session_id, n) is not None):
-            return False
+            return None
+        if self._result_log_waited:
+            return True
         end = min(time.time() + _RESULT_LOG_WAIT_S, win["end_ts"] + _RESULT_LOG_RECENT_S)
         if time.time() >= end:
-            return False
+            return None
+        self._result_log_waited = True
         while time.time() < end:
             self.scan_results()
             time.sleep(_RESULT_LOG_POLL_S)
