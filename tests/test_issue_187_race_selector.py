@@ -63,33 +63,39 @@ _ROWS = [
     (3786.5, "race", 9, None, 1, 107.471),
 ]
 
-# The two race result logs: (race_sessions ts, logged_ts, finish, grid) off T0.
-_R1 = (-36.68, 1169.19, 2, 2)
-_R2 = (2687.32, 3885.03, 1, 3)
+# The rows stored with pit set (ts offsets): out-laps, and the garage/grid segments
+# of race lap 0 -- set on a grid start too, so pit on a lap-0 row is no pit-lane start.
+_PIT_AT = {-782.8, -613.4, 0.0, 18.6, 1927.2, 2087.5, 2711.7}
+
+# The two race result logs: (race_sessions ts, logged_ts, finish, grid, class grid)
+# off T0.
+_R1 = (-36.68, 1169.19, 2, 2, 2)
+_R2 = (2687.32, 3885.03, 1, 3, 3)
 
 RACE2_TAIL = ("Per-lap positions (overall) from race lap 1: race 2 lap 1 P2, race 2 lap 2 "
               "P2, race 2 lap 3 P2, race 2 lap 4 P2, race 2 lap 5 P1, race 2 lap 6 P1, "
               "race 2 lap 7 P1, race 2 lap 8 P1, race 2 lap 9 P1.")
 
 
-def _lgc12(tmp_path, synthetic_lap, logs=(), rows=_ROWS):
+def _lgc12(tmp_path, synthetic_lap, logs=(), rows=_ROWS, sid=SID, t0=T0, pit_at=_PIT_AT):
     """`logs`: (result, logged_ts or None) pairs to import. A logged_ts of None is a
     row whose write time is unknown -- the only way the latest result can be race 1's
     while race 2 is stored (a known write time before race 2's laps refuses it)."""
     store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
     for dt, phase, lap_no, partial, pos, t in rows:
         store.save(dataclasses.replace(
-            synthetic_lap, session_id=SID, phase=phase, lap_no=lap_no, partial=partial,
-            position=pos, lap_time=t, valid=t is not None, timestamp=T0 + dt))
-    for (ts, _, finish, grid), logged in logs:
+            synthetic_lap, session_id=sid, phase=phase, lap_no=lap_no, partial=partial,
+            pit=dt in pit_at, position=pos, lap_time=t, valid=t is not None,
+            timestamp=t0 + dt))
+    for (ts, _, finish, grid, class_grid), logged in logs:
         store.save_result_session(ResultSession(
             sim="lmu", track=synthetic_lap.track, car=synthetic_lap.car, car_class="GT3",
-            date_ts=T0 + ts, session_type="race", position=finish, class_position=finish,
+            date_ts=t0 + ts, session_type="race", position=finish, class_position=finish,
             best_lap=None, finish_status="Finished Normally", laps=[], incidents=[],
-            penalties=[], grid_position=grid, class_grid_position=grid, online=True),
-            session_id=f"result-{ts}", logged_ts=None if logged is None else T0 + logged)
+            penalties=[], grid_position=grid, class_grid_position=class_grid, online=True),
+            session_id=f"result-{ts}", logged_ts=None if logged is None else t0 + logged)
     return CoachContext(store, cmap=CornerMap.load("simcoach/tracks/test_track.json"),
-                        track=synthetic_lap.track, car=synthetic_lap.car, session_id=SID)
+                        track=synthetic_lap.track, car=synthetic_lap.car, session_id=sid)
 
 
 def _laps(out):
@@ -127,10 +133,17 @@ def test_race_selector_default_and_race_2_are_the_latest_race(tmp_path, syntheti
 
 def test_race_selector_names_a_race_the_session_does_not_hold(tmp_path, synthetic_lap):
     ctx = _lgc12(tmp_path, synthetic_lap)
-    for bad in (3, 0, "first"):
+    for bad in (3, 0, "first", 1.5, True, 10 ** 400):
         out = ctx.dispatch("get_stint_events", {"phase": "race", "race": bad})
-        assert out == (f"No race {bad} in this session: it holds 2 race(s), race 1 to "
+        assert out == (f"No race {bad} in this session: it holds 2 races, race 1 to "
                        "race 2."), out
+    assert _laps(ctx.dispatch("get_stint_events", {"race": 1.0}))[0] == "race 1 lap 1"
+
+
+def test_race_selector_on_a_single_race_session(tmp_path, synthetic_lap):
+    ctx = _lgc12(tmp_path, synthetic_lap, rows=_ROWS[:21])
+    out = ctx.dispatch("get_stint_events", {"phase": "race", "race": 2})
+    assert out == "No race 2 in this session: it holds 1 race."
 
 
 # -- 2 + 3. the positions tail and its pointer read the race the result describes ----
@@ -199,3 +212,55 @@ def test_no_grid_slot_no_from_and_never_the_previous_race(tmp_path, synthetic_la
     ctx = _lgc12(tmp_path, synthetic_lap)
     assert _pos(ctx, "race 2 lap 1") == "P2 overall"
     assert _pos(ctx, "race 2 lap 2") == "P2 overall (from P2 overall)"
+
+
+# -- M1: a window can hold two races; the grid slot is only the logged race's ------------
+
+def test_grid_slot_never_reaches_the_other_race_of_a_merged_window(tmp_path, synthetic_lap):
+    """Two races back to back with no other lap between (an offline restart) are ONE
+    window. Only race B is logged: A's lap 1 must not read 'from' B's grid slot."""
+    race = [(0.0, "race", 0, "partial", 2, None), (203.4, "race", 1, None, 2, 112.345),
+            (309.6, "race", 2, None, 2, 106.289), (416.6, "race", 3, None, 2, 106.867)]
+    b0 = 900.0          # under _RACE_WINDOW_GAP_S after A's last lap
+    rows = race + [(dt + b0, *rest) for dt, *rest in race]
+    log_b = (b0 - 36.68, None, 1, 7, 7)
+    ctx = _lgc12(tmp_path, synthetic_lap, logs=[(log_b, None)], rows=rows, pit_at=set())
+    assert len(ctx._race_windows()) == 1
+    heads = [line for line in ctx.get_stint_events(phase="race").splitlines()
+             if line.startswith("Lap: race lap 1 ")]
+    assert len(heads) == 2
+    assert heads[0].endswith("position P2 overall"), heads[0]      # race A: no 'from'
+    assert "P7" not in heads[0]
+
+
+# -- M2 + M3: the real Road Atlanta pit-lane start (13 Autosport, 2026-09-23) -------------
+
+RA_SID = "michelin-raceway-road-atlanta--13-autosport-2026-13-lm--online"
+RA_T0 = 1_790_215_719.66
+_RA_ROWS = [
+    (-87.4, "qualifying", 6, None, 28, 82.592),
+    (0.0, "race", 0, "in", 30, None),
+    (148.8, "race", 0, "out", 30, None),       # pit set: the start from the pit lane
+    (257.2, "race", 1, "in", 32, None),        # pit set
+    (359.0, "race", 2, None, 32, 101.84),      # pit set
+    (444.6, "race", 3, None, 31, 85.612),
+]
+# GridPos 30 overall, ClassGridPos 8 (a multiclass grid), finished P22 (DNF).
+_RA_LOG = (-2.66, None, 22, 30, 8)
+
+
+@pytest.mark.parametrize("pit_at", [
+    {148.8, 257.2, 359.0},      # the real flags
+    {148.8, 359.0},             # only the start segment before lap 1
+    {257.2, 359.0},             # only lap 1
+], ids=["real", "start-segment", "lap-1"])
+def test_pit_lane_start_has_no_grid_from(tmp_path, synthetic_lap, pit_at):
+    ctx = _lgc12(tmp_path, synthetic_lap, logs=[(_RA_LOG, None)], rows=_RA_ROWS,
+                 sid=RA_SID, t0=RA_T0, pit_at=pit_at)
+    assert _pos(ctx, "race lap 1") == "P32 overall"
+
+
+def test_grid_start_reads_the_overall_grid_slot_not_the_class_one(tmp_path, synthetic_lap):
+    ctx = _lgc12(tmp_path, synthetic_lap, logs=[(_RA_LOG, None)], rows=_RA_ROWS,
+                 sid=RA_SID, t0=RA_T0, pit_at={0.0, 359.0})   # garage segment only
+    assert _pos(ctx, "race lap 1") == "P32 overall (from P30 overall on the grid)"

@@ -1001,9 +1001,12 @@ class CoachContext:
 
     def _race_window_at(self, race_ts: float | None) -> dict | None:
         """The race window a result row describes: the first one still running at its
-        race_ts -- the race's own start stamp, which is exactly how the position arc is
-        floored (`since=race_ts`), so the two can never disagree. The current race
-        without one; None when the session has no race."""
+        race_ts -- the race's own start stamp, the same floor the position arc uses
+        (`since=race_ts`). The current race without one; None when the session has no
+        race. A window is a run of race laps, not a race: two races driven back to back
+        with no other lap between merge into one, and then this window also holds the
+        other race -- anything pairing a lap with the result must check the lap's own
+        time against race_ts/next_race_ts too."""
         win = self._current_race()
         if race_ts is not None:
             win = next((w for w in self._race_windows() if w["end_ts"] >= race_ts), win)
@@ -1150,11 +1153,26 @@ class CoachContext:
                     pos_txt += f" (from P{prev_pos} overall)"
                 elif record.lap_no == 1 and win is not None:
                     # Race lap 1 starts from the grid slot -- only ever the result log's,
-                    # and only when that log is THIS race's (never guessed).
+                    # and only when that log is THIS race's (never guessed): its window,
+                    # and this lap inside race_ts..next_race_ts (a window can hold two
+                    # back-to-back races).
                     rr = self.store.race_session(self.session_id)
                     grid = rr.get("grid_position") if rr else None
-                    at = self._race_window_at(rr.get("race_ts")) if rr else None
-                    if grid is not None and at is not None and at["index"] == win["index"]:
+                    start = rr.get("race_ts") if rr else None
+                    ts = sess_laps[idx]["ts"]
+                    at = self._race_window_at(start) if rr else None
+                    # A pit-lane start: the start segment just before lap 1 (the last
+                    # lap-0 row -- the earlier ones are garage/grid segments, pit set on
+                    # grid starts too) or lap 1 itself is in the pits. The grid slot is
+                    # not where that lap started.
+                    before = [r for r in sess_laps[:idx] if r["id"] in ids
+                              and start is not None and r["ts"] >= start]
+                    pit_start = (sess_laps[idx].get("pit")
+                                 or bool(before and before[-1].get("pit")))
+                    if (grid is not None and at is not None and at["index"] == win["index"]
+                            and start is not None and start <= ts
+                            and (rr.get("next_race_ts") is None or ts < rr["next_race_ts"])
+                            and not pit_start):
                         pos_txt += f" (from P{grid} overall on the grid)"
                 tail_bits.append(pos_txt)
         return (f"Lap: {head}" + (f" ({', '.join(parts)})" if parts else "")
@@ -1845,13 +1863,16 @@ class CoachContext:
                 return "No race in this session — no race laps to scan for incidents."
             if race is not None:
                 windows = self._race_windows()
-                try:
-                    cur_race = next((w for w in windows if w["index"] == int(race)), None)
-                except (TypeError, ValueError):
-                    cur_race = None
+                try:   # a whole number only: 1.5 is not race 1
+                    want = (int(race) if not isinstance(race, bool)
+                            and float(race) == int(race) else None)
+                except (TypeError, ValueError, OverflowError):
+                    want = None
+                cur_race = next((w for w in windows if w["index"] == want), None)
                 if cur_race is None:
-                    return (f"No race {race} in this session: it holds {len(windows)} "
-                            f"race(s), race 1 to race {len(windows)}.")
+                    held = (f"{len(windows)} races, race 1 to race {len(windows)}"
+                            if len(windows) > 1 else "1 race")
+                    return f"No race {race} in this session: it holds {held}."
             ids = set(cur_race["lap_ids"])
             rows = [r for r in rows if r["id"] in ids and not _pre_green("race", r["lap_no"])]
             if not rows:
