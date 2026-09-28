@@ -3069,7 +3069,7 @@ def test_get_tire_trend_leaves_contact_laps_out_of_the_pace_trend(tmp_path, synt
                        session_id="s1", on_track=True)
     out = ctx.dispatch("get_tire_trend", {})
     assert "deg-limited" not in out and "pace +" not in out, out
-    assert "2 incident laps (spin/off/contact) left out of the pace trend" in out
+    assert "2 incident laps (spin/stop/off/contact) left out of the pace trend" in out
 
 
 # --- #161 provisional pre-race plan / #164 pit-menu stops ------------------------

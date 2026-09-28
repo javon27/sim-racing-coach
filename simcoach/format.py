@@ -506,7 +506,7 @@ def format_tire_trend(result: dict, units: str = "metric") -> str:
                 " — pace dropped, but wear/temps don't show degradation")
     k = result.get("incident_laps") or 0
     if k:
-        out += (f" {k} incident lap{'s' if k != 1 else ''} (spin/off/contact) left out "
+        out += (f" {k} incident lap{'s' if k != 1 else ''} (spin/stop/off/contact) left out "
                 "of the pace trend.")
     return out
 
@@ -680,14 +680,14 @@ def format_time_on_table(*, lap_time, sectors, optimal, all_time, benchmark, for
                        "(every sector is your best).")
         if own_out:
             out.append(f"  This lap's own {' and '.join(names[i] for i in own_out)} had a "
-                       "spin or an off: not counted as a best sector.")
+                       "spin, a stop or an off: not counted as a best sector.")
         by_sector: dict = {}
         for i, _, key in optimal["dropped"]:
             if key != "this":
                 by_sector.setdefault(i, []).append(label_of(key))
         for i, labels in sorted(by_sector.items()):
             out.append(f"  Quicker {names[i]} on {' and '.join(labels)} doesn't count: "
-                       "a spin or an off in that sector.")
+                       "a spin, a stop or an off in that sector.")
     if all_time:
         when = "this lap" if all_time["this_lap"] else all_time["when"]
         line = f"All-time here in this car: best {format_laptime(all_time['best'])} ({when})"
@@ -777,10 +777,14 @@ def _event_corner_tag(cmap, corner_no) -> str:
 
 def place_text(cmap, dist: float) -> str:
     """'1,152 m (T3 Name)' inside a corner window, '1,152 m, between T3 Name and T4
-    Name' outside every window -- most of a lap is between corners."""
-    at = f"{dist:,.0f} m"
+    Name' outside every window -- most of a lap is between corners. 'an unknown
+    point' for a NaN distance (#210: an in-lap's tail printed "spin at nan m")."""
+    if not math.isfinite(dist):
+        return "an unknown point"
+    # #210: an out-lap buffer still behind the line reads a negative lap distance
+    at = f"{dist:,.0f} m" if dist >= 0 else f"{-dist:,.0f} m before the line"
     corners = sorted(getattr(cmap, "corners", None) or [], key=lambda c: c.start_dist)
-    if not corners or not math.isfinite(dist):
+    if not corners:
         return at
     n = _corner_at(cmap, dist)
     c = next((c for c in corners if c.number == n), None)
@@ -808,11 +812,12 @@ def format_events(events, cmap, units: str = "metric") -> list[str]:
                     f"{place_text(cmap, e['lap_distance'])} \N{EM DASH} "
                     f"{spd(d['speed_from_kmh']):.0f} \N{RIGHTWARDS ARROW} "
                     f"{spd(d['speed_min_kmh']):.0f} {spd_u}, ")
-            stop = (f"{d['stopped_s']:.1f} s under {spd(_STOP_KMH):.0f} {spd_u}"
+            # the whole stuck span: first under the stop speed to back over it
+            stop = (f"stuck {d['stopped_s']:.1f} s (under {spd(_STOP_KMH):.0f} {spd_u})"
                     if "stopped_s" in d else "")
             if kind == "spin":
                 line += f"turned {d['turned_deg']:.0f}\N{DEGREE SIGN}"
-                line += f", then stopped {stop}" if stop else ""
+                line += f", then {stop}" if stop else ""
             else:
                 line += stop + (", right after contact there" if d["after_contact"] else "")
             lines.append(line)
@@ -867,8 +872,7 @@ def format_damage_line(events: list, state: dict, cmap=None) -> str | None:
     n = len(events)
     hi = max(range(n), key=lambda i: events[i]["magnitude"])
     # #210: each place on the corner map; "; " between places, as one may hold a comma.
-    places = "; ".join((place_text(cmap, d) if math.isfinite(d) else "an unknown point")
-                       + f" ({', '.join(sides)})" for d, sides in groups)
+    places = "; ".join(f"{place_text(cmap, d)} ({', '.join(sides)})" for d, sides in groups)
     line = (f"Contact: {n} impact{'s' if n != 1 else ''} at {places}, "
             f"{'heaviest' if n > 1 else 'magnitude'} {events[hi]['magnitude']:.0f}")
     place = groups[home[hi]][0]

@@ -505,8 +505,8 @@ def optimal_sectors(laps: list[dict], bounds) -> dict | None:
     """The optimal lap from the game's own sector times: the best of each sector.
 
     `laps`: `{"key", "sectors": [s1, s2, s3] | None, "incidents": [lap_distance]}`
-    per comparable lap, the subject included; `incidents` are the lap's spin/off
-    distances. A sector counts only when its lap had no spin/off inside it; with no
+    per comparable lap, the subject included; `incidents` are the lap's spin/stop/off
+    distances. A sector counts only when its lap had no incident inside it; with no
     `bounds` any incident drops the whole lap. None when a sector has no clean time.
     Else `{"total", "best": [(time, key)] * 3, "dropped": [(sector, time, key)]}` --
     `dropped` are incident sectors that were quicker than the clean best."""
@@ -1599,8 +1599,8 @@ def stint_tire_trend(analyses: "list[LapAnalysis]", lap_times: "list[float]",
             `-100 * slope` of that fraction -- see `_wheel_summary`), same
             gating,
         pace_slope_s: s/lap least-squares slope of `lap_times` over the laps
-            NOT flagged in `incident` (#161: a spin/off/contact lap is slow for
-            a reason that is not the tires), fitted at their stint positions;
+            NOT flagged in `incident` (#161: a spin/stop/off/contact lap is slow
+            for a reason that is not the tires), fitted at their stint positions;
             None when fewer than `_MIN_TIRE_TREND_LAPS` incident-free laps,
         pace_laps / incident_laps: how many laps the pace fit used / left out,
         hottest: wheel with the highest mean temp over the stint, or None,
@@ -1770,12 +1770,13 @@ def _spin_events(record: LapRecord, cmap: CornerMap) -> list[dict]:
     keep = (np.isfinite(x) & np.isfinite(z) & np.isfinite(v) & np.isfinite(t)
             & (v > _SPIN_MIN_SPEED_KMH))
     x, z, v, d, t = x[keep], z[keep], v[keep], d[keep], t[keep]
+    raw = np.flatnonzero(keep)            # each kept sample's index in the channels
     if x.size < 3:
         return []
     # A repeated position gives arctan2(0, 0) == 0 and would inject a fake ±180°
     # swing into the unwrapped heading. Drop the duplicate, keep the first.
     moved = np.concatenate(([True], (np.diff(x) ** 2 + np.diff(z) ** 2) > 0.0))
-    x, z, v, d, t = x[moved], z[moved], v[moved], d[moved], t[moved]
+    x, z, v, d, t, raw = x[moved], z[moved], v[moved], d[moved], t[moved], raw[moved]
     if x.size < 3:
         return []
     # h[k] = heading of the segment LEAVING sample k, unwrapped so a window's
@@ -1812,6 +1813,8 @@ def _spin_events(record: LapRecord, cmap: CornerMap) -> list[dict]:
             "kind": "spin",
             "corner_no": _corner_at(cmap, d[mi]),
             "lap_distance": float(d[mi]),
+            # #210: its first and slowest samples, to pair it with a stop it caused
+            "samples": (int(raw[lo]), int(raw[mi])),
             "detail": {"speed_from_kmh": float(v[lo]),
                        "speed_min_kmh": float(v[mi]),
                        "turned_deg": float(np.abs(h[lo:k + 1] - h[lo]).max())},
@@ -1824,49 +1827,78 @@ def _spin_events(record: LapRecord, cmap: CornerMap) -> list[dict]:
 # stop that goes unreported, or a slow hairpin that reports, is what moves them.
 _STOP_KMH = 10.0
 _STOP_S = 1.5
-# A spin or hit this close to the stop is what stopped the car.
+# Runs under _STOP_KMH this close (in metres or seconds) are ONE stop: a car rocking
+# off a wall dips under and back over again and again (Long Beach 7658: four runs
+# over 15.6 s at 780-783 m). A spin or hit this close to the stop is what stopped it.
 _STOP_CAUSE_M = 100.0
+_STOP_MERGE_S = 3.0
+# The speed a stop came down from: the peak over this look-back before it.
+_STOP_LOOKBACK_S = 5.0
+# ponytail: on a lap that saw the pits (or can't say: pit None, a partial, the live
+# lap) a stop counts only when braked into from above this -- the pit limiter reads
+# ~60 km/h, so a pit-box stop never passes. A short pit lane that lets the car reach
+# the box inside the look-back from racing speed would slip through; move it then.
+_STOP_FROM_KMH = 80.0
 
 
 def _stop_events(record: LapRecord, cmap: CornerMap, spins: list[dict]) -> list[dict]:
-    """Stops on track. Complete, pit-free laps only: a pit box (out/in laps), race lap
-    0's grid and a post-flag cool-down are all partial laps -- and never a stop the lap
-    began in. Timed off the game clock: `_sample_time` falls back to ds/v at LMU's S/F
-    seam, where a car standing still takes no time. A stop within _STOP_CAUSE_M of a
-    spin is folded into that spin (its `stopped_s`), not a second incident; one near
-    an impact -- a separate contact line -- is annotated (`after_contact`)."""
+    """Stops on track: runs under _STOP_KMH merged into one stuck span, judged per
+    stop. Never the lap's first stretch (a standing start, the grid); on a lap that
+    may have seen the pits, only one braked into from over _STOP_FROM_KMH (the pit box
+    is at limiter speed). Timed off the game clock: `_sample_time` falls back to ds/v
+    at LMU's S/F seam, where a car standing still takes no time. A stop is folded into
+    a spin that began before it and ended in it (the spin's `stopped_s`), not a
+    second incident; one after a hit there -- a separate contact line -- is annotated
+    (`after_contact`)."""
     ch = record.channels
     et = ch.get("elapsed_time", ch.get("time"))
-    if record.partial is not None or record.pit or et is None:
+    if et is None:
         return []
     v = np.asarray(ch["speed"], dtype=float)
     d = _interp_lap_distance(record)
     et = np.asarray(et, dtype=float)
     n = min(v.size, d.size, et.size)
-    slow = np.r_[0, (v[:n] < _STOP_KMH).astype(int), 0]
-    edges = np.diff(slow)
-    hits = [e["lap_distance"] for e in damage_events(ch)]
-    out = []
+    edges = np.diff(np.r_[0, (v[:n] < _STOP_KMH).astype(int), 0])
+    runs: list[list[int]] = []
     for lo, hi in zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1) - 1):
-        stopped = float(et[hi] - et[lo])
-        if lo == 0 or not stopped >= _STOP_S:
+        if runs and (et[lo] - et[runs[-1][1]] < _STOP_MERGE_S
+                     or abs(d[lo] - d[runs[-1][1]]) <= _STOP_CAUSE_M):
+            runs[-1][1] = hi
+        else:
+            runs.append([lo, hi])
+    maybe_pit = record.partial is not None or record.pit is not False
+    hits = damage_events(ch)
+    out = []
+    for lo, hi in runs:
+        stuck = float(et[min(hi + 1, n - 1)] - et[lo])   # first under -> back over
+        if lo == 0 or not stuck >= _STOP_S:
             continue
-        k = lo            # back up the braking to where it began: the speed it stopped from
-        while k > 0 and v[k - 1] >= v[k]:
-            k -= 1
-        spin = next((s for s in spins if abs(s["lap_distance"] - d[lo]) <= _STOP_CAUSE_M),
-                    None)
+        back = et[:lo + 1] >= et[lo] - _STOP_LOOKBACK_S
+        peak = float(np.nanmax(v[:lo + 1][back])) if back.any() else float(v[lo])
+        if maybe_pit and not peak > _STOP_FROM_KMH:
+            continue
+        # A spin that began before the stop and ended in it (or within _STOP_CAUSE_M).
+        spin = next((s for s in spins if s["samples"][0] <= lo
+                     and (lo <= s["samples"][1] <= hi
+                          or abs(s["lap_distance"] - d[lo]) <= _STOP_CAUSE_M)), None)
         if spin is not None:
-            spin["detail"]["stopped_s"] = stopped
+            spin["detail"]["stopped_s"] = stuck
+            if not math.isfinite(spin["lap_distance"]):
+                # an in-lap's tail past the last distance knot (Long Beach 7573/7583):
+                # the spin ended where the stop began, a measured place
+                spin["lap_distance"] = float(d[lo])
+                spin["corner_no"] = _corner_at(cmap, d[lo])
             continue
         out.append({
             "kind": "stop",
             "corner_no": _corner_at(cmap, d[lo]),
             "lap_distance": float(d[lo]),
-            "detail": {"speed_from_kmh": float(v[k]),
+            "detail": {"speed_from_kmh": peak,
                        "speed_min_kmh": float(np.nanmin(v[lo:hi + 1])),
-                       "stopped_s": stopped,
-                       "after_contact": any(abs(x - d[lo]) <= _STOP_CAUSE_M for x in hits)},
+                       "stopped_s": stuck,
+                       "after_contact": any(h["et"] <= et[lo]
+                                            and abs(h["lap_distance"] - d[lo]) <= _STOP_CAUSE_M
+                                            for h in hits)},
         })
     return out
 

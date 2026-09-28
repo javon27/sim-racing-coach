@@ -5,14 +5,15 @@ Laps are built the way LMU stores them: lap_distance a ~5 Hz staircase under ~50
 channels, elapsed_time/lap_start_et with lap_start_et rolling over a few samples
 before the end (rig lap 7744), and the #143 impact channels."""
 import dataclasses
+import math
 
 import numpy as np
 import pytest
 
-from simcoach.analysis import _SPEED_KMH_TO_MS, damage_events, lap_events
+from simcoach.analysis import _SPEED_KMH_TO_MS, _spin_events, damage_events, lap_events
 from simcoach.coach_tools import CoachContext
 from simcoach.corners import CornerMap
-from simcoach.format import format_damage_line, format_events
+from simcoach.format import format_damage_line, format_events, place_text
 from simcoach.livelap import lap_incidents
 from simcoach.model_types import LapRecord
 
@@ -39,8 +40,9 @@ def _lap(segments, d0=0.0, hit_at_m=None, **kw):
     lset = np.full(n, 400.0)
     lset[-3:] = et[-3] - 0.02            # LMU rolls the lap over before the wrap
     impact_et = np.zeros(n)
-    if hit_at_m is not None:
-        impact_et[int(np.argmax(d >= hit_at_m)):] = 450.0
+    if hit_at_m is not None:             # mLastImpactET: the game clock of the hit
+        i = int(np.argmax(d >= hit_at_m))
+        impact_et[i:] = et[i]
     ch = {
         "lap_distance": d[(np.arange(n) // 10) * 10],     # scoring-rate staircase
         "speed": v,
@@ -58,10 +60,24 @@ def _lap(segments, d0=0.0, hit_at_m=None, **kw):
 _SPIN = (2.0, 200.0, 180.0, 30.0)                          # test_analysis' spin shape
 _STOP = [(40.0, 0.0, 132.0, 132.0), (3.0, 0.0, 132.0, 0.0),  # 132 -> 0 on the brake,
          (7.0, 0.0, 0.0, 0.0), (5.0, 0.0, 0.0, 100.0)]       # 7 s parked, then away
+# Long Beach 7658 (race lap 11), after the spin at 782 m: four runs under 10 km/h
+# (~2.1, 1.9, 2.3, 2.7 s) over a 15.6 s span, rocking back and forth off the wall
+# at up to ~40 km/h in between -- gaps over 3 s, but all within ~50 m.
+_ROCK = [(1.0, 0.0, 30.0, 0.0), (1.8, 0.0, 0.0, 0.0),
+         (2.0, 0.0, 0.0, 40.0), (2.0, 0.0, 40.0, 0.0), (1.6, 0.0, 0.0, 0.0),
+         (1.6, 0.0, 0.0, 27.0), (1.6, 0.0, 27.0, 0.0), (2.0, 0.0, 0.0, 0.0),
+         (1.0, 0.0, 0.0, 15.0), (1.0, 0.0, 15.0, 0.0), (2.4, 0.0, 0.0, 0.0),
+         (4.0, 0.0, 0.0, 100.0)]
+_PIT_BOX = [(20.0, 0.0, 60.0, 60.0), (2.0, 0.0, 60.0, 0.0),    # limiter -> the box,
+            (25.0, 0.0, 0.0, 0.0), (5.0, 0.0, 0.0, 60.0)]      # 25 s service
 
 
 def _lines(rec):
     return format_events(lap_events(rec, _CMAP, None), _CMAP)
+
+
+def _stops(rec):
+    return [e for e in lap_events(rec, _CMAP, None) if e["kind"] == "stop"]
 
 
 def test_a_spin_between_corners_is_placed_between_them():
@@ -90,11 +106,29 @@ def test_an_impact_is_placed_on_the_corner_map():
         in line
 
 
+def test_place_text_edges_past_the_last_corner_before_t1_behind_the_line_and_nan():
+    wrap = ", between T2 Right Sweeper and T1 Left Hairpin"
+    assert place_text(_CMAP, 3100.0) == "3,100 m" + wrap           # past the last corner
+    assert place_text(_CMAP, 5.0) == "5 m" + wrap                  # before T1
+    assert place_text(_CMAP, -241.0) == "241 m before the line" + wrap
+    assert place_text(_CMAP, math.nan) == "an unknown point"
+    assert place_text(None, -241.0) == "241 m before the line"     # no map: distance only
+
+
+def test_a_spin_with_no_lap_distance_never_prints_nan():
+    """Long Beach in-laps 7573/7583: the tail's lap distance is NaN (past the last knot
+    `_interp_lap_distance` trusts) and the line read 'spin at nan m'."""
+    ev = {"kind": "spin", "corner_no": None, "lap_distance": math.nan,
+          "detail": {"speed_from_kmh": 219.0, "speed_min_kmh": 5.0, "turned_deg": 162.0}}
+    [line] = format_events([ev], _CMAP)
+    assert line.startswith("spin at an unknown point \N{EM DASH} 219 ") and "nan" not in line
+
+
 def test_a_stop_on_track_is_an_event_with_place_duration_and_speed():
     """Long Beach race lap 4: 132 -> 0 km/h on the brake at ~3047 m, ~7 s, no rotation,
     no hit -- no event kind said so."""
     rec = _lap(_STOP)
-    [stop] = [e for e in lap_events(rec, _CMAP, None) if e["kind"] == "stop"]
+    [stop] = _stops(rec)
     assert stop["lap_distance"] == pytest.approx(1520.0, abs=15.0)
     assert stop["detail"]["speed_from_kmh"] == pytest.approx(132.0, abs=1.0)
     assert stop["detail"]["speed_min_kmh"] == 0.0
@@ -104,23 +138,67 @@ def test_a_stop_on_track_is_an_event_with_place_duration_and_speed():
     [line] = [x for x in _lines(rec) if x.startswith("stopped")]
     assert line.startswith("stopped at 1,5")
     assert line.endswith(", between T1 Left Hairpin and T2 Right Sweeper \N{EM DASH} "
-                         "132 \N{RIGHTWARDS ARROW} 0 km/h, 7.7 s under 10 km/h")
+                         "132 \N{RIGHTWARDS ARROW} 0 km/h, stuck 7.7 s (under 10 km/h)")
     imperial = format_events(lap_events(rec, _CMAP, None), _CMAP, "imperial")
-    assert "82 \N{RIGHTWARDS ARROW} 0 mph, 7.7 s under 6 mph" in imperial[0]
+    assert "82 \N{RIGHTWARDS ARROW} 0 mph, stuck 7.7 s (under 6 mph)" in imperial[0]
 
 
-def test_pit_lane_grid_and_short_stops_are_not_stops():
-    def stops(rec):
-        return [e for e in lap_events(rec, _CMAP, None) if e["kind"] == "stop"]
-    assert len(stops(_lap(_STOP))) == 1                        # the control
-    assert stops(_lap(_STOP, pit=True)) == []                  # a pit lap
-    for kind in ("out", "in", "partial"):                      # box, grid, cool-down
-        assert stops(_lap(_STOP, partial=kind, lap_time=None, valid=False)) == []
-    # a lap whose buffer began standing (a standing start from the grid)
-    assert stops(_lap([(6.0, 0.0, 0.0, 0.0), (8.0, 0.0, 0.0, 150.0)])) == []
+def test_rocking_off_a_wall_is_one_stop_timed_over_its_whole_span():
+    """Long Beach 7658: four runs under 10 km/h at 780-783 m over 15.6 s printed
+    'then stopped 2.7 s' -- only the last run, each fold overwriting the one before."""
+    rec = _lap([(40.0, 0.0, 132.0, 132.0), (3.0, 0.0, 132.0, 30.0)] + _ROCK)
+    [stop] = _stops(rec)
+    # 0.3 s braking under 10 + 17.0 s of runs and rocks + 0.4 s pulling away
+    assert stop["detail"]["stopped_s"] == pytest.approx(17.7, abs=0.1)
+    assert stop["detail"]["speed_from_kmh"] == pytest.approx(132.0, abs=1.0)
+    spun = _lap([(30.0, 0.0, 180.0, 180.0), _SPIN] + _ROCK)
+    [line] = _lines(spun)
+    assert line.startswith("spin at 1,5")
+    assert line.endswith(", turned 200°, then stuck 17.7 s (under 10 km/h)")
+
+
+def test_the_speed_a_stop_came_down_from_is_the_peak_before_it():
+    """A stop braked into with a lift in the middle (98 -> 20, back up to 23, -> 0): the
+    first cut's walk back while speed was still falling stopped at the lift and
+    printed '23 -> 0'. The peak over the 5 s before the stop is 98."""
+    rec = _lap([(40.0, 0.0, 98.0, 98.0), (2.0, 0.0, 98.0, 20.0), (0.5, 0.0, 20.0, 23.0),
+                (1.5, 0.0, 23.0, 0.0), (5.0, 0.0, 0.0, 0.0), (3.0, 0.0, 0.0, 60.0)])
+    [stop] = _stops(rec)
+    assert stop["detail"]["speed_from_kmh"] == pytest.approx(98.0, abs=1.0)
+
+
+def test_pit_box_grid_and_crawl_are_not_stops_but_a_crash_on_an_in_lap_is():
+    # the pit box at limiter speed, on a pit lap and on a lap with no pit record
+    for kw in ({"pit": True}, {"pit": None},
+               {"partial": "in", "lap_time": None, "valid": False},
+               {"partial": "out", "lap_time": None, "valid": False}):
+        assert _stops(_lap(_PIT_BOX, **kw)) == [], kw
+    # a lap whose buffer began standing (the grid, a standing start)
+    assert _stops(_lap([(6.0, 0.0, 0.0, 0.0), (8.0, 0.0, 0.0, 150.0)])) == []
     # ~1.2 s under 10 km/h is a crawl through a slow corner, not a stop
-    assert stops(_lap([(20.0, 0.0, 60.0, 60.0), (1.0, 0.0, 60.0, 0.0),
-                       (0.5, 0.0, 0.0, 0.0), (3.0, 0.0, 0.0, 60.0)])) == []
+    assert _stops(_lap([(20.0, 0.0, 60.0, 60.0), (1.0, 0.0, 60.0, 0.0),
+                        (0.5, 0.0, 0.0, 0.0), (3.0, 0.0, 0.0, 60.0)])) == []
+    # braked in from racing speed: a stop even on an in-lap or a pit-flagged lap
+    for kw in ({"pit": True}, {"pit": None},
+               {"partial": "in", "lap_time": None, "valid": False}):
+        assert len(_stops(_lap(_STOP, **kw))) == 1, kw
+
+
+def test_a_stop_on_the_lap_in_progress_is_reported_not_no_incidents(tmp_path):
+    """The driver's complaint: stop on track, ask, and hear nothing happened -- the
+    live scan's record is a partial, which the first cut never looked at."""
+    rec = _lap([(40.0, 0.0, 135.0, 135.0), (3.0, 0.0, 135.0, 0.0), (7.0, 0.0, 0.0, 0.0)])
+    ctx = CoachContext(None, cmap=_CMAP, on_track=True)
+    ctx._provisional = lambda: ({"incidents": lap_incidents(rec.channels, _CMAP)}, [],
+                                "Lap: game lap 4 so far")
+    out = ctx._this_lap_events()
+    assert "stopped at 1,5" in out and "135 \N{RIGHTWARDS ARROW} 0 km/h, stuck 7." in out
+    assert "no incidents" not in out
+    # a pit-box stop on the live lap is not one
+    box = _lap(_PIT_BOX)
+    ctx._provisional = lambda: ({"incidents": lap_incidents(box.channels, _CMAP)}, [],
+                                "Lap: game lap 4 so far")
+    assert "stopped" not in ctx._this_lap_events()
 
 
 def test_a_stop_after_a_spin_folds_into_it_and_one_after_a_hit_says_so():
@@ -130,11 +208,44 @@ def test_a_stop_after_a_spin_folds_into_it_and_one_after_a_hit_says_so():
                  (5.0, 0.0, 0.0, 0.0), (3.0, 0.0, 0.0, 80.0)])
     [line] = _lines(spun)
     assert line.startswith("spin at 1,5")
-    assert line.endswith(", turned 200°, then stopped 5.7 s under 10 km/h")
+    assert line.endswith(", turned 200°, then stuck 5.7 s (under 10 km/h)")
     hit = _lap(_STOP, hit_at_m=1480.0)
     [line] = _lines(hit)
     assert line.startswith("stopped at 1,5")
-    assert line.endswith("7.7 s under 10 km/h, right after contact there")
+    assert line.endswith("stuck 7.7 s (under 10 km/h), right after contact there")
+
+
+def test_a_crash_spin_in_an_in_lap_tail_folds_into_its_stop_at_the_stop_place():
+    """Long Beach 7573/7583 (in-laps): wall at 2550 m, spin, stuck -- the spin's own
+    slowest sample sat in the tail past the last distance knot (NaN), so it printed
+    'spin at nan m' after a separate 'stopped at 2,553 m'."""
+    rec = _lap([(30.0, 0.0, 180.0, 180.0), _SPIN, (1.0, 0.0, 30.0, 0.0),
+                (5.0, 0.0, 0.0, 0.0)], partial="in", lap_time=None, valid=False)
+    v = rec.channels["speed"]
+    lo = int(np.flatnonzero(v < 10)[0])                    # the stop starts here
+    slowest = lo + int(np.argmin(np.where(v[lo:] > 5.0, v[lo:], np.inf)))
+    d = np.cumsum(np.r_[0.0, v[1:] * _SPEED_KMH_TO_MS / _HZ])
+    d[slowest:] = np.nan                                  # the spin's slowest: no place
+    rec = dataclasses.replace(rec, channels=dict(rec.channels, lap_distance=d))
+    [spin] = _spin_events(rec, _CMAP)
+    assert math.isnan(spin["lap_distance"])               # the fixture's premise
+    [line] = _lines(rec)
+    assert line.startswith("spin at 1,5") and "nan" not in line and "unknown" not in line
+    assert line.endswith(", turned 200°, then stuck 5.3 s (under 10 km/h)")
+
+
+def test_a_spin_or_hit_after_the_stop_did_not_cause_it():
+    """Cause is order, not only distance: a hit taken pulling away, or a spin on the
+    restart, is its own line -- not 'right after contact', not folded."""
+    hit = _lap(_STOP, hit_at_m=1530.0)                     # hit while pulling away
+    [stop] = _stops(hit)
+    assert stop["detail"]["after_contact"] is False
+    assert damage_events(hit.channels)[0]["lap_distance"] > stop["lap_distance"]
+    rec = _lap([(40.0, 0.0, 132.0, 132.0), (3.0, 0.0, 132.0, 0.0), (7.0, 0.0, 0.0, 0.0),
+                (3.0, 0.0, 0.0, 60.0), (2.0, 200.0, 60.0, 5.0), (3.0, 0.0, 5.0, 40.0)])
+    lines = _lines(rec)
+    assert [x.split(" at ")[0] for x in lines] == ["stopped", "spin"]
+    assert "then stuck" not in lines[1]
 
 
 def test_a_scan_still_behind_the_line_prints_no_negative_distance():

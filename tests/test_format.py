@@ -644,7 +644,7 @@ def test_format_tire_trend_road_atlanta_pace_drop_is_not_called_degradation():
 def test_format_tire_trend_names_the_incident_laps_left_out():
     from simcoach.format import format_tire_trend
     out = format_tire_trend(_trend_result(incident_laps=2, pace_laps=6))
-    assert "2 incident laps (spin/off/contact) left out of the pace trend" in out
+    assert "2 incident laps (spin/stop/off/contact) left out of the pace trend" in out
 
 
 def test_format_tire_trend_says_so_when_no_pace_trend_is_readable():

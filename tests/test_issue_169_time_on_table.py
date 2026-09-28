@@ -405,7 +405,7 @@ def test_get_time_on_table_finds_the_time_on_the_best_lap(tmp_path, synthetic_la
     assert lines[1] == ("Optimal lap from your best sectors this session: 1:32.500, 0.20 s "
                         "under this lap:")
     assert lines[2] == "  S1 (T1) 0.20 s on practice lap 1."
-    assert "Quicker S1 (T1) on practice lap 7 doesn't count: a spin or an off" in out
+    assert "Quicker S1 (T1) on practice lap 7 doesn't count: a spin, a stop or an off" in out
     # All-time: the same as this session's optimal (no other session), so not
     # repeated -- and never the 1:32.300 the off lap's 30.20 S1 would make.
     assert "All-time here in this car: best 1:32.700 (this lap)." in out
@@ -481,7 +481,7 @@ def test_get_optimal_seconds_none_when_subjects_own_sector_dropped(tmp_path, syn
     _save(store, off, 90.0, 1, 1, sectors=[29.0, 31.0, 31.0], sector_bounds=bounds)
     _save(store, synthetic_lap, 91.0, 2, 2, sectors=[30.0, 30.8, 31.2], sector_bounds=bounds)
     ctx = _ctx(store)
-    assert "This lap's own S1 (T1) had a spin or an off" in ctx.get_time_on_table()
+    assert "This lap's own S1 (T1) had a spin, a stop or an off" in ctx.get_time_on_table()
     assert ctx.get_optimal_seconds() is None
 
 
@@ -531,7 +531,7 @@ def test_own_sector_with_an_off_is_the_baseline_never_a_negative_gain():
         {"key": "A", "sectors": [30.0, 31.3, 31.4], "incidents": []},
         {"key": "B", "sectors": [30.1, 31.2, 31.3], "incidents": []}])
     assert "no clean sector of yours beat this lap's" in text
-    assert "This lap's own S1 (T1) had a spin or an off: not counted as a best sector." in text
+    assert "This lap's own S1 (T1) had a spin, a stop or an off: not counted as a best sector." in text
     assert "every sector is your best" not in text and "on this lap doesn't count" not in text
     assert not re.search(r"-\d+\.\d\d s under", text)
     assert "at your own limit everywhere" not in text
@@ -543,7 +543,7 @@ def test_own_sector_with_an_off_is_the_baseline_never_a_negative_gain():
     assert text.splitlines()[0] == ("0.20 s from your best clean sectors this session: "
                                     "S2 (T2) 0.20 s on lap A.")
     assert "Optimal lap" not in text and "1:31.300" not in text
-    assert "This lap's own S1 (T1) had a spin or an off" in text
+    assert "This lap's own S1 (T1) had a spin, a stop or an off" in text
 
 
 def _table_all_time(lap_time, sectors, laps, best, other):

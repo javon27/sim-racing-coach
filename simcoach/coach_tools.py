@@ -1964,7 +1964,7 @@ class CoachContext:
         """(analyses, lap_times, incident) for one stint -- session + phase, valid laps
         only, telemetry-backed laps only, in lap order. Shared by `get_consistency` and
         `get_tire_trend`, which only differ in which pure function they feed it to.
-        `incident[i]` flags a spin/off/contact lap (#161: kept out of the pace trend).
+        `incident[i]` flags a spin/stop/off/contact lap (#161: kept out of the pace trend).
 
         The stint starts after the LAST stop -- a pit, out- or in-lap, the same rule
         `RaceTracker.commit` uses (#161 red-team: Road Atlanta's puncture stop read as
