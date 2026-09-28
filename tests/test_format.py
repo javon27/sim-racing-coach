@@ -514,21 +514,25 @@ def _ev(kind, corner_no, **detail):
 
 
 def test_format_events_spin_line():
-    ev = _ev("spin", 2, speed_from_kmh=178.0, speed_min_kmh=32.0, turned_deg=195.0)
+    ev = dict(_ev("spin", 2, speed_from_kmh=178.0, speed_min_kmh=32.0, turned_deg=195.0),
+              lap_distance=2200.0)
     assert format_events([ev], _CMAP) == [
-        "T2 Right Sweeper: spin — 178 → 32 km/h, turned 195°"]
+        "spin at 2,200 m (T2 Right Sweeper) — 178 → 32 km/h, turned 195°"]
 
 
 def test_format_events_spin_line_imperial():
-    ev = _ev("spin", 2, speed_from_kmh=178.0, speed_min_kmh=32.0, turned_deg=195.0)
+    ev = dict(_ev("spin", 2, speed_from_kmh=178.0, speed_min_kmh=32.0, turned_deg=195.0),
+              lap_distance=2200.0)
     assert format_events([ev], _CMAP, "imperial") == [
-        "T2 Right Sweeper: spin — 111 → 20 mph, turned 195°"]
+        "spin at 2,200 m (T2 Right Sweeper) — 111 → 20 mph, turned 195°"]
 
 
-def test_format_events_spin_off_the_map_has_no_corner_tag():
-    ev = _ev("spin", None, speed_from_kmh=178.0, speed_min_kmh=32.0, turned_deg=195.0)
+def test_format_events_spin_between_corners_is_placed_between_them():
+    ev = dict(_ev("spin", None, speed_from_kmh=178.0, speed_min_kmh=32.0, turned_deg=195.0),
+              lap_distance=1500.0)
     assert format_events([ev], _CMAP) == [
-        "spin — 178 → 32 km/h, turned 195°"]
+        ("spin at 1,500 m, between T1 Left Hairpin and T2 Right Sweeper — 178 → 32 km/h, "
+         "turned 195°")]
 
 
 def test_format_events_lockup_and_wheelspin_lines():
@@ -681,7 +685,7 @@ def test_damage_line_groups_impacts_by_place():
     two = format_damage_line(_impacts((755.7, "front-right", 4734.0),
                                       (1264.6, "rear-right", 1029.0),
                                       (1269.6, "front-left", 145.0)), {})
-    assert two == ("Contact: 3 impacts at 756 m (front-right), 1,265 m (rear-right, "
+    assert two == ("Contact: 3 impacts at 756 m (front-right); 1,265 m (rear-right, "
                    "front-left), heaviest 4734 at 756 m.")
     one = format_damage_line(_impacts((1392.1, "front-left", 1135.0),
                                       (1420.1, "front-right", 990.0),
@@ -701,7 +705,7 @@ def test_damage_line_heaviest_is_placed_at_its_group_not_its_own_distance():
     line = format_damage_line(_impacts((742.8, "front-left", 1968.6),
                                        (756.5, "rear-left", 2710.6),
                                        (2839.0, "front-left", 336.9)), {})
-    assert line == ("Contact: 3 impacts at 743 m (front-left, rear-left), 2,839 m "
+    assert line == ("Contact: 3 impacts at 743 m (front-left, rear-left); 2,839 m "
                     "(front-left), heaviest 2711 at 743 m.")
 
 
@@ -712,7 +716,7 @@ def test_damage_line_group_span_is_capped_not_chained():
     line = format_damage_line(_impacts((854.2, "rear", 4944.0), (879.5, "front-left", 902.0),
                                        (895.9, "front-left", 218.0),
                                        (904.7, "front-left", 35.0)), {})
-    assert line == ("Contact: 4 impacts at 854 m (rear, front-left), 896 m (front-left), "
+    assert line == ("Contact: 4 impacts at 854 m (rear, front-left); 896 m (front-left), "
                     "heaviest 4944 at 854 m.")
 
 
@@ -723,6 +727,6 @@ def test_damage_line_never_prints_nan_metres():
     two = format_damage_line(_impacts((763.0, "front-right", 90.0),
                                       (math.nan, "rear-left", 500.0),
                                       (math.nan, "rear", 20.0)), {})
-    assert two == ("Contact: 3 impacts at 763 m (front-right), an unknown point "
+    assert two == ("Contact: 3 impacts at 763 m (front-right); an unknown point "
                    "(rear-left, rear), heaviest 500.")
     assert "nan" not in one + two

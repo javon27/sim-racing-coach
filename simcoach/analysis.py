@@ -1819,6 +1819,58 @@ def _spin_events(record: LapRecord, cmap: CornerMap) -> list[dict]:
     return out
 
 
+# #210: a stop -- under _STOP_KMH for _STOP_S or more (Long Beach race lap 4: 132 -> 0
+# on the brake at 3046 m, 7.7 s, no rotation, no hit). ponytail: flat knobs; a rig
+# stop that goes unreported, or a slow hairpin that reports, is what moves them.
+_STOP_KMH = 10.0
+_STOP_S = 1.5
+# A spin or hit this close to the stop is what stopped the car.
+_STOP_CAUSE_M = 100.0
+
+
+def _stop_events(record: LapRecord, cmap: CornerMap, spins: list[dict]) -> list[dict]:
+    """Stops on track. Complete, pit-free laps only: a pit box (out/in laps), race lap
+    0's grid and a post-flag cool-down are all partial laps -- and never a stop the lap
+    began in. Timed off the game clock: `_sample_time` falls back to ds/v at LMU's S/F
+    seam, where a car standing still takes no time. A stop within _STOP_CAUSE_M of a
+    spin is folded into that spin (its `stopped_s`), not a second incident; one near
+    an impact -- a separate contact line -- is annotated (`after_contact`)."""
+    ch = record.channels
+    et = ch.get("elapsed_time", ch.get("time"))
+    if record.partial is not None or record.pit or et is None:
+        return []
+    v = np.asarray(ch["speed"], dtype=float)
+    d = _interp_lap_distance(record)
+    et = np.asarray(et, dtype=float)
+    n = min(v.size, d.size, et.size)
+    slow = np.r_[0, (v[:n] < _STOP_KMH).astype(int), 0]
+    edges = np.diff(slow)
+    hits = [e["lap_distance"] for e in damage_events(ch)]
+    out = []
+    for lo, hi in zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1) - 1):
+        stopped = float(et[hi] - et[lo])
+        if lo == 0 or not stopped >= _STOP_S:
+            continue
+        k = lo            # back up the braking to where it began: the speed it stopped from
+        while k > 0 and v[k - 1] >= v[k]:
+            k -= 1
+        spin = next((s for s in spins if abs(s["lap_distance"] - d[lo]) <= _STOP_CAUSE_M),
+                    None)
+        if spin is not None:
+            spin["detail"]["stopped_s"] = stopped
+            continue
+        out.append({
+            "kind": "stop",
+            "corner_no": _corner_at(cmap, d[lo]),
+            "lap_distance": float(d[lo]),
+            "detail": {"speed_from_kmh": float(v[k]),
+                       "speed_min_kmh": float(np.nanmin(v[lo:hi + 1])),
+                       "stopped_s": stopped,
+                       "after_contact": any(abs(x - d[lo]) <= _STOP_CAUSE_M for x in hits)},
+        })
+    return out
+
+
 def _wear_step_events(record: LapRecord, cmap: CornerMap, baseline: dict) -> list[dict]:
     """Per-wheel wear STEPS: this lap's wear against the stint's own median. A step
     on one lap at one corner is a flat spot; a slope across the stint is
@@ -1859,13 +1911,15 @@ def lap_events(record: LapRecord, cmap: CornerMap, analysis: "LapAnalysis | None
     """Everything that went wrong on one lap, in along-lap order:
     `{"kind", "corner_no", "lap_distance", "detail"}` per incident.
 
-    kinds: "spin" (path rotation with a speed collapse), "off" (wheels on
+    kinds: "spin" (path rotation with a speed collapse), "stop" (#210: stopped on
+    track, `_stop_events`), "off" (wheels on
     grass/dirt/gravel -- `CornerMetrics.off_surface`; never from track_edge, so a
     lap captured without surface channels has no offs), "lockup"/"wheelspin"
     (pass-through of the per-corner reads), "wear_step" (a flat spot). `wear_baseline` comes from `stint_wear_baseline`
     over the stint's laps; without one the wear kind is skipped entirely rather
     than guessed against a single lap."""
     events = _spin_events(record, cmap)
+    events += _stop_events(record, cmap, events)
     for cm in (analysis.corners if analysis is not None else []):
         if cm.lockup:
             events.append({"kind": "lockup", "corner_no": cm.corner_no,
@@ -1885,11 +1939,11 @@ def lap_events(record: LapRecord, cmap: CornerMap, analysis: "LapAnalysis | None
 
 def is_incident_lap(record: LapRecord, cmap: CornerMap,
                     analysis: "LapAnalysis | None") -> bool:
-    """#161: a lap slowed by a spin, an off or contact -- the same detection
+    """#161: a lap slowed by a spin, a stop, an off or contact -- the same detection
     get_stint_events reports -- so its lap time says nothing about the tires.
     Lockups/wheelspin are corner-level and don't cost a lap on their own."""
     return bool(damage_events(record.channels)) or any(
-        e["kind"] in ("spin", "off") for e in lap_events(record, cmap, analysis))
+        e["kind"] in ("spin", "stop", "off") for e in lap_events(record, cmap, analysis))
 
 
 # #206: the ONE reader of mLastImpactPos's frame -- every consumer (damage_events,

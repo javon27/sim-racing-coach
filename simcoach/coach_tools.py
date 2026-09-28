@@ -1823,11 +1823,11 @@ class CoachContext:
         return identity + "\n" + format_time_loss(buckets, ref_label)
 
     def _incidents(self, record, lap_id) -> list[float]:
-        """Lap distances of this lap's spins and offs (#169: a sector or a corner
+        """Lap distances of this lap's spins, stops and offs (#169: a sector or a corner
         segment a lap ran off in is never a best)."""
         return [e["lap_distance"] for e in
                 lap_events(record, self.cmap, self._analysis_for(record, lap_id))
-                if e["kind"] in ("spin", "off")]
+                if e["kind"] in ("spin", "stop", "off")]
 
     def _class_benchmark(self):
         """(class, 'm:ss.mmm', seconds) from the track notes' reference_times for this
@@ -2132,7 +2132,7 @@ class CoachContext:
             # (or one captured before #143, with no damage channels at all) says
             # nothing here rather than a "no damage" line on every lap.
             damage_line = format_damage_line(damage_events(record.channels),
-                                             damage_state(record.channels))
+                                             damage_state(record.channels), self.cmap)
             if damage_line:
                 out.append(f"  {damage_line}")
                 contact = True
@@ -2288,7 +2288,9 @@ class CoachContext:
         incidents += incident_lines(scan, self.cmap, self.units)
         if incidents:
             out.extend(f"  {line}" for line in incidents)
-        elif scan.get("scanned_to") is not None:
+        # #210: a buffer still behind the line (an out-lap before it) reads a negative
+        # lap distance -- "scanned to -241 m" is no measured reach; the line is dropped.
+        elif (scan.get("scanned_to") or -1) >= 0:
             out.append(f"  no incidents so far (whole lap scanned to "
                        f"{scan['scanned_to']:,.0f} m)")
         if offs_note:

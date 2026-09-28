@@ -2174,7 +2174,7 @@ def test_get_stint_events_names_the_lap_and_the_corner(tmp_path, synthetic_lap):
     ctx, _ = _events_session(tmp_path, synthetic_lap)
     out = ctx.dispatch("get_stint_events", {})
     assert "race lap 2" in out and "race lap 3" in out
-    assert "T2 Right Sweeper: spin" in out
+    assert "spin at 2,231 m (T2 Right Sweeper)" in out   # #210: placed
     assert "FR wear step" in out and "T1 Left Hairpin" in out
     # the two clean laps say so rather than going unmentioned
     assert out.count("\n  none") == 2

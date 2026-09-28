@@ -22,11 +22,9 @@ from types import SimpleNamespace
 import numpy as np
 
 from .analysis import (
-    _corner_at,
     _damage_label,
     _is_impact,
     _metrics_for_corner,
-    corner_tag,
     damage_events,
     damage_state,
     lap_events,
@@ -34,7 +32,7 @@ from .analysis import (
     tag_sections,
 )
 from .corners import in_window
-from .format import SUSPENSION_UNSEEN, format_events
+from .format import SUSPENSION_UNSEEN, format_events, place_text
 from .model_types import LapRecord
 
 # ponytail: a flat 0.5 s look, so a corner lands at most ~0.5 s after its window end.
@@ -84,23 +82,6 @@ def driven_corners(cmap, dist) -> list:
             if c.start_dist <= c.end_dist and d[0] <= c.start_dist and d.max() > c.end_dist]
 
 
-def place_text(cmap, dist: float) -> str:
-    """'1,152 m (T3 Name)' inside a corner window, '1,152 m, between T3 Name and T4
-    Name' outside every window -- most of a lap is between corners."""
-    at = f"{dist:,.0f} m"
-    corners = sorted(getattr(cmap, "corners", None) or [], key=lambda c: c.start_dist)
-    if not corners or not math.isfinite(dist):
-        return at
-    n = _corner_at(cmap, dist)
-    c = next((c for c in corners if c.number == n), None)
-    if c is not None:
-        return f"{at} ({corner_tag(c)})"
-    before = [c for c in corners if c.start_dist < dist]
-    after = [c for c in corners if c.start_dist > dist]
-    prev, nxt = (before or corners)[-1], (after or corners)[0]
-    return f"{at}, between {corner_tag(prev)} and {corner_tag(nxt)}"
-
-
 def impact_text(e: dict, cmap, now_et: float | None = None) -> str:
     """'impact 365 at 1,004 m (T1 Left Hairpin), front-left, 12 s ago'. Magnitude is
     the game's raw, unitless number (#143) -- never tiered."""
@@ -113,16 +94,9 @@ def impact_text(e: dict, cmap, now_et: float | None = None) -> str:
 
 def incident_lines(incidents: dict, cmap, units: str = "metric") -> list[str]:
     """Lap-wide scan -> driver lines; an incident between windows is placed by
-    distance and its neighbouring corners instead of being dropped."""
-    out = []
-    for e in incidents.get("events", []):
-        line = format_events([e], cmap, units)
-        if not line:
-            continue
-        if e.get("corner_no") is None:
-            line[0] += f" at {place_text(cmap, e['lap_distance'])}"
-        out.append(line[0])
-    return out + [impact_text(e, cmap) for e in incidents.get("impacts", [])]
+    distance and its neighbouring corners (`format_events` places every spin)."""
+    return (format_events(incidents.get("events", []), cmap, units)
+            + [impact_text(e, cmap) for e in incidents.get("impacts", [])])
 
 
 def lap_incidents(channels: dict, cmap) -> dict:

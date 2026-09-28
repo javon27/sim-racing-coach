@@ -9,7 +9,9 @@ from simcoach.analysis import (
     _ENVELOPE_MIN_LAPS,
     _FORM_FLOOR_S,
     _FORM_MIN_LAPS,
+    _STOP_KMH,
     PHASES,
+    _corner_at,
     _sector_of,
     corner_tag,
     optimal_headline,
@@ -773,19 +775,47 @@ def _event_corner_tag(cmap, corner_no) -> str:
     return f"T{corner_no}"
 
 
+def place_text(cmap, dist: float) -> str:
+    """'1,152 m (T3 Name)' inside a corner window, '1,152 m, between T3 Name and T4
+    Name' outside every window -- most of a lap is between corners."""
+    at = f"{dist:,.0f} m"
+    corners = sorted(getattr(cmap, "corners", None) or [], key=lambda c: c.start_dist)
+    if not corners or not math.isfinite(dist):
+        return at
+    n = _corner_at(cmap, dist)
+    c = next((c for c in corners if c.number == n), None)
+    if c is not None:
+        return f"{at} ({corner_tag(c)})"
+    before = [c for c in corners if c.start_dist < dist]
+    after = [c for c in corners if c.start_dist > dist]
+    prev, nxt = (before or corners)[-1], (after or corners)[0]
+    return f"{at}, between {corner_tag(prev)} and {corner_tag(nxt)}"
+
+
 def format_events(events, cmap, units: str = "metric") -> list[str]:
     """One driver-facing line per incident from `analysis.lap_events`, corner-tagged
-    the way corner lines are. Every number here is measured; nothing is hedged."""
+    the way corner lines are. Every number here is measured; nothing is hedged.
+    #210: a spin or a stop is placed by its own distance (`place_text`) -- a line
+    with no corner tag read as part of the previous corner's."""
     spd, _, spd_u, _ = unit_fns(units)
     lines = []
     for e in events:
         tag = _event_corner_tag(cmap, e.get("corner_no"))
         head = f"{tag}: " if tag else ""
         kind, d = e["kind"], e.get("detail") or {}
-        if kind == "spin":
-            lines.append(f"{head}spin \N{EM DASH} {spd(d['speed_from_kmh']):.0f} "
-                         f"\N{RIGHTWARDS ARROW} {spd(d['speed_min_kmh']):.0f} {spd_u}, "
-                         f"turned {d['turned_deg']:.0f}\N{DEGREE SIGN}")
+        if kind in ("spin", "stop"):
+            line = (f"{'spin' if kind == 'spin' else 'stopped'} at "
+                    f"{place_text(cmap, e['lap_distance'])} \N{EM DASH} "
+                    f"{spd(d['speed_from_kmh']):.0f} \N{RIGHTWARDS ARROW} "
+                    f"{spd(d['speed_min_kmh']):.0f} {spd_u}, ")
+            stop = (f"{d['stopped_s']:.1f} s under {spd(_STOP_KMH):.0f} {spd_u}"
+                    if "stopped_s" in d else "")
+            if kind == "spin":
+                line += f"turned {d['turned_deg']:.0f}\N{DEGREE SIGN}"
+                line += f", then stopped {stop}" if stop else ""
+            else:
+                line += stop + (", right after contact there" if d["after_contact"] else "")
+            lines.append(line)
         elif kind == "off":
             # #207: read from the wheels' surface, not track_edge, whose metres
             # figure is unvalidated and withheld everywhere (the corner line too).
@@ -810,7 +840,7 @@ SUSPENSION_UNSEEN = ("suspension and mechanical damage are not visible in the te
 _IMPACT_GROUP_M = 30.0
 
 
-def format_damage_line(events: list, state: dict) -> str | None:
+def format_damage_line(events: list, state: dict, cmap=None) -> str | None:
     """One line for a lap that took contact, or None for a clean lap -- and None
     for a lap with no damage channels (older capture), never implied clean.
     Impact magnitude and dent severity are raw, unitless numbers (#143: the only
@@ -836,7 +866,8 @@ def format_damage_line(events: list, state: dict) -> str | None:
         home.append(len(groups) - 1)
     n = len(events)
     hi = max(range(n), key=lambda i: events[i]["magnitude"])
-    places = ", ".join((f"{d:,.0f} m" if math.isfinite(d) else "an unknown point")
+    # #210: each place on the corner map; "; " between places, as one may hold a comma.
+    places = "; ".join((place_text(cmap, d) if math.isfinite(d) else "an unknown point")
                        + f" ({', '.join(sides)})" for d, sides in groups)
     line = (f"Contact: {n} impact{'s' if n != 1 else ''} at {places}, "
             f"{'heaviest' if n > 1 else 'magnitude'} {events[hi]['magnitude']:.0f}")
