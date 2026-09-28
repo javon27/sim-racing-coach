@@ -1061,8 +1061,10 @@ class CoachContext:
         if words not in ("", "latest") + _WHOLE_RACE:
             m = re.fullmatch(r"(?:the )?race (\d+)", words)
             if m is None:
+                one = (f" For one lap use get_lap_summary({words!r})."
+                       if re.fullmatch(r"race (\d+ )?lap \d+", words) else "")
                 return None, (f"which must name a race like 'race 2' (this session holds "
-                              f"{held}), not {which!r}.")
+                              f"{held}), not {which!r}.{one}")
             want = int(m[1])
         if race is not None:
             try:   # a whole number only: 1.5 is not race 1
@@ -2450,7 +2452,11 @@ class CoachContext:
             seen.add(name)
             laps.append(f"{name} P{r['position']}" + (" (invalidated)" if b else "")
                         + (f" ({kind})" if kind else ""))
-        out = [f"Per-lap positions (overall) from race lap 1: {', '.join(laps)}."]
+        # #204: the header names where the list starts -- capture can miss race lap 1,
+        # and a legacy window's second race numbers on from the first.
+        first = label_by_id.get(rows[0]["id"], "lap id " + str(rows[0]["id"]))
+        start = "race lap 1" if first.endswith(" lap 1") else first
+        out = [f"Per-lap positions (overall) from {start}: {', '.join(laps)}."]
         if any(bad):
             out.append("An invalidated lap was RACED -- a racing lap LMU didn't time (an off "
                        "or a cut), never the cool-down.")

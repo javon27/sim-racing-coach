@@ -267,7 +267,7 @@ def test_legacy_laps_without_lap_no_cannot_split(tmp_path, synthetic_lap):
     # race 2's own laps (race_ts..next_race_ts), as its arc does -- not all eleven.
     out = ctx.get_race_result()
     assert "Finished P35 overall" in out and "over 6 captured lap(s)" in out
-    assert _tail(out) == ("Per-lap positions (overall) from race lap 1: race lap 6 P25, "
+    assert _tail(out) == ("Per-lap positions (overall) from race lap 6: race lap 6 P25, "
                           "race lap 7 P28, race lap 8 P29, race lap 9 P29, race lap 10 "
                           "P28, race lap 11 P29.")
 
@@ -376,3 +376,29 @@ def test_race_session_which_last_lap_is_the_normal_scan(tmp_path, synthetic_lap)
     assert ctx.dispatch("get_stint_events", {"which": "last lap"}) == normal
     assert ctx.dispatch("get_stint_events", {"which": "the race"}) == ctx.dispatch(
         "get_stint_events", {"phase": "race"})
+
+
+
+def test_positions_header_names_where_capture_started(tmp_path, synthetic_lap):
+    """Capture missed race lap 1 (the real Spa Iron Dames 2026-09-15 shape): the header
+    says the list starts at lap 2, not 'from race lap 1'. A list from lap 1 keeps it."""
+    rows = [r for r in _ROWS[:22] if not (r[1] == "race" and r[2] < 2)]
+    out = _ctx(tmp_path, synthetic_lap, logs=(R1,), rows=rows).get_race_result()
+    assert _tail(out).startswith("Per-lap positions (overall) from race lap 2: race lap 2 "
+                                 "P6, race lap 3 P10,")
+    full = _ctx(tmp_path / "full", synthetic_lap, logs=(R1,), rows=_ROWS[:22])
+    assert _tail(full.get_race_result()).startswith(
+        "Per-lap positions (overall) from race lap 1: race lap 1 P6,")
+    assert _tail(_ctx(tmp_path / "multi", synthetic_lap).get_race_result(race=2)).startswith(
+        "Per-lap positions (overall) from race lap 1: race 2 lap 1 P3,")
+
+
+def test_a_lap_which_points_at_get_lap_summary(tmp_path, synthetic_lap):
+    ctx = _ctx(tmp_path, synthetic_lap)
+    held = "this session holds 3 races, race 1 to race 3"
+    for which in ("race lap 5", "race 2 lap 5"):
+        assert ctx.dispatch("get_stint_events", {"which": which}) == (
+            f"which must name a race like 'race 2' ({held}), not {which!r}. For one lap "
+            f"use get_lap_summary({which!r}).")
+    assert ctx.dispatch("get_race_result", {"which": "the first race"}).endswith(
+        "not 'the first race'.")
