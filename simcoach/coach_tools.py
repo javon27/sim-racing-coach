@@ -430,7 +430,8 @@ TOOLS = [
         "description": "LIVE SESSION ONLY. The car right now, read live from the game: "
                        "impacts since the start of THIS lap (where, which side, how hard), "
                        "bodywork dent severity, detached parts or wheels, flat tires, engine "
-                       "overheating, and whether the car is on track, in the pit lane or in "
+                       "overheating (NOT suspension or mechanical damage: the game doesn't "
+                       "report it), and whether the car is on track, in the pit lane or in "
                        "the garage. Use for 'check my car', 'am I damaged', 'did I just hit "
                        "something', 'is a wheel off'.",
         "input_schema": {"type": "object", "properties": {}},

@@ -801,6 +801,13 @@ def format_events(events, cmap, units: str = "metric") -> list[str]:
     return lines
 
 
+# #206: dent severity is bodywork only -- the rF2 buffers carry no suspension or
+# mechanical damage field, and a low dent read sat beside real FR suspension damage
+# at Long Beach. Said wherever dent severity is, so it never passes for "undamaged".
+SUSPENSION_UNSEEN = ("suspension and mechanical damage are not visible in the telemetry "
+                     "-- dent severity says nothing about them")
+
+
 def format_damage_line(events: list, state: dict) -> str | None:
     """One line for a lap that took contact, or None for a clean lap -- and None
     for a lap with no damage channels (older capture), never implied clean.
@@ -827,6 +834,7 @@ def format_damage_line(events: list, state: dict) -> str | None:
         flags.extend(f"{w.upper()} wheel detached" for w in state.get("wheels_detached", []))
         if flags:
             line += "; " + ", ".join(flags)
+        line += f". Note: {SUSPENSION_UNSEEN}"
     return line + "."
 
 

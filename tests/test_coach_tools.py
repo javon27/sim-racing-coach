@@ -2211,7 +2211,8 @@ def _damage_session(tmp_path, synthetic_lap):
             ch[f"wheel_detached_{w}"] = np.zeros(n)
         return dataclasses.replace(base, channels=ch)
 
-    def hit_at(base, dist=1240.0, et=2178.5, mag=365.47, x=-1.02, z=1.75):
+    # #206: the first lap-19 Long Beach impact (id 7759), front-right in the rF2 frame
+    def hit_at(base, dist=1240.0, et=2178.5, mag=365.47, x=-1.08, z=-1.83):
         clean = zeroed(base)
         ch = dict(clean.channels)
         d = np.asarray(ch["lap_distance"], float)
@@ -2246,8 +2247,11 @@ def test_get_stint_events_prints_contact_for_the_damaged_lap_only(tmp_path, synt
     assert "1 impact" in line
     assert "365" in line
     assert "1,240 m" in line
-    assert "front-left" in line
+    assert "front-right" in line
     assert "dent severity max 1" in line
+    # #206: dent severity never stands in for "undamaged"
+    assert "suspension and mechanical damage are not visible" in line
+    assert "cosmetic" not in line.lower() and " fine" not in line.lower()
 
 
 def test_get_stint_events_is_silent_on_a_clean_or_pre_143_lap(tmp_path, synthetic_lap):

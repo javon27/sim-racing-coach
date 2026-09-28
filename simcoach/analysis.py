@@ -1866,18 +1866,26 @@ def is_incident_lap(record: LapRecord, cmap: CornerMap,
         e["kind"] in ("spin", "off") for e in lap_events(record, cmap, analysis))
 
 
-# #143: a hit's side/end label is read off local-vehicle mLastImpactPos, per the
-# 2026-09-20 rig convention (x negative = left, z positive = front). A dead zone
-# near x=0 is what keeps a centred hit reading "front" instead of a coin-flip
-# "front-left" -- not measured, a guessed geometric width, so kept as one knob.
+# #206: the ONE reader of mLastImpactPos's frame -- every consumer (damage_events,
+# livelap's car status) labels a hit through `_damage_label`, never its own signs.
+# mLastImpactPos is in the rF2 local vehicle frame, the same frame the verified
+# accel channels are read in (mLocalAccel): +x = LEFT (lat_g > 0 in a left turn,
+# ribbon.multi_signal_direction), +z = REAR (long_g > 0 under braking,
+# raceline._calibrate). So x < 0 is the right side and z < 0 the front.
+# #143 shipped both axes inverted, from one Imola sample (x -1.02, z +1.75) read
+# as front-left; in this frame it reads rear-right, so that hit was misattributed.
+# Long Beach lap 19 (2026-09-27, a front-right wall hit on the game's own damage
+# display) logged x -1.08 z -1.83 and x -1.04 z +1.58: front-right + rear-right.
+# A dead zone near x=0 keeps a centred hit reading "front" instead of a coin-flip
+# "front-right" -- not measured, a guessed geometric width, so kept as one knob.
 _DAMAGE_DEAD_ZONE_M = 0.15
 
 
 def _damage_label(x: float, z: float) -> str:
-    end = "front" if z >= 0 else "rear"
+    end = "front" if z <= 0 else "rear"
     if abs(x) < _DAMAGE_DEAD_ZONE_M:
         return end
-    return f"{end}-{'left' if x < 0 else 'right'}"
+    return f"{end}-{'right' if x < 0 else 'left'}"
 
 
 def damage_events(channels: dict) -> list[dict]:

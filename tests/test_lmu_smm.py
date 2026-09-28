@@ -246,8 +246,9 @@ def test_sample_from_telem_maps_driver_aid_index_channels():
 
 def test_sample_from_telem_maps_damage_channels():
     """#143, the exact 2026-09-20 rig readout (Imola, Garage 59 #10, 1.3 s after
-    a real front-left hit) -- the fixture the repo's own "tests that encode the
-    bug" lesson demands, not invented numbers."""
+    a real hit -- logged as front-left, read rear-right in the rF2 frame, #206)
+    -- the fixture the repo's own "tests that encode the bug" lesson demands, not
+    invented numbers. Capture passes x/z through raw; the side is analysis's."""
     t = make_telem()
     t.mDentSeverity = (C.c_ubyte * 8)(0, 0, 0, 0, 0, 0, 0, 1)
     t.mLastImpactET = 2178.5

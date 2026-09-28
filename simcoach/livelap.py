@@ -33,7 +33,7 @@ from .analysis import (
     tag_sections,
 )
 from .corners import in_window
-from .format import format_events
+from .format import SUSPENSION_UNSEEN, format_events
 from .model_types import LapRecord
 
 # ponytail: a flat 0.5 s look, so a corner lands at most ~0.5 s after its window end.
@@ -176,6 +176,7 @@ def car_status_text(meta: dict, ch: dict, state: dict | None, cmap) -> str:
     if st:
         lines.append(f"Bodywork: dent severity max {st['dent_max']:.0f}, total "
                      f"{st['dent_total']:.0f} (raw 0\N{EN DASH}255 scale, panel unknown).")
+        lines.append(f"Note: {SUSPENSION_UNSEEN}.")
         flags = (["bodywork part detached"] if st["detached"] else []) \
             + (["engine overheating"] if st["overheating"] else []) \
             + [f"{w.upper()} flat" for w in st["wheels_flat"]] \

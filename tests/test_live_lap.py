@@ -178,7 +178,7 @@ def test_car_status_reports_an_impact_mid_lap_and_a_detached_wheel(tmp_path, syn
     ch.update({
         "elapsed_time": np.linspace(100.0, 192.5, n), "lap_start_et": np.full(n, 100.0),
         "last_impact_et": et, "last_impact_mag": np.where(et > 10, 365.0, 20.0),
-        "last_impact_x": np.full(n, -1.0), "last_impact_z": np.full(n, 1.7),
+        "last_impact_x": np.full(n, -1.08), "last_impact_z": np.full(n, -1.83),  # #206 FR
         "dent_max": np.where(et > 10, 1.0, 0.0), "dent_total": np.where(et > 10, 1.0, 0.0),
         "detached": np.zeros(n), "overheating": np.zeros(n),
     })
@@ -192,7 +192,7 @@ def test_car_status_reports_an_impact_mid_lap_and_a_detached_wheel(tmp_path, syn
     src.drive(dataclasses.replace(lap, channels=ch), 1500)
     ctx = _ctx(store, on_track=True, live=live)
     out = ctx.dispatch("get_car_status", {})
-    assert "365" in out and "front-left" in out and "T1" in out
+    assert "365" in out and "front-right" in out and "T1" in out
     # Positive only, and marked: flat_*/wheel_detached_* are not rig-verified (#143).
     assert "FL wheel detached (unverified channel)" in out
     assert "game lap 5" in out
@@ -220,6 +220,9 @@ def test_car_status_never_states_a_negative_from_an_unverified_channel(tmp_path,
         assert claim not in out
     assert "no impacts since the start of this lap" in out    # rig-confirmed channel
     assert "dent severity max 0" in out                       # rig-confirmed channel
+    # #206: dent 0 is not "undamaged" -- suspension is invisible and it says so
+    assert "suspension and mechanical damage are not visible" in out
+    assert "cosmetic" not in out and " fine" not in out
 
 
 def test_car_status_mentions_a_hit_just_before_the_line(tmp_path, synthetic_lap):
@@ -230,7 +233,8 @@ def test_car_status_mentions_a_hit_just_before_the_line(tmp_path, synthetic_lap)
     ch = dict(lap.channels)
     ch.update({"elapsed_time": np.linspace(200.0, 292.5, n),
                "last_impact_et": np.full(n, 198.0), "last_impact_mag": np.full(n, 410.0),
-               "last_impact_x": np.full(n, 1.0), "last_impact_z": np.full(n, -1.5),
+               # #206: lap 19's first sample (id 7759), a hit carried over the line
+               "last_impact_x": np.full(n, 1.03), "last_impact_z": np.full(n, 1.54),
                "dent_max": np.ones(n), "dent_total": np.ones(n),
                "detached": np.zeros(n), "overheating": np.zeros(n)})
     store = _store(tmp_path)
@@ -238,7 +242,7 @@ def test_car_status_mentions_a_hit_just_before_the_line(tmp_path, synthetic_lap)
     live.source = src = _Source()
     src.drive(dataclasses.replace(lap, channels=ch), 20)       # just past the line
     out = _ctx(store, on_track=True, live=live).dispatch("get_car_status", {})
-    assert "lap just completed" in out and "410" in out and "rear-right" in out
+    assert "lap just completed" in out and "410" in out and "rear-left" in out
 
 
 def test_live_tools_are_gated_to_the_live_session(tmp_path, synthetic_lap):

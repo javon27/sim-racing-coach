@@ -337,9 +337,17 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
             wheels "left" is the outside, so these are named _l/_r, not
             _in/_out. tire_temp_{w} (center, mTemperature[1]) is unchanged.
       [RIG 2026-09-20] damage (#143), rig-confirmed live+populated at Imola
-        (Garage 59 #10, 1.3 s after a real front-left hit; mDentSeverity
+        (Garage 59 #10, 1.3 s after a real hit; mDentSeverity
         [0,0,0,0,0,0,0,1], mLastImpactET 2178.5, mLastImpactMag 365.47,
-        mLastImpactPos x=-1.02 y=0.20 z=1.75):
+        mLastImpactPos x=-1.02 y=0.20 z=1.75). That hit was logged as
+        front-left and #143 read the axes off it (x<0 left, z>0 front). That
+        was a misattribution, corrected in #206: mLastImpactPos is in the rF2
+        local vehicle frame, the frame mLocalAccel is verified in (lat_g > 0
+        in a left turn -> +x = LEFT; long_g > 0 under braking -> +z = REAR),
+        so the Imola sample reads rear-right. Long Beach lap 19 (2026-09-27,
+        front-right damage on the game's display after a wall hit) logged
+        x -1.08 z -1.83 and x -1.04 z +1.58, front-right + rear-right in
+        that frame. The label is owned by analysis._damage_label:
           dent_max <- max(mDentSeverity), dent_total <- sum(mDentSeverity).
             The 8-panel array itself is NOT captured per-element -- which
             index is which panel is UNVERIFIED, so a per-panel number would

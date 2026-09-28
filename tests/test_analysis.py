@@ -1914,10 +1914,10 @@ def test_damage_events_two_impacts_get_two_entries():
     assert e1["et"] == pytest.approx(2178.5)
     assert e1["magnitude"] == pytest.approx(365.47)
     assert e1["lap_distance"] == pytest.approx(1240.0)
-    assert e1["label"] == "front-left"
+    assert e1["label"] == "rear-right"   # #206: rF2 frame, +x left, +z rear
     assert e2["et"] == pytest.approx(2400.0)
     assert e2["magnitude"] == pytest.approx(90.0)
-    assert e2["label"] == "rear"
+    assert e2["label"] == "front"
 
 
 def test_damage_events_constant_et_is_zero_entries():
@@ -1938,17 +1938,36 @@ def test_damage_events_missing_channels_is_empty_not_raised():
     assert damage_events({"speed": [1.0, 2.0]}) == []
 
 
-def test_damage_label_centred_hit_has_no_side():
+@pytest.mark.parametrize("x,z,label", [
+    (0.10, -2.0, "front"),    # inside the dead zone, nose (-z) -- no side
+    (-0.10, 1.9, "rear"),     # inside the dead zone, tail (+z) -- no side
+])
+def test_damage_label_centred_hit_has_no_side(x, z, label):
     channels = {
         "last_impact_et": [0.0, 5.0],
         "last_impact_mag": [0.0, 200.0],
-        "last_impact_x": [0.0, 0.0],
-        "last_impact_z": [0.0, -2.0],
+        "last_impact_x": [0.0, x],
+        "last_impact_z": [0.0, z],
         "lap_distance": [0.0, 500.0],
     }
     events = damage_events(channels)
     assert len(events) == 1
-    assert events[0]["label"] == "rear"   # not "rear-left" / "rear-right"
+    assert events[0]["label"] == label
+
+
+def test_damage_label_long_beach_lap_19_wall_hit_is_front_right_and_rear_right():
+    """#206: the real race lap 19 (id 7759, Long Beach 2026-09-27), values copied
+    from its .npz. The game showed FRONT-RIGHT damage after a wall hit; #143's
+    inverted frame called these rear-left + front-left. In the rF2 local frame
+    (+x left, +z rear, as lat_g/long_g read) one side, both ends: a scrape."""
+    channels = {
+        "last_impact_et": [1537.84, 1537.84, 1650.44, 1650.44, 1650.56],
+        "last_impact_mag": [1188.99, 1188.99, 2892.20, 2892.20, 3336.18],
+        "last_impact_x": [1.0261, 1.0261, -1.0773, -1.0773, -1.0359],
+        "last_impact_z": [1.5369, 1.5369, -1.8253, -1.8253, 1.5768],
+        "lap_distance": [0.0, 400.0, 762.9, 762.9, 762.9],
+    }
+    assert [e["label"] for e in damage_events(channels)] == ["front-right", "rear-right"]
 
 
 def test_damage_state_reads_flat_wheel():
