@@ -551,7 +551,24 @@ def test_format_strategy_pit_menu_fuel_ratio_direction_tyres_and_repairs():
     assert ("Tyres: change FL (it reaches the 30% threshold before the flag on the "
             "measured wear); keep FR, RL, RR.") in text
     assert "Repairs: damage measured on lap 12 (dent severity max 2" in text
+    assert "suspension and mechanical damage are not visible" in text
     assert "crew" not in text.lower()
+
+
+def test_format_strategy_repairs_gives_no_verdict_from_dent_zero():
+    """#206 M1: 16 of 55 real contact laps ended at dent 0, hits of 18k/13k/9k among
+    them -- heavier than the 3,336 that cost the FR suspension at Long Beach. Dent 0 is
+    no licence to leave repairs off."""
+    snap = dataclasses.replace(build_snapshot(STINT, "s"), strategy=strategy(STINT, 30))
+    text = format_strategy(snap, damage={"dent_max": 0.0, "dent_total": 0.0,
+                                         "detached": False, "overheating": False,
+                                         "wheels_flat": [], "wheels_detached": []},
+                           damage_lap=12)
+    assert "leave repairs off" not in text
+    assert ("Repairs: no bodywork damage or flat/detached wheel measured as of lap 12; "
+            "suspension and mechanical damage are not visible in the telemetry -- dent "
+            "severity says nothing about them — check the game's damage display before "
+            "leaving repairs off.") in text
 
 
 def test_format_strategy_fuel_only_car_sets_fuel_litres_and_keeps_tyres():

@@ -51,6 +51,7 @@ from simcoach.car_lookup import resolve_car_class
 from simcoach.coach import _setup_lines, live_electronics
 from simcoach.corners import CornerMap
 from simcoach.format import (
+    SUSPENSION_UNSEEN,
     corner_descriptor,
     find_corner,
     format_consistency,
@@ -430,8 +431,8 @@ TOOLS = [
         "description": "LIVE SESSION ONLY. The car right now, read live from the game: "
                        "impacts since the start of THIS lap (where, which side, how hard), "
                        "bodywork dent severity, detached parts or wheels, flat tires, engine "
-                       "overheating (NOT suspension or mechanical damage: the game doesn't "
-                       "report it), and whether the car is on track, in the pit lane or in "
+                       "overheating (NOT suspension or mechanical damage: the telemetry this "
+                       "app reads doesn't carry it), and whether the car is on track, in the pit lane or in "
                        "the garage. Use for 'check my car', 'am I damaged', 'did I just hit "
                        "something', 'is a wheel off'.",
         "input_schema": {"type": "object", "properties": {}},
@@ -1966,6 +1967,7 @@ class CoachContext:
             return this_lap or "No telemetry-backed laps in this session yet — nothing to scan."
         baseline = stint_wear_baseline([rec for rec, _ in loaded])
         out = cut
+        contact = False
         for record, lap_id in loaded:
             lines = self._events_for(record, lap_id, baseline)
             out.append(self._lap_line(record, lap_id))
@@ -1977,8 +1979,11 @@ class CoachContext:
                                              damage_state(record.channels))
             if damage_line:
                 out.append(f"  {damage_line}")
+                contact = True
         if this_lap:
             out.append(this_lap)
+        if contact:                  # #206: once, not on every contact lap
+            out.append(f"Note: {SUSPENSION_UNSEEN}.")
         return "\n".join(out)
 
     def get_consistency(self, phase=None):

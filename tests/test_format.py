@@ -675,7 +675,8 @@ def test_damage_line_lap_19_names_both_sides_not_just_the_heaviest():
 
 def test_damage_line_groups_impacts_by_place():
     """Real Long Beach laps: 7655 hit at two places 509 m apart; 7745 scraped a
-    wall over 28 m (one place, three sides); 7662 hit one side twice."""
+    wall over 28 m (one place, three sides -- the last between the axles, z +0.22,
+    so "right side"); 7662 hit one side twice."""
     from simcoach.format import format_damage_line
     two = format_damage_line(_impacts((755.7, "front-right", 4734.0),
                                       (1264.6, "rear-right", 1029.0),
@@ -684,10 +685,44 @@ def test_damage_line_groups_impacts_by_place():
                    "front-left), heaviest 4734 at 756 m.")
     one = format_damage_line(_impacts((1392.1, "front-left", 1135.0),
                                       (1420.1, "front-right", 990.0),
-                                      (1420.1, "rear-right", 4541.0)), {})
-    assert one == ("Contact: 3 impacts at 1,392 m (front-left, front-right, rear-right), "
+                                      (1420.1, "right side", 4541.0)), {})
+    assert one == ("Contact: 3 impacts at 1,392 m (front-left, front-right, right side), "
                    "heaviest 4541.")
     # 7662: two hits, same place, same side -- the side is named once
     same = format_damage_line(_impacts((1964.4, "front-left", 129.0),
                                        (1964.4, "front-left", 142.0)), {})
     assert same == "Contact: 2 impacts at 1,964 m (front-left), heaviest 142."
+
+
+def test_damage_line_heaviest_is_placed_at_its_group_not_its_own_distance():
+    """Long Beach 7737: the heaviest (2711) landed at 756.5 m inside the place shown
+    as 743 m -- "heaviest at 757 m" beside "743 m" named a place that isn't listed."""
+    from simcoach.format import format_damage_line
+    line = format_damage_line(_impacts((742.8, "front-left", 1968.6),
+                                       (756.5, "rear-left", 2710.6),
+                                       (2839.0, "front-left", 336.9)), {})
+    assert line == ("Contact: 3 impacts at 743 m (front-left, rear-left), 2,839 m "
+                    "(front-left), heaviest 2711 at 743 m.")
+
+
+def test_damage_line_group_span_is_capped_not_chained():
+    """Long Beach 7648: 854 -> 880 -> 896 -> 905 m steps under 30 m each, but 896 m
+    is 42 m past the place's first impact -- a second place, not one endless chain."""
+    from simcoach.format import format_damage_line
+    line = format_damage_line(_impacts((854.2, "rear", 4944.0), (879.5, "front-left", 902.0),
+                                       (895.9, "front-left", 218.0),
+                                       (904.7, "front-left", 35.0)), {})
+    assert line == ("Contact: 4 impacts at 854 m (rear, front-left), 896 m (front-left), "
+                    "heaviest 4944 at 854 m.")
+
+
+def test_damage_line_never_prints_nan_metres():
+    from simcoach.format import format_damage_line
+    one = format_damage_line(_impacts((math.nan, "rear-left", 500.0)), {})
+    assert one == "Contact: 1 impact at an unknown point (rear-left), magnitude 500."
+    two = format_damage_line(_impacts((763.0, "front-right", 90.0),
+                                      (math.nan, "rear-left", 500.0),
+                                      (math.nan, "rear", 20.0)), {})
+    assert two == ("Contact: 3 impacts at 763 m (front-right), an unknown point "
+                   "(rear-left, rear), heaviest 500.")
+    assert "nan" not in one + two

@@ -24,6 +24,7 @@ import numpy as np
 from .analysis import (
     _corner_at,
     _damage_label,
+    _is_impact,
     _metrics_for_corner,
     corner_tag,
     damage_events,
@@ -169,9 +170,11 @@ def car_status_text(meta: dict, ch: dict, state: dict | None, cmap) -> str:
     et0 = float(ch["last_impact_et"][0]) if len(ch["last_impact_et"]) else math.nan
     if (now_et is not None and math.isfinite(et0) and et0 > 0
             and 0 <= now_et - et0 <= _RECENT_HIT_S):
-        label = _damage_label(float(ch["last_impact_x"][0]), float(ch["last_impact_z"][0]))
-        lines.append(f"Last impact {now_et - et0:.0f} s ago, on the lap just completed: "
-                     f"impact {float(ch['last_impact_mag'][0]):.0f}, {label}.")
+        x0, z0 = float(ch["last_impact_x"][0]), float(ch["last_impact_z"][0])
+        mag0 = float(ch["last_impact_mag"][0])
+        if _is_impact(mag0, x0, z0):
+            lines.append(f"Last impact {now_et - et0:.0f} s ago, on the lap just "
+                         f"completed: impact {mag0:.0f}, {_damage_label(x0, z0)}.")
     st = damage_state(ch)
     if st:
         lines.append(f"Bodywork: dent severity max {st['dent_max']:.0f}, total "

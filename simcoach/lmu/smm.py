@@ -344,7 +344,11 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
         was a misattribution, corrected in #206: mLastImpactPos is in the rF2
         local vehicle frame, the frame mLocalAccel is verified in (lat_g > 0
         in a left turn -> +x = LEFT; long_g > 0 under braking -> +z = REAR),
-        so the Imola sample reads rear-right. Long Beach lap 19 (2026-09-27,
+        so the Imola sample reads rear-right. The likely mechanism: the field
+        keeps only the LAST contact of a sequence, so a front-left hit
+        followed by a rear-right one leaves only the rear-right sample behind
+        (Long Beach 7759 logged two contacts of one scrape 0.12 s apart).
+        Long Beach lap 19 (2026-09-27,
         front-right damage on the game's display after a wall hit) logged
         x -1.08 z -1.83 and x -1.04 z +1.58, front-right + rear-right in
         that frame. The label is owned by analysis._damage_label:

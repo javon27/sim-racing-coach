@@ -1955,6 +1955,37 @@ def test_damage_label_centred_hit_has_no_side(x, z, label):
     assert events[0]["label"] == label
 
 
+@pytest.mark.parametrize("x,z,label", [
+    (-1.036, 0.216, "right side"),    # Long Beach 7745, mag 4541: between the axles
+    (1.027, -0.022, "left side"),     # Road Atlanta 7541, mag 3125
+    (-1.022, 0.457, "right side"),    # Algarve 7702: just inside the 0.5 m band
+    (-1.08, -1.83, "front-right"),    # lap 19: outside the band, an end is named
+])
+def test_damage_label_hit_between_the_axles_names_the_side_only(x, z, label):
+    """#206 m2: z near 0 is a side hit; forcing it to an end was a coin flip."""
+    channels = {"last_impact_et": [0.0, 5.0], "last_impact_mag": [0.0, 200.0],
+                "last_impact_x": [0.0, x], "last_impact_z": [0.0, z],
+                "lap_distance": [0.0, 500.0]}
+    assert [e["label"] for e in damage_events(channels)] == [label]
+
+
+def test_damage_events_skip_a_zero_magnitude_edge_at_the_origin():
+    """#206 m1: Long Beach 7744 (and Road Atlanta 7562) logged a new mLastImpactET with
+    magnitude 0 at exactly (0, 0) -- it printed as a 'front' impact and made 6 hits 7."""
+    et = [434.0, 434.44, 434.76, 434.88, 435.08, 435.24, 435.6, 435.86]
+    channels = {
+        "last_impact_et": et,
+        "last_impact_mag": [0.0, 1812.0, 300.8, 306.3, 784.7, 902.5, 1025.4, 0.0],
+        "last_impact_x": [0.0, 1.027, 1.015, 1.033, 1.026, 1.018, 1.03, 0.0],
+        "last_impact_z": [0.0, 1.023, 2.213, 1.539, 1.974, 2.241, -1.954, 0.0],
+        "lap_distance": [1900.0, 1931.0, 1934.9, 1938.9, 1943.0, 1947.0, 1955.1, 1959.2],
+    }
+    events = damage_events(channels)
+    assert len(events) == 6
+    assert "front" not in [e["label"] for e in events]
+    assert events[-1]["lap_distance"] == pytest.approx(1955.1)
+
+
 def test_damage_label_long_beach_lap_19_wall_hit_is_front_right_and_rear_right():
     """#206: the real race lap 19 (id 7759, Long Beach 2026-09-27), values copied
     from its .npz. The game showed FRONT-RIGHT damage after a wall hit; #143's

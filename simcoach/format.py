@@ -806,7 +806,8 @@ def format_events(events, cmap, units: str = "metric") -> list[str]:
 # at Long Beach. Said wherever dent severity is, so it never passes for "undamaged".
 SUSPENSION_UNSEEN = ("suspension and mechanical damage are not visible in the telemetry "
                      "-- dent severity says nothing about them")
-# ponytail: a guessed gap -- the real Long Beach scrapes chain in steps of <= 28 m;
+# ponytail: a guessed span -- real Long Beach wall scrapes span <= 28 m. One place
+# is every impact within this of the place's FIRST impact (no open-ended chaining);
 # widen it if one wall contact still prints as two places.
 _IMPACT_GROUP_M = 30.0
 
@@ -817,30 +818,33 @@ def format_damage_line(events: list, state: dict) -> str | None:
     Impact magnitude and dent severity are raw, unitless numbers (#143: the only
     anchor is the rig driver's own "more than a tap" at 365 -- no invented
     tiers); the dent scale is per-panel-unknown, so it is never broken out by
-    panel, only max/total."""
+    panel, only max/total. The caller says SUSPENSION_UNSEEN once (#206 m4)."""
     if not events:
         return None
     # #206: every side hit, not just the heaviest's -- on Long Beach lap 19 the
     # heaviest was the rear-right of a scrape whose front-right was the real damage.
-    # Impacts chained within _IMPACT_GROUP_M of each other are one place (a scrape
-    # along a wall logs several), shown at its first impact's distance with its
-    # sides in the order they were hit.
+    # A place is shown at its first impact's distance, with its sides in the order
+    # they were hit; impacts with no lap distance share one unplaced group.
     groups: list[tuple[float, list[str]]] = []
-    last = math.nan
+    home = []                              # each event's group index
     for e in events:                       # damage_events order: as hit, along the lap
         d = e["lap_distance"]
-        if not groups or not abs(d - last) <= _IMPACT_GROUP_M:
+        p = groups[-1][0] if groups else None
+        if p is None or not (abs(d - p) <= _IMPACT_GROUP_M
+                             or not (math.isfinite(d) or math.isfinite(p))):
             groups.append((d, []))
         if e["label"] not in groups[-1][1]:
             groups[-1][1].append(e["label"])
-        last = d
-    heaviest = max(events, key=lambda e: e["magnitude"])
+        home.append(len(groups) - 1)
     n = len(events)
-    places = ", ".join(f"{d:,.0f} m ({', '.join(sides)})" for d, sides in groups)
+    hi = max(range(n), key=lambda i: events[i]["magnitude"])
+    places = ", ".join((f"{d:,.0f} m" if math.isfinite(d) else "an unknown point")
+                       + f" ({', '.join(sides)})" for d, sides in groups)
     line = (f"Contact: {n} impact{'s' if n != 1 else ''} at {places}, "
-            f"{'heaviest' if n > 1 else 'magnitude'} {heaviest['magnitude']:.0f}")
-    if len(groups) > 1:
-        line += f" at {heaviest['lap_distance']:,.0f} m"
+            f"{'heaviest' if n > 1 else 'magnitude'} {events[hi]['magnitude']:.0f}")
+    place = groups[home[hi]][0]
+    if len(groups) > 1 and math.isfinite(place):
+        line += f" at {place:,.0f} m"
     if state:
         line += (f". Bodywork damage: dent severity max {state['dent_max']:.0f}, "
                  f"total {state['dent_total']:.0f} (raw 0\N{EN DASH}255 scale, panel unknown)")
@@ -853,7 +857,6 @@ def format_damage_line(events: list, state: dict) -> str | None:
         flags.extend(f"{w.upper()} wheel detached" for w in state.get("wheels_detached", []))
         if flags:
             line += "; " + ", ".join(flags)
-        line += f". Note: {SUSPENSION_UNSEEN}"
     return line + "."
 
 

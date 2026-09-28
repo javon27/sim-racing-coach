@@ -2192,7 +2192,7 @@ def test_get_stint_events_is_advertised_to_the_model():
 
 # --- damage / contact (#143) --------------------------------------------------
 
-def _damage_session(tmp_path, synthetic_lap):
+def _damage_session(tmp_path, synthetic_lap, hit_laps=1):
     """3 race laps: lap 1 is pre-#143 (no damage channels at all), lap 2 has
     damage channels but no impact (clean), lap 3 takes one hit."""
     import dataclasses
@@ -2228,7 +2228,7 @@ def _damage_session(tmp_path, synthetic_lap):
     store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
     cmap = CornerMap.load("simcoach/tracks/test_track.json")
     session_id = "s1--online"
-    laps = [synthetic_lap, zeroed(synthetic_lap), hit_at(synthetic_lap)]
+    laps = [synthetic_lap, zeroed(synthetic_lap)] + [hit_at(synthetic_lap)] * hit_laps
     ids = [store.save(dataclasses.replace(lap, session_id=session_id, phase="race",
                                           lap_time=90.0 + i, timestamp=90.0 + i))
            for i, lap in enumerate(laps)]
@@ -2249,9 +2249,19 @@ def test_get_stint_events_prints_contact_for_the_damaged_lap_only(tmp_path, synt
     assert "1,240 m" in line
     assert "front-right" in line
     assert "dent severity max 1" in line
-    # #206: dent severity never stands in for "undamaged"
-    assert "suspension and mechanical damage are not visible" in line
-    assert "cosmetic" not in line.lower() and " fine" not in line.lower()
+    # #206: dent severity never stands in for "undamaged" -- said once, at the end
+    assert "suspension and mechanical damage are not visible" not in line
+    assert out.count("suspension and mechanical damage are not visible") == 1
+    assert out.splitlines()[-1].startswith("Note: suspension and mechanical damage")
+    assert "cosmetic" not in out.lower() and " fine" not in out.lower()
+
+
+def test_get_stint_events_says_the_suspension_caveat_once_for_many_contact_laps(
+        tmp_path, synthetic_lap):
+    ctx = _damage_session(tmp_path, synthetic_lap, hit_laps=3)
+    out = ctx.dispatch("get_stint_events", {})
+    assert out.count("Contact:") == 3
+    assert out.count("suspension and mechanical damage are not visible") == 1
 
 
 def test_get_stint_events_is_silent_on_a_clean_or_pre_143_lap(tmp_path, synthetic_lap):

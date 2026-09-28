@@ -9,6 +9,7 @@ import dataclasses
 import uuid
 
 import numpy as np
+import pytest
 
 from simcoach.coach import Coach
 from simcoach.coach_tools import CoachContext
@@ -225,16 +226,23 @@ def test_car_status_never_states_a_negative_from_an_unverified_channel(tmp_path,
     assert "cosmetic" not in out and " fine" not in out
 
 
-def test_car_status_mentions_a_hit_just_before_the_line(tmp_path, synthetic_lap):
+@pytest.mark.parametrize("mag,x,z,label", [
+    # #206: Long Beach lap 17's impact (id 7757, 2,590 m), still held in the field
+    # through lap 18 and into lap 19's first sample (id 7759)
+    (410.0, 1.03, 1.54, "rear-left"),
+    # #206 m1: a zero-magnitude edge at (0, 0) (7744, 7562) is no hit at all
+    (0.0, 0.0, 0.0, None),
+])
+def test_car_status_mentions_a_hit_just_before_the_line(tmp_path, synthetic_lap,
+                                                         mag, x, z, label):
     """Right after the line the new buffer holds no rising edge for a hit taken in the
     last seconds of the lap just completed -- its first sample still carries it."""
     lap = synthetic_lap
     n = len(lap.channels["lap_distance"])
     ch = dict(lap.channels)
     ch.update({"elapsed_time": np.linspace(200.0, 292.5, n),
-               "last_impact_et": np.full(n, 198.0), "last_impact_mag": np.full(n, 410.0),
-               # #206: lap 19's first sample (id 7759), a hit carried over the line
-               "last_impact_x": np.full(n, 1.03), "last_impact_z": np.full(n, 1.54),
+               "last_impact_et": np.full(n, 198.0), "last_impact_mag": np.full(n, mag),
+               "last_impact_x": np.full(n, x), "last_impact_z": np.full(n, z),
                "dent_max": np.ones(n), "dent_total": np.ones(n),
                "detached": np.zeros(n), "overheating": np.zeros(n)})
     store = _store(tmp_path)
@@ -242,7 +250,10 @@ def test_car_status_mentions_a_hit_just_before_the_line(tmp_path, synthetic_lap)
     live.source = src = _Source()
     src.drive(dataclasses.replace(lap, channels=ch), 20)       # just past the line
     out = _ctx(store, on_track=True, live=live).dispatch("get_car_status", {})
-    assert "lap just completed" in out and "410" in out and "rear-left" in out
+    if label is None:
+        assert "lap just completed" not in out and "impact 0," not in out
+    else:
+        assert "lap just completed" in out and "410" in out and label in out
 
 
 def test_live_tools_are_gated_to_the_live_session(tmp_path, synthetic_lap):

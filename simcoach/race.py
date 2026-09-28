@@ -20,7 +20,7 @@ from simcoach.analysis import _MIN_TIRE_TREND_LAPS, _WHEELS
 from simcoach.battle import _SIDE, Battle, build_battle, car_laps
 from simcoach.car_lookup import resolve_car
 from simcoach.corners import CornerMap
-from simcoach.format import format_laptime
+from simcoach.format import SUSPENSION_UNSEEN, format_laptime
 from simcoach.fuel import (
     SaveAdvice,
     laps_remaining,
@@ -1172,9 +1172,13 @@ def _pit_menu_lines(s: Strategy, as_of_lap: int, damage: dict | None,
         lines.append(f"Repairs: damage measured on lap {damage_lap} (dent severity max "
                      f"{damage.get('dent_max', 0):.0f}, raw 0\N{EN DASH}255 scale, panel "
                      "unknown) — whether to set repairs on is your call; the time a repair "
-                     "adds isn't measured here.")
+                     f"adds isn't measured here; {SUSPENSION_UNSEEN}.")
     else:
-        lines.append(f"Repairs: none measured as of lap {damage_lap} — leave repairs off.")
+        # #206: no verdict from dent severity -- real hits of magnitude 9k-18k ended
+        # at dent 0, heavier than the 3,336 that cost FR suspension at Long Beach.
+        lines.append(f"Repairs: no bodywork damage or flat/detached wheel measured as of "
+                     f"lap {damage_lap}; {SUSPENSION_UNSEEN} — check the game's damage "
+                     "display before leaving repairs off.")
     return lines
 
 

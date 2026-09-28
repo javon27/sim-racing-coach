@@ -1877,15 +1877,27 @@ def is_incident_lap(record: LapRecord, cmap: CornerMap,
 # Long Beach lap 19 (2026-09-27, a front-right wall hit on the game's own damage
 # display) logged x -1.08 z -1.83 and x -1.04 z +1.58: front-right + rear-right.
 # A dead zone near x=0 keeps a centred hit reading "front" instead of a coin-flip
-# "front-right" -- not measured, a guessed geometric width, so kept as one knob.
+# "front-right", and one near z=0 keeps a hit between the axles reading "right side"
+# instead of a coin-flip end (#206 red team: Long Beach 7745, mag 4541 at z +0.22).
+# Neither is measured -- guessed geometric widths, so kept as knobs.
 _DAMAGE_DEAD_ZONE_M = 0.15
+_DAMAGE_DEAD_ZONE_Z_M = 0.5
 
 
 def _damage_label(x: float, z: float) -> str:
     end = "front" if z <= 0 else "rear"
     if abs(x) < _DAMAGE_DEAD_ZONE_M:
         return end
-    return f"{end}-{'right' if x < 0 else 'left'}"
+    side = "right" if x < 0 else "left"
+    if abs(z) < _DAMAGE_DEAD_ZONE_Z_M:
+        return f"{side} side"
+    return f"{end}-{side}"
+
+
+def _is_impact(mag: float, x: float, z: float) -> bool:
+    """#206: a new mLastImpactET with magnitude 0 at exactly (0, 0) is no hit -- it
+    printed as a "front" impact and inflated the count (Long Beach 7744, 7562)."""
+    return mag > 0 and not (x == 0 and z == 0)
 
 
 def damage_events(channels: dict) -> list[dict]:
@@ -1907,7 +1919,8 @@ def damage_events(channels: dict) -> list[dict]:
     events = []
     prev = et[0] if n else math.nan
     for i in range(1, n):
-        if math.isfinite(et[i]) and (not math.isfinite(prev) or et[i] > prev):
+        if (math.isfinite(et[i]) and (not math.isfinite(prev) or et[i] > prev)
+                and _is_impact(float(mag[i]), float(x[i]), float(z[i]))):
             events.append({
                 "et": float(et[i]),
                 "magnitude": float(mag[i]),
