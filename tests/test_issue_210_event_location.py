@@ -10,11 +10,17 @@ import math
 import numpy as np
 import pytest
 
-from simcoach.analysis import _SPEED_KMH_TO_MS, _spin_events, damage_events, lap_events
+from simcoach.analysis import (
+    _SPEED_KMH_TO_MS,
+    _spin_events,
+    damage_events,
+    is_incident_lap,
+    lap_events,
+)
 from simcoach.coach_tools import CoachContext
 from simcoach.corners import CornerMap
 from simcoach.format import format_damage_line, format_events, place_text
-from simcoach.livelap import lap_incidents
+from simcoach.livelap import incident_lines, lap_incidents
 from simcoach.model_types import LapRecord
 
 # T1 Left Hairpin 800-1200 m, T2 Right Sweeper 2000-2400 m
@@ -138,9 +144,9 @@ def test_a_stop_on_track_is_an_event_with_place_duration_and_speed():
     [line] = [x for x in _lines(rec) if x.startswith("stopped")]
     assert line.startswith("stopped at 1,5")
     assert line.endswith(", between T1 Left Hairpin and T2 Right Sweeper \N{EM DASH} "
-                         "132 \N{RIGHTWARDS ARROW} 0 km/h, stuck 7.7 s (under 10 km/h)")
+                         "132 \N{RIGHTWARDS ARROW} 0 km/h, stuck 7.7 s (dipping under 10 km/h)")
     imperial = format_events(lap_events(rec, _CMAP, None), _CMAP, "imperial")
-    assert "82 \N{RIGHTWARDS ARROW} 0 mph, stuck 7.7 s (under 6 mph)" in imperial[0]
+    assert "82 \N{RIGHTWARDS ARROW} 0 mph, stuck 7.7 s (dipping under 6 mph)" in imperial[0]
 
 
 def test_rocking_off_a_wall_is_one_stop_timed_over_its_whole_span():
@@ -154,7 +160,7 @@ def test_rocking_off_a_wall_is_one_stop_timed_over_its_whole_span():
     spun = _lap([(30.0, 0.0, 180.0, 180.0), _SPIN] + _ROCK)
     [line] = _lines(spun)
     assert line.startswith("spin at 1,5")
-    assert line.endswith(", turned 200°, then stuck 17.7 s (under 10 km/h)")
+    assert line.endswith(", turned 200°, then stuck 17.7 s (dipping under 10 km/h)")
 
 
 def test_the_speed_a_stop_came_down_from_is_the_peak_before_it():
@@ -208,11 +214,11 @@ def test_a_stop_after_a_spin_folds_into_it_and_one_after_a_hit_says_so():
                  (5.0, 0.0, 0.0, 0.0), (3.0, 0.0, 0.0, 80.0)])
     [line] = _lines(spun)
     assert line.startswith("spin at 1,5")
-    assert line.endswith(", turned 200°, then stuck 5.7 s (under 10 km/h)")
+    assert line.endswith(", turned 200°, then stuck 5.7 s (dipping under 10 km/h)")
     hit = _lap(_STOP, hit_at_m=1480.0)
     [line] = _lines(hit)
     assert line.startswith("stopped at 1,5")
-    assert line.endswith("stuck 7.7 s (under 10 km/h), right after contact there")
+    assert line.endswith("stuck 7.7 s (dipping under 10 km/h), right after contact there")
 
 
 def test_a_crash_spin_in_an_in_lap_tail_folds_into_its_stop_at_the_stop_place():
@@ -231,7 +237,7 @@ def test_a_crash_spin_in_an_in_lap_tail_folds_into_its_stop_at_the_stop_place():
     assert math.isnan(spin["lap_distance"])               # the fixture's premise
     [line] = _lines(rec)
     assert line.startswith("spin at 1,5") and "nan" not in line and "unknown" not in line
-    assert line.endswith(", turned 200°, then stuck 5.3 s (under 10 km/h)")
+    assert line.endswith(", turned 200°, then stuck 5.3 s (dipping under 10 km/h)")
 
 
 def test_a_spin_or_hit_after_the_stop_did_not_cause_it():
@@ -246,6 +252,100 @@ def test_a_spin_or_hit_after_the_stop_did_not_cause_it():
     lines = _lines(rec)
     assert [x.split(" at ")[0] for x in lines] == ["stopped", "spin"]
     assert "then stuck" not in lines[1]
+
+
+def _with(rec, **channels):
+    return dataclasses.replace(rec, channels=dict(rec.channels, **channels))
+
+
+def test_a_teleport_to_the_garage_is_no_stop_and_no_spin():
+    """Algarve 7690 / Sarthe 7447 / 7416 (partial practice laps): ESC to the garage at
+    speed -- 261 -> 0 km/h and a 358 m jump in one sample, then a 5,200 s gap on the
+    game clock -- printed a 372-degree spin 'then stuck 5285.3 s'."""
+    # the car leaves the garage facing the other way: across the jump the path "turns"
+    # 180 degrees while speed "collapses" -- the shape of 7690's fake 372-degree spin
+    garage = 125                                           # 2.5 s standing in it
+    rec = _lap([(40.0, 0.0, 200.0, 200.0), (garage / _HZ, 180.0, 0.0, 0.0),
+                (6.0, 0.0, 0.0, 60.0)], partial="partial", pit=True, lap_time=None,
+               valid=False)
+    v = rec.channels["speed"]
+    i = int(np.flatnonzero(v < 10)[0])                     # the teleport sample
+    assert v[i - 1] > 190 and v[i] == 0                    # 200 -> 0 in one sample
+    x, z = rec.channels["pos_x"].copy(), rec.channels["pos_z"].copy()
+    x[i:] += 300.0                                         # the garage is 300 m away
+    z[i:] += 40.0
+    et = rec.channels["elapsed_time"].copy()
+    et[i + 100:] += 5200.0                                 # the garage wait
+    # the spin detector's own clock where the standing car takes no time (7690: the
+    # ds/v fallback), so a 3 s window reaches from before the jump to after the garage
+    t = np.arange(v.size) / _HZ
+    t[i:i + garage] = t[i]
+    t[i + garage:] -= (garage - 1) / _HZ
+    rec = _with(rec, pos_x=x, pos_z=z, elapsed_time=et, time=t)
+    kinds = [e["kind"] for e in lap_events(rec, _CMAP, None)]
+    assert "stop" not in kinds and "spin" not in kinds and "parked" not in kinds
+
+
+def test_a_wall_hit_that_sheds_speed_in_one_sample_is_no_teleport():
+    """Long Beach 7583: the wall took 66 -> 23 km/h in one sample with the car moving
+    0.4 m, mid-spin -- a one-sample speed drop is a real hit, only a position jump
+    teleports. Read as a break, it cut the spin's window and lost the spin."""
+    rec = _lap([(30.0, 0.0, 180.0, 180.0), (1.5, 140.0, 180.0, 66.0),   # the wall:
+                (0.5, 60.0, 23.0, 5.0), (0.5, 0.0, 5.0, 0.0),           # 66 -> 23
+                (5.0, 0.0, 0.0, 0.0), (3.0, 0.0, 0.0, 80.0)])
+    v = rec.channels["speed"]
+    assert (v[:-1] - v[1:]).max() > 40                    # the fixture's premise
+    [line] = _lines(rec)
+    assert line.startswith("spin at 1,5") and line.endswith(", then stuck 6.0 s (dipping under 10 km/h)")
+
+
+def test_a_clock_step_back_between_two_stretches_is_not_one_stop():
+    """A session restart steps elapsed_time BACK (32 partial/pit laps): 'et[lo] -
+    et[prev_hi] < 3 s' held for a negative step, so two stops merged into one."""
+    rec = _lap([(40.0, 0.0, 132.0, 132.0), (3.0, 0.0, 132.0, 0.0), (2.0, 0.0, 0.0, 0.0),
+                (0.5, 0.0, 0.0, 40.0), (0.5, 0.0, 40.0, 0.0), (2.0, 0.0, 0.0, 0.0),
+                (4.0, 0.0, 0.0, 100.0)])
+    v = rec.channels["speed"]
+    fast = np.flatnonzero(v >= 10)
+    gap = int(fast[np.searchsorted(fast, np.flatnonzero(v < 10)[0])]) + 5  # in the climb
+    et = rec.channels["elapsed_time"].copy()
+    et[gap:] -= 100.0
+    stops = _stops(_with(rec, elapsed_time=et))
+    assert len(stops) == 2
+    # each 2 s standstill + its own ramps under 10 km/h; merged would be ~5.4 s
+    assert [s["detail"]["stopped_s"] for s in stops] == [pytest.approx(2.35, abs=0.1),
+                                                         pytest.approx(2.55, abs=0.1)]
+
+
+def test_a_crawl_after_a_crash_does_not_hide_the_speed_or_the_stop():
+    """Long Beach 7667: braked 157 -> 23, crawled ~5 s, stopped -- '23 -> 0'. On the
+    live lap the crawl also failed the 80 km/h gate, so it said 'no incidents'."""
+    rec = _lap([(40.0, 0.0, 150.0, 150.0), (0.5, 0.0, 150.0, 20.0), (6.0, 0.0, 20.0, 20.0),
+                (1.0, 0.0, 20.0, 0.0), (5.0, 0.0, 0.0, 0.0)])
+    ctx = CoachContext(None, cmap=_CMAP, on_track=True)
+    ctx._provisional = lambda: ({"incidents": lap_incidents(rec.channels, _CMAP)}, [],
+                                "Lap: game lap 4 so far")
+    out = ctx._this_lap_events()
+    assert "150 \N{RIGHTWARDS ARROW} 0 km/h, stuck 5." in out and "no incidents" not in out
+
+
+def test_a_stored_in_lap_ending_parked_is_not_an_incident_but_the_live_lap_is_stuck():
+    """Algarve 7669/7691/7607: braked 187 -> 0 at ~1.2 g and never moved again -- the
+    driver parked and went to the garage. Not 'stuck', not an incident. The live lap's
+    buffer also ends standing, but there the car is stopped NOW: stuck, an incident."""
+    rec = _lap([(40.0, 0.0, 187.0, 187.0), (4.5, 0.0, 187.0, 0.0), (5.0, 0.0, 0.0, 0.0)],
+               partial="in", lap_time=None, valid=False)
+    [line] = _lines(rec)
+    assert line.endswith("\N{EM DASH} 187 \N{RIGHTWARDS ARROW} 0 km/h; the lap ended there")
+    assert not is_incident_lap(rec, _CMAP, None)
+    # ... and the same after a teleport to the garage at the end (Algarve 7607)
+    x = rec.channels["pos_x"].copy()
+    x[-5:] += 500.0
+    assert _lines(_with(rec, pos_x=x)) == [line]
+    # the live lap: stuck, with its time so far
+    live = incident_lines(lap_incidents(rec.channels, _CMAP), _CMAP)
+    assert live and "187 \N{RIGHTWARDS ARROW} 0 km/h, stuck 5." in live[0]
+    assert "lap ended" not in live[0]
 
 
 def test_a_scan_still_behind_the_line_prints_no_negative_distance():

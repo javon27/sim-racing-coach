@@ -108,7 +108,7 @@ def lap_incidents(channels: dict, cmap) -> dict:
     events = []
     if "speed" in snap:
         rec = LapRecord("lmu", "", "", None, False, 0.0, snap, partial="partial")
-        events = lap_events(rec, cmap, None)          # no analysis -> spins only
+        events = lap_events(rec, cmap, None, live=True)   # no analysis: spins, stops
     return {"events": events, "impacts": damage_events(snap),
             "scanned_to": float(fin.max()) if fin.size else None}
 
@@ -216,7 +216,7 @@ class LiveLap:
             # Judged against the lap's peak RPM -- mid-lap only the peak SO FAR, so a
             # live read can be a false negative. Stated once the lap commits.
             cm.short_shift = cm.bog = None
-        events = lap_events(record, cmap, SimpleNamespace(corners=cms))
+        events = lap_events(record, cmap, SimpleNamespace(corners=cms), live=True)
         impacts = damage_events(snap)
         for c, cm in zip(todo, cms):
             label = c.label or str(c.number)

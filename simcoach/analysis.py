@@ -1,3 +1,4 @@
+import itertools
 import math
 from dataclasses import dataclass
 
@@ -1754,9 +1755,34 @@ def _corner_at(cmap: CornerMap, dist) -> int | None:
     return None
 
 
+# ponytail: a game teleport (ESC to the garage, a restart) between two samples -- a jump
+# in position in one 0.02 s step (Algarve 7690: 358 m, Sarthe 7447: 294 m), or the game
+# clock stepping back or pausing (the garage wait: 5,200 s on 7690). No real car covers
+# 20 m in one sample (400 km/h is 2.2 m). Not a one-sample speed drop: a real wall hit
+# does that too (Long Beach 7583: 66 -> 23 km/h in one sample, 0.4 m moved).
+_TELEPORT_STEP_M = 20.0
+_TELEPORT_GAP_S = 1.0
+
+
+def _breaks(ch: dict, n: int) -> np.ndarray:
+    """#210: brk[i] -- sample i does not follow on from sample i - 1 (a teleport or a
+    game-clock break). No spin window and no stop spans one."""
+    brk = np.zeros(n, dtype=bool)
+    et = ch.get("elapsed_time", ch.get("time"))
+    if et is not None and len(et) >= n:
+        step = np.diff(np.asarray(et, dtype=float)[:n])
+        brk[1:] |= ~((step >= 0) & (step <= _TELEPORT_GAP_S))
+    if "pos_x" in ch and "pos_z" in ch and min(len(ch["pos_x"]), len(ch["pos_z"])) >= n:
+        x = np.asarray(ch["pos_x"], dtype=float)[:n]
+        z = np.asarray(ch["pos_z"], dtype=float)[:n]
+        brk[1:] |= np.hypot(np.diff(x), np.diff(z)) > _TELEPORT_STEP_M
+    return brk
+
+
 def _spin_events(record: LapRecord, cmap: CornerMap) -> list[dict]:
     """Spins, read off the driven path. Empty when the lap has no position
-    channels (older captures) or too few moving samples."""
+    channels (older captures) or too few moving samples. #210: never across a
+    teleport -- the jump read as a 370-degree 'spin' (Algarve 7690, Sarthe 7447)."""
     ch = record.channels
     if "pos_x" not in ch or "pos_z" not in ch:
         return []
@@ -1787,10 +1813,11 @@ def _spin_events(record: LapRecord, cmap: CornerMap) -> list[dict]:
     # ponytail: O(samples x window) scan -- ~150 samples per window at 50 Hz, a few
     # ms a lap. A prefix-min/running-extreme structure would make it linear; it is
     # not worth the code until a stint scan is measurably slow.
+    nbrk = np.cumsum(_breaks(ch, n))      # breaks so far, per raw sample
     spans: list[list[int]] = []
     for i in range(m):
         j = int(np.searchsorted(t, t[i] + _SPIN_WINDOW_S, side="right")) - 1
-        if j <= i:
+        if j <= i or nbrk[raw[j]] != nbrk[raw[i]]:
             continue
         k = min(j, m - 1)
         if np.abs(h[i:k + 1] - h[i]).max() <= _SPIN_DEG:
@@ -1832,8 +1859,11 @@ _STOP_S = 1.5
 # over 15.6 s at 780-783 m). A spin or hit this close to the stop is what stopped it.
 _STOP_CAUSE_M = 100.0
 _STOP_MERGE_S = 3.0
-# The speed a stop came down from: the peak over this look-back before it.
+# The speed a stop came down from: the peak over this look-back before it, taken from
+# where the car was last above a crawl -- Long Beach 7667 braked 157 -> 23, crawled
+# ~5 s, then stopped: 157 is what it came down from, not the crawl.
 _STOP_LOOKBACK_S = 5.0
+_STOP_CRAWL_KMH = 30.0
 # ponytail: on a lap that saw the pits (or can't say: pit None, a partial, the live
 # lap) a stop counts only when braked into from above this -- the pit limiter reads
 # ~60 km/h, so a pit-box stop never passes. A short pit lane that lets the car reach
@@ -1841,15 +1871,19 @@ _STOP_LOOKBACK_S = 5.0
 _STOP_FROM_KMH = 80.0
 
 
-def _stop_events(record: LapRecord, cmap: CornerMap, spins: list[dict]) -> list[dict]:
+def _stop_events(record: LapRecord, cmap: CornerMap, spins: list[dict],
+                 live: bool = False) -> list[dict]:
     """Stops on track: runs under _STOP_KMH merged into one stuck span, judged per
-    stop. Never the lap's first stretch (a standing start, the grid); on a lap that
-    may have seen the pits, only one braked into from over _STOP_FROM_KMH (the pit box
-    is at limiter speed). Timed off the game clock: `_sample_time` falls back to ds/v
-    at LMU's S/F seam, where a car standing still takes no time. A stop is folded into
-    a spin that began before it and ended in it (the spin's `stopped_s`), not a
-    second incident; one after a hit there -- a separate contact line -- is annotated
-    (`after_contact`)."""
+    stop. Never the lap's first stretch (a standing start, the grid) nor one entered by
+    a teleport, and no span runs across one; on a lap that may have seen the pits, only
+    one braked into from over _STOP_FROM_KMH (the pit box is at limiter speed). Timed off
+    the game clock: `_sample_time` falls back to ds/v at LMU's S/F seam, where a car
+    standing still takes no time. A stop is folded into a spin that began before it and
+    ended in it (the spin's `stopped_s`), not a second incident; one after a hit there
+    -- a separate contact line -- is annotated (`after_contact`). A stored in-lap or
+    partial that ends standing, with neither, is "parked" (the driver pulled over and
+    left, maybe via a teleport to the garage): no stuck time, not an incident. Never
+    on the `live` lap, whose buffer ends now -- a car stopped there is stuck."""
     ch = record.channels
     et = ch.get("elapsed_time", ch.get("time"))
     if et is None:
@@ -1858,23 +1892,34 @@ def _stop_events(record: LapRecord, cmap: CornerMap, spins: list[dict]) -> list[
     d = _interp_lap_distance(record)
     et = np.asarray(et, dtype=float)
     n = min(v.size, d.size, et.size)
-    edges = np.diff(np.r_[0, (v[:n] < _STOP_KMH).astype(int), 0])
+    v, d, et = v[:n], d[:n], et[:n]
+    brk = _breaks(ch, n)
+    edges = np.diff(np.r_[0, (v < _STOP_KMH).astype(int), 0])
     runs: list[list[int]] = []
     for lo, hi in zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1) - 1):
-        if runs and (et[lo] - et[runs[-1][1]] < _STOP_MERGE_S
-                     or abs(d[lo] - d[runs[-1][1]]) <= _STOP_CAUSE_M):
-            runs[-1][1] = hi
-        else:
-            runs.append([lo, hi])
+        cuts = [lo, *(np.flatnonzero(brk[lo + 1:hi + 1]) + lo + 1), hi + 1]
+        for a, b in itertools.pairwise(cuts):     # a run split at every break in it
+            b -= 1
+            if (runs and not brk[runs[-1][1] + 1:a + 1].any()
+                    and (0 <= et[a] - et[runs[-1][1]] < _STOP_MERGE_S
+                         or abs(d[a] - d[runs[-1][1]]) <= _STOP_CAUSE_M)):
+                runs[-1][1] = b
+            else:
+                runs.append([a, b])
     maybe_pit = record.partial is not None or record.pit is not False
     hits = damage_events(ch)
     out = []
     for lo, hi in runs:
-        stuck = float(et[min(hi + 1, n - 1)] - et[lo])   # first under -> back over
-        if lo == 0 or not stuck >= _STOP_S:
+        # first under -> back over, never across a break
+        end = hi + 1 if hi + 1 < n and not brk[hi + 1] else hi
+        stuck = float(et[end] - et[lo])
+        if lo == 0 or brk[lo] or not stuck >= _STOP_S:
             continue
-        back = et[:lo + 1] >= et[lo] - _STOP_LOOKBACK_S
-        peak = float(np.nanmax(v[:lo + 1][back])) if back.any() else float(v[lo])
+        k = lo
+        while k > 0 and v[k - 1] < _STOP_CRAWL_KMH and not brk[k]:
+            k -= 1
+        back = et[:k + 1] >= et[k] - _STOP_LOOKBACK_S
+        peak = float(np.nanmax(v[:k + 1][back])) if back.any() else float(v[lo])
         if maybe_pit and not peak > _STOP_FROM_KMH:
             continue
         # A spin that began before the stop and ended in it (or within _STOP_CAUSE_M).
@@ -1889,16 +1934,18 @@ def _stop_events(record: LapRecord, cmap: CornerMap, spins: list[dict]) -> list[
                 spin["lap_distance"] = float(d[lo])
                 spin["corner_no"] = _corner_at(cmap, d[lo])
             continue
+        contact = any(h["et"] <= et[lo] and abs(h["lap_distance"] - d[lo]) <= _STOP_CAUSE_M
+                      for h in hits)
+        # the car never moved again on this lap (a teleport to the garage may follow)
+        parked = (not live and not contact and record.partial in ("in", "partial")
+                  and not (v[hi + 1:] >= _STOP_KMH).any())
         out.append({
-            "kind": "stop",
+            "kind": "parked" if parked else "stop",
             "corner_no": _corner_at(cmap, d[lo]),
             "lap_distance": float(d[lo]),
             "detail": {"speed_from_kmh": peak,
                        "speed_min_kmh": float(np.nanmin(v[lo:hi + 1])),
-                       "stopped_s": stuck,
-                       "after_contact": any(h["et"] <= et[lo]
-                                            and abs(h["lap_distance"] - d[lo]) <= _STOP_CAUSE_M
-                                            for h in hits)},
+                       **({} if parked else {"stopped_s": stuck, "after_contact": contact})},
         })
     return out
 
@@ -1939,19 +1986,20 @@ def _wear_step_events(record: LapRecord, cmap: CornerMap, baseline: dict) -> lis
 
 
 def lap_events(record: LapRecord, cmap: CornerMap, analysis: "LapAnalysis | None",
-               wear_baseline: dict | None = None) -> list[dict]:
+               wear_baseline: dict | None = None, live: bool = False) -> list[dict]:
     """Everything that went wrong on one lap, in along-lap order:
     `{"kind", "corner_no", "lap_distance", "detail"}` per incident.
 
     kinds: "spin" (path rotation with a speed collapse), "stop" (#210: stopped on
-    track, `_stop_events`), "off" (wheels on
+    track, `_stop_events`), "parked" (a stored in-lap/partial that ended standing --
+    not an incident; `live` marks the lap in progress, never parked), "off" (wheels on
     grass/dirt/gravel -- `CornerMetrics.off_surface`; never from track_edge, so a
     lap captured without surface channels has no offs), "lockup"/"wheelspin"
     (pass-through of the per-corner reads), "wear_step" (a flat spot). `wear_baseline` comes from `stint_wear_baseline`
     over the stint's laps; without one the wear kind is skipped entirely rather
     than guessed against a single lap."""
     events = _spin_events(record, cmap)
-    events += _stop_events(record, cmap, events)
+    events += _stop_events(record, cmap, events, live)
     for cm in (analysis.corners if analysis is not None else []):
         if cm.lockup:
             events.append({"kind": "lockup", "corner_no": cm.corner_no,

@@ -807,19 +807,23 @@ def format_events(events, cmap, units: str = "metric") -> list[str]:
         tag = _event_corner_tag(cmap, e.get("corner_no"))
         head = f"{tag}: " if tag else ""
         kind, d = e["kind"], e.get("detail") or {}
-        if kind in ("spin", "stop"):
+        if kind in ("spin", "stop", "parked"):
             line = (f"{'spin' if kind == 'spin' else 'stopped'} at "
                     f"{place_text(cmap, e['lap_distance'])} \N{EM DASH} "
                     f"{spd(d['speed_from_kmh']):.0f} \N{RIGHTWARDS ARROW} "
-                    f"{spd(d['speed_min_kmh']):.0f} {spd_u}, ")
-            # the whole stuck span: first under the stop speed to back over it
-            stop = (f"stuck {d['stopped_s']:.1f} s (under {spd(_STOP_KMH):.0f} {spd_u})"
-                    if "stopped_s" in d else "")
+                    f"{spd(d['speed_min_kmh']):.0f} {spd_u}")
+            # the whole stuck span: first under the stop speed to back over it, which
+            # may hold climbs back over it (a car rocking off a wall)
+            stop = (f"stuck {d['stopped_s']:.1f} s (dipping under {spd(_STOP_KMH):.0f} "
+                    f"{spd_u})" if "stopped_s" in d else "")
             if kind == "spin":
-                line += f"turned {d['turned_deg']:.0f}\N{DEGREE SIGN}"
+                line += f", turned {d['turned_deg']:.0f}\N{DEGREE SIGN}"
                 line += f", then {stop}" if stop else ""
+            elif kind == "parked":
+                line += "; the lap ended there"
             else:
-                line += stop + (", right after contact there" if d["after_contact"] else "")
+                line += ", " + stop + (", right after contact there"
+                                       if d["after_contact"] else "")
             lines.append(line)
         elif kind == "off":
             # #207: read from the wheels' surface, not track_edge, whose metres
