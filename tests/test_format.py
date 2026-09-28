@@ -654,3 +654,40 @@ def test_format_tire_trend_pace_improving_is_never_degradation():
     from simcoach.format import format_tire_trend
     out = format_tire_trend(_trend_result(pace_slope_s=-0.3))
     assert "deg-limited" not in out and "degradation" not in out
+
+
+
+# --- #206: every side hit, grouped by place ----------------------------------
+
+def _impacts(*rows):
+    return [{"et": float(i), "lap_distance": d, "label": lbl, "magnitude": m}
+            for i, (d, lbl, m) in enumerate(rows)]
+
+
+def test_damage_line_lap_19_names_both_sides_not_just_the_heaviest():
+    """Long Beach race lap 19 (id 7759): the game showed FRONT-RIGHT damage; the
+    heaviest impact was the rear-right one, so a heaviest-only line hid it."""
+    from simcoach.format import format_damage_line
+    line = format_damage_line(_impacts((762.9, "front-right", 2892.2),
+                                       (762.9, "rear-right", 3336.2)), {})
+    assert line == "Contact: 2 impacts at 763 m (front-right, rear-right), heaviest 3336."
+
+
+def test_damage_line_groups_impacts_by_place():
+    """Real Long Beach laps: 7655 hit at two places 509 m apart; 7745 scraped a
+    wall over 28 m (one place, three sides); 7662 hit one side twice."""
+    from simcoach.format import format_damage_line
+    two = format_damage_line(_impacts((755.7, "front-right", 4734.0),
+                                      (1264.6, "rear-right", 1029.0),
+                                      (1269.6, "front-left", 145.0)), {})
+    assert two == ("Contact: 3 impacts at 756 m (front-right), 1,265 m (rear-right, "
+                   "front-left), heaviest 4734 at 756 m.")
+    one = format_damage_line(_impacts((1392.1, "front-left", 1135.0),
+                                      (1420.1, "front-right", 990.0),
+                                      (1420.1, "rear-right", 4541.0)), {})
+    assert one == ("Contact: 3 impacts at 1,392 m (front-left, front-right, rear-right), "
+                   "heaviest 4541.")
+    # 7662: two hits, same place, same side -- the side is named once
+    same = format_damage_line(_impacts((1964.4, "front-left", 129.0),
+                                       (1964.4, "front-left", 142.0)), {})
+    assert same == "Contact: 2 impacts at 1,964 m (front-left), heaviest 142."

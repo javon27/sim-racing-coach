@@ -806,6 +806,9 @@ def format_events(events, cmap, units: str = "metric") -> list[str]:
 # at Long Beach. Said wherever dent severity is, so it never passes for "undamaged".
 SUSPENSION_UNSEEN = ("suspension and mechanical damage are not visible in the telemetry "
                      "-- dent severity says nothing about them")
+# ponytail: a guessed gap -- the real Long Beach scrapes chain in steps of <= 28 m;
+# widen it if one wall contact still prints as two places.
+_IMPACT_GROUP_M = 30.0
 
 
 def format_damage_line(events: list, state: dict) -> str | None:
@@ -817,11 +820,27 @@ def format_damage_line(events: list, state: dict) -> str | None:
     panel, only max/total."""
     if not events:
         return None
+    # #206: every side hit, not just the heaviest's -- on Long Beach lap 19 the
+    # heaviest was the rear-right of a scrape whose front-right was the real damage.
+    # Impacts chained within _IMPACT_GROUP_M of each other are one place (a scrape
+    # along a wall logs several), shown at its first impact's distance with its
+    # sides in the order they were hit.
+    groups: list[tuple[float, list[str]]] = []
+    last = math.nan
+    for e in events:                       # damage_events order: as hit, along the lap
+        d = e["lap_distance"]
+        if not groups or not abs(d - last) <= _IMPACT_GROUP_M:
+            groups.append((d, []))
+        if e["label"] not in groups[-1][1]:
+            groups[-1][1].append(e["label"])
+        last = d
     heaviest = max(events, key=lambda e: e["magnitude"])
     n = len(events)
-    line = (f"Contact: {n} impact{'s' if n != 1 else ''}, heaviest "
-            f"{heaviest['magnitude']:.0f} at {heaviest['lap_distance']:,.0f} m "
-            f"({heaviest['label']})")
+    places = ", ".join(f"{d:,.0f} m ({', '.join(sides)})" for d, sides in groups)
+    line = (f"Contact: {n} impact{'s' if n != 1 else ''} at {places}, "
+            f"{'heaviest' if n > 1 else 'magnitude'} {heaviest['magnitude']:.0f}")
+    if len(groups) > 1:
+        line += f" at {heaviest['lap_distance']:,.0f} m"
     if state:
         line += (f". Bodywork damage: dent severity max {state['dent_max']:.0f}, "
                  f"total {state['dent_total']:.0f} (raw 0\N{EN DASH}255 scale, panel unknown)")
