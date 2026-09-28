@@ -727,6 +727,13 @@ def session_turn_note(row: dict, laps: list[dict]) -> str:
     return f"[About a different session ({', '.join(bits + [when])}) — not the current one.] "
 
 
+def _complete_laps(win: dict) -> str:
+    """'8 complete laps captured' -- a window's complete-lap count, worded so it is
+    never read as the race's length (out/in/partial laps aren't in it, #204)."""
+    n = win["laps"]
+    return f"{n} complete lap{'' if n == 1 else 's'} captured"
+
+
 def current_race_fact(windows: list[dict]) -> str:
     """The CURRENT RACE line for the user turn, or '' with at most one race (#136).
 
@@ -737,7 +744,7 @@ def current_race_fact(windows: list[dict]) -> str:
     win = windows[-1]
     started = time.strftime("%H:%M", time.localtime(win["start_ts"]))
     return (f"CURRENT RACE: race {win['index']} of this session (started {started}, "
-            f"{win['laps']} laps). Earlier turns marked as earlier races are history, "
+            f"{_complete_laps(win)}). Earlier turns marked as earlier races are history, "
             f"not this race.")
 
 
@@ -1017,14 +1024,15 @@ class CoachContext:
         return windows[-1] if windows else None
 
     def _race_line(self, win: dict | None) -> str:
-        """'Race 3 of this session (started 00:26, 8 laps).' for the race window a tool
+        """'Race 3 of this session (started 00:26, 8 complete laps captured).' for the
+        race window a tool
         is about, or '' when the session holds at most one race (nothing to
         disambiguate, and a lone 'Race 1 of this session' is noise)."""
         if len(self._race_windows()) < 2:
             return ""
         started = time.strftime("%H:%M", time.localtime(win["start_ts"]))
         return (f"Race {win['index']} of this session (started {started}, "
-                f"{win['laps']} laps).")
+                f"{_complete_laps(win)}).")
 
     def _race_window_at(self, race_ts: float | None) -> dict | None:
         """The race window a result row describes: the first one still running at its
@@ -1906,7 +1914,11 @@ class CoachContext:
         this_lap = self._this_lap_events()
         if not self.session_id:
             return this_lap or "No active session — no stint to scan for incidents."
-        race_only = phase == "race" or race is not None or bool(which)
+        # #204: `which` picks a race only when it names one ('race 2', 'the race'); a
+        # lap-ish which ('latest', 'last lap') is no race selector here and is ignored,
+        # as before #204 -- the scan already covers the recent laps.
+        race_which = which if "race" in str(which or "").lower().split() else None
+        race_only = phase == "race" or race is not None or race_which is not None
         try:
             # A race review is the WHOLE race: `laps` is ignored, or laps=10 (what the
             # model sent in #279) drops the start of any race longer than 10 laps.
@@ -1924,7 +1936,7 @@ class CoachContext:
         if race_only:
             if cur_race is None:
                 return "No race in this session — no race laps to scan for incidents."
-            picked, err = self._race_pick(race, which)
+            picked, err = self._race_pick(race, race_which)
             if err:
                 return err
             cur_race = picked or cur_race
@@ -2401,20 +2413,26 @@ class CoachContext:
             text += ("\nNo race is live now, so the race these positions describe is over "
                      "(its result log isn't read yet): talk about it as a finished race -- "
                      f"{_COOL_DOWN_RULE}; no pit-stop or strategy offers.")
-        return "\n".join([h for h in head if h] + [text] + self._race_lap_positions(win))
+        return "\n".join([h for h in head if h] + [text] + self._race_lap_positions(win, rr))
 
-    def _race_lap_positions(self, win) -> list[str]:
+    def _race_lap_positions(self, win, rr=None) -> list[str]:
         """#180: the race's per-lap positions from race lap 1 (session_laps rows, no
         telemetry), so a race recap has the arc even when the model never makes the
         race-scoped incident call -- and the pointer to that call. `win`: the race
-        window get_race_result describes (the same one `_race_line` names)."""
+        window get_race_result describes (the same one `_race_line` names).
+        #204: with a result row `rr`, also only laps inside its race_ts..next_race_ts,
+        as the arc is -- a legacy window (no lap_no to split on, Monza 2026-09-07) can
+        hold two races."""
         if win is None:
             return []
         ids = set(win["lap_ids"])
+        start = rr.get("race_ts") if rr else None
+        end = rr.get("next_race_ts") if rr else None
         label_by_id, _ = self._lap_numbering()
         rows = [r for r in self._session_laps()
                 if r["id"] in ids and r.get("position") is not None
-                and not _pre_green(r["phase"], r.get("lap_no"))]
+                and not _pre_green(r["phase"], r.get("lap_no"))
+                and (start is None or r["ts"] >= start) and (end is None or r["ts"] < end)]
         if not rows:
             return []
         # #181: a whole lap LMU invalidated (an off, a cut) has no time, like a cool-down
@@ -2868,6 +2886,15 @@ class CoachContext:
         if race is not None or (len(self._race_windows()) > 1
                                 and re.fullmatch(r"(?:the )?race \d+", which)):
             target, err = self._race_pick(race, which)
+            lap = re.fullmatch(r"lap (\d+)", which)
+            whole = re.fullmatch(r"(?:the )?race (\d+)", which)
+            if err and race is not None and lap:
+                return self._race_pick(race)[1] or (
+                    f"race={race} is the whole race; for lap {lap[1]} of it pass "
+                    f"which='race {race} lap {lap[1]}'.")
+            if err and race is None and whole:
+                return err + (f" For a lap: 'race {self._current_race()['index']} lap "
+                              f"{whole[1]}'.")
             if err:
                 return err
         if target is not None or which in _WHOLE_RACE:

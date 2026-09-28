@@ -260,9 +260,16 @@ def test_legacy_laps_without_lap_no_cannot_split(tmp_path, synthetic_lap):
         (3680.76, 28, 115.277), (4494.47, 29, 115.859)]]
     logs = ((0.0, 2245.66, 34, 23, []), (2251.0, 5367.66, 35, 23, []))
     sid = "autodromo-nazionale-monza--team-wrt-2026-32-wec--offline~20260907T2042"
-    store_ctx = _ctx(tmp_path, synthetic_lap, logs=logs, rows=rows, sid=sid, t0=t0,
-                     modes=(False, False))
-    assert len(store_ctx._race_windows()) == 1
+    ctx = _ctx(tmp_path, synthetic_lap, logs=logs, rows=rows, sid=sid, t0=t0,
+               modes=(False, False))
+    assert len(ctx._race_windows()) == 1
+    # The result is race 2's (the nearest to the last lap): its positions tail keeps to
+    # race 2's own laps (race_ts..next_race_ts), as its arc does -- not all eleven.
+    out = ctx.get_race_result()
+    assert "Finished P35 overall" in out and "over 6 captured lap(s)" in out
+    assert _tail(out) == ("Per-lap positions (overall) from race lap 1: race lap 6 P25, "
+                          "race lap 7 P28, race lap 8 P29, race lap 9 P29, race lap 10 "
+                          "P28, race lap 11 P29.")
 
 
 def test_next_race_ts_keeps_the_earlier_logs_grid_off_the_next_race(tmp_path, synthetic_lap):
@@ -280,6 +287,8 @@ def test_next_race_ts_keeps_the_earlier_logs_grid_off_the_next_race(tmp_path, sy
     rr = ctx.store.race_session(SID, 1)
     assert (rr["grid_position"], rr["next_race_ts"]) == (9, T0 + 100.0)
     assert _pos(ctx, "race lap 1") == "P4 overall"
+    # The positions tail keeps to A's race_ts..next_race_ts too: A had no racing lap.
+    assert "Per-lap positions" not in ctx.get_race_result()
 
 
 # -- 3. the repeated in-lap label ---------------------------------------------------
@@ -322,7 +331,11 @@ def test_battle_race_n(tmp_path, synthetic_lap):
     msg = "No race 5 in this session: it holds 3 races, race 1 to race 3."
     assert ctx.dispatch("get_battle", {"race": 5}) == msg
     # Used to read race 3 lap 5 -- the latest race -- through the unqualified lap ref.
-    assert ctx.dispatch("get_battle", {"which": "race 5"}) == msg
+    assert ctx.dispatch("get_battle", {"which": "race 5"}) == (
+        msg + " For a lap: 'race 3 lap 5'.")
+    assert ctx.dispatch("get_battle", {"race": 1, "which": "lap 4"}) == (
+        "race=1 is the whole race; for lap 4 of it pass which='race 1 lap 4'.")
+    assert ctx.dispatch("get_battle", {"race": 5, "which": "lap 4"}) == msg
     # race=N is a stored read even with a race live: never the live read or its note.
     ctx.on_track, ctx.race_note = True, "A race is live; its first lap isn't in yet."
     assert ctx.dispatch("get_battle", {"race": 1}) == out
@@ -341,3 +354,25 @@ def test_battle_on_a_single_race_session_keeps_race_n_as_a_lap(tmp_path, synthet
     assert ctx.dispatch("get_battle", {"race": 1}) == whole
     assert ctx.dispatch("get_battle", {"race": 2}) == (
         "No race 2 in this session: it holds 1 race.")
+
+
+# -- F1: a lap-ish `which` is no race selector for the stint scan ---------------------
+
+def test_practice_only_session_which_latest_is_the_normal_scan(tmp_path, synthetic_lap):
+    """'latest' or 'last lap' must not turn the scan into a race review that finds no
+    race (seen on the real practice-only Imola Garage 59 #10 offline session; the rows
+    here are LGC #10's practice + qualy laps)."""
+    ctx = _ctx(tmp_path, synthetic_lap, logs=(), rows=_ROWS[:9])
+    normal = ctx.dispatch("get_stint_events", {})
+    assert not normal.startswith("No race"), normal
+    assert _laps(normal)[-1] == "qualifying lap 6"
+    for which in ("latest", "last lap", "", "LATEST"):
+        assert ctx.dispatch("get_stint_events", {"which": which}) == normal, which
+
+
+def test_race_session_which_last_lap_is_the_normal_scan(tmp_path, synthetic_lap):
+    ctx = _ctx(tmp_path, synthetic_lap)
+    normal = ctx.dispatch("get_stint_events", {})
+    assert ctx.dispatch("get_stint_events", {"which": "last lap"}) == normal
+    assert ctx.dispatch("get_stint_events", {"which": "the race"}) == ctx.dispatch(
+        "get_stint_events", {"phase": "race"})

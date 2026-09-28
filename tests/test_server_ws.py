@@ -1210,7 +1210,7 @@ def test_ws_coach_current_race_fact_leads_the_user_turn(tmp_path):
 
     user_turn = model.last_messages[-1]["content"]
     assert user_turn.startswith("CURRENT RACE: race 2 of this session (started ")
-    assert "2 laps)." in user_turn.split("\n", 1)[0]
+    assert "2 complete laps captured)." in user_turn.split("\n", 1)[0]
     assert user_turn.index("CURRENT RACE:") < user_turn.index("NEW SINCE YOUR LAST ANSWER:")
     assert user_turn.endswith("how was that?")
     assert "CURRENT RACE:" not in model.last_system

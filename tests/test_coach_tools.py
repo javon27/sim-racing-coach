@@ -2533,7 +2533,7 @@ def test_get_race_result_names_which_race_of_the_sitting_it_reports(
                        car=synthetic_lap.car)
 
     out = ctx.get_race_result()
-    assert f"Race 2 of this session (started {_hhmm(_T0 + 400)}, 2 laps)." in out
+    assert f"Race 2 of this session (started {_hhmm(_T0 + 400)}, 2 complete laps captured)." in out
     # And the figures under that heading are race 2's, not all four laps'.
     assert "over 2 captured lap(s)" in out
     assert "P5 overall on the first captured lap" in out
@@ -2599,7 +2599,7 @@ def test_current_race_fact_only_when_the_session_holds_several_races():
 
     fact = current_race_fact(windows)
     assert fact.startswith(f"CURRENT RACE: race 2 of this session (started "
-                           f"{_hhmm(_T0 + 400)}, 2 laps).")
+                           f"{_hhmm(_T0 + 400)}, 2 complete laps captured).")
     assert "Earlier turns marked as earlier races are history" in fact
     assert current_race_fact(windows[:1]) == ""
     assert current_race_fact([]) == ""
