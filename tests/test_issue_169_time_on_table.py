@@ -382,8 +382,9 @@ def _session(tmp_path, synthetic_lap, n_level=4):
             + [(_variant(synthetic_lap, [slow_t1, slow_end]), 92.9 + i / 10,
                 [30.60, 31.20 - i / 100, 31.10]) for i in range(n_level)])
     off = _variant(synthetic_lap, [slow_t1])
-    off.channels["track_edge"][(off.channels["lap_distance"] >= 800.0)
-                               & (off.channels["lap_distance"] <= 1200.0)] = 1.0   # off at T1
+    t1 = (off.channels["lap_distance"] >= 800.0) & (off.channels["lap_distance"] <= 1200.0)
+    for w in ("fl", "fr", "rl", "rr"):   # #207: an off is two wheels on the grass
+        off.channels[f"surface_{w}"] = t1 * (2.0 if w in ("fl", "rl") else 0.0)
     laps.append((off, 93.5, [30.20, 31.40, 31.20]))
     for i, (lap, t, sec) in enumerate(laps, start=1):
         _save(store, lap, t, i, i, sectors=sec, sector_bounds=bounds)
@@ -474,8 +475,9 @@ def test_get_optimal_seconds_none_when_subjects_own_sector_dropped(tmp_path, syn
     store = _store(tmp_path)
     bounds = [1500.0, 2600.0]
     off = _variant(synthetic_lap, [])
-    off.channels["track_edge"][(off.channels["lap_distance"] >= 800.0)
-                               & (off.channels["lap_distance"] <= 1200.0)] = 1.0
+    t1 = (off.channels["lap_distance"] >= 800.0) & (off.channels["lap_distance"] <= 1200.0)
+    for w in ("fl", "fr", "rl", "rr"):   # #207: an off is two wheels on the grass
+        off.channels[f"surface_{w}"] = t1 * (2.0 if w in ("fl", "rl") else 0.0)
     _save(store, off, 90.0, 1, 1, sectors=[29.0, 31.0, 31.0], sector_bounds=bounds)
     _save(store, synthetic_lap, 91.0, 2, 2, sectors=[30.0, 30.8, 31.2], sector_bounds=bounds)
     ctx = _ctx(store)

@@ -51,6 +51,10 @@ class CornerMetrics:
     # half-width, and not the outer wheels. Low = using all the track; negative = the
     # centre crossed the white line by that much.
     track_edge_min: float = float("nan")
+    # #207: the car left the road -- _OFF_WHEELS+ wheels on grass/dirt/gravel
+    # (mSurfaceType) for _OFF_SAMPLES+ consecutive samples. None when the lap has no
+    # surface channels (captured before them): never guessed from track_edge_min.
+    off_surface: bool | None = None
     coast_time: float = float("nan")      # seconds in the corner with NEITHER pedal
     coast_dist: float = float("nan")      # meters in the corner with neither pedal
     brake_to_throttle_dist: float = float("nan")  # last brake-off -> first throttle (m)
@@ -1269,6 +1273,16 @@ def _metrics_for_corner(
         track_edge_min = float(np.nanmin(np.abs(edge[idx]) - np.abs(path_lat[idx])))
     else:
         track_edge_min = float("nan")
+    # #207: track_edge_min is NOT an off-track signal. At Long Beach T1 it read
+    # -2..-3 m on 35 of 40 laps with the car on asphalt (the AI edge there is
+    # narrower than the road). "Off" is read from the wheels' own surface instead.
+    surf = [record.channels.get(f"surface_{w}") for w in _WHEELS]
+    if all(s is not None for s in surf):
+        n_off = sum(np.isin(np.asarray(s, dtype=float)[idx], _OFF_SURFACES) for s in surf)
+        run = np.convolve((n_off >= _OFF_WHEELS).astype(int), np.ones(_OFF_SAMPLES), "valid")
+        off_surface = bool((run >= _OFF_SAMPLES).any())
+    else:
+        off_surface = None
 
     # Dead time: distance/seconds in the corner with neither pedal, plus the gap
     # between brake release and throttle pickup. Same ds/(v/3.6) integration as
@@ -1344,6 +1358,7 @@ def _metrics_for_corner(
         abs_pct=abs_pct,
         tc_pct=tc_pct,
         track_edge_min=track_edge_min,
+        off_surface=off_surface,
         coast_time=coast_time,
         coast_dist=coast_dist,
         brake_to_throttle_dist=brake_to_throttle_dist,
@@ -1678,12 +1693,16 @@ _SPIN_SPEED_FRAC = 0.5    # ponytail: the actual discriminator -- a hairpin hold
                           # half the speed it started the window at.
 _SPIN_MIN_SPEED_KMH = 5.0  # ponytail: below this the heading off two positions is noise
                            # (a parked or crawling car), so those samples are dropped.
-# ponytail: centre-of-car past the white line, not the outer wheels -- see the
-# track_edge_min note in `_metrics_for_corner`. 1 m is roughly one unmodeled
-# half-car-width past the line, i.e. the point where even a wide GT car's centre
-# being out is not explainable by the missing width. A rig lap with a KNOWN
-# track-limits warning is what settles it.
-_OFF_TRACK_M = -1.0
+# #207: an off is wheels on a non-road surface, from mSurfaceType (codes per the rF2
+# InternalsPlugin.hpp: 0 dry, 1 wet, 2 grass, 3 dirt, 4 gravel, 5 rumblestrip,
+# 6 special). Kerbs (5) are road; "special" is unknown, so it is not claimed.
+_OFF_SURFACES = (2, 3, 4)
+# ponytail: 2+ wheels, not 1 -- one wheel on the grass is a kerb-exit clip that costs
+# nothing, two is the car's whole side off the road. 5 samples is 0.1 s at the 50 Hz
+# poll, so a one-frame blip at a grass/asphalt seam never counts. Both UNVERIFIED at
+# the rig: a lap with a known two-wheel off vs a clean kerb-hopping lap settles them.
+_OFF_WHEELS = 2
+_OFF_SAMPLES = 5
 # ponytail: a flat spot is a STEP, not a slope. Multiple of the stint median, with
 # an absolute floor so a stint that barely wears (a cold short run, median ~0)
 # doesn't flag every lap. A rig lap with a known flat spot settles both.
@@ -1832,9 +1851,10 @@ def lap_events(record: LapRecord, cmap: CornerMap, analysis: "LapAnalysis | None
     """Everything that went wrong on one lap, in along-lap order:
     `{"kind", "corner_no", "lap_distance", "detail"}` per incident.
 
-    kinds: "spin" (path rotation with a speed collapse), "off" (car centre past
-    the white line), "lockup"/"wheelspin" (pass-through of the per-corner reads),
-    "wear_step" (a flat spot). `wear_baseline` comes from `stint_wear_baseline`
+    kinds: "spin" (path rotation with a speed collapse), "off" (wheels on
+    grass/dirt/gravel -- `CornerMetrics.off_surface`; never from track_edge, so a
+    lap captured without surface channels has no offs), "lockup"/"wheelspin"
+    (pass-through of the per-corner reads), "wear_step" (a flat spot). `wear_baseline` comes from `stint_wear_baseline`
     over the stint's laps; without one the wear kind is skipped entirely rather
     than guessed against a single lap."""
     events = _spin_events(record, cmap)
@@ -1845,11 +1865,9 @@ def lap_events(record: LapRecord, cmap: CornerMap, analysis: "LapAnalysis | None
         if cm.wheelspin:
             events.append({"kind": "wheelspin", "corner_no": cm.corner_no,
                            "lap_distance": cm.apex_dist, "detail": {}})
-        edge = cm.track_edge_min
-        if edge is not None and math.isfinite(edge) and edge < _OFF_TRACK_M:
+        if cm.off_surface:
             events.append({"kind": "off", "corner_no": cm.corner_no,
-                           "lap_distance": cm.apex_dist,
-                           "detail": {"past_edge_m": -edge}})
+                           "lap_distance": cm.apex_dist, "detail": {}})
     events.extend(_wear_step_events(record, cmap, wear_baseline or {}))
     # Stable, so incidents sharing an apex distance keep their insertion order.
     events.sort(key=lambda e: (e["lap_distance"] if math.isfinite(e["lap_distance"])

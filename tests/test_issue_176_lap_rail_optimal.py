@@ -41,8 +41,9 @@ def _seed_session(store, synthetic_lap, sid="s1"):
     not merely "not the naive value" (#176 fix round 1 red-team finding)."""
     bounds = [1500.0, 2600.0]
     off = _variant(synthetic_lap)
-    off.channels["track_edge"][(off.channels["lap_distance"] >= 800.0)
-                               & (off.channels["lap_distance"] <= 1200.0)] = 1.0
+    t1 = (off.channels["lap_distance"] >= 800.0) & (off.channels["lap_distance"] <= 1200.0)
+    for w in ("fl", "fr", "rl", "rr"):   # #207: an off is two wheels on the grass
+        off.channels[f"surface_{w}"] = t1 * (2.0 if w in ("fl", "rl") else 0.0)
     _save(store, off, 93.5, 1, 1, sid=sid, sectors=[30.20, 31.40, 31.20], sector_bounds=bounds)
     _save(store, synthetic_lap, 92.8, 2, 2, sid=sid, sectors=[30.40, 31.30, 31.10],
          sector_bounds=bounds)

@@ -4,10 +4,13 @@ import numpy as np
 import pytest
 
 from simcoach.analysis import (
+    _OFF_SAMPLES,
     analyze_lap,
     damage_events,
     damage_state,
+    is_incident_lap,
     lap_events,
+    optimal_sectors,
     stint_wear_baseline,
 )
 from simcoach.corners import CornerMap
@@ -1793,24 +1796,124 @@ def test_lap_events_skips_spins_without_position_channels(synthetic_lap):
     assert [e for e in events if e["kind"] == "spin"] == []
 
 
-def test_lap_events_off_track_only_past_the_knob(synthetic_lap):
-    cmap = CornerMap.load("simcoach/tracks/test_track.json")
-    # Corner 1's closest approach is 0.3 m INSIDE the edge -> not an off.
-    events = lap_events(synthetic_lap, cmap, analyze_lap(synthetic_lap, cmap))
-    assert [e for e in events if e["kind"] == "off"] == []
-    # Push the car 1.5 m past its own edge through corner 1.
-    ch = dict(synthetic_lap.channels)
+# #207: Long Beach lap 7748 (race, 2026-09-27), T1 braking zone -- the scoring-rate
+# (lap_distance, track_edge, path_lateral) updates exactly as stored. On asphalt
+# (valid lap, walled track, no track-limits entry there) |edge| - |lat| reads -3.04 m:
+# LMU's AI edge is narrower than the road the car uses. The old detector called this
+# "off track" on 35 of the last 40 Long Beach laps.
+_LB7748_T1 = (
+    (644.0, 5.663, 8.689), (654.7, 5.535, 8.579), (664.7, 5.467, 8.118),
+    (674.0, 5.333, 7.311), (682.8, 5.316, 6.254), (690.8, 5.286, 4.99),
+    (698.3, 5.302, 3.505), (705.2, 5.397, 1.781), (711.6, -7.655, -0.203),
+    (717.4, -7.393, -2.422), (723.9, -6.173, -4.734), (730.7, -6.179, -5.904),
+    (737.5, -6.131, -5.531), (744.9, -5.415, -3.239), (749.6, -5.663, -0.322),
+    (754.4, 6.381, 2.277), (759.5, 7.374, 4.478),
+)
+
+
+def _long_beach_t1(lap, surface=None):
+    """`lap` with 7748's T1 edge trace laid over corner 1 (800-1200 m), step-held like
+    the ~5 Hz scoring channel it came from. `surface`: {wheel: code array}, added as
+    the surface_{w} channels (absent -> a lap captured before #207)."""
+    ch = dict(lap.channels)
     d = np.asarray(ch["lap_distance"], float)
-    edge = np.asarray(ch["track_edge"], float).copy()
-    lat = np.asarray(ch["path_lateral"], float).copy()
-    seg = (d >= 980) & (d <= 1020)
-    lat[seg] = np.copysign(np.abs(edge[seg]) + 1.5, lat[seg])
-    ch["path_lateral"] = lat
-    rec = dataclasses.replace(synthetic_lap, channels=ch)
-    offs = [e for e in lap_events(rec, cmap, analyze_lap(rec, cmap)) if e["kind"] == "off"]
-    assert len(offs) == 1
-    assert offs[0]["corner_no"] == 1
-    assert offs[0]["detail"]["past_edge_m"] == pytest.approx(1.5, abs=0.2)
+    src = np.array(_LB7748_T1)
+    at = 800.0 + (src[:, 0] - src[0, 0]) * 400.0 / (src[-1, 0] - src[0, 0])
+    seg = (d >= 800) & (d <= 1200)
+    k = np.searchsorted(at, d[seg], side="right") - 1
+    edge, lat = ch["track_edge"].copy(), ch["path_lateral"].copy()
+    edge[seg], lat[seg] = src[k, 1], src[k, 2]
+    ch["track_edge"], ch["path_lateral"] = edge, lat
+    ch.update({f"surface_{w}": s for w, s in (surface or {}).items()})
+    return dataclasses.replace(lap, channels=ch)
+
+
+def _surfaces(lap, off=(), code=2, start=None, count=0):
+    """All four wheels on dry asphalt (0), except wheels `off` on `code` for `count`
+    consecutive samples from the first sample at/after lap distance `start`."""
+    d = np.asarray(lap.channels["lap_distance"], float)
+    out = {w: np.zeros(d.size) for w in ("fl", "fr", "rl", "rr")}
+    if start is not None:
+        i = int(np.searchsorted(d, start))
+        for w in off:
+            out[w][i:i + count] = code
+    return out
+
+
+def _offs(rec, cmap):
+    return [e for e in lap_events(rec, cmap, analyze_lap(rec, cmap)) if e["kind"] == "off"]
+
+
+def test_off_track_never_from_track_edge_on_road(synthetic_lap):
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    rec = _long_beach_t1(synthetic_lap, _surfaces(synthetic_lap))
+    c1 = analyze_lap(rec, cmap).corners[0]
+    assert c1.track_edge_min == pytest.approx(-3.04, abs=0.01)   # the old trigger
+    assert c1.off_surface is False
+    assert _offs(rec, cmap) == []
+    # All four wheels on the kerb (5) through the whole corner: still road.
+    kerb = _long_beach_t1(synthetic_lap, _surfaces(synthetic_lap, ("fl", "fr", "rl", "rr"),
+                                                   code=5, start=800.0, count=130))
+    assert _offs(kerb, cmap) == []
+
+
+def test_off_track_without_surface_channels_is_never_stated(synthetic_lap):
+    # A lap captured before #207: track_edge says -3 m, nothing corroborates it -> cut.
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    rec = _long_beach_t1(synthetic_lap)
+    a = analyze_lap(rec, cmap)
+    assert a.corners[0].track_edge_min < -1.0 and a.corners[0].off_surface is None
+    assert _offs(rec, cmap) == []
+    assert is_incident_lap(rec, cmap, a) is False
+
+
+def test_off_track_two_wheels_on_grass_for_n_samples(synthetic_lap):
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+
+    def offs(**kw):
+        return _offs(_long_beach_t1(synthetic_lap, _surfaces(synthetic_lap, start=990.0, **kw)),
+                     cmap)
+    for code in (2, 3, 4):   # grass, dirt, gravel
+        got = offs(off=("fl", "rl"), code=code, count=_OFF_SAMPLES)
+        assert [(e["kind"], e["corner_no"]) for e in got] == [("off", 1)]
+    assert offs(off=("fl", "rl"), count=_OFF_SAMPLES - 1) == []   # a blip
+    assert offs(off=("fl",), count=60) == []                     # one wheel: a clip
+    # Two wheels, but never at the same time: still one wheel off.
+    rec = _long_beach_t1(synthetic_lap, _surfaces(synthetic_lap))
+    rec.channels["surface_fl"][300:320] = 2
+    rec.channels["surface_rr"][320:340] = 2
+    assert _offs(rec, cmap) == []
+
+
+def test_off_track_knock_on_optimal_and_incident_lap(synthetic_lap):
+    """Long Beach quali (2026-09-27): lap 6's session-best S1 25.951 was dropped from
+    the optimal by the false T1 off. T1 (corner 1, 1000 m) sits in S1 of these real
+    bounds, as Long Beach T1 does."""
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    bounds = [1140.315, 2270.840]
+    real = {"q6": [25.951, 29.841, 25.846], "q4": [26.451, 29.923, 25.831],
+            "q3": [26.596, 30.204, 26.212]}
+
+    def optimal(rec_for):
+        laps = []
+        for key, sectors in real.items():
+            rec = rec_for(key)
+            laps.append({"key": key, "sectors": sectors, "incidents":
+                         [e["lap_distance"] for e in _offs(rec, cmap)]})
+        return optimal_sectors(laps, bounds)
+    no_surface = optimal(lambda key: _long_beach_t1(synthetic_lap))
+    assert no_surface["best"][0] == (25.951, "q6") and no_surface["dropped"] == []
+    road = optimal(lambda key: _long_beach_t1(synthetic_lap, _surfaces(synthetic_lap)))
+    assert road["best"][0] == (25.951, "q6") and road["dropped"] == []
+    assert road["total"] == pytest.approx(25.951 + 29.841 + 25.831)
+    # A REAL off (two wheels on the grass at T1) still costs q6 its S1.
+    grass = optimal(lambda key: _long_beach_t1(synthetic_lap, _surfaces(
+        synthetic_lap, ("fl", "rl"), start=990.0, count=10) if key == "q6"
+        else _surfaces(synthetic_lap)))
+    assert grass["best"][0] == (26.451, "q4") and grass["dropped"] == [(0, 25.951, "q6")]
+    graze = _long_beach_t1(synthetic_lap, _surfaces(synthetic_lap, ("fl", "rl"),
+                                                     start=990.0, count=10))
+    assert is_incident_lap(graze, cmap, analyze_lap(graze, cmap)) is True
 
 
 def test_lap_events_passes_lockup_and_wheelspin_through(synthetic_lap):

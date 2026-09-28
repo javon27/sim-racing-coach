@@ -367,6 +367,12 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
           flat_{w}, wheel_detached_{w} <- mFlat/mDetached (per wheel), 0.0/1.0
             -- UNVERIFIED (nothing broke on the rig hit that confirmed the
             other damage fields).
+      surface_{w} <- mSurfaceType (#207), uint8 code -> float. Codes per the rF2
+        SDK InternalsPlugin.hpp: 0=dry, 1=wet, 2=grass, 3=dirt, 4=gravel,
+        5=rumblestrip, 6=special. analysis reads 2/3/4 as off the road (the
+        off-track event). UNVERIFIED at the rig: that LMU fills it, and that
+        grass/gravel read as 2/4 rather than 0, is settled by the first rig lap
+        that puts two wheels on the grass.
     """
     wheels = telem.mWheel
     # #33: at frame 1, in the garage, this whole block reads pre-population state --
@@ -496,6 +502,8 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
         # #143 [RIG 2026-09-20]: UNVERIFIED, see docstring above.
         sample[f"flat_{name}"] = 1.0 if w.mFlat else 0.0
         sample[f"wheel_detached_{name}"] = 1.0 if w.mDetached else 0.0
+        # #207: UNVERIFIED at the rig, see docstring above.
+        sample[f"surface_{name}"] = float(w.mSurfaceType)
     return sample
 
 

@@ -787,10 +787,8 @@ def format_events(events, cmap, units: str = "metric") -> list[str]:
                          f"\N{RIGHTWARDS ARROW} {spd(d['speed_min_kmh']):.0f} {spd_u}, "
                          f"turned {d['turned_deg']:.0f}\N{DEGREE SIGN}")
         elif kind == "off":
-            # The metres figure stays in the event detail only: track_edge units are
-            # still pending live validation (see `_metrics_for_corner`) and the corner
-            # line deliberately withholds the same number. State the fact, not an
-            # unverified measurement.
+            # #207: read from the wheels' surface, not track_edge, whose metres
+            # figure is unvalidated and withheld everywhere (the corner line too).
             lines.append(f"{head}off track")
         elif kind in ("lockup", "wheelspin"):
             lines.append(f"{head}{kind}")

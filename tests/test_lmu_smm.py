@@ -273,6 +273,16 @@ def test_sample_from_telem_maps_damage_channels():
     assert s["wheel_detached_fl"] == 0.0
 
 
+def test_sample_from_telem_maps_surface_type_per_wheel():
+    """#207: mSurfaceType per wheel, the raw code (header: 0 dry .. 2 grass .. 4
+    gravel, 5 rumblestrip). Distinct codes per wheel so a swapped index shows."""
+    t = make_telem()
+    for i, code in enumerate((2, 0, 5, 4)):
+        t.mWheel[i].mSurfaceType = code
+    s = sample_from_telem(roundtrip(t), lap_dist=0.0)
+    assert [s[f"surface_{w}"] for w in ("fl", "fr", "rl", "rr")] == [2.0, 0.0, 5.0, 4.0]
+
+
 def test_sample_from_telem_maps_rear_brake_bias():
     """mRearBrakeBias is a plain double in the offset-anchored region with
     unambiguous rF2 semantics, unlike the uint8 map indices above -- it is what
