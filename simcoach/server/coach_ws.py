@@ -224,7 +224,9 @@ def register(app, deps) -> None:
                                race=race_snap, race_note=race_note,
                                live_lap=live_meta, car_status=car_status,
                                # #161: the race length for a pre-race plan.
-                               live_session=live_session, live_field=live_field)
+                               live_session=live_session, live_field=live_field,
+                               # #209: wakes the result-log poller (set in main()).
+                               scan_results=getattr(app.state, "scan_results", None))
             car = ctx.car or "car"
 
             # Concise always-on profile tier: static prefs from settings + the active

@@ -12,7 +12,7 @@ from ..car_lookup import warm_entry_table_async
 from ..coach import Coach
 from ..config import load_config
 from ..corners import CornerMap
-from ..lmu.ingest import poll_results
+from ..lmu.ingest import poll_results, scan_now
 from ..lmu.rest import LmuRest
 from ..lmu.smm import LmuSource
 from ..logging_setup import configure_logging
@@ -74,6 +74,7 @@ def main():
     # build_app has returned, so LapStore.__init__ (every migration) is finished first.
     threading.Thread(target=poll_results, args=(app.state.store,), name="result-import",
                      daemon=True).start()
+    app.state.scan_results = scan_now   # #209: a race review wakes it (CoachContext)
     # Warm car_lookup's entry table (#179) so the first cold Results-dir scan (~5 s
     # on a real install) happens here, not on the first /status tick. Same reasoning
     # as poll_results: real install only, never started from build_app/create_app.

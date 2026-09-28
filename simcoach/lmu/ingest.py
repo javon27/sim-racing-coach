@@ -8,6 +8,7 @@ from __future__ import annotations
 import functools
 import logging
 import os
+import threading
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -154,7 +155,21 @@ def ingest_all(store, userdata_dir=None, player_names=None, limit=None, unmatche
     return summary
 
 
-def poll_results(store, sleep=time.sleep, **ingest_kwargs) -> None:
+# #209: set by scan_now -- a race review asked before LMU wrote the log wakes the poller
+# instead of waiting out POLL_INTERVAL_S. One poller per process, so one event.
+_wake = threading.Event()
+
+
+def scan_now() -> None:
+    _wake.set()
+
+
+def _sleep_or_wake(seconds: float) -> None:
+    _wake.wait(seconds)
+    _wake.clear()
+
+
+def poll_results(store, sleep=_sleep_or_wake, **ingest_kwargs) -> None:
     """ingest_all now, then every POLL_INTERVAL_S, forever: the sidecar's result-import
     thread (#81). A poll that raises (e.g. a locked db) is logged and retried, never ends
     the thread. With no `ingest_kwargs` this reads the REAL LMU install, which is why the

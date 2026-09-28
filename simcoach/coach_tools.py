@@ -129,6 +129,16 @@ _UNTIMED_NOTE = "no time \N{EM DASH} LMU didn't time it (invalidated)"
 _COOL_DOWN_RULE = ("the lap begun after the chequered flag is the cool-down (listed as an "
                    "in-lap or a partial lap), not a pit stop -- a lap marked invalidated "
                    "is never the cool-down")
+# #209: a race review asked right after the flag ran before LMU wrote the result log
+# (rig 2026-09-27, Long Beach: tool call 33 s after the last race lap, log written at
+# 52 s). get_race_result waits for it -- at most _RESULT_LOG_WAIT_S, and only while the
+# race's last lap is under _RESULT_LOG_RECENT_S old -- nudging the importer every
+# _RESULT_LOG_POLL_S. The turn runs on coach_ws's worker thread, so blocking is fine.
+# 25 s, not 20: that log landed 18.8 s after the call, and a 20 s wait caught it on its
+# very last poll.
+_RESULT_LOG_WAIT_S = 25.0
+_RESULT_LOG_RECENT_S = 90.0
+_RESULT_LOG_POLL_S = 1.0
 
 
 # #195: what get_strategy reads off a stored lap's .npz, kept in-process -- the history
@@ -934,8 +944,11 @@ class CoachContext:
                  allowed_adjustments=None, session_id=None,
                  car_notes=None, setup_concepts=None, car_class=None, race=None,
                  race_note=None, live_lap=None, car_status=None, live_session=None,
-                 live_field=None, match_class=None):
+                 live_field=None, match_class=None, scan_results=None):
         self.store = store
+        # #209: a zero-argument nudge that makes the result-log importer scan now (the
+        # sidecar's poller wake). None = no importer to wait on (tests, dev builds).
+        self.scan_results = scan_results
         self.units = units
         self.record = record
         self.lap_id = lap_id
@@ -2553,6 +2566,7 @@ class CoachContext:
         if err:
             return err
         n = picked["index"] if picked else None
+        waited = self._await_result_log(picked, n)
         # Name the track of the session these figures DESCRIBE, taken from that session's
         # own laps -- never self.track, which follows the live game or the last capture
         # and can be another track entirely (reviewing Silverstone while the game sat at
@@ -2589,7 +2603,31 @@ class CoachContext:
             text += ("\nNo race is live now, so the race these positions describe is over "
                      "(its result log isn't read yet): talk about it as a finished race -- "
                      f"{_COOL_DOWN_RULE}; no pit-stop or strategy offers.")
+        if waited:
+            text += ("\nThe result log isn't written yet -- this review is PROVISIONAL: no "
+                     "class result, grid slot or car-to-car contacts until it is. Say so, and "
+                     "tell the driver to ask again in a minute for them.")
         return "\n".join([h for h in head if h] + [text] + self._race_lap_positions(win, rr))
+
+    def _await_result_log(self, picked, n) -> bool:
+        """#209: the latest race is over with no live race attached (get_race_result's
+        'No race is live now' case) and its result log isn't imported yet: nudge the
+        importer and re-check until it is, bounded (see _RESULT_LOG_WAIT_S). True when it
+        waited and the log still isn't in; False with no wait, or once it lands."""
+        win = self._current_race()
+        if (self.scan_results is None or win is None or picked not in (None, win)
+                or (self.on_track and (self.race is not None or self.race_note))
+                or self.store.race_session(self.session_id, n) is not None):
+            return False
+        end = min(time.time() + _RESULT_LOG_WAIT_S, win["end_ts"] + _RESULT_LOG_RECENT_S)
+        if time.time() >= end:
+            return False
+        while time.time() < end:
+            self.scan_results()
+            time.sleep(_RESULT_LOG_POLL_S)
+            if self.store.race_session(self.session_id, n) is not None:
+                return False
+        return True
 
     def _race_lap_positions(self, win, rr=None) -> list[str]:
         """#180: the race's per-lap positions from race lap 1 (session_laps rows, no
