@@ -348,6 +348,28 @@ def test_a_stored_in_lap_ending_parked_is_not_an_incident_but_the_live_lap_is_st
     assert "lap ended" not in live[0]
 
 
+def test_a_stop_ended_by_an_escape_is_parked_though_the_car_drives_on_after_it():
+    """Sarthe 7449 / Long Beach 7733 (stored partials): parked, ESC to the garage, then
+    drove out -- the driving AFTER the teleport made it read 'stuck 2.5 s'."""
+    rec = _lap([(40.0, 0.0, 187.0, 187.0), (4.5, 0.0, 187.0, 0.0), (5.0, 0.0, 0.0, 0.0),
+                (6.0, 0.0, 0.0, 80.0)],
+               partial="partial", pit=True, lap_time=None, valid=False)
+    i = int(np.flatnonzero(rec.channels["speed"] < 10)[0]) + 150    # still standing
+    x = rec.channels["pos_x"].copy()
+    x[i:] += 500.0                                                  # the teleport
+    [line] = _lines(_with(rec, pos_x=x))
+    assert line.endswith("\N{EM DASH} 187 \N{RIGHTWARDS ARROW} 0 km/h; the lap ended there")
+
+
+def test_the_crawl_skipped_before_a_stop_is_capped_at_10_s():
+    """A car limping home under 30 km/h for a minute came down from its limp, not from
+    the 200 km/h it did before the damage, a minute earlier."""
+    rec = _lap([(20.0, 0.0, 200.0, 200.0), (1.0, 0.0, 200.0, 25.0), (60.0, 0.0, 25.0, 25.0),
+                (1.0, 0.0, 25.0, 0.0), (5.0, 0.0, 0.0, 0.0), (3.0, 0.0, 0.0, 60.0)])
+    [stop] = _stops(rec)
+    assert stop["detail"]["speed_from_kmh"] == pytest.approx(25.0, abs=0.5)
+
+
 def test_a_scan_still_behind_the_line_prints_no_negative_distance():
     """An out-lap's buffer before the line reads lap_distance -400 -> -241: 'whole lap
     scanned to -241 m' is no measured reach."""

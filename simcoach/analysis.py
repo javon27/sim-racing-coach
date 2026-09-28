@@ -1864,6 +1864,9 @@ _STOP_MERGE_S = 3.0
 # ~5 s, then stopped: 157 is what it came down from, not the crawl.
 _STOP_LOOKBACK_S = 5.0
 _STOP_CRAWL_KMH = 30.0
+# ponytail: how far back the crawl is skipped -- a car limping home for minutes came
+# down from its limp, not from a speed long gone. Raise it if a rig crawl runs longer.
+_STOP_CRAWL_MAX_S = 10.0
 # ponytail: on a lap that saw the pits (or can't say: pit None, a partial, the live
 # lap) a stop counts only when braked into from above this -- the pit limiter reads
 # ~60 km/h, so a pit-box stop never passes. A short pit lane that lets the car reach
@@ -1881,9 +1884,10 @@ def _stop_events(record: LapRecord, cmap: CornerMap, spins: list[dict],
     standing still takes no time. A stop is folded into a spin that began before it and
     ended in it (the spin's `stopped_s`), not a second incident; one after a hit there
     -- a separate contact line -- is annotated (`after_contact`). A stored in-lap or
-    partial that ends standing, with neither, is "parked" (the driver pulled over and
-    left, maybe via a teleport to the garage): no stuck time, not an incident. Never
-    on the `live` lap, whose buffer ends now -- a car stopped there is stuck."""
+    partial whose stop runs to its end or to a break, with neither, is "parked" (the
+    driver pulled over and left, maybe via a teleport to the garage): no stuck time,
+    not an incident. Never on the `live` lap, whose buffer ends now -- a car stopped
+    there is stuck."""
     ch = record.channels
     et = ch.get("elapsed_time", ch.get("time"))
     if et is None:
@@ -1916,7 +1920,8 @@ def _stop_events(record: LapRecord, cmap: CornerMap, spins: list[dict],
         if lo == 0 or brk[lo] or not stuck >= _STOP_S:
             continue
         k = lo
-        while k > 0 and v[k - 1] < _STOP_CRAWL_KMH and not brk[k]:
+        while (k > 0 and v[k - 1] < _STOP_CRAWL_KMH and not brk[k]
+               and et[lo] - et[k - 1] <= _STOP_CRAWL_MAX_S):
             k -= 1
         back = et[:k + 1] >= et[k] - _STOP_LOOKBACK_S
         peak = float(np.nanmax(v[:k + 1][back])) if back.any() else float(v[lo])
@@ -1936,9 +1941,10 @@ def _stop_events(record: LapRecord, cmap: CornerMap, spins: list[dict],
             continue
         contact = any(h["et"] <= et[lo] and abs(h["lap_distance"] - d[lo]) <= _STOP_CAUSE_M
                       for h in hits)
-        # the car never moved again on this lap (a teleport to the garage may follow)
+        # the stop ran to the buffer's end or to a break (an ESC to the garage) -- what
+        # follows a break is not this stop's (Sarthe 7449, Long Beach 7733 drove out)
         parked = (not live and not contact and record.partial in ("in", "partial")
-                  and not (v[hi + 1:] >= _STOP_KMH).any())
+                  and end == hi)
         out.append({
             "kind": "parked" if parked else "stop",
             "corner_no": _corner_at(cmap, d[lo]),
