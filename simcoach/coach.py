@@ -202,6 +202,8 @@ AGENTIC_SYSTEM_PROMPT = (
     "just the latest one. For the RACE as a whole ('analyze that race', 'how did the "
     "race go') pass phase='race': it reads that race's own laps from race lap 1, never "
     "qualifying or the grid/formation lap; an earlier race of the session: add race=N. "
+    "Unscoped it reads only the current phase; for another one (the qualy just before "
+    "the race) pass phase='qualifying'/'practice'. "
     "A wear step on ONE lap at ONE corner is a flat spot (from a "
     "lockup or a spin there), not cornering load.\n\n"
     "THIS LAP: every other lap read is a COMPLETED lap. When the driver describes something "

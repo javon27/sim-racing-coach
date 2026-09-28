@@ -250,7 +250,7 @@ TOOLS = [
     },
     {
         "name": "get_stint_events",
-        "description": "Incidents across the last N laps of this session — spins, "
+        "description": "Incidents across the last N laps of the current phase — spins, "
                        "off-tracks, lockups, wheelspin, and per-wheel wear steps (flat "
                        "spots), each with lap and corner. Call this when the driver "
                        "mentions a spin, an off, a moment, a flat spot, or asks what "
@@ -267,9 +267,12 @@ TOOLS = [
                          "description": "How many recent laps to scan (default 10, "
                                         "max 30). Ignored with phase='race', which "
                                         "always scans the whole race."},
-                "phase": {"type": "string", "enum": ["race"],
-                          "description": "'race' to scan only the current or most "
-                                         "recent race's racing laps."},
+                "phase": {"type": "string",
+                          "enum": ["practice", "qualifying", "warmup", "race"],
+                          "description": "Which phase's laps to scan. Default: the "
+                                         "current phase only. 'race': the current or "
+                                         "most recent race's racing laps; any other: "
+                                         "that phase's most recent laps."},
                 "race": {"type": "integer",
                          "description": "Which race of a session holding several "
                                         "(1 = the first; laps are labelled 'race N lap "
@@ -2011,7 +2014,15 @@ class CoachContext:
 
         #187: race=N (1-based, store.race_windows' index -- #174's 'race N') reviews
         that race of a multi-race session instead of the latest; it implies
-        phase='race'. #204: which='race N' says the same (_race_pick)."""
+        phase='race'. #204: which='race N' says the same (_race_pick).
+
+        #212: any other scan reads ONE phase's laps -- `phase` ('practice',
+        'qualifying', 'warmup'), else the current lap's phase (the latest complete
+        lap, as get_consistency) -- so a qualy question gets neither practice laps nor
+        the race's lap 0 that follows it. Right after qualy (no complete race lap yet)
+        the current lap is still qualy's: 'that spin a few laps ago' reaches it. A
+        non-race phase reads its most recent consecutive run (one session id spans
+        the evening); the race default, the current race's laps, lap 0 included."""
         if not self.session_id and not self.on_track:
             return "No active session — no stint to scan for incidents."
         if self.cmap is None:
@@ -2053,8 +2064,27 @@ class CoachContext:
                 return msg + ("\n" + this_lap if this_lap else "")
             if len(rows) > n:
                 cut.append(f"(last {n} of {len(rows)} race laps)")
-        elif cur_race is not None and len(self._race_windows()) > 1:
-            rows = [r for r in rows if r["ts"] >= cur_race["start_ts"]]
+        else:
+            if phase is None:
+                # ponytail: the latest COMPLETE lap's phase -- a new phase's stored
+                # out-lap before its first complete lap is scanned under the old
+                # phase (pass phase= to reach it); key off the live phase if that bites.
+                cur_rec, _ = self._current_lap()
+                phase = cur_rec.phase if cur_rec is not None else None
+            if phase == "race" and cur_race is not None:
+                rows = [r for r in rows if r["id"] in set(cur_race["lap_ids"])]
+            elif phase is not None:
+                end = max((i for i, r in enumerate(rows) if r.get("phase") == phase),
+                          default=None)
+                if end is None:
+                    msg = f"No {phase} laps in this session — nothing to scan."
+                    return msg + ("\n" + this_lap if this_lap else "")
+                start = end
+                while start and rows[start - 1].get("phase") == phase:
+                    start -= 1
+                rows = rows[start:end + 1]
+            elif cur_race is not None and len(self._race_windows()) > 1:
+                rows = [r for r in rows if r["ts"] >= cur_race["start_ts"]]
         rows = rows[-n:]
         loaded = []
         for row in rows:

@@ -142,6 +142,20 @@ def race_finished(windows: list[dict], result_ts: float | None, *, has_result: b
     return bool(windows) and not race_live
 
 
+def race_reviewable(windows: list[dict], laps: list[dict], live_phase: str | None) -> bool:
+    """#212: may the router call a question a race review? Only once the current race
+    (the last race window) holds a COMPLETE lap from the green -- not partial, not race
+    lap 0 (grid/formation) -- and no non-race session is live. At the qualifying ->
+    race boundary LMU flips the live phase to race before a race lap exists (rig
+    2026-09-27: 'how am I doing' after quali lap 6 got the race ack), so a question
+    there is about the session just driven. Args as `race_finished`."""
+    if (live_phase and live_phase != "race") or not windows:
+        return False
+    ids = set(windows[-1]["lap_ids"])
+    return any(lap["id"] in ids and lap.get("lap_no") != 0 and not lap.get("partial")
+               for lap in laps)
+
+
 def ack_line(intent: str | None) -> str:
     """The code-chosen line a deep answer opens with, before the model is called."""
     return _ACK.get(intent or "", _ACK_DEFAULT)
@@ -195,7 +209,8 @@ def _prompt(question: str, history: list[dict], state: str) -> str:
 def route(question: str, *, setting: str = "auto", moving: bool = False,
           race_finished: bool = False, classifier: Callable | None = None,
           history: list[dict] | None = None, state: str = "",
-          cmap=None) -> tuple[str, str | None, str, TokenUsage, dict]:
+          cmap=None, race_reviewable: bool = True
+          ) -> tuple[str, str | None, str, TokenUsage, dict]:
     """(tier, intent, one line of context for the coach or "", what the classifier
     billed, {"via", "classify_ms"} -- how the tier was chosen and how long the router
     waited on the classifier, None when it was not asked). `classifier` is a
@@ -205,7 +220,12 @@ def route(question: str, *, setting: str = "auto", moving: bool = False,
     one of "gate", "classifier", "rules" (no classifier; classify_ms None), "rules: classifier timeout" (the router's
     budget ran out), "rules: classifier failed" (the call returned nothing: an API
     error or its own timeout), "rules: bad classifier output", "rules: classifier
-    error" (it raised). Every classification is logged (INFO)."""
+    error" (it raised). Every classification is logged (INFO), with its state line.
+
+    #212: a race_review intent while `race_reviewable` is False (see that function)
+    becomes "session_review" -- a neutral ack and router note. The tier stands: the
+    classifier judged the work (a whole-session review is a multi-read answer too);
+    what was false is only that there is a race to review."""
     t0 = time.monotonic()
     if setting not in SETTINGS:
         setting = "auto"
@@ -242,6 +262,8 @@ def route(question: str, *, setting: str = "auto", moving: bool = False,
     tier = thinking_tier(question, setting=setting, moving=moving,
                          race_finished=race_finished, classified=classified)
     intent = classified["intent"] if classified else None
+    if intent == "race_review" and not race_reviewable:
+        intent = "session_review"       # #212: code decides there is a race to review
     corner = match_corner(classified.get("corner"), cmap) if classified else None
     parts = [f"question type: {intent.replace('_', ' ')}" if intent else "",
              f"about {corner}" if corner else "",
@@ -249,9 +271,9 @@ def route(question: str, *, setting: str = "auto", moving: bool = False,
              else ""]
     hint = "; ".join(p for p in parts if p)
     _log.info("coach thinking %s tier=%s via=%s%s setting=%s moving=%s race_finished=%s "
-              "classified=%s %.0f ms question=%r", TURN_TAG.get(), tier, via, detail,
-              setting, moving, race_finished,
+              "intent=%s classified=%s %.0f ms state=%r question=%r", TURN_TAG.get(), tier,
+              via, detail, setting, moving, race_finished, intent,
               json.dumps(classified) if classified else None,
-              (time.monotonic() - t0) * 1000, question[:300])
+              (time.monotonic() - t0) * 1000, state[:300], question[:300])
     return tier, intent, (f"ROUTER NOTE (a hint, not an instruction): {hint}." if hint
                           else ""), usage, {"via": via, "classify_ms": classify_ms}

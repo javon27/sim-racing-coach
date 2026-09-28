@@ -28,7 +28,7 @@ from ..format import format_laptime
 from ..model.base import TURN_TAG, TokenUsage
 from ..model.factory import CoachUserError
 from ..race import live_race
-from ..thinking import MOVING_KPH, race_finished, route
+from ..thinking import MOVING_KPH, race_finished, race_reviewable, route
 from ..tiers import legal_adjustments
 from .security import ALLOWED_HOSTS, _bad_origin
 from .serialize import _usage_view
@@ -389,6 +389,7 @@ def register(app, deps) -> None:
                     tier, intent, hint, classify_usage, routed = route(
                         question, setting=coach_cfg.get("thinking", "auto"), moving=moving,
                         race_finished=finished, history=history, state=state, cmap=ctx.cmap,
+                        race_reviewable=race_reviewable(windows, laps, live_phase),
                         classifier=(lambda: classifier_for(coach_cfg.get("classifier_model")))
                         if classifier_for is not None else None)
                     turn_usage = turn_usage + classify_usage

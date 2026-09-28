@@ -74,14 +74,19 @@ def test_race_scope_defaults_to_the_whole_race(tmp_path, synthetic_lap):
     assert _laps(out)[0] == "race lap 1"
 
 
-def test_unscoped_stint_events_still_see_every_phase(tmp_path, synthetic_lap):
-    """No regression: 'that spin a few laps ago' is not a race review."""
-    out = _sarthe(tmp_path, synthetic_lap).dispatch("get_stint_events", {"laps": 10})
+def test_unscoped_stint_events_read_the_current_phase(tmp_path, synthetic_lap):
+    """'that spin a few laps ago' is not a race review: race lap 0 stays in. #212: but
+    the unscoped scan is the current phase only -- qualy is reached by phase=."""
+    ctx = _sarthe(tmp_path, synthetic_lap)
+    out = ctx.dispatch("get_stint_events", {"laps": 10})
     labels = _laps(out)
-    assert labels[0] == "qualifying lap 2" and labels.count("race lap 0") == 4
-    assert "RL wear step" in out and "FR wear step" in out
+    assert labels[0] == "race lap 0" and labels.count("race lap 0") == 4
+    assert "RL wear step" not in out and "FR wear step" in out
     # ...but a race lap 0 still carries no position: the formation lap's P9 is not one.
     assert "P9" not in out
+    # (not "RL wear step": a two-lap median baseline includes the step lap itself)
+    qualy = ctx.dispatch("get_stint_events", {"phase": "qualifying"})
+    assert _laps(qualy) == ["qualifying lap 1", "qualifying lap 2"]
 
 
 def test_race_result_positions_start_at_race_lap_1(tmp_path, synthetic_lap):
