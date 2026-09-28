@@ -1669,14 +1669,20 @@ class LapStore:
         rule (see race_windows's docstring for the rule itself and the shape)."""
         windows: list[dict] = []
         current: dict | None = None
+        last_no = None      # the current window's newest game lap number
         for lap in laps:
             if lap.get("phase") != "race":
                 current = None      # any other phase ends the race run
                 continue
-            if current is None or (lap["ts"] - current["end_ts"]) > _RACE_WINDOW_GAP_S:
+            no = lap.get("lap_no")
+            if (current is None or (lap["ts"] - current["end_ts"]) > _RACE_WINDOW_GAP_S
+                    or (no is not None and last_no is not None and no < last_no)):
                 current = {"index": len(windows) + 1, "start_ts": lap["ts"],
                            "end_ts": lap["ts"], "lap_ids": [], "laps": 0}
                 windows.append(current)
+                last_no = None
+            if no is not None:
+                last_no = no
             current["end_ts"] = lap["ts"]
             current["lap_ids"].append(lap["id"])
             if not lap.get("partial"):
@@ -1689,8 +1695,11 @@ class LapStore:
         One session id spans a whole evening (track + car + online|offline, split only
         after _SESSION_GAP_S = 6 h), so three races in a row share it -- and a chat that
         spans them had nothing to say which race an earlier turn was about. A race window
-        is a maximal run of phase='race' laps, ended by any non-race lap or by a pause
-        longer than _RACE_WINDOW_GAP_S.
+        is a maximal run of phase='race' laps, ended by any non-race lap, by a pause
+        longer than _RACE_WINDOW_GAP_S, or (#204) by the game's lap number going BACK
+        (race B's lap 0 after race A's lap 3: two races driven back to back with no
+        other lap between). Legacy laps with no lap_no can't show that reset, so two
+        such races still share one window (Monza WRT offline, 2026-09-07).
 
         Derived from `laps` on every call: no schema change, and it stays right for laps
         imported later from a result log. Each window is
@@ -1861,7 +1870,8 @@ class LapStore:
                  logged_ts),
             )
 
-    def _linked_result_session(self, session_id: str) -> str | None:
+    def _linked_result_session(self, session_id: str,
+                               window: tuple[float | None, float] | None = None):
         """The result-log session id (XML filename stem) holding the race outcome for
         a LIVE session id, or None.
 
@@ -1900,7 +1910,13 @@ class LapStore:
         Returns (result session id, arc-floor ts). The second value is set only on that
         refusal: it is when the stale log was written, which is the point after which the
         session's race laps belong to the race that has no log yet -- so the caller can
-        still scope an honest per-lap arc to the current race instead of spanning both."""
+        still scope an honest per-lap arc to the current race instead of spanning both.
+
+        #204: `window` = (previous race window's end_ts or None, this window's end_ts)
+        resolves ONE race of the sitting instead of the latest: a row started after the
+        previous race's last lap and by this race's last lap (the coach's
+        `_race_window_at` rule), with this race's last lap as the anchor and the stale-log
+        cutoff."""
         row = self.conn.execute(
             "SELECT track, car, MIN(ts), MAX(ts) FROM laps "
             "WHERE session_id = ? AND source = 'live' AND phase = 'race'",
@@ -1915,6 +1931,12 @@ class LapStore:
         query = ("SELECT session_id, logged_ts FROM race_sessions WHERE phase = 'race' "
                  "AND track IS ? AND car IS ? AND ts IS NOT NULL AND ts BETWEEN ? AND ?")
         params: list = [track, car, first - _SESSION_GAP_S, last + _SESSION_GAP_S]
+        if window is not None:
+            after, last = window
+            params[3] = last
+            if after is not None:
+                query += " AND ts > ?"
+                params.append(after)
         order = "ORDER BY ABS(ts - ?), ts DESC, session_id LIMIT 1"
         if mode is not None:
             query += " AND (mode IS NULL OR mode = ?)"
@@ -1956,14 +1978,24 @@ class LapStore:
         with self._lock:
             return self._linked_result_session(session_id)[1]
 
-    def race_session(self, session_id: str) -> dict | None:
+    def race_session(self, session_id: str, race: int | None = None) -> dict | None:
         """The persisted race outcome (grid/finish position, incidents, penalties) for
         a session, or None if no race row exists (practice/qualy, or not imported).
 
         Falls back to the result-log row linked to a LIVE session id (see
         _linked_result_session) -- the row is keyed by the XML stem, so a live session
         has no row of its own. None while a race is still being driven: its log is not
-        written yet, and the newest one on disk belongs to an earlier race."""
+        written yet, and the newest one on disk belongs to an earlier race.
+
+        #204: race=N (1-based, race_windows' index) is that race's row instead of the
+        latest race's -- None when N is not a race of this session or has no log."""
+        window = None
+        if race is not None:
+            wins = self.race_windows(session_id)
+            if not 1 <= race <= len(wins):
+                return None
+            window = (wins[race - 2]["end_ts"] if race > 1 else None,
+                      wins[race - 1]["end_ts"])
         # phase = 'race' OR NULL: a practice/qualifying result row must not resolve
         # (issue #67 residual). NULL is grandfathered for rows migrated from a
         # pre-v15 db that never had a phase column -- a re-ingest backfills it.
@@ -1973,7 +2005,7 @@ class LapStore:
         with self._lock:
             row = self.conn.execute(cols, (session_id,)).fetchone()
             if row is None:
-                linked, _ = self._linked_result_session(session_id)
+                linked, _ = self._linked_result_session(session_id, window)
                 row = self.conn.execute(cols, (linked,)).fetchone() if linked else None
             if row is None:
                 return None

@@ -191,8 +191,9 @@ def test_race_lap_1_is_measured_from_this_races_grid_slot(tmp_path, synthetic_la
     # Race 2 lap 1 ran P2 from the P3 grid slot -- not "from P2", race 1's in-lap.
     assert _pos(ctx, "race 2 lap 1") == "P2 overall (from P3 overall on the grid)"
     assert _pos(ctx, "race 2 lap 5") == "P1 overall (from P2 overall)"
-    # The result on hand is race 2's: race 1's grid slot is not in it, so no 'from'.
-    assert _pos(ctx, "race 1 lap 1") == "P2 overall"
+    # #204: race 1's own result row gives its lap 1 race 1's grid slot (P2), never
+    # race 2's P3.
+    assert _pos(ctx, "race 1 lap 1") == "P2 overall (from P2 overall on the grid)"
 
 
 def test_race_lap_1_uses_race_1s_grid_when_its_log_is_the_one(tmp_path, synthetic_lap):
@@ -217,20 +218,18 @@ def test_no_grid_slot_no_from_and_never_the_previous_race(tmp_path, synthetic_la
 # -- M1: a window can hold two races; the grid slot is only the logged race's ------------
 
 def test_grid_slot_never_reaches_the_other_race_of_a_merged_window(tmp_path, synthetic_lap):
-    """Two races back to back with no other lap between (an offline restart) are ONE
-    window. Only race B is logged: A's lap 1 must not read 'from' B's grid slot."""
+    """Two races back to back with no other lap between (an offline restart) -- #204:
+    split into two windows by the lap_no reset. Only race B is logged: A's lap 1 must
+    not read 'from' B's grid slot; B's lap 1 does."""
     race = [(0.0, "race", 0, "partial", 2, None), (203.4, "race", 1, None, 2, 112.345),
             (309.6, "race", 2, None, 2, 106.289), (416.6, "race", 3, None, 2, 106.867)]
     b0 = 900.0          # under _RACE_WINDOW_GAP_S after A's last lap
     rows = race + [(dt + b0, *rest) for dt, *rest in race]
     log_b = (b0 - 36.68, None, 1, 7, 7)
     ctx = _lgc12(tmp_path, synthetic_lap, logs=[(log_b, None)], rows=rows, pit_at=set())
-    assert len(ctx._race_windows()) == 1
-    heads = [line for line in ctx.get_stint_events(phase="race").splitlines()
-             if line.startswith("Lap: race lap 1 ")]
-    assert len(heads) == 2
-    assert heads[0].endswith("position P2 overall"), heads[0]      # race A: no 'from'
-    assert "P7" not in heads[0]
+    assert len(ctx._race_windows()) == 2
+    assert _pos(ctx, "race 1 lap 1") == "P2 overall"                # race A: no 'from'
+    assert _pos(ctx, "race 2 lap 1") == "P2 overall (from P7 overall on the grid)"
 
 
 # -- M2 + M3: the real Road Atlanta pit-lane start (13 Autosport, 2026-09-23) -------------
