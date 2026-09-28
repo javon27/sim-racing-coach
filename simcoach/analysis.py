@@ -52,8 +52,9 @@ class CornerMetrics:
     # centre crossed the white line by that much.
     track_edge_min: float = float("nan")
     # #207: the car left the road -- _OFF_WHEELS+ wheels on grass/dirt/gravel
-    # (mSurfaceType) for _OFF_SAMPLES+ consecutive samples. None when the lap has no
-    # surface channels (captured before them): never guessed from track_edge_min.
+    # (mSurfaceType) for _OFF_SAMPLES+ consecutive samples. None = not measured: no
+    # surface channels (captured before them), or they read 0 all lap (dead channel).
+    # Never guessed from track_edge_min.
     off_surface: bool | None = None
     coast_time: float = float("nan")      # seconds in the corner with NEITHER pedal
     coast_dist: float = float("nan")      # meters in the corner with neither pedal
@@ -1276,11 +1277,18 @@ def _metrics_for_corner(
     # #207: track_edge_min is NOT an off-track signal. At Long Beach T1 it read
     # -2..-3 m on 35 of 40 laps with the car on asphalt (the AI edge there is
     # narrower than the road). "Off" is read from the wheels' own surface instead.
+    # Liveness gate: a lap whose surface reads 0 on every wheel all lap never touched
+    # a kerb -- far likelier the channel is dead (as mGripFract is, #43) than that the
+    # lap was clean, so it measures nothing: None, not False.
     surf = [record.channels.get(f"surface_{w}") for w in _WHEELS]
-    if all(s is not None for s in surf):
-        n_off = sum(np.isin(np.asarray(s, dtype=float)[idx], _OFF_SURFACES) for s in surf)
-        run = np.convolve((n_off >= _OFF_WHEELS).astype(int), np.ones(_OFF_SAMPLES), "valid")
-        off_surface = bool((run >= _OFF_SAMPLES).any())
+    surf = [np.asarray(s, dtype=float) for s in surf if s is not None]
+    if len(surf) == len(_WHEELS) and any((s > 0).any() for s in surf):
+        n_off = sum(np.isin(s[idx], _OFF_SURFACES) for s in surf)
+        # A run never joins across a gap in `idx` -- a window wrapping S/F puts the
+        # lap's last samples next to its first.
+        segs = np.split((n_off >= _OFF_WHEELS).astype(int), np.flatnonzero(np.diff(idx) != 1) + 1)
+        off_surface = any((np.convolve(g, np.ones(_OFF_SAMPLES), "valid") >= _OFF_SAMPLES).any()
+                          for g in segs)
     else:
         off_surface = None
 

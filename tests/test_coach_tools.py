@@ -2174,7 +2174,48 @@ def test_get_stint_events_names_the_lap_and_the_corner(tmp_path, synthetic_lap):
     assert "T2 Right Sweeper: spin" in out
     assert "FR wear step" in out and "T1 Left Hairpin" in out
     # the two clean laps say so rather than going unmentioned
-    assert out.count("none") == 2
+    assert out.count("\n  none") == 2
+    # #207: none of these laps has a surface capture, so that "none" is scoped ONCE
+    assert out.count("off-track not captured") == 1
+    assert out.endswith("(off-track not captured on these laps: 'none' there does not "
+                        "rule out an off)")
+
+
+def _with_surface(lap, grass=False):
+    """#207: `lap` with the per-wheel surface capture -- a kerb touch (FR, first 5
+    samples) so the channel reads live, and with `grass` FL+RL on the grass through
+    T1's apex for 10 samples."""
+    import dataclasses
+
+    import numpy as np
+    d = np.asarray(lap.channels["lap_distance"], float)
+    s = {w: np.zeros(d.size) for w in ("fl", "fr", "rl", "rr")}
+    s["fr"][:5] = 5
+    if grass:
+        i = int(np.searchsorted(d, 990.0))
+        s["fl"][i:i + 10] = s["rl"][i:i + 10] = 2
+    return dataclasses.replace(lap, channels={**lap.channels,
+                                              **{f"surface_{w}": v for w, v in s.items()}})
+
+
+def test_get_stint_events_offs_scope_follows_the_surface_capture(tmp_path, synthetic_lap):
+    import dataclasses
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    laps = [synthetic_lap, _with_surface(synthetic_lap), _with_surface(synthetic_lap, True)]
+    for i, lap in enumerate(laps):
+        store.save(dataclasses.replace(lap, session_id="s1--online", phase="race",
+                                       lap_time=90.0 + i, timestamp=90.0 + i))
+    ctx = CoachContext(store, cmap=CornerMap.load("simcoach/tracks/test_track.json"),
+                       track=synthetic_lap.track, car=synthetic_lap.car,
+                       session_id="s1--online", on_track=True)
+    out = ctx.dispatch("get_stint_events", {})
+    assert "T1 Left Hairpin: off track" in out           # the grass lap, measured
+    assert out.count("\n  none") == 2                    # old lap + the clean kerb lap
+    # Only the pre-#207 lap is unmeasured, and the note says exactly that much.
+    assert out.count("off-track not captured") == 1
+    assert "(off-track not captured on 1 of these 3 laps:" in out
+    assert "not captured" not in ctx.get_lap_summary("race lap 2")
+    assert ctx.get_lap_summary("race lap 2").splitlines()[1] == "Events this lap: none"
 
 
 def test_get_stint_events_scopes_to_the_last_n_laps(tmp_path, synthetic_lap):
@@ -2280,8 +2321,10 @@ def test_get_lap_summary_leads_with_events_this_lap(tmp_path, synthetic_lap):
     assert lines[0].startswith("Lap: ")
     assert lines[1].startswith("Events this lap: ")
     assert "spin" in lines[1]
-    # a clean lap says so rather than dropping the line
-    assert ctx.get_lap_summary("race lap 1").splitlines()[1] == "Events this lap: none"
+    # a clean lap says so rather than dropping the line -- scoped, #207: this lap has
+    # no surface capture, so its "none" can't speak for offs
+    assert ctx.get_lap_summary("race lap 1").splitlines()[1] == (
+        "Events this lap: none (off-track not captured on this lap)")
 
 
 def test_get_wheel_report_appends_the_wear_step(tmp_path, synthetic_lap):

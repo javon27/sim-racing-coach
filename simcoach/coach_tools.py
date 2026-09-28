@@ -69,6 +69,10 @@ from simcoach.format import (
 )
 from simcoach.fuel import laps_remaining
 from simcoach.livelap import impact_text, incident_lines
+
+# #207: the off-track read needs the per-wheel surface capture (`off_surface`); a lap
+# captured before it, or with the channel dead, has no measured offs either way.
+OFFS_UNSCANNED = "off-track not captured"
 from simcoach.race import (
     FILL_ROWS,
     FILL_TOL,
@@ -1310,6 +1314,11 @@ class CoachContext:
                             self._wear_baseline() if baseline is None else baseline)
         return format_events(events, self.cmap, self.units)
 
+    def _offs_unscanned(self, record, lap_id) -> bool:
+        """#207: no corner on this lap has a surface read (captured before it, or a
+        dead channel), so an absent "off track" there is not a measured "no off"."""
+        return all(cm.off_surface is None for cm in self._analysis_for(record, lap_id).corners)
+
     def _grip_envelope(self, reference):
         """The grip envelope (g), computed ONCE per context (cached on
         `self._envelope`) from this track/car's recent stored laps plus
@@ -1555,7 +1564,9 @@ class CoachContext:
         # or a flat spot reframes every corner number below it.
         events = self._events_for(record, lap_id)
         lap_line = (self._lap_line(record, lap_id) + "\nEvents this lap: "
-                    + (", ".join(events) if events else "none"))
+                    + (", ".join(events) if events else "none")
+                    + (f" ({OFFS_UNSCANNED} on this lap)"
+                       if self._offs_unscanned(record, lap_id) else ""))
         analysis = self._analysis_for(record, lap_id)
         # #102: lead with the time-loss ranking (and surface its worst corners
         # first below) whenever a reference resolves -- a flat table buries the
@@ -1968,8 +1979,10 @@ class CoachContext:
         baseline = stint_wear_baseline([rec for rec, _ in loaded])
         out = cut
         contact = False
+        unscanned = 0
         for record, lap_id in loaded:
             lines = self._events_for(record, lap_id, baseline)
+            unscanned += self._offs_unscanned(record, lap_id)
             out.append(self._lap_line(record, lap_id))
             out.extend(f"  {line}" for line in (lines or ["none"]))
             # #143: contact is its own line, not folded into "none" -- a clean lap
@@ -1980,6 +1993,10 @@ class CoachContext:
             if damage_line:
                 out.append(f"  {damage_line}")
                 contact = True
+        if unscanned:                # #207: once -- "none" above doesn't cover offs there
+            which = "these laps" if unscanned == len(loaded) else (
+                f"{unscanned} of these {len(loaded)} laps")
+            out.append(f"({OFFS_UNSCANNED} on {which}: 'none' there does not rule out an off)")
         if this_lap:
             out.append(this_lap)
         if contact:                  # #206: once, not on every contact lap
@@ -2116,17 +2133,23 @@ class CoachContext:
         out.append(f"  corners completed: {tags or 'none yet'}")
         incidents = [line for r in rows for line in self._row_corner_reads(r)]
         scan = m.get("incidents")
+        # #207: offs are read from the wheel surface; none on any corner row = unmeasured.
+        offs_note = (f"  ({OFFS_UNSCANNED} on this lap so far)"
+                     if all(r["facts"]["metrics"].get("off_surface") is None for r in rows)
+                     else None)
         if scan is None:
             # Never "no incidents" off a partial look: only corner windows were read.
             out.extend(f"  {line}" for line in incidents)
             out.append("  (spins and hits outside corner windows: not scanned)")
-            return "\n".join(out)
+            return "\n".join(out + ([offs_note] if offs_note else []))
         incidents += incident_lines(scan, self.cmap, self.units)
         if incidents:
             out.extend(f"  {line}" for line in incidents)
         elif scan.get("scanned_to") is not None:
             out.append(f"  no incidents so far (whole lap scanned to "
                        f"{scan['scanned_to']:,.0f} m)")
+        if offs_note:
+            out.append(offs_note)
         return "\n".join(out)
 
     def get_car_status(self):

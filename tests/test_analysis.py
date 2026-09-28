@@ -1828,11 +1828,15 @@ def _long_beach_t1(lap, surface=None):
     return dataclasses.replace(lap, channels=ch)
 
 
-def _surfaces(lap, off=(), code=2, start=None, count=0):
+def _surfaces(lap, off=(), code=2, start=None, count=0, kerb=True):
     """All four wheels on dry asphalt (0), except wheels `off` on `code` for `count`
-    consecutive samples from the first sample at/after lap distance `start`."""
+    consecutive samples from the first sample at/after lap distance `start`. `kerb`:
+    FR rides a kerb (5) for the lap's first 5 samples, as a real lap touches one --
+    without any non-zero code the channel reads as dead (the liveness gate)."""
     d = np.asarray(lap.channels["lap_distance"], float)
     out = {w: np.zeros(d.size) for w in ("fl", "fr", "rl", "rr")}
+    if kerb:
+        out["fr"][:5] = 5
     if start is not None:
         i = int(np.searchsorted(d, start))
         for w in off:
@@ -1855,6 +1859,39 @@ def test_off_track_never_from_track_edge_on_road(synthetic_lap):
     kerb = _long_beach_t1(synthetic_lap, _surfaces(synthetic_lap, ("fl", "fr", "rl", "rr"),
                                                    code=5, start=800.0, count=130))
     assert _offs(kerb, cmap) == []
+    # "special" (6) is undefined in the header: never claimed as an off.
+    special = _long_beach_t1(synthetic_lap, _surfaces(synthetic_lap, ("fl", "fr", "rl", "rr"),
+                                                      code=6, start=800.0, count=130))
+    assert _offs(special, cmap) == []
+
+
+def test_off_track_dead_surface_channel_measures_nothing(synthetic_lap):
+    # Every wheel 0 all lap -- no kerb, no wet patch: the channel is presumed dead
+    # (like mGripFract, #43), so the corner is unmeasured (None), not clean (False).
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    rec = _long_beach_t1(synthetic_lap, _surfaces(synthetic_lap, kerb=False))
+    assert [c.off_surface for c in analyze_lap(rec, cmap).corners] == [None, None]
+    # One kerb touch anywhere on the lap -- outside every corner -- makes it live.
+    rec = _long_beach_t1(synthetic_lap, _surfaces(synthetic_lap))
+    assert [c.off_surface for c in analyze_lap(rec, cmap).corners] == [False, False]
+
+
+def test_off_track_run_never_joins_across_the_start_finish_seam(synthetic_lap):
+    # A corner wrapping S/F (2900 -> 100 m of a 3000 m lap): 3 grass samples at the
+    # lap's END and 3 at its START are two separate moments, never one 6-sample run.
+    from simcoach.corners import Corner
+    cmap = CornerMap([Corner(1, "Seam", "left", 2900.0, 0.0, 100.0)], length=3000.0)
+    s = _surfaces(synthetic_lap, kerb=False)
+    s["fr"][500:505] = 5                                   # liveness: a kerb mid-lap
+    for w in ("fl", "rl"):
+        s[w][-3:] = 2
+        s[w][:3] = 2
+    rec = dataclasses.replace(synthetic_lap, channels={**synthetic_lap.channels,
+                                                       **{f"surface_{w}": v for w, v in s.items()}})
+    assert analyze_lap(rec, cmap).corners[0].off_surface is False
+    for w in ("fl", "rl"):                                 # one side long enough: off
+        s[w][:_OFF_SAMPLES] = 2
+    assert analyze_lap(rec, cmap).corners[0].off_surface is True
 
 
 def test_off_track_without_surface_channels_is_never_stated(synthetic_lap):

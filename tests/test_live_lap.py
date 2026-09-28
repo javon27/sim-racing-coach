@@ -341,6 +341,23 @@ def test_no_incidents_is_said_only_after_a_whole_buffer_scan(tmp_path, synthetic
     live.tick()
     out = _ctx(store, on_track=True, live=live).dispatch("get_stint_events", {})
     assert "no incidents so far (whole lap scanned to 1,297 m)" in out   # last sample
+    # #207: the fixture has no surface capture -- the "no incidents" doesn't cover offs
+    assert "(off-track not captured on this lap so far)" in out
+
+
+def test_live_lap_with_surface_capture_states_no_offs_scope_note(tmp_path, synthetic_lap):
+    import dataclasses
+    d = np.asarray(synthetic_lap.channels["lap_distance"], float)
+    s = {f"surface_{w}": np.zeros(d.size) for w in ("fl", "fr", "rl", "rr")}
+    s["surface_fr"][:5] = 5                                  # a kerb: the channel is live
+    lap = dataclasses.replace(synthetic_lap, channels={**synthetic_lap.channels, **s})
+    store = _store(tmp_path)
+    live = _worker(store)
+    live.source = src = _Source()
+    src.drive(lap, 1300)
+    live.tick()
+    out = _ctx(store, on_track=True, live=live).dispatch("get_stint_events", {})
+    assert "no incidents so far" in out and "not captured" not in out
 
 
 def test_supersede_and_reads_stay_cheap_at_scale(tmp_path, synthetic_lap):
