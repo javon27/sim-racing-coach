@@ -926,18 +926,23 @@ def format_race_state(snap: RaceSnapshot,
     counts = (st.laps_to_go, snap.as_of_lap + st.laps_to_go) if st.timed else None
     for side, g in (("ahead", st.ahead), ("behind", st.behind)):
         label = f"Car {side} in class"
+        # #208: his class place, stated so the model never makes one up ('he's P16 while
+        # you're P16'). He is the next car of the class by place, and class places rank
+        # by place (lmu.live.read_field): yours -/+ 1.
+        step = -1 if side == "ahead" else 1
         if now is None:
-            lines.append(_gap_line(label, g, side, placed, counts))
+            his = f" (P{st.class_position + step})" if g and placed else ""
+            lines.append(_gap_line(label + his, g, side, placed, counts))
         elif now[side] is None:
             lines.append(f"{label} now (live): none"
                          + (" — you lead your class." if side == "ahead" else "."))
         elif placed and now[side] == who[side]:
-            lines.append(_gap_line(f"{label} at the end of lap {snap.as_of_lap}", g, side,
-                                   placed, counts))
+            lines.append(_gap_line(f"{label} (P{st.class_position + step}) at the end of lap "
+                                   f"{snap.as_of_lap}", g, side, placed, counts))
         else:
-            lines.append(f"{label} now (live): {now[side]}; no gap to him yet — it's read "
-                         f"at the line, and a trend needs {MIN_STINT_LAPS} clean laps with "
-                         "him there.")
+            lines.append(f"{label} now (live, P{live[1].class_position + step}): {now[side]}; "
+                         "no gap to him yet — it's read at the line, and a trend needs "
+                         f"{MIN_STINT_LAPS} clean laps with him there.")
     return "\n".join(lines)
 
 

@@ -754,6 +754,36 @@ def current_race_fact(windows: list[dict]) -> str:
             f"not this race.")
 
 
+def _multiclass(pairs, rr=None) -> bool:
+    """#208: a multiclass race -- a lap's (overall, class) place pair that differs, or
+    the result row's finish or grid pair. In a one-class race the two are the same
+    number everywhere; the field's class list is not stored, so a race where the
+    driver's class led the whole field on every lap reads as one class -- and there
+    either number is true."""
+    if rr:
+        pairs = [*pairs, (rr["position"], rr["class_position"]),
+                 (rr["grid_position"], rr["class_grid_position"])]
+    return any(p is not None and c is not None and p != c for p, c in pairs)
+
+
+def _place(pos, cls, multi, inner=False) -> str:
+    """#208: 'P9 in class (P17 overall)' in a multiclass race -- the driver races for
+    class, so class leads -- 'P17 overall' otherwise, or when the lap's class place
+    wasn't sampled. `inner`: 'P9 in class, P17 overall', for inside parentheses."""
+    if not multi or cls is None:
+        return f"P{pos} overall"
+    return f"P{cls} in class, P{pos} overall" if inner else f"P{cls} in class (P{pos} overall)"
+
+
+def _arc_places(arc, multi, inner=False) -> tuple[str, str, str]:
+    """#208: an arc's (first captured, lowest, most recent) places as text. Multiclass:
+    the lowest CLASS place, with that same lap's overall place."""
+    pos = arc["positions"]
+    classed = [p for p in pos if p[1] is not None]
+    low = max(classed, key=lambda p: p[1]) if multi and classed else (arc["worst"], None)
+    return tuple(_place(p, c, multi, inner) for p, c in (pos[0], low, pos[-1]))
+
+
 def race_result_text(store, session_id, race: int | None = None) -> str:
     """The session's race outcome as prompt text: grid slot, finish, incidents, and
     the live per-lap position arc. #204: race=N (store.race_windows' index) is that
@@ -802,19 +832,21 @@ def race_result_text(store, session_id, race: int | None = None) -> str:
         return ("No race result recorded for this session (practice/qualy, or not a "
                 "completed race).")
     lines = []
+    multi = _multiclass(arc["positions"] if arc else [], rr)
     if rr:
         if rr["grid_position"] is not None:
-            # #162: every position says whether it is overall or in class.
-            grid = f"Started P{rr['grid_position']} overall on the grid"
-            if (rr["class_grid_position"] is not None
-                    and rr["class_grid_position"] != rr["grid_position"]):
-                grid += f" (P{rr['class_grid_position']} in class)"
-            lines.append(grid + ".")
+            # #162: every position says whether it is overall or in class. #208: class
+            # leads in a multiclass race.
+            grid = f"Started {_place(rr['grid_position'], rr['class_grid_position'], multi)}"
+            lines.append(grid + " on the grid.")
         parts = []
-        if rr["position"] is not None:
-            parts.append(f"Finished P{rr['position']} overall")
-        if rr["class_position"] is not None:
-            parts.append(f"P{rr['class_position']} in class")
+        if multi and rr["position"] is not None and rr["class_position"] is not None:
+            parts.append(f"Finished {_place(rr['position'], rr['class_position'], multi)}")
+        else:
+            if rr["position"] is not None:
+                parts.append(f"Finished P{rr['position']} overall")
+            if rr["class_position"] is not None:
+                parts.append(f"P{rr['class_position']} in class")
         if rr["finish_status"]:
             parts.append(f"status: {rr['finish_status']}")
         lines.append("; ".join(parts) + "." if parts else "Race result recorded.")
@@ -835,9 +867,10 @@ def race_result_text(store, session_id, race: int | None = None) -> str:
         # NEVER call arc['start'] a starting position: it is the first lap capture
         # happened to record, which is already underway (issue #67 reported a P9
         # start as P18 this way). The grid slot only ever comes from the result log.
+        first, low, last = _arc_places(arc, multi)
         line = (f"Live per-lap positions over {arc['laps']} captured lap(s): "
-                f"P{arc['start']} overall on the first captured lap, as low as "
-                f"P{arc['worst']} overall, P{arc['last']} overall on the most recent.")
+                f"{first} on the first captured lap, as low as {low}, {last} on the most "
+                "recent.")
         if not (rr and rr["grid_position"] is not None):
             line += (" The grid position was not captured, so the first captured lap "
                      "is NOT the starting position -- do not report a start.")
@@ -1222,13 +1255,18 @@ class CoachContext:
                 # against race 1's finish.
                 win = next((w for w in self._race_windows() if lap_id in w["lap_ids"]), None)
                 ids = set(win["lap_ids"]) if win else set()
-                prev_pos = next((r["position"] for r in reversed(sess_laps[:idx])
-                                 if r["id"] in ids and r.get("position") is not None
-                                 and not _pre_green(r["phase"], r.get("lap_no"))),
-                                None)
-                pos_txt = f"position P{cur_pos} overall"   # laps.position is mPlace
-                if prev_pos is not None:
-                    pos_txt += f" (from P{prev_pos} overall)"
+                prev = next((r for r in reversed(sess_laps[:idx])
+                             if r["id"] in ids and r.get("position") is not None
+                             and not _pre_green(r["phase"], r.get("lap_no"))), None)
+                # #208: class leads in a multiclass race (this race's laps say so).
+                multi = _multiclass((r["position"], r.get("class_position"))
+                                    for r in sess_laps if r["id"] in ids)
+                cls = sess_laps[idx].get("class_position")
+                pos_txt = f"position {_place(cur_pos, cls, multi)}"   # laps.position: mPlace
+                grid_txt = None
+                if prev is not None:
+                    was = _place(prev["position"], prev.get("class_position"), multi, True)
+                    pos_txt += f" (from {was})"
                 elif record.lap_no == 1 and win is not None:
                     # Race lap 1 starts from the grid slot -- only ever the result log's,
                     # and only when that log is THIS race's (never guessed): its window,
@@ -1252,7 +1290,14 @@ class CoachContext:
                             and start is not None and start <= ts
                             and (rr.get("next_race_ts") is None or ts < rr["next_race_ts"])
                             and not pit_start):
-                        pos_txt += f" (from P{grid} overall on the grid)"
+                        grid_txt = _place(grid, rr.get("class_grid_position"), multi, True)
+                        pos_txt += f" (from {grid_txt} on the grid)"
+                if prev is None and grid_txt is None:
+                    # #208: this race's first captured lap, with no grid slot to measure
+                    # it from -- its place is where the lap ENDED. 'up from
+                    # P24 at the start' (rig 2026-09-27, started P31) read it as a start.
+                    pos_txt += (" (the first captured lap of this race: where it ENDED, "
+                                "NOT the starting position)")
                 tail_bits.append(pos_txt)
         return (f"Lap: {head}" + (f" ({', '.join(parts)})" if parts else "")
                 + (f" — {'; '.join(tail_bits)}" if tail_bits else ""))
@@ -1497,8 +1542,12 @@ class CoachContext:
                 since=cur_race["start_ts"] if cur_race else None)
             if arc:
                 # #67: arc['start'] is the first CAPTURED lap, never a start position.
-                pos_txt = (f" | Position: P{arc['last']} overall (P{arc['start']} overall "
-                           f"on the first captured lap, low P{arc['worst']} overall)")
+                # #208: class leads in a multiclass race.
+                multi = _multiclass(arc["positions"])
+                first, low, _ = _arc_places(arc, multi, inner=True)
+                last = _arc_places(arc, multi)[2]
+                pos_txt = (f" | Position: {last} ({first} on the first captured lap"
+                           f"{'; ' if multi else ', '}low {low})")
         # #136: how many races this one session id covers, and which one is current.
         races_txt = ""
         if len(self._race_windows()) > 1:
@@ -2474,18 +2523,26 @@ class CoachContext:
         # #204: a lap and its in-lap share a label ('race 3 lap 9' twice after the
         # flag); the repeat names its kind. Tagged, not deduped: at Long Beach
         # (2026-09-24, DNF) the lap-4 in-lap is P14 after lap 4's P12.
+        # #208: a multiclass race lists class, the lap's overall place in brackets --
+        # when the laps carry a class place at all (older laps never sampled one).
+        multi = (_multiclass(((r["position"], r.get("class_position")) for r in rows), rr)
+                 and any(r.get("class_position") is not None for r in rows))
         laps, seen = [], set()
         for r, b in zip(rows, bad):
             name = label_by_id.get(r["id"], "lap id " + str(r["id"]))
             kind = _PARTIAL_WORD.get(r.get("partial"), "") if name in seen else ""
             seen.add(name)
-            laps.append(f"{name} P{r['position']}" + (" (invalidated)" if b else "")
+            cls = r.get("class_position") if multi else None
+            place = (f"P{cls} (P{r['position']})" if cls is not None
+                     else f"P{r['position']}" + (" overall" if multi else ""))
+            laps.append(f"{name} {place}" + (" (invalidated)" if b else "")
                         + (f" ({kind})" if kind else ""))
         # #204: the header names where the list starts -- capture can miss race lap 1,
         # and a legacy window's second race numbers on from the first.
         first = label_by_id.get(rows[0]["id"], "lap id " + str(rows[0]["id"]))
         start = "race lap 1" if first.endswith(" lap 1") else first
-        out = [f"Per-lap positions (overall) from {start}: {', '.join(laps)}."]
+        which = "in class, the overall place in brackets" if multi else "overall"
+        out = [f"Per-lap positions ({which}) from {start}: {', '.join(laps)}."]
         if any(bad):
             out.append("An invalidated lap was RACED -- a racing lap LMU didn't time (an off "
                        "or a cut), never the cool-down.")
@@ -3160,7 +3217,8 @@ class CoachContext:
             kind = "online" if "online" in sid else ("offline" if "offline" in sid else "session")
             best = format_laptime(r["best"]) if r["best"] is not None else "no valid lap"
             rr = self.store.race_session(r["session_id"])
-            result = f", finished P{rr['position']} overall" if rr and rr.get("position") is not None else ""
+            result = (f", finished {_place(rr['position'], rr['class_position'], _multiclass([], rr))}"
+                      if rr and rr.get("position") is not None else "")
             out.append(f"{date} ({kind}, {r['laps']} laps, best {best}{result})")
         return f"Recent sessions at {track} / {car}:\n" + "\n".join(out)
 

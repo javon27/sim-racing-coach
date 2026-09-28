@@ -119,7 +119,7 @@ def test_session_laps(tmp_path, synthetic_lap):
                      "track": synthetic_lap.track, "car": synthetic_lap.car,
                      "car_model": synthetic_lap.car,  # unknown entry -> raw name
                      "lap_no": None, "pit": None, "partial": None, "position": None, "mapping": False,
-                     "source": "live",
+                     "source": "live", "class_position": None,
                      "race_index": None}]  # #142: non-race lap (phase None) -> null
 
 

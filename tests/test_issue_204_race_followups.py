@@ -123,6 +123,10 @@ def _tail(out):
     return next(line for line in out.splitlines() if line.startswith("Per-lap positions"))
 
 
+# #208: the first captured lap of a race with no grid "from" says it is not the start.
+_FIRST = " (the first captured lap of this race: where it ENDED, NOT the starting position)"
+
+
 def _pos(ctx, which):
     head = ctx.get_lap_summary(which).splitlines()[0]
     assert head.startswith(f"Lap: {which} "), head
@@ -214,7 +218,7 @@ def test_an_unlogged_races_lap_1_has_no_grid_slot(tmp_path, synthetic_lap):
     """Race 2 has no log. Race 1's has no write time either, so the stale-log cutoff
     can't refuse it: only the window's lower bound keeps it off race 2."""
     ctx = _ctx(tmp_path, synthetic_lap, logs=(R1[:1] + (None,) + R1[2:], R3))
-    assert _pos(ctx, "race 2 lap 1") == "P3 overall"      # never R1's P7 or R3's P4
+    assert _pos(ctx, "race 2 lap 1") == "P3 overall" + _FIRST      # never R1's P7 or R3's P4
     assert "Started P" not in ctx.get_race_result(race=2)   # nor R1's result as race 2's
     assert _pos(ctx, "race 1 lap 1") == "P6 overall (from P7 overall on the grid)"
 
@@ -286,7 +290,7 @@ def test_next_race_ts_keeps_the_earlier_logs_grid_off_the_next_race(tmp_path, sy
     assert len(ctx._race_windows()) == 1
     rr = ctx.store.race_session(SID, 1)
     assert (rr["grid_position"], rr["next_race_ts"]) == (9, T0 + 100.0)
-    assert _pos(ctx, "race lap 1") == "P4 overall"
+    assert _pos(ctx, "race lap 1") == "P4 overall" + _FIRST
     # The positions tail keeps to A's race_ts..next_race_ts too: A had no racing lap.
     assert "Per-lap positions" not in ctx.get_race_result()
 

@@ -271,9 +271,10 @@ def test_format_race_state_leads_with_the_lap_stamp_and_states_only_trends():
     assert text.startswith("As of lap 12 (race).")
     assert "Position: P7 overall, P3 in class." in text
     assert "Remaining: 12 of 24 laps." in text
-    assert ("Car ahead in class: A. Rival (Rival Entry), 2.5 s ahead; you are closing "
+    assert ("Car ahead in class (P2): A. Rival (Rival Entry), 2.5 s ahead; you are closing "
             "0.30 s/lap; at this rate you reach him around lap 21.") in text
-    assert "Car behind in class: B. Chaser (Chaser Entry), 2.0 s behind; holding steady" in text
+    assert ("Car behind in class (P4): B. Chaser (Chaser Entry), 2.0 s behind; holding "
+            "steady") in text
 
 
 def test_format_strategy_states_margin_save_target_threshold_and_window():
@@ -1129,7 +1130,7 @@ def test_a_catch_on_the_longer_counts_flag_lap_is_said_conditionally():
     # #186's live read: the place changed, the same car is ahead -- the lap's line, as said.
     live = format_race_state(snap, (8, RaceSample(class_position=3,
                                                   class_ahead="A. Rival (Rival Entry)")))
-    assert ("Car ahead in class at the end of lap 12: A. Rival (Rival Entry), 3.2 s ahead; "
+    assert ("Car ahead in class (P2) at the end of lap 12: A. Rival (Rival Entry), 3.2 s ahead; "
             "you are closing 0.30 s/lap; at this rate you reach him around lap 23, only if "
             "the race runs that long") in live, live
     # A catch inside the shorter count (2.9 s: lap 22) needs no caveat.

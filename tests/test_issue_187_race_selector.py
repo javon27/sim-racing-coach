@@ -107,6 +107,10 @@ def _tail(out):
     return next(line for line in out.splitlines() if line.startswith("Per-lap positions"))
 
 
+# #208: the first captured lap of a race with no grid "from" says it is not the start.
+_FIRST = " (the first captured lap of this race: where it ENDED, NOT the starting position)"
+
+
 def _pos(ctx, which):
     head = ctx.get_lap_summary(which).splitlines()[0]
     assert head.startswith(f"Lap: {which} "), head
@@ -199,19 +203,19 @@ def test_race_lap_1_is_measured_from_this_races_grid_slot(tmp_path, synthetic_la
 def test_race_lap_1_uses_race_1s_grid_when_its_log_is_the_one(tmp_path, synthetic_lap):
     ctx = _lgc12(tmp_path, synthetic_lap, logs=[(_R1, None)])
     assert _pos(ctx, "race 1 lap 1") == "P2 overall (from P2 overall on the grid)"
-    assert _pos(ctx, "race 2 lap 1") == "P2 overall"
+    assert _pos(ctx, "race 2 lap 1") == "P2 overall" + _FIRST
 
 
 def test_grid_slot_is_only_race_lap_1s_from(tmp_path, synthetic_lap):
     """Capture picked race 2 up at lap 3: the grid slot is not where lap 3 started."""
     rows = [r for r in _ROWS if not (r[0] > 2700 and r[2] < 3)]
     ctx = _lgc12(tmp_path, synthetic_lap, logs=[(_R1, _R1[1]), (_R2, _R2[1])], rows=rows)
-    assert _pos(ctx, "race 2 lap 3") == "P2 overall"
+    assert _pos(ctx, "race 2 lap 3") == "P2 overall" + _FIRST
 
 
 def test_no_grid_slot_no_from_and_never_the_previous_race(tmp_path, synthetic_lap):
     ctx = _lgc12(tmp_path, synthetic_lap)
-    assert _pos(ctx, "race 2 lap 1") == "P2 overall"
+    assert _pos(ctx, "race 2 lap 1") == "P2 overall" + _FIRST
     assert _pos(ctx, "race 2 lap 2") == "P2 overall (from P2 overall)"
 
 
@@ -228,7 +232,7 @@ def test_grid_slot_never_reaches_the_other_race_of_a_merged_window(tmp_path, syn
     log_b = (b0 - 36.68, None, 1, 7, 7)
     ctx = _lgc12(tmp_path, synthetic_lap, logs=[(log_b, None)], rows=rows, pit_at=set())
     assert len(ctx._race_windows()) == 2
-    assert _pos(ctx, "race 1 lap 1") == "P2 overall"                # race A: no 'from'
+    assert _pos(ctx, "race 1 lap 1") == "P2 overall" + _FIRST                # race A: no 'from'
     assert _pos(ctx, "race 2 lap 1") == "P2 overall (from P7 overall on the grid)"
 
 
@@ -256,7 +260,7 @@ _RA_LOG = (-2.66, None, 22, 30, 8)
 def test_pit_lane_start_has_no_grid_from(tmp_path, synthetic_lap, pit_at):
     ctx = _lgc12(tmp_path, synthetic_lap, logs=[(_RA_LOG, None)], rows=_RA_ROWS,
                  sid=RA_SID, t0=RA_T0, pit_at=pit_at)
-    assert _pos(ctx, "race lap 1") == "P32 overall"
+    assert _pos(ctx, "race lap 1") == "P32 overall" + _FIRST
 
 
 def test_grid_start_reads_the_overall_grid_slot_not_the_class_one(tmp_path, synthetic_lap):

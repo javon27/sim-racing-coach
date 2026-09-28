@@ -1554,7 +1554,7 @@ def test_list_past_sessions_excludes_current_and_shows_result(tmp_path, syntheti
     ctx = CoachContext(store, track=synthetic_lap.track, car=synthetic_lap.car,
                        session_id="current--online")
     out = ctx.dispatch("list_past_sessions", {})
-    assert "finished P4 overall" in out
+    assert "finished P1 in class (P4 overall)" in out   # #208: class leads
     assert "1:35.000" in out
     assert "1:32.000" not in out  # current session excluded
 

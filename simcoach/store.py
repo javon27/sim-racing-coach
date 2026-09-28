@@ -1638,12 +1638,13 @@ class LapStore:
         with self._lock:
             rows = self.conn.execute(
                 "SELECT id, lap_time, valid, ts, s1, s2, s3, phase, track, car, lap_no, pit, "
-                "partial, position, mapping, source FROM laps WHERE session_id = ? "
-                "ORDER BY ts",
+                "partial, position, mapping, source, class_position FROM laps "
+                "WHERE session_id = ? ORDER BY ts",
                 (session_id,),
             ).fetchall()
             keys = ("id", "lap_time", "valid", "ts", "s1", "s2", "s3", "phase", "track", "car",
-                    "lap_no", "pit", "partial", "position", "mapping", "source")
+                    "lap_no", "pit", "partial", "position", "mapping", "source",
+                    "class_position")
             out = []
             for r in rows:
                 d = dict(zip(keys, r))
@@ -1724,8 +1725,12 @@ class LapStore:
 
         since/until bound the arc in time, for a sitting that ran more than one race:
         phase='race' alone spans every race the session covers, which would describe
-        two different races in one arc."""
-        query = "SELECT position FROM laps WHERE session_id = ? AND position IS NOT NULL"
+        two different races in one arc.
+
+        #208: `positions` is every lap's (overall, class) place pair, ts order -- the
+        class place is None on a lap that didn't sample it."""
+        query = ("SELECT position, class_position FROM laps "
+                 "WHERE session_id = ? AND position IS NOT NULL")
         params: list = [session_id]
         if phase is not None:
             query += " AND phase = ?"
@@ -1752,6 +1757,7 @@ class LapStore:
             "worst": max(places),
             "last": places[-1],
             "laps": len(places),
+            "positions": [tuple(r) for r in rows],
         }
 
     def clear_all(self) -> None:
