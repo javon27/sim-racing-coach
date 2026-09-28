@@ -35,26 +35,28 @@ _ROWS = [
 ]
 
 
-def _ctx(tmp_path, lap, one_class=False, pit_start=True, log=True):
+def _ctx(tmp_path, lap, one_class=False, pit_start=True, log=True, rows=_ROWS, sid=SID,
+         t0=T0, result=(17, 9, 31, 18, "Finished Normally")):
     """`one_class`: the same race with every class place = the overall one (a GT3-only
     field) -- the output before #208, byte for byte."""
     store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
-    for dt, lap_no, partial, pit, pos, cls in _ROWS:
+    for dt, lap_no, partial, pit, pos, cls in rows:
         cls = pos if one_class and cls is not None else cls
         store.save(dataclasses.replace(
-            lap, session_id=SID, phase="race", lap_no=lap_no, partial=partial,
+            lap, session_id=sid, phase="race", lap_no=lap_no, partial=partial,
             pit=bool(pit) and pit_start, position=pos, valid=partial is None,
-            lap_time=None if partial else 82.0, timestamp=T0 + dt,
+            lap_time=None if partial else 82.0, timestamp=t0 + dt,
             race=RaceSample(class_position=cls)))
     if log:
+        pos, cls, grid, cls_grid, status = result
         store.save_result_session(ResultSession(
-            sim="lmu", track=lap.track, car=lap.car, car_class="GT3", date_ts=T0,
-            session_type="race", position=17, class_position=17 if one_class else 9,
-            best_lap=None, finish_status="Finished Normally", laps=[], incidents=[],
-            penalties=[], grid_position=31, class_grid_position=31 if one_class else 18,
-            online=True), session_id="2026_09_27_22_37_25-56R1", logged_ts=T0 + 2031.87)
+            sim="lmu", track=lap.track, car=lap.car, car_class="GT3", date_ts=t0,
+            session_type="race", position=pos, class_position=pos if one_class else cls,
+            best_lap=None, finish_status=status, laps=[], incidents=[], penalties=[],
+            grid_position=grid, class_grid_position=grid if one_class else cls_grid,
+            online=True), session_id=f"result-{t0}", logged_ts=t0 + 2031.87)
     return CoachContext(store, cmap=CornerMap.load("simcoach/tracks/test_track.json"),
-                        track=lap.track, car=lap.car, session_id=SID)
+                        track=lap.track, car=lap.car, session_id=sid)
 
 
 def _line(out, head):
@@ -85,7 +87,7 @@ def test_race_result_leads_with_class(tmp_path, synthetic_lap):
         "lap 12 P14 (P23), race lap 13 P14 (P23), race lap 14 P13 (P21), race lap 15 P12 "
         "(P19), race lap 16 P12 (P19), race lap 17 P11 (P18), race lap 18 P10 (P17), race "
         "lap 19 P10 (P17), race lap 20 P10 (P17), race lap 21 P10 (P18), race lap 22 P10 "
-        "(P18), race lap 22 P17 overall, class place not sampled (in-lap).")
+        "(P18), race lap 22 P17 overall (class place not sampled) (in-lap).")
 
 
 def test_lap_lines_and_session_status_lead_with_class(tmp_path, synthetic_lap):
@@ -99,8 +101,9 @@ def test_lap_lines_and_session_status_lead_with_class(tmp_path, synthetic_lap):
     # M1: after the flag the in-lap (committed in the garage stall) has no class place:
     # the finish is the result log's P9 -- never lap 22's P10, nor a bare "P17".
     assert _line(ctx.get_session_status(), "Track:").endswith(
-        " | Position: finished P9 in class (P17 overall) (result log) (P12 in class, P24 "
-        "overall on the first captured lap; low P17 in class, P26 overall)")
+        " | Position: finished P9 in class (P17 overall) per the result log; live laps: "
+        "P12 in class, P24 overall on the first captured lap; low P17 in class, P26 "
+        "overall")
     events = ctx.get_stint_events(phase="race")
     assert "— position P10 in class (P18 overall) (from P10 in class, P17 overall)" in _line(
         events, "Lap: race lap 21 ")
@@ -114,6 +117,51 @@ def test_status_with_no_log_says_the_class_place_was_not_sampled(tmp_path, synth
     assert _line(ctx.get_session_status(), "Track:").endswith(
         " | Position: P17 overall (class place not sampled) (P12 in class, P24 overall on "
         "the first captured lap; low P17 in class, P26 overall)")
+
+
+def test_a_retirement_is_never_finished(tmp_path, synthetic_lap):
+    """A multiclass DNF: the log's status, never 'finished'."""
+    ctx = _ctx(tmp_path, synthetic_lap, result=(17, 9, 31, 18, "DNF"))
+    assert " | Position: P9 in class (P17 overall), DNF per the result log; live laps: "         in ctx.get_session_status()
+    assert "finished P9" not in ctx.get_session_status()
+
+
+# The real Road Atlanta race (13 Autosport #13 LMP2 in a multiclass field, 2026-09-23,
+# online): retired after lap 25 at P19 overall / P8 in class live; the log classifies
+# him P22 overall / P8 in class, DNF (GridPos 30, ClassGridPos 8).
+RA_SID = "michelin-raceway-road-atlanta--13-autosport-2026-13-lm--online"
+RA_T0 = 1_790_215_717.0
+_RA_ROWS = [
+    (2.66, 0, "in", 0, 30, None), (151.46, 0, "out", 1, 30, 8), (259.84, 1, "in", 1, 32, 11),
+    (361.64, 2, None, 1, 32, 11), (447.25, 3, None, 0, 31, 11), (550.64, 4, None, 0, 30, 11),
+    (634.84, 5, None, 0, 29, 11), (721.25, 6, None, 0, 29, 11), (809.05, 7, None, 0, 28, 10),
+    (893.04, 8, None, 0, 25, 8), (979.83, 9, None, 0, 25, 7), (1063.43, 10, None, 0, 25, 7),
+    (1146.23, 11, None, 0, 25, 7), (1229.63, 12, None, 0, 24, 7),
+    (1313.03, 13, None, 0, 23, 7), (1408.03, 14, None, 0, 22, 7),
+    (1492.44, 15, None, 0, 22, 7), (1576.63, 16, None, 0, 22, 7),
+    (1659.41, 17, None, 0, 22, 7), (1746.62, 18, None, 0, 21, 7),
+    (1919.83, 19, None, 1, 21, 8), (2174.02, 20, None, 1, 21, 8),
+    (2270.02, 21, None, 0, 20, 8), (2353.81, 22, None, 0, 19, 8),
+    (2437.02, 23, None, 0, 19, 8), (2521.01, 24, None, 0, 19, 8),
+    (2626.61, 25, None, 0, 19, 8),
+]
+
+
+def test_the_result_log_leads_even_when_the_last_lap_has_a_class_place(tmp_path,
+                                                                        synthetic_lap):
+    """The last lap sampled P8 in class / P19 overall, but he retired: the log's P22
+    overall, DNF is the result -- not the last lap's P19."""
+    ctx = _ctx(tmp_path, synthetic_lap, rows=_RA_ROWS, sid=RA_SID, t0=RA_T0,
+               result=(22, 8, 30, 8, "DNF"))
+    assert _line(ctx.get_session_status(), "Track:").endswith(
+        " | Position: P8 in class (P22 overall), DNF per the result log; live laps: P11 "
+        "in class, P32 overall on the first captured lap; low P11 in class, P32 overall")
+    # No log yet: the live laps are all there is, the last one leads.
+    live = _ctx(tmp_path / "live", synthetic_lap, rows=_RA_ROWS, sid=RA_SID, t0=RA_T0,
+                log=False)
+    assert _line(live.get_session_status(), "Track:").endswith(
+        " | Position: P8 in class (P19 overall) (P11 in class, P32 overall on the first "
+        "captured lap; low P11 in class, P32 overall)")
 
 
 def test_recent_laps_lead_with_class(tmp_path, synthetic_lap):

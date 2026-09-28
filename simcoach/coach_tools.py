@@ -1562,19 +1562,27 @@ class CoachContext:
             if arc:
                 # #67: arc['start'] is the first CAPTURED lap, never a start position.
                 # #208: class leads in a multiclass race.
-                multi = _multiclass(arc["positions"])
+                rr = (self.store.race_session(self.session_id, cur_race["index"])
+                      if cur_race else None)
+                multi = _multiclass(arc["positions"], rr)
                 first, low, _ = _arc_places(arc, multi, inner=True)
                 last = _arc_places(arc, multi)[2]
-                rr = (self.store.race_session(self.session_id, cur_race["index"])
-                      if multi and cur_race and arc["positions"][-1][1] is None else None)
-                if rr and rr["position"] is not None and rr["class_position"] is not None:
-                    # M1: the post-flag in-lap sampled no class place (committed in the
-                    # garage stall); the finish is the result log's -- never the last
-                    # lap's class place, a frame at the line whose order didn't hold.
-                    last = (f"finished {_place(rr['position'], rr['class_position'], True)} "
-                            "(result log)")
                 pos_txt = (f" | Position: {last} ({first} on the first captured lap"
                            f"{'; ' if multi else ', '}low {low})")
+                if (multi and rr and rr["position"] is not None
+                        and rr["class_position"] is not None):
+                    # M1: once this race's log exists, its finish leads -- not the last
+                    # lap's place: the post-flag in-lap samples no class place (committed
+                    # in the garage stall), lap 22's P10 was a frame at the line whose
+                    # order didn't hold, and a retirement's last lap isn't where the
+                    # log classifies him (Road Atlanta: live P19, logged P22 DNF).
+                    fin = _place(rr["position"], rr["class_position"], True)
+                    status = rr["finish_status"]
+                    # A retirement is never "finished": the log's status says what it was.
+                    fin = (f"{fin}, {status}" if status and status != "Finished Normally"
+                           else f"finished {fin}")
+                    pos_txt = (f" | Position: {fin} per the result log; live laps: {first} "
+                               f"on the first captured lap; low {low}")
         # #136: how many races this one session id covers, and which one is current.
         races_txt = ""
         if len(self._race_windows()) > 1:
@@ -2567,7 +2575,7 @@ class CoachContext:
             seen.add(name)
             cls = r.get("class_position") if multi else None
             place = (f"P{cls} (P{r['position']})" if cls is not None
-                     else _place(r["position"], None, True, True) if multi else f"P{r['position']}")
+                     else _place(r["position"], None, True) if multi else f"P{r['position']}")
             laps.append(f"{name} {place}" + (" (invalidated)" if b else "")
                         + (f" ({kind})" if kind else ""))
         # #204: the header names where the list starts -- capture can miss race lap 1,
