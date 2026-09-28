@@ -2172,3 +2172,63 @@ def test_a_lap_route_save_that_replaces_the_path_re_measures_radius_on_the_new_o
     # T1's old 31.2 m, carried, would be the old path's radius on the new one.
     t1 = _by_apex(written["corners"], 459.9)
     assert t1["radius_m"] != 31.2 and abs(t1["radius_m"] / 31.2 - 1.2) < 0.05
+
+
+# --- #200: an installed build's lap route keeps a shipped track's path -----------------
+
+
+def _put_scaled_laguna_lap(client, store, data, corners):
+    # The #198 lap -- Laguna's outline scaled 1.2x about its centroid, so a radius
+    # measured on its average is ~1.2x the shipped one -- then PUT /laps/{id}/map.
+    p = np.asarray(data["path"], float)
+    p = p.mean(axis=0) + 1.2 * (p - p.mean(axis=0))
+    ld = np.linspace(0.0, data["path_dist"][-1], 2000)
+    ch = {"pos_x": np.interp(ld, data["path_dist"], p[:, 0]),
+          "pos_z": np.interp(ld, data["path_dist"], p[:, 1]), "lap_distance": ld}
+    lap = store.save(LapRecord("lmu", "WeatherTech Raceway Laguna Seca", "Porsche 963",
+                               82.0, True, 0.0, ch))
+    body = {"corners": [{k: c[k] for k in _EDITOR_KEYS if k in c} for c in corners],
+            "sectors": data.get("sectors") or [], "sections": data.get("sections") or [],
+            "name": data.get("name")}
+    return client.put(f"/laps/{lap}/map", json=with_map_rev(client, f"/laps/{lap}/map", body))
+
+
+def test_an_installed_lap_route_save_measures_radius_on_the_shipped_path(tmp_path, monkeypatch):
+    # `path` is not an annotation field, so load_map_data serves the SHIPPED path whatever
+    # the overlay stores. A window-edited corner used to be re-measured on the laps'
+    # average -- a path the coach never reads -- and the #196 merge kept that value.
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    client, store, data, f = _laguna_client(tmp_path)
+    corners = [dict(c) for c in data["corners"]]
+    _by_apex(corners, 2515.4)["end_dist"] = 2615.1                 # Corkscrew window edited
+    r = _put_scaled_laguna_lap(client, store, data, corners)
+    assert r.status_code == 200, r.text
+    user = Path(store.data_dir) / "tracks"
+    overlay = json.loads((user / f.name).read_text("utf-8"))
+    merged = load_map_data(_LAGUNA, str(f.parent), str(user))
+    assert merged["path"] == data["path"] == overlay["path"]      # the path the coach reads
+    cork = _by_apex(overlay["corners"], 2515.4)
+    assert cork["radius_m"] == _measured(merged, cork)["radius_m"]
+    assert _by_apex(merged["corners"], 2515.4)["radius_m"] == cork["radius_m"]
+    # Nothing moved under an unedited corner, so it keeps the shipped bake.
+    assert _by_apex(overlay["corners"], 459.9)["radius_m"] == 31.2
+
+
+def test_an_installed_lap_route_save_still_re_averages_an_unshipped_track(tmp_path, monkeypatch):
+    # No shipped map: the app-data file IS the whole map, so its path is the one read and
+    # the lap route re-averages it and re-measures on it, as #198 does in dev.
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    client, store, data, f = _laguna_client(tmp_path)
+    user = Path(store.data_dir) / "tracks"
+    user.mkdir(parents=True, exist_ok=True)
+    g = user / f.name
+    g.write_bytes(f.read_bytes())
+    f.unlink()
+    r = _put_scaled_laguna_lap(client, store, data, data["corners"])
+    assert r.status_code == 200, r.text
+    written = json.loads(g.read_text("utf-8"))
+    assert written["path"] != data["path"]
+    assert load_map_data(_LAGUNA, str(f.parent), str(user))["path"] == written["path"]
+    t1 = _by_apex(written["corners"], 459.9)
+    assert t1["radius_m"] == _measured(written, t1)["radius_m"]
+    assert abs(t1["radius_m"] / 31.2 - 1.2) < 0.05

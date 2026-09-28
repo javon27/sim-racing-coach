@@ -101,6 +101,8 @@ def register(app, deps) -> None:
     _slug_map_key = deps._slug_map_key
     _live_lap_paths = deps._live_lap_paths
     _rebuild_clouds = deps._rebuild_clouds
+    _curating = deps._curating
+    _is_shipped = deps._is_shipped
 
     @app.get("/tracks/{slug}/map")
     def track_map_by_slug(slug: str):
@@ -141,7 +143,12 @@ def register(app, deps) -> None:
                                      "can't be saved from here yet")
         keep_ribbon = existing.get("ribbon")
         ep, epd = existing.get("path"), existing.get("path_dist")
-        if keep_ribbon and isinstance(ep, list) and ep and isinstance(epd, list) and len(ep) == len(epd):
+        # An installed build never re-averages a shipped track's path either (#200):
+        # `path` is not an annotation field, so load_map_data serves the SHIPPED path
+        # whatever the overlay stores, and a radius measured on the laps' average would
+        # describe a path the coach never reads. An unshipped track's overlay IS the map.
+        keep_path = keep_ribbon or (not _curating() and _is_shipped(track))
+        if keep_path and isinstance(ep, list) and ep and isinstance(epd, list) and len(ep) == len(epd):
             path, dist = ep, epd
         else:
             laps = _clean_lap_channels(track, car)
