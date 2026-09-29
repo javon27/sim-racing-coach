@@ -1187,16 +1187,19 @@ class LapStore:
                 return None
             return self.load(row[0])
 
-    def list_lap_ids(self, track: str, car: str, complete_only: bool = False) -> list[int]:
+    def list_lap_ids(self, track: str, car: str, complete_only: bool = False,
+                     car_class: str | None = None) -> list[int]:
         """Every lap id for a track/car. complete_only drops out/in/partial laps (#77)
         -- map building, the Tracks badge and "how much data do we have" counts want
         only whole laps. The default stays inclusive because lap REFERENCE resolution
-        (`_resolve_lap`) must be able to reach a partial lap by its number."""
+        (`_resolve_lap`) must be able to reach a partial lap by its number.
+        `car`/`car_class` expand like `timed_laps` (#214: the coach passes the model)."""
+        teams = self._teams(car, car_class)
         with self._lock:
             rows = self.conn.execute(
-                "SELECT id FROM laps WHERE track = ? AND car = ?"
+                f"SELECT id FROM laps WHERE track = ? AND car IN ({','.join('?' * len(teams))})"
                 + (" AND partial IS NULL" if complete_only else ""),
-                (track, car),
+                [track, *teams],
             ).fetchall()
             return [r[0] for r in rows]
 
@@ -1261,10 +1264,12 @@ class LapStore:
 
     def recent_laps(self, track: str, car: str, limit: int = 10,
                     session_id: str | None = None,
-                    complete_only: bool = False) -> list[dict]:
+                    complete_only: bool = False,
+                    car_class: str | None = None) -> list[dict]:
         """Recent laps for a track/car (newest first) as lightweight rows — no
         telemetry loaded — so a tool can list laps for the model to choose from.
-        Pass session_id to scope to the current stint.
+        Pass session_id to scope to the current stint; without it `car`/`car_class`
+        expand like `timed_laps` (#216).
 
         complete_only drops out/in/partial laps (#77). The lap LIST wants them (they
         are laps, and their numbers are the point); anything that treats "the most
@@ -1283,8 +1288,9 @@ class LapStore:
                 query = cols + "session_id = ?"
                 params: list = [session_id]
             else:
-                query = cols + "track = ? AND car = ?"
-                params = [track, car]
+                teams = self._teams(car, car_class)
+                query = cols + f"track = ? AND car IN ({','.join('?' * len(teams))})"
+                params = [track, *teams]
             if complete_only:
                 query += " AND partial IS NULL"
             query += " ORDER BY id DESC LIMIT ?"
