@@ -343,4 +343,7 @@ def test_agentic_prompt_routes_race_questions_to_one_race_tool():
     assert "ONE call answers the question" in p and "As of lap N" in p
     assert "never state gaps or traffic" not in p
     assert "→ get_battle" in p
+    # #213: a rival's lap times are a race-state / race-result answer, not get_battle's.
+    assert ("a rival's best/last lap → get_race_state (live) / get_race_result (after the "
+            "race)") in p
     p.format(car="x", speed_unit="km/h", temp_unit="°C")    # no stray braces

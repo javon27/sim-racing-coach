@@ -814,7 +814,7 @@ def _arc_places(arc, multi, inner=False) -> tuple[str, str, str]:
     return tuple(_place(p, c, multi, inner) for p, c in (pos[0], low, pos[-1]))
 
 
-def race_result_text(store, session_id, race: int | None = None) -> str:
+def race_result_text(store, session_id, race: int | None = None, bests: bool = True) -> str:
     """The session's race outcome as prompt text: grid slot, finish, incidents, and
     the live per-lap position arc. #204: race=N (store.race_windows' index) is that
     race of the sitting, its arc kept inside its own window; default the latest.
@@ -825,6 +825,8 @@ def race_result_text(store, session_id, race: int | None = None) -> str:
     which is exactly the #67 defect: `start` is the first lap capture happened to
     record, mid-race, and an unscoped arc reads it from whatever phase came first.
     Two copies meant fixing one left the other asserting the opposite as fact.
+    `bests=False` leaves out the class best-laps line (#213): the profile digest must
+    not turn a list of rival names into memories.
     """
     rr = store.race_session(session_id, race) if session_id else None
     # Race stint only — a session_id spans practice/qualy/race, so an all-phase arc
@@ -881,12 +883,18 @@ def race_result_text(store, session_id, race: int | None = None) -> str:
             parts.append(f"status: {rr['finish_status']}")
         lines.append("; ".join(parts) + "." if parts else "Race result recorded.")
         # #213: every class rival's best lap from the log, ranked here, not by the model.
-        bests = sorted(rr.get("class_bests") or [], key=lambda d: d["best"])
-        if bests:
-            lines.append("Best laps in your class (result log), fastest first, class finish "
+        # The bracket is his class position in the log -- a DNF's too -- with the finish
+        # status whenever it isn't a normal finish (a 3-lap DNF is no "P16 finish").
+        ranked = sorted(rr.get("class_bests") or [], key=lambda d: d["best"]) if bests else []
+        if ranked:
+            def tag(d):
+                st = d.get("st") if d.get("st") != "Finished Normally" else None
+                t = ", ".join(x for x in (f"P{d['p']}" if d["p"] else None, st) if x)
+                return f" ({t})" if t else ""
+            lines.append("Best laps in your class (result log), fastest first, class position "
                          "in brackets: " + "; ".join(
                              f"{format_laptime(d['best'])} {'you' if d['me'] else d['name']}"
-                             + (f" (P{d['p']})" if d["p"] else "") for d in bests) + ".")
+                             + tag(d) for d in ranked) + ".")
         incidents = rr["incidents"]
         if incidents:
             head = "; ".join(incidents[:3])

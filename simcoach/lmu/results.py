@@ -76,7 +76,8 @@ class ResultSession:
     # server, even alone -- #170). See _is_online for the signal.
     online: bool | None = None
     # #213: every timed car of the player's class -- {"p": class place, "name", "best": s,
-    # "me": the player} -- so a rival's best lap is reachable after the race.
+    # "me": the player, "st": FinishStatus} -- so a rival's best lap is reachable after
+    # the race.
     class_bests: list[dict] = field(default_factory=list)
 
 
@@ -226,7 +227,10 @@ def parse_result(path, player_names: str | Iterable[str]) -> ResultSession | Non
             online=_is_online(race_results, session_elem),
             class_bests=[
                 {"p": _to_int(d.findtext("ClassPosition")), "name": d.findtext("Name"),
-                 "best": best, "me": d is driver}
+                 "best": best, "me": d is driver,
+                 # no status is logged as the TEXT "None" (1238 cars in the real logs)
+                 "st": None if (st := (d.findtext("FinishStatus") or "").strip())
+                 in ("", "None") else st}
                 for d in session_elem.findall("Driver")
                 if d.findtext("CarClass") == driver.findtext("CarClass")
                 and (best := _to_float(d.findtext("BestLapTime"))) and best > 0],

@@ -91,7 +91,7 @@ def register(app, deps) -> None:
         # Via the shared owner, never a local arc read: an unscoped session_position_arc
         # here called the first captured lap of ANY phase a starting position, which is
         # the #67 defect the coach tool was fixed for. One wording, one place.
-        race = race_result_text(app.state.store, session_id)
+        race = race_result_text(app.state.store, session_id, bests=False)  # #213: no rival list
         digest.append(race)
 
         cmap = _cmap_for_map(track)
