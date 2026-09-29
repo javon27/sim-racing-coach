@@ -102,6 +102,24 @@ def race_sample(snap: FieldSnapshot) -> RaceSample | None:
     )
 
 
+def rival_laps_line(field: FieldSnapshot) -> str | None:
+    """#213: the best and last lap of the class cars ahead and behind -- the same
+    neighbours `class_neighbours` picks -- and the driver's own, from one live scoring
+    frame. LMU's per-session times, so nothing carries across sessions. A time the game
+    hasn't set (<= 0) is left out, never '0:00.000'; None when there is none to state."""
+    ahead, _, behind, _ = class_neighbours(field.cars)
+    parts = []
+    for who, best, last in (
+            *((f"car {side} in class {_who(c)}", c.best_lap, c.last_lap)
+              for side, c in (("ahead", ahead), ("behind", behind)) if c),
+            ("yours", field.session.best_lap, field.session.last_lap)):
+        t = [f"{k} {format_laptime(v)}" for k, v in (("best", best), ("last", last))
+             if v and v > 0]
+        if t:
+            parts.append(f"{who}: {', '.join(t)}")
+    return "Lap times now (live, this session): " + "; ".join(parts) + "." if parts else None
+
+
 def live_battle_target(cars: list[VehicleState], direction: str | None,
                        position: int | None) -> tuple[VehicleState | None, str]:
     """#186: the car a get_battle `direction`/`position` asks for in the LIVE field --

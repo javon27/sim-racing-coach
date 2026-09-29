@@ -102,6 +102,7 @@ from simcoach.race import (
     plans_longer,
     provisional_strategy,
     race_sample,
+    rival_laps_line,
 )
 from simcoach.store import _SESSION_GAP_S, _session_base
 from simcoach.track_lookup import load_track_knowledge, note_key_binds
@@ -430,7 +431,8 @@ TOOLS = [
     {
         "name": "get_race_result",
         "description": "The race outcome + racecraft context for this session — finishing "
-                       "position, incidents, penalties. Call this for questions about the "
+                       "position, incidents, penalties, every class rival's best lap. Call "
+                       "this for questions about the "
                        "race/result/how it went overall; for the race lap by lap, "
                        "get_stint_events with phase='race'.",
         "input_schema": {
@@ -460,7 +462,8 @@ TOOLS = [
         "description": "LIVE RACE ONLY. Where the driver stands as of the last completed lap: "
                        "overall and class position, laps or time remaining (and laps left at "
                        "the recent clean pace), and the in-class car ahead and behind with the "
-                       "gap TREND (s/lap) and the lap he'd be caught at that rate; a "
+                       "gap TREND (s/lap) and the lap he'd be caught at that rate, and their "
+                       "best and last lap times; a "
                        "'Penalties:' line appears only when the game reports one outstanding "
                        "(no line says nothing either way). Use for position, gap, "
                        "'am I catching him', 'how long is left'. One call "
@@ -877,6 +880,13 @@ def race_result_text(store, session_id, race: int | None = None) -> str:
         if rr["finish_status"]:
             parts.append(f"status: {rr['finish_status']}")
         lines.append("; ".join(parts) + "." if parts else "Race result recorded.")
+        # #213: every class rival's best lap from the log, ranked here, not by the model.
+        bests = sorted(rr.get("class_bests") or [], key=lambda d: d["best"])
+        if bests:
+            lines.append("Best laps in your class (result log), fastest first, class finish "
+                         "in brackets: " + "; ".join(
+                             f"{format_laptime(d['best'])} {'you' if d['me'] else d['name']}"
+                             + (f" (P{d['p']})" if d["p"] else "") for d in bests) + ".")
         incidents = rr["incidents"]
         if incidents:
             head = "; ".join(incidents[:3])
@@ -2737,6 +2747,9 @@ class CoachContext:
         if text is None:
             live = self._live()
             text = format_race_state(self.race, (live[2].place, live[1]) if live else None)
+            laps = rival_laps_line(live[0]) if live else None
+            if laps:
+                text += "\n" + laps
         # #162: the game's live penalty count (lmu.live.SessionState.penalties), read
         # when the question came in. What a penalty is for only reaches us in the result
         # log after the race (get_race_result). Only a positive count is said: the channel

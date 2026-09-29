@@ -62,7 +62,7 @@ def test_session_race_endpoint(tmp_path, synthetic_lap):
     assert body == {"position": 3, "class_position": 2, "finish_status": "Finished",
                     "incidents": ["Off track T7"], "penalties": [],
                     "grid_position": None, "class_grid_position": None,
-                    "race_ts": 1, "next_race_ts": None}
+                    "race_ts": 1, "next_race_ts": None, "class_bests": []}
     # No race row -> empty object per contract.
     assert c.get("/sessions/absent/race").json() == {}
 

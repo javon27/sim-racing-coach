@@ -964,7 +964,8 @@ def test_save_result_session_persists_race_row(tmp_path):
     assert race == {"position": 3, "class_position": 2, "finish_status": "Finished",
                     "incidents": [], "penalties": [],
                     "grid_position": None, "class_grid_position": None,
-                    "race_ts": 1234567890, "next_race_ts": None}
+                    "race_ts": 1234567890, "next_race_ts": None,
+                    "class_bests": []}
 
 
 def test_race_session_round_trips_incidents_and_penalties(tmp_path):
@@ -1004,7 +1005,8 @@ def test_v12_schema_migrates_grid_and_identity_columns_to_v13(tmp_path):
     assert s2.race_session("old") == {
         "position": 4, "class_position": 2, "finish_status": "Finished",
         "incidents": [], "penalties": [], "grid_position": None,
-        "class_grid_position": None, "race_ts": None, "next_race_ts": None}
+        "class_grid_position": None, "race_ts": None, "next_race_ts": None,
+        "class_bests": []}
     assert s2.is_ingested("some/old.xml", 1.0) is False   # re-read on the next ingest
     LapStore(db, str(tmp_path / "telem"))   # dup-safe on a 2nd open
 

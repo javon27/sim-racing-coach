@@ -13,7 +13,7 @@ import json
 import re
 import xml.etree.ElementTree as ET
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import config as _config
@@ -75,6 +75,9 @@ class ResultSession:
     # True for a multiplayer session, i.e. what live capture calls "online" (on a
     # server, even alone -- #170). See _is_online for the signal.
     online: bool | None = None
+    # #213: every timed car of the player's class -- {"p": class place, "name", "best": s,
+    # "me": the player} -- so a rival's best lap is reachable after the race.
+    class_bests: list[dict] = field(default_factory=list)
 
 
 _SESSION_TAG_RE = re.compile(r"^(Practice|Qualify|Warmup|Race)\d*$")
@@ -221,6 +224,12 @@ def parse_result(path, player_names: str | Iterable[str]) -> ResultSession | Non
             grid_position=_to_int(driver.findtext("GridPos")),
             class_grid_position=_to_int(driver.findtext("ClassGridPos")),
             online=_is_online(race_results, session_elem),
+            class_bests=[
+                {"p": _to_int(d.findtext("ClassPosition")), "name": d.findtext("Name"),
+                 "best": best, "me": d is driver}
+                for d in session_elem.findall("Driver")
+                if d.findtext("CarClass") == driver.findtext("CarClass")
+                and (best := _to_float(d.findtext("BestLapTime"))) and best > 0],
             best_lap=_to_float(driver.findtext("BestLapTime")),
             finish_status=driver.findtext("FinishStatus"),
             laps=_player_laps(driver),

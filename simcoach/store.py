@@ -92,7 +92,7 @@ def _session_base(sid: str) -> str:
     """The (track, car, mode) base of a session id, dropping any ~<instance> suffix."""
     return sid.split(_SESSION_SEP, 1)[0]
 
-SCHEMA_VERSION = 27
+SCHEMA_VERSION = 28
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
@@ -313,7 +313,8 @@ CREATE TABLE IF NOT EXISTS race_sessions (
     phase TEXT,
     ts REAL,
     mode TEXT,
-    logged_ts REAL
+    logged_ts REAL,
+    class_bests TEXT
 );
 """ + _COACH_CHAT_SCHEMA + _PROFILE_SCHEMA + _BATTLE_SCHEMA + _LIVE_CORNERS_SCHEMA
 
@@ -813,6 +814,17 @@ class LapStore:
                 cols = [r[1] for r in self.conn.execute("PRAGMA table_info(coach_chat)")]
                 if cols and "latency" not in cols:
                     _add_column(self.conn, "coach_chat", "latency TEXT")
+            if current_version < 28:
+                # v27 -> v28: every class rival's best lap from the result log (#213).
+                # Guarded like v15; and, as v15 did, forget which logs are imported so
+                # the next ingest re-reads them and backfills the races already stored.
+                cols = [r[1] for r in self.conn.execute("PRAGMA table_info(race_sessions)")]
+                if cols and "class_bests" not in cols:
+                    _add_column(self.conn, "race_sessions", "class_bests TEXT")
+                self.conn.execute(
+                    "CREATE TABLE IF NOT EXISTS ingested_files (path TEXT PRIMARY KEY, mtime REAL)"
+                )
+                self.conn.execute("DELETE FROM ingested_files")
         if current_version != stamp:
             self.conn.execute(f"PRAGMA user_version = {stamp}")
         self.conn.commit()
@@ -1866,14 +1878,14 @@ class LapStore:
             self.conn.execute(
                 "INSERT OR REPLACE INTO race_sessions "
                 "(session_id, position, class_position, finish_status, incidents, penalties, "
-                "grid_position, class_grid_position, track, car, phase, ts, mode, logged_ts) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "grid_position, class_grid_position, track, car, phase, ts, mode, logged_ts, "
+                "class_bests) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (session_id, rs.position, rs.class_position, rs.finish_status,
                  json.dumps(rs.incidents or []), json.dumps(rs.penalties or []),
                  rs.grid_position, rs.class_grid_position,
                  rs.track, rs.car, rs.session_type, rs.date_ts,
                  None if rs.online is None else ("online" if rs.online else "offline"),
-                 logged_ts),
+                 logged_ts, json.dumps(getattr(rs, "class_bests", None) or [])),
             )
 
     def _linked_result_session(self, session_id: str,
@@ -2006,7 +2018,7 @@ class LapStore:
         # (issue #67 residual). NULL is grandfathered for rows migrated from a
         # pre-v15 db that never had a phase column -- a re-ingest backfills it.
         cols = ("SELECT position, class_position, finish_status, incidents, penalties, "
-                "grid_position, class_grid_position, track, car, ts, mode "
+                "grid_position, class_grid_position, track, car, ts, mode, class_bests "
                 "FROM race_sessions WHERE session_id = ? AND (phase = 'race' OR phase IS NULL)")
         with self._lock:
             row = self.conn.execute(cols, (session_id,)).fetchone()
@@ -2015,7 +2027,8 @@ class LapStore:
                 row = self.conn.execute(cols, (linked,)).fetchone() if linked else None
             if row is None:
                 return None
-            pos, cls_pos, finish, incidents, penalties, grid, cls_grid, track, car, ts, mode = row
+            (pos, cls_pos, finish, incidents, penalties, grid, cls_grid, track, car, ts, mode,
+             class_bests) = row
             # When this race is one of several in a sitting, the live session spans them
             # all -- so hand the caller the window this race occupies (its own start, up
             # to the next race's) or the per-lap arc would mix two races into one answer.
@@ -2041,6 +2054,7 @@ class LapStore:
             "class_grid_position": cls_grid,
             "race_ts": ts,
             "next_race_ts": next_ts,
+            "class_bests": _load(class_bests),
         }
 
     def is_ingested(self, path: str, mtime: float) -> bool:

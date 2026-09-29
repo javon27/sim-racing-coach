@@ -99,7 +99,7 @@ def test_v26_db_gains_coach_chat_latency(tmp_path):
     conn.close()
     store = LapStore(db, str(tmp_path / "data"))
     assert "latency" in [r[1] for r in store.conn.execute("PRAGMA table_info(coach_chat)")]
-    assert store.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 27
+    assert store.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert store.chat_messages("chat-1")[0]["latency"] is None     # old rows stay NULL
     store.save_chat("chat-1", "sid", "T", "C", None, "q2", "a2", latency={"rounds": 3})
     assert store.chat_messages("chat-1")[1]["latency"] == {"rounds": 3}
