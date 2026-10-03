@@ -76,7 +76,7 @@ def test_get_race_state_states_them(tmp_path):
     frame = _frame(FIELD)
     out = CoachContext(store, on_track=True, race=snap,
                        live_field=lambda: read_field(frame)).dispatch("get_race_state", {})
-    assert "Car ahead in class (P1): A (A Entry), 3.0 s ahead" in out
+    assert "Car ahead in class (P1) at the end of lap 3: A (A Entry), 3.0 s ahead" in out
     assert out.splitlines()[-1] == rival_laps_line(read_field(frame))
     # Without a live frame there is no measured time to state.
     plain = CoachContext(store, on_track=True, race=snap).dispatch("get_race_state", {})

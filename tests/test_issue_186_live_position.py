@@ -81,12 +81,14 @@ def test_the_live_place_leads_and_a_passed_cars_stale_gap_is_cut(tmp_path):
     out = _ctx(tmp_path, _live(PASSED_B)).dispatch("get_race_state", {})
     assert out.startswith("Position now (live): P4 overall, P2 in class.\n"
                           "As of lap 3 (race).")
-    assert ("Car ahead in class now (live, P1): A (A Entry); no gap to him yet — it's read at "
-            "the line, and a trend needs 2 clean laps with him there.") in out
-    assert ("Car behind in class now (live, P3): B (B Entry); no gap to him yet — it's read at "
-            "the line, and a trend needs 2 clean laps with him there.") in out
+    # #192: the frame's class gaps, live; no trend off one sample.
+    assert ("Car ahead in class now (live, P1): A (A Entry), 1.5 s ahead; no trend yet — a "
+            "trend needs 2 clean laps with him there.") in out
+    assert ("Car behind in class now (live, P3): B (B Entry), 1.5 s behind; no trend yet — a "
+            "trend needs 2 clean laps with him there.") in out
     # B's lap-3 gap, closing trend and catch-lap are about a car he has passed: cut.
-    for stale in ("P3 in class", "P5 overall", "1.5 s", "closing", "reach", "lap 9"):
+    for stale in ("P3 in class", "P5 overall", "1.5 s ahead of", "closing", "reach",
+                  "lap 9"):
         assert stale not in out, stale
 
 
@@ -95,8 +97,9 @@ def test_a_neighbour_swap_ahead_is_live_and_the_same_car_behind_keeps_its_trend(
     is ahead of him now, the same car is behind."""
     out = _ctx(tmp_path, _live(["B", "A", "You", "C"])).dispatch("get_race_state", {})
     assert out.startswith("Position now (live): P5 overall, P3 in class.\nAs of lap 3")
-    assert "Car ahead in class now (live, P2): A (A Entry); no gap to him yet" in out
-    assert "Car behind in class (P4) at the end of lap 3: C (C Entry), 1.5 s behind" in out
+    assert "Car ahead in class now (live, P2): A (A Entry), 1.5 s ahead; no trend yet" in out
+    assert ("Car behind in class now (live, P4): C (C Entry), 1.5 s behind.\n"
+            "Car behind in class (P4) at the end of lap 3: C (C Entry), 1.5 s behind") in out
 
 
 def test_a_class_lead_taken_since_the_lap_is_said_in_the_present(tmp_path):
@@ -106,10 +109,16 @@ def test_a_class_lead_taken_since_the_lap_is_said_in_the_present(tmp_path):
     assert "B (B Entry)" not in out
 
 
-def test_live_equal_to_the_snapshot_leaves_the_answer_unchanged(tmp_path):
+def test_live_equal_to_the_snapshot_keeps_the_lap_position_and_adds_live_gaps(tmp_path):
+    """#192: nothing moved, so the lap's position stands -- but the gaps are continuous,
+    so the frame's gap is stated as live and the lap's gap and trend as of its lap."""
     plain = _ctx(tmp_path, None).dispatch("get_race_state", {})
-    assert _ctx(tmp_path, _live(AT_LAP_3)).dispatch("get_race_state", {}) == plain
     assert plain.startswith("As of lap 3 (race).\nPosition: P5 overall, P3 in class.")
+    out = _ctx(tmp_path, _live(AT_LAP_3)).dispatch("get_race_state", {})
+    assert out.startswith("As of lap 3 (race).\nPosition: P5 overall, P3 in class.")
+    assert ("Car ahead in class now (live, P2): B (B Entry), 1.5 s ahead.\n"
+            "Car ahead in class (P2) at the end of lap 3: B (B Entry), 1.5 s ahead; you are "
+            "closing") in out
 
 
 def _raise():

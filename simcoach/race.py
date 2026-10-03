@@ -900,19 +900,23 @@ def format_race_state(snap: RaceSnapshot,
     neighbour has changed since its lap, the position now leads the answer -- never the
     lap-old one against the driver's own word -- and a neighbour that is a different car
     now is named with its lap-old gap and trend CUT (a stale value is cut, not hedged).
-    A neighbour still the same car keeps the lap's gap and trend, labelled with the lap."""
+    A neighbour still the same car keeps the lap's gap and trend, labelled with the lap.
+    #192: every live neighbour gets the frame's class gap, labelled live -- the scoring
+    gaps update every tick (rig, Laguna 2026-10-02), so the frame's sum of links is the
+    gap now. A lapped link has no seconds figure. Trends and catch laps stay per-lap."""
     st = snap.state
     who = {side: g.who if g else None for side, g in (("ahead", st.ahead),
                                                         ("behind", st.behind))}
     now = None
+    moved = False
     if live is not None and live[1].class_position is None:
         live = None     # #208: an unplaced frame (formation, a reset) has no class order
     if live is not None:
         now = {"ahead": live[1].class_ahead, "behind": live[1].class_behind}
-        if (live[0], live[1].class_position, now) == (st.position, st.class_position, who):
-            now = None      # nothing moved: the lap's answer, unchanged
+        moved = (live[0], live[1].class_position, now) != (st.position, st.class_position,
+                                                            who)
     lines = [f"As of lap {snap.as_of_lap} (race)."]
-    if now is None:
+    if not moved:
         pos = f"P{st.position}" if st.position else "unknown"
         cls = f"P{st.class_position}" if st.class_position else "unknown"
         lines.append(f"Position: {pos} overall, {cls} in class.")
@@ -958,13 +962,18 @@ def format_race_state(snap: RaceSnapshot,
         elif now[side] is None:
             lines.append(f"{label} now (live): none"
                          + (" — you lead your class." if side == "ahead" else "."))
-        elif placed and now[side] == who[side]:
-            lines.append(_gap_line(f"{label} (P{st.class_position + step}) at the end of lap "
-                                   f"{snap.as_of_lap}", g, side, placed, counts))
         else:
-            lines.append(f"{label} now (live, P{live[1].class_position + step}): {now[side]}; "
-                         "no gap to him yet — it's read at the line, and a trend needs "
-                         f"{MIN_STINT_LAPS} clean laps with him there.")
+            gap = getattr(live[1], f"class_gap_{side}")
+            head = (f"{label} now (live, P{live[1].class_position + step}): {now[side]}, "
+                    + (f"{gap:.1f} s {side}" if gap is not None else
+                       "a lap or more away (no seconds figure)"))
+            if placed and now[side] == who[side]:
+                lines.append(head + ".")
+                lines.append(_gap_line(f"{label} (P{st.class_position + step}) at the end "
+                                       f"of lap {snap.as_of_lap}", g, side, placed, counts))
+            else:
+                lines.append(f"{head}; no trend yet — a trend needs {MIN_STINT_LAPS} clean "
+                             "laps with him there.")
     return "\n".join(lines)
 
 
