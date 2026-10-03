@@ -87,8 +87,8 @@ def test_the_live_place_leads_and_a_passed_cars_stale_gap_is_cut(tmp_path):
     assert ("Car behind in class now (live, P3): B (B Entry), 1.5 s behind; no trend yet — a "
             "trend needs 2 clean laps with him there.") in out
     # B's lap-3 gap, closing trend and catch-lap are about a car he has passed: cut.
-    for stale in ("P3 in class", "P5 overall", "1.5 s ahead of", "closing", "reach",
-                  "lap 9"):
+    for stale in ("P3 in class", "P5 overall", "B (B Entry), 1.5 s ahead", "closing",
+                  "reach", "lap 9"):
         assert stale not in out, stale
 
 
@@ -115,10 +115,15 @@ def test_live_equal_to_the_snapshot_keeps_the_lap_position_and_adds_live_gaps(tm
     plain = _ctx(tmp_path, None).dispatch("get_race_state", {})
     assert plain.startswith("As of lap 3 (race).\nPosition: P5 overall, P3 in class.")
     out = _ctx(tmp_path, _live(AT_LAP_3)).dispatch("get_race_state", {})
-    assert out.startswith("As of lap 3 (race).\nPosition: P5 overall, P3 in class.")
     assert ("Car ahead in class now (live, P2): B (B Entry), 1.5 s ahead.\n"
             "Car ahead in class (P2) at the end of lap 3: B (B Entry), 1.5 s ahead; you are "
             "closing") in out
+    # Less the live lines and the lap labels it is the lap's answer, but for the catch-lap
+    # projection off the lap's gap: cut beside a live gap (#192 review).
+    lap_only = "\n".join(ln for ln in out.splitlines() if "now (live" not in ln)
+    assert "reach him around lap 9" in plain
+    assert lap_only.replace(" at the end of lap 3", "") == plain.replace(
+        "; at this rate you reach him around lap 9", "")
 
 
 def _raise():

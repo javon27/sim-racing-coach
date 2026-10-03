@@ -3,11 +3,13 @@ updates every tick and is the gap to the car one place up OVERALL, whatever its 
 the class gap is the sum of links to the nearest same-class car (race.class_neighbours).
 So the race tools state the live class gap, labelled live, and keep the lap's gap and
 trend labelled with its lap."""
+import pytest
+
 from simcoach.coach_tools import CoachContext
 from simcoach.lmu.live import read_field
 from simcoach.lmu.rf2structs import VehicleScoringInfoV01, rF2Scoring
 from simcoach.model_types import RaceSample
-from simcoach.race import LapFacts, build_snapshot
+from simcoach.race import LapFacts, build_snapshot, class_neighbours
 from simcoach.store import LapStore
 
 _ID = {"H1": 1, "H2": 2, "H3": 3, "A": 10, "B": 11, "You": 5, "C": 12}
@@ -81,6 +83,47 @@ def test_a_lapped_link_has_no_seconds_figure(tmp_path):
     """H2 is a lap down on B: the link between B and him is lapped, so the class gap is
     None -- never H2's seconds plus his."""
     out = _ctx(tmp_path, _frame(AT_LAP_3, lapped=("H2",))).dispatch("get_race_state", {})
-    assert ("Car ahead in class now (live, P2): B (B Entry), a lap or more away (no seconds "
-            "figure).") in out
+    assert ("Car ahead in class now (live, P2): B (B Entry), no seconds figure (a lap or more "
+            "away, or the game hasn't set it).") in out
     assert "1.4 s" not in out
+
+
+def test_a_live_gap_cuts_the_laps_catch_lap_and_keeps_its_rate(tmp_path):
+    """Review round 1: a live 0.3 s beside the lap's '2.5 s ... reach him around lap 8'
+    reads the stale projection as current. The lap's rate stays; its catch lap goes."""
+    plain = _ctx(tmp_path, None).dispatch("get_race_state", {})
+    assert "you reach him around lap 8" in plain       # 2.5 s at 0.5 s/lap, off lap 3
+    close = [(n, 0.1 if n == "H2" else 0.2 if n == "You" else g) for n, g in AT_LAP_3]
+    out = _ctx(tmp_path, _frame(close)).dispatch("get_race_state", {})
+    assert "Car ahead in class now (live, P2): B (B Entry), 0.3 s ahead." in out
+    assert ("Car ahead in class (P2) at the end of lap 3: B (B Entry), 2.5 s ahead; you are "
+            "closing 0.50 s/lap.") in out
+    assert "reach him" not in out
+
+
+@pytest.mark.parametrize("links", [
+    {"You": -1.853},                 # the rig's post-flag value
+    {"You": float("nan")},
+    {"H2": 0.0, "You": 0.0},         # summed 0.0: unset, not side by side
+], ids=["negative", "nan", "all-zero"])
+def test_an_unset_or_negative_link_has_no_seconds_figure(tmp_path, links):
+    order = [(n, links.get(n, g)) for n, g in AT_LAP_3]
+    _, gap, _, _ = class_neighbours(read_field(_frame(order)).cars)
+    assert gap is None
+    out = _ctx(tmp_path, _frame(order)).dispatch("get_race_state", {})
+    assert ("Car ahead in class now (live, P2): B (B Entry), no seconds figure") in out
+    assert "-1." not in out and "nan" not in out and "0.0 s" not in out
+
+
+def test_an_unsampled_lap_says_no_trend_rule_beside_the_live_gap():
+    """Review NIT: the lap wasn't read, so 'a trend needs 2 clean laps' would be wrong
+    for the same car -- the live gap, and that the lap wasn't sampled."""
+    from simcoach.race import GapRead, RaceSnapshot, RaceState, format_race_state
+    st = RaceState(position=5, class_position=3, max_laps=24, time_left=None, pace=None,
+                   laps_to_go=None, ahead=GapRead("B (B Entry)", 2.5, None, None),
+                   behind=None, sampled=False)
+    out = format_race_state(RaceSnapshot(3, "s", st, None), (5, RaceSample(
+        class_position=3, class_ahead="B (B Entry)", class_gap_ahead=1.4)))
+    assert "Car ahead in class now (live, P2): B (B Entry), 1.4 s ahead." in out
+    assert "Car ahead in class (P2) at the end of lap 3: not sampled this lap." in out
+    assert "trend" not in out and "2.5 s" not in out

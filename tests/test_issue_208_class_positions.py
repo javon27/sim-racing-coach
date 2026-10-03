@@ -236,8 +236,8 @@ def test_race_state_states_the_rivals_class_place():
     # Live: he is P15 in class now and a different car is ahead -- its place is P14.
     live = format_race_state(RaceSnapshot(8, SID, st, None), (24, RaceSample(
         class_position=15, class_ahead="C (C Entry)", class_behind="A. Rival (A Entry)")))
-    assert "Car ahead in class now (live, P14): C (C Entry), a lap or more away" in live
-    assert "Car behind in class now (live, P16): A. Rival (A Entry), a lap or more" in live
+    assert "Car ahead in class now (live, P14): C (C Entry), no seconds figure" in live
+    assert "Car behind in class now (live, P16): A. Rival (A Entry), no seconds" in live
     # Leading the class: nobody ahead, so no place is named for him.
     lead = dataclasses.replace(st, class_position=1, ahead=None)
     text = format_race_state(RaceSnapshot(8, SID, lead, None))

@@ -60,7 +60,9 @@ def class_neighbours(cars: list[VehicleState]):
     two cars. In a multiclass race the car one place up is often another class, so the
     player's own gap_next is not the class gap. A lapped link (read_field sets gap_next
     None when laps_behind_next > 0) makes the gap None: that car is a lap or more away,
-    and a seconds figure would be false. Unplaced cars (place 0) are ignored."""
+    and a seconds figure would be false. #192: so does a negative or non-finite link
+    (the rig read -1.853 after the flag) and a summed 0.0, which is unset, not side by
+    side. Unplaced cars (place 0) are ignored."""
     # (place, id): read_field's class-rank order, so the class neighbours' class places
     # are the player's -/+ 1 even on a tied place (#208: format_race_state states them).
     order = sorted((c for c in cars if c.place > 0), key=lambda c: (c.place, c.id))
@@ -71,7 +73,9 @@ def class_neighbours(cars: list[VehicleState]):
 
     def _gap(lo: int, hi: int) -> float | None:
         links = [order[k].gap_next for k in range(lo + 1, hi + 1)]
-        return None if any(g is None for g in links) else float(sum(links))
+        if any(g is None or not math.isfinite(g) or g < 0 for g in links):
+            return None
+        return float(sum(links)) or None
 
     a = next((j for j in range(me - 1, -1, -1) if order[j].cls == cls), None)
     b = next((j for j in range(me + 1, len(order)) if order[j].cls == cls), None)
@@ -862,9 +866,11 @@ def _clock(seconds: float) -> str:
 
 
 def _gap_line(label: str, g: GapRead | None, side: str, placed: bool,
-              counts: tuple[int, int] | None = None) -> str:
+              counts: tuple[int, int] | None = None, catch: bool = True) -> str:
     """`counts` = flag_counts' (laps to go, flag lap) when the race is planned on the
-    longer count (#201): a catch after that flag lap is said to be conditional."""
+    longer count (#201): a catch after that flag lap is said to be conditional.
+    `catch` False (#192: a live seconds gap is stated beside this line) cuts the catch-lap
+    projection, which is off the lap's gap: only the per-lap rate is said."""
     if not placed:
         return f"{label}: not sampled this lap."
     if g is None:
@@ -884,6 +890,8 @@ def _gap_line(label: str, g: GapRead | None, side: str, placed: bool,
     else:
         trend = f"he is {'closing' if closing else 'dropping back'} {abs(g.slope):.2f} s/lap"
         reach = "he reaches you"
+    if not catch:
+        return f"{head}; {trend}."
     if g.catch_lap is not None:
         trend += f"; at this rate {reach} around lap {g.catch_lap}"
         if counts and g.catch_lap > counts[1]:
@@ -966,11 +974,12 @@ def format_race_state(snap: RaceSnapshot,
             gap = getattr(live[1], f"class_gap_{side}")
             head = (f"{label} now (live, P{live[1].class_position + step}): {now[side]}, "
                     + (f"{gap:.1f} s {side}" if gap is not None else
-                       "a lap or more away (no seconds figure)"))
-            if placed and now[side] == who[side]:
+                       "no seconds figure (a lap or more away, or the game hasn't set it)"))
+            if now[side] == who[side]:      # an unsampled lap says so, not a trend rule
                 lines.append(head + ".")
-                lines.append(_gap_line(f"{label} (P{st.class_position + step}) at the end "
-                                       f"of lap {snap.as_of_lap}", g, side, placed, counts))
+                his = f" (P{st.class_position + step})" if st.class_position else ""
+                lines.append(_gap_line(f"{label}{his} at the end of lap {snap.as_of_lap}",
+                                       g, side, placed, counts, catch=gap is None))
             else:
                 lines.append(f"{head}; no trend yet — a trend needs {MIN_STINT_LAPS} clean "
                              "laps with him there.")
