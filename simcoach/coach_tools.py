@@ -2628,7 +2628,7 @@ class CoachContext:
         elif fin := self._finish_status():
             # #172: on the cool-down lap -- on track, a fresh snapshot, no row yet.
             text += (f"\nYou have {fin} (the game's live finish status), so this race is "
-                     "over (its result log isn't written yet): talk about it as over, not "
+                     "over (its result log isn't read yet): talk about it as over, not "
                      f"live -- {_COOL_DOWN_RULE}; no pit-stop or strategy offers.")
         elif not self.on_track or (self.race is None and not self.race_note):
             text += ("\nNo race is live now, so the race these positions describe is over "
