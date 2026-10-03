@@ -1859,11 +1859,12 @@ class CoachContext:
         return identity + "\n" + format_time_loss(buckets, ref_label)
 
     def _incidents(self, record, lap_id) -> list[float]:
-        """Lap distances of this lap's spins, stops and offs (#169: a sector or a corner
-        segment a lap ran off in is never a best)."""
+        """Lap distances of this lap's spins, stops, offs and track-limits strikes
+        (#169: a sector or a corner segment a lap ran off in is never a best; #215: nor
+        one LMU counted a time-gaining off in)."""
         return [e["lap_distance"] for e in
                 lap_events(record, self.cmap, self._analysis_for(record, lap_id))
-                if e["kind"] in ("spin", "stop", "off")]
+                if e["kind"] in ("spin", "stop", "off", "track_limits")]
 
     def _class_benchmark(self):
         """(class, 'm:ss.mmm', seconds) from the track notes' reference_times for this

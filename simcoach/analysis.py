@@ -1991,6 +1991,26 @@ def _wear_step_events(record: LapRecord, cmap: CornerMap, baseline: dict) -> lis
     return out
 
 
+def _track_limit_events(record: LapRecord, cmap: CornerMap) -> list[dict]:
+    """#215 [RIG 2026-10-02, Laguna]: one event per RISE of LMU's mTrackLimitsSteps,
+    placed on the frame it rises, carrying the rise. The counter is a session running
+    total (held across the line, back to 0 at a session change), so each sample is
+    diffed against the one before it -- never against a per-lap zero -- and a drop is
+    not an event. It only steps on an off that gained time, and one off can add
+    several steps, so the rise is a size, not a count of offs. [] for a lap captured
+    before the channel existed: nothing is said, not "none"."""
+    steps = record.channels.get("track_limits_steps")
+    if steps is None:
+        return []
+    steps = np.asarray(steps, dtype=float)
+    d = np.asarray(record.channels.get("lap_distance", []), dtype=float)
+    n = min(steps.size, d.size)
+    rise = np.diff(steps[:n])
+    return [{"kind": "track_limits", "corner_no": _corner_at(cmap, d[i]),
+             "lap_distance": float(d[i]), "detail": {"steps": int(rise[i - 1])}}
+            for i in np.flatnonzero(rise > 0) + 1]
+
+
 def lap_events(record: LapRecord, cmap: CornerMap, analysis: "LapAnalysis | None",
                wear_baseline: dict | None = None, live: bool = False) -> list[dict]:
     """Everything that went wrong on one lap, in along-lap order:
@@ -2000,12 +2020,14 @@ def lap_events(record: LapRecord, cmap: CornerMap, analysis: "LapAnalysis | None
     track, `_stop_events`), "parked" (a stored in-lap/partial that ended standing --
     not an incident; `live` marks the lap in progress, never parked), "off" (wheels on
     grass/dirt/gravel -- `CornerMetrics.off_surface`; never from track_edge, so a
-    lap captured without surface channels has no offs), "lockup"/"wheelspin"
+    lap captured without surface channels has no offs), "track_limits" (#215: LMU's
+    own counter rose -- `_track_limit_events`), "lockup"/"wheelspin"
     (pass-through of the per-corner reads), "wear_step" (a flat spot). `wear_baseline` comes from `stint_wear_baseline`
     over the stint's laps; without one the wear kind is skipped entirely rather
     than guessed against a single lap."""
     events = _spin_events(record, cmap)
     events += _stop_events(record, cmap, events, live)
+    events += _track_limit_events(record, cmap)
     for cm in (analysis.corners if analysis is not None else []):
         if cm.lockup:
             events.append({"kind": "lockup", "corner_no": cm.corner_no,

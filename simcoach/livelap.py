@@ -47,7 +47,7 @@ _RECENT_HIT_S = 15.0
 # so it never converts the whole ~110-channel buffer.
 _INCIDENT_KEYS = ("lap_distance", "speed", "pos_x", "pos_z", "time", "elapsed_time",
                   "lap_start_et", "last_impact_et", "last_impact_mag", "last_impact_x",
-                  "last_impact_z")
+                  "last_impact_z", "track_limits_steps")
 
 
 def _snapshot(channels: dict, keys=None) -> dict[str, np.ndarray]:

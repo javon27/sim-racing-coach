@@ -373,6 +373,10 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
         off-track event). UNVERIFIED at the rig: that LMU fills it, and that
         grass/gravel read as 2/4 rather than 0, is settled by the first rig lap
         that puts two wheels on the grass.
+      track_limits_steps <- mTrackLimitsSteps (#215), uint8 -> float. [RIG
+        2026-10-02, Laguna] live: LMU's session running total of track-limits
+        steps -- held across the line, 0 again at a session change, only steps on
+        an off that gained time (+1/+2/+3 seen per off). analysis reads a rise.
     """
     wheels = telem.mWheel
     # #33: at frame 1, in the garage, this whole block reads pre-population state --
@@ -472,6 +476,7 @@ def sample_from_telem(telem: TelemInfoV01, lap_dist: float) -> dict[str, float]:
         "last_impact_z": telem.mLastImpactPos.z,
         "overheating": 1.0 if telem.mOverheating else 0.0,
         "detached": 1.0 if telem.mDetached else 0.0,
+        "track_limits_steps": float(telem.mTrackLimitsSteps),   # #215, see docstring
     }
     for name, i in (("fl", 0), ("fr", 1), ("rl", 2), ("rr", 3)):
         w = wheels[i]
