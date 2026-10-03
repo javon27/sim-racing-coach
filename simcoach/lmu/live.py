@@ -59,6 +59,10 @@ class SessionState:
     # (unserved) penalties. PENDING RIG VERIFICATION in LMU (never eyeballed against a
     # served drive-through). None = no live frame.
     penalties: int | None = None
+    # #172: the player's mFinishStatus (0 none, 1 finished, 2 DNF, 3 DQ). Rig 2026-10-02
+    # (Laguna, offline race): 0 -> 1 on the frame he crossed the line at the flag, 1 for
+    # the whole cool-down lap. Only 1 seen live. None = no live frame.
+    finish_status: int | None = None
 
 
 @dataclass
@@ -175,6 +179,7 @@ def read_field(scoring: rF2Scoring) -> FieldSnapshot:
             last_lap=_pos(player.mLastLapTime),
             best_lap=_pos(player.mBestLapTime),
             penalties=int(player.mNumPenalties),
+            finish_status=int(player.mFinishStatus),
         ),
         cars=cars,
     )

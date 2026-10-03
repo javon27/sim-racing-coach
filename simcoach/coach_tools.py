@@ -138,6 +138,10 @@ _COOL_DOWN_RULE = ("the lap begun after the chequered flag is the cool-down (lis
 # 25 s, not 20: that log landed 18.8 s after the call, and a 20 s wait caught it on its
 # very last poll.
 _RESULT_LOG_WAIT_S = 25.0
+# #172: the player's live mFinishStatus (lmu.live) -> what he has done. 0 (still
+# racing) and any other value say nothing; a DNF or DQ is never called "finished".
+_FINISH_WORDS = {1: "finished (taken the chequered flag)", 2: "retired (DNF)",
+                 3: "been disqualified (DQ)"}
 _RESULT_LOG_RECENT_S = 90.0
 _RESULT_LOG_POLL_S = 1.0
 
@@ -2621,6 +2625,11 @@ class CoachContext:
             text += ("\nA later race of this session followed it, so this race is over "
                      "(its result log isn't read): talk about it as a finished race -- "
                      f"{_COOL_DOWN_RULE}; no pit-stop or strategy offers.")
+        elif fin := self._finish_status():
+            # #172: on the cool-down lap -- on track, a fresh snapshot, no row yet.
+            text += (f"\nYou have {fin} (the game's live finish status), so this race is "
+                     "over (its result log isn't written yet): talk about it as over, not "
+                     f"live -- {_COOL_DOWN_RULE}; no pit-stop or strategy offers.")
         elif not self.on_track or (self.race is None and not self.race_note):
             text += ("\nNo race is live now, so the race these positions describe is over "
                      "(its result log isn't read yet): talk about it as a finished race -- "
@@ -2750,7 +2759,29 @@ class CoachContext:
             return None
         return field, sample, me
 
+    def _finish_status(self) -> str | None:
+        """#172: what the player's live finish status says he has done, once his race is
+        over -- read from one #186 live frame (lmu.live: mFinishStatus is 1 from the
+        line at the flag through the cool-down lap). None: still racing (0), an unknown
+        value, no reader, off track, or not a race."""
+        if not self.on_track or self.live_field is None:
+            return None
+        try:
+            sess = self.live_field().session
+        except Exception:
+            return None
+        return _FINISH_WORDS.get(sess.finish_status) if sess.phase == "race" else None
+
+    def _race_over(self) -> str | None:
+        """#172: the race tools' answer once the live finish status ends the race."""
+        fin = self._finish_status()
+        return (f"This race is over: you have {fin} (the game's live finish status). No "
+                "race state, pit stops or strategy to offer -- get_race_result reviews it."
+                if fin else None)
+
     def get_race_state(self):
+        if over := self._race_over():
+            return over
         text = self._no_live_race()
         if text is None:
             live = self._live()
@@ -2775,6 +2806,8 @@ class CoachContext:
     def get_strategy(self, race_laps=None, race_minutes=None):
         if not self.on_track:
             return self._no_live_race()
+        if over := self._race_over():
+            return over
         if self.race is not None and self.race.strategy.note is None:
             rec = self._race_lap_record()
             return format_strategy(self.race, *((damage_state(rec.channels), rec.lap_no)
