@@ -232,7 +232,7 @@ def test_race_state_states_the_rivals_class_place():
     text = format_race_state(RaceSnapshot(as_of_lap=8, session_id=SID, state=st,
                                           strategy=None))
     assert "Car ahead in class (P15): A. Rival (A Entry), 1.2 s ahead; trend:" in text
-    assert "Car behind in class (P17): B. Chaser (B Entry), a lap or more away." in text
+    assert "Car behind in class (P17): B. Chaser (B Entry), no seconds figure (a lap or more away, or the game hasn't set it)." in text
     # Live: he is P15 in class now and a different car is ahead -- its place is P14.
     live = format_race_state(RaceSnapshot(8, SID, st, None), (24, RaceSample(
         class_position=15, class_ahead="C (C Entry)", class_behind="A. Rival (A Entry)")))

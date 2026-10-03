@@ -677,7 +677,7 @@ _WHEEL_NAME = {"fl": "front-left", "fr": "front-right", "rl": "rear-left", "rr":
 @dataclass
 class GapRead:
     who: str
-    gap: float | None           # s now; None = a lap or more away
+    gap: float | None           # s now; None = lapped link, or an unset/negative one
     slope: float | None         # s/lap over the trend laps; negative = the gap is shrinking
     catch_lap: int | None       # the lap it reaches zero at that slope, before the flag
                                 # (#201: the longer count's, as build_snapshot plans)
@@ -876,7 +876,7 @@ def _gap_line(label: str, g: GapRead | None, side: str, placed: bool,
     if g is None:
         return f"{label}: none" + (" — you lead your class." if side == "ahead" else ".")
     if g.gap is None:
-        return f"{label}: {g.who}, a lap or more away."
+        return f"{label}: {g.who}, no seconds figure (a lap or more away, or the game hasn't set it)."
     head = f"{label}: {g.who}, {g.gap:.1f} s {side}"
     if g.slope is None:
         return (f"{head}; trend: not enough laps yet (needs {MIN_STINT_LAPS} clean laps with "
