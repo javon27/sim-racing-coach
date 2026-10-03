@@ -6,32 +6,30 @@
       "label": "1",
       "name": "Turn 1",
       "direction": "left",
-      "start_dist": 370.2,
-      "apex_dist": 459.9,
-      "end_dist": 495.8,
+      "start_dist": 140.3,
+      "apex_dist": 230.0,
+      "end_dist": 265.9,
       "apexes": [
-        459.9
+        230.0
       ],
-      "radius_m": 31.2,
-      "elev_delta_m": -5.1,
-      "width_m": 10.3,
-      "banking_deg": -2.2
+      "radius_m": 322.8
     },
     {
       "number": 2,
       "label": "2",
       "name": "Andretti Hairpin",
       "direction": "left",
-      "start_dist": 495.8,
-      "apex_dist": 531.8,
-      "end_dist": 621.5,
+      "start_dist": 423.9,
+      "apex_dist": 459.9,
+      "end_dist": 549.6,
       "apexes": [
+        459.9,
         531.8
       ],
-      "radius_m": 34.8,
-      "elev_delta_m": -0.8,
+      "radius_m": 31.2,
       "width_m": 10.3,
-      "banking_deg": -2.2
+      "banking_deg": -2.2,
+      "elev_delta_m": -5.1
     },
     {
       "number": 3,
@@ -45,9 +43,9 @@
         776.2
       ],
       "radius_m": 55.9,
-      "elev_delta_m": 0.1,
       "width_m": 9.8,
-      "banking_deg": 1.3
+      "banking_deg": 1.3,
+      "elev_delta_m": 0.1
     },
     {
       "number": 4,
@@ -61,9 +59,9 @@
         1049.3
       ],
       "radius_m": 89.8,
-      "elev_delta_m": -0.0,
       "width_m": 9.9,
-      "banking_deg": 1.4
+      "banking_deg": 1.4,
+      "elev_delta_m": -0.0
     },
     {
       "number": 5,
@@ -77,9 +75,9 @@
         1538.0
       ],
       "radius_m": 61.9,
-      "elev_delta_m": 5.6,
       "width_m": 10.7,
-      "banking_deg": -4.3
+      "banking_deg": -4.3,
+      "elev_delta_m": 5.6
     },
     {
       "number": 6,
@@ -93,9 +91,9 @@
         1940.4
       ],
       "radius_m": 67.5,
-      "elev_delta_m": 3.6,
       "width_m": 7.2,
-      "banking_deg": -4.7
+      "banking_deg": -4.7,
+      "elev_delta_m": 3.6
     },
     {
       "number": 7,
@@ -109,9 +107,9 @@
         2357.3
       ],
       "radius_m": 285.6,
-      "elev_delta_m": 7.2,
       "width_m": 8.1,
-      "banking_deg": -0.2
+      "banking_deg": -0.2,
+      "elev_delta_m": 7.2
     },
     {
       "number": 8,
@@ -125,13 +123,13 @@
         2443.5
       ],
       "radius_m": 23.0,
-      "elev_delta_m": -3.3,
       "width_m": 9.3,
-      "banking_deg": -3.9
+      "banking_deg": -3.9,
+      "elev_delta_m": -3.3
     },
     {
       "number": 9,
-      "label": "9",
+      "label": "8a",
       "name": "Corkscrew",
       "direction": "right",
       "start_dist": 2479.4,
@@ -141,13 +139,13 @@
         2515.4
       ],
       "radius_m": 37.2,
-      "elev_delta_m": -16.7,
       "width_m": 9.4,
-      "banking_deg": 4.1
+      "banking_deg": 4.1,
+      "elev_delta_m": -16.7
     },
     {
       "number": 10,
-      "label": "10",
+      "label": "9",
       "name": "Rainey Curve",
       "direction": "left",
       "start_dist": 2612.5,
@@ -157,14 +155,14 @@
         2702.2
       ],
       "radius_m": 72.9,
-      "elev_delta_m": -15.2,
       "width_m": 10.7,
-      "banking_deg": -7.0
+      "banking_deg": -7.0,
+      "elev_delta_m": -15.2
     },
     {
       "number": 11,
-      "label": "11",
-      "name": "Turn 11",
+      "label": "10",
+      "name": "Turn 10",
       "direction": "right",
       "start_dist": 2871.2,
       "apex_dist": 2960.9,
@@ -173,14 +171,14 @@
         2960.9
       ],
       "radius_m": 68.0,
-      "elev_delta_m": -6.5,
       "width_m": 10.0,
-      "banking_deg": 4.3
+      "banking_deg": 4.3,
+      "elev_delta_m": -6.5
     },
     {
       "number": 12,
-      "label": "12",
-      "name": "Turn 12",
+      "label": "11",
+      "name": "Turn 11",
       "direction": "left",
       "start_dist": 3187.5,
       "apex_dist": 3277.2,
@@ -189,9 +187,9 @@
         3277.2
       ],
       "radius_m": 21.4,
-      "elev_delta_m": -1.1,
       "width_m": 8.4,
-      "banking_deg": -1.1
+      "banking_deg": -1.1,
+      "elev_delta_m": -1.1
     }
   ],
   "path": [
@@ -2702,25 +2700,55 @@
     1400.3,
     2842.3
   ],
-  "sections": [],
+  "sections": [
+    {
+      "name": "The Corkscrew",
+      "kind": "section",
+      "start_dist": 2400.4,
+      "end_dist": 2544.1
+    },
+    {
+      "name": "Rahal Straight",
+      "kind": "section",
+      "start_dist": 1997.9,
+      "end_dist": 2328.5
+    },
+    {
+      "name": "Andretti Hairpin",
+      "kind": "section",
+      "start_dist": 445.6,
+      "end_dist": 546.2
+    }
+  ],
   "length": 3586.2,
   "rotation": 0.0,
   "name": "WeatherTech Raceway Laguna Seca",
+  "pronunciations": {
+    "Andretti Hairpin": "\u00e6nd\u0279\u02c8\u025b\u027ei h\u02c8\u025b\u0279p\u026an",
+    "Rainey Curve": "\u0279\u02c8e\u026ani k\u02c8\u025c\u02d0v",
+    "Turn 1": "t\u02c8\u025c\u02d0n w\u02c8\u028cn",
+    "Turn 11": "t\u02c8\u025c\u02d0n \u026al\u02c8\u025bv\u0259n",
+    "Turn 12": "t\u02c8\u025c\u02d0n tw\u02c8\u025blv",
+    "Turn 3": "t\u02c8\u025c\u02d0n \u03b8\u0279\u02c8i\u02d0",
+    "Turn 4": "t\u02c8\u025c\u02d0n f\u02c8\u0254\u02d0\u0279",
+    "Turn 5": "t\u02c8\u025c\u02d0n f\u02c8a\u026av",
+    "Turn 6": "t\u02c8\u025c\u02d0n s\u02c8\u026aks",
+    "Turn 7": "t\u02c8\u025c\u02d0n s\u02c8\u025bv\u0259n"
+  },
   "notes": {
     "overview": "Laguna Seca is a short, brutally undulating 3.6 km circuit with over 90 m of elevation change, mixing slow hairpins with fast, blind, downhill corners. Rhythm and commitment matter more than outright grip. The signature is the Corkscrew (T8-T9), a blind plunging left-right drop. Nail the exits of the two hairpins (Andretti and the final left) for lap time, since both feed long straights.",
     "corners": {
-      "1": "Downhill entry off the front straight into the hairpin braking zone. Brake in a straight line before turning in; the surface falls away, so early trail-braking upsets the car. Sets up the Andretti apex.",
-      "2": "The Andretti Hairpin. Long, downhill left; brake earlier than it looks because it drops away. Take a late apex around the second set of inside kerbs, then feed throttle progressively toward the climb.",
+      "2": "Downhill entry off the front straight into the hairpin braking zone. Brake in a straight line before turning in; the surface falls away, so early trail-braking upsets the car. Sets up the Andretti apex.",
       "3": "Quick right as the track begins to climb. Short braking, rotate the car early so you can commit to throttle up the hill and carry momentum toward Turn 4.",
       "4": "Uphill right; keep the car settled on the climb. A clean, early apex lets you get power down for the run up to the mid-lap left-handers.",
       "5": "Left as the track keeps rising. Momentum corner; protect entry speed and let the gradient scrub pace rather than over-braking, then flow toward Turn 6.",
       "6": "Left near the top of the hill. Keep it tidy and positioned for the fast run up to the Corkscrew; don't waste speed you carry onto the climb.",
       "7": "Fast right on the run toward the Corkscrew. Stay committed, settle the car and get positioned left, because this sets your entry line into the drop that follows.",
       "8": "Corkscrew entry: blind, plunging left over the crest. Aim at your marker and commit, you can't see the exit. Turn in as the nose drops and the track falls away.",
-      "9": "Corkscrew exit: immediate right as the track plummets. Let the car fall down the hill, unwind the wheel and get throttle down early for the run to Rainey Curve.",
-      "10": "Rainey Curve: long, downhill left taken at speed after the Corkscrew drop. Be patient on entry; camber and gradient help, but running wide costs you all the way down toward the final complex.",
-      "11": "Downhill right leading toward the final hairpin. Short braking, rotate and settle the car so a tidy exit lines you up for the last corner.",
-      "12": "The final hairpin, a slow left onto the main straight. Brake deep, sacrifice entry for a clean early throttle exit; this drive sets your speed down the whole front straight."
+      "8a": "Corkscrew exit: immediate right as the track plummets. Let the car fall down the hill, unwind the wheel and get throttle down early for the run to Rainey Curve.",
+      "9": "Rainey Curve: long, downhill left taken at speed after the Corkscrew drop. Be patient on entry; camber and gradient help, but running wide costs you all the way down toward the final complex.",
+      "10": "Downhill right leading toward the final hairpin. Short braking, rotate and settle the car so a tidy exit lines you up for the last corner.",
+      "11": "The final hairpin, a slow left onto the main straight. Brake deep, sacrifice entry for a clean early throttle exit; this drive sets your speed down the whole front straight."
     },
     "reference_times": {
       "Hypercar": "1:12.445",
@@ -2728,17 +2756,5 @@
       "LMGT3": "1:21.186"
     },
     "source": "IMSA (2024 Motul Course de Monterey: Bourdais GTP pole 1:12.445; GTD Pro race lap record 1:21.186), RaceControl.gg LMU track guide, Corkscrew Coaching corner-by-corner guide, official WeatherTech Raceway track information (elevation/Corkscrew/Rainey Curve/Andretti Hairpin)."
-  },
-  "pronunciations": {
-    "Andretti Hairpin": "ændɹˈɛɾi hˈɛɹpɪn",
-    "Rainey Curve": "ɹˈeɪni kˈɜːv",
-    "Turn 1": "tˈɜːn wˈʌn",
-    "Turn 11": "tˈɜːn ɪlˈɛvən",
-    "Turn 12": "tˈɜːn twˈɛlv",
-    "Turn 3": "tˈɜːn θɹˈiː",
-    "Turn 4": "tˈɜːn fˈɔːɹ",
-    "Turn 5": "tˈɜːn fˈaɪv",
-    "Turn 6": "tˈɜːn sˈɪks",
-    "Turn 7": "tˈɜːn sˈɛvən"
   }
 }

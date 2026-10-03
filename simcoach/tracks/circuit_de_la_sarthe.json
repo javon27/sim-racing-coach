@@ -5,7 +5,7 @@
     {
       "number": 1,
       "label": "1",
-      "name": "Turn 1",
+      "name": "Dunlop Curve",
       "direction": "right",
       "start_dist": 573.1,
       "apex_dist": 655.0,
@@ -23,16 +23,16 @@
       "label": "2",
       "name": "Turn 2",
       "direction": "left",
-      "start_dist": 764.2,
-      "apex_dist": 846.1,
-      "end_dist": 887.0,
+      "start_dist": 736.9,
+      "apex_dist": 818.8,
+      "end_dist": 848.2,
       "apexes": [
-        846.1
+        818.8
       ],
       "radius_m": 61.2,
-      "width_m": 8.7,
-      "banking_deg": 1.5,
-      "elev_delta_m": 5.3
+      "width_m": 8.9,
+      "banking_deg": 0.4,
+      "elev_delta_m": 4.8
     },
     {
       "number": 3,
@@ -40,36 +40,20 @@
       "name": "Turn 3",
       "direction": "right",
       "start_dist": 900.7,
-      "apex_dist": 928.0,
+      "apex_dist": 905.0,
       "end_dist": 1009.8,
       "apexes": [
-        928.0
+        905.0
       ],
       "radius_m": 63.5,
-      "width_m": 9.0,
-      "banking_deg": 0.2,
+      "width_m": 8.3,
+      "banking_deg": 1.5,
       "elev_delta_m": 3.2
     },
     {
       "number": 4,
-      "label": "4",
-      "name": "Turn 4",
-      "direction": "left",
-      "start_dist": 1037.1,
-      "apex_dist": 1119.0,
-      "end_dist": 1173.6,
-      "apexes": [
-        1119.0
-      ],
-      "radius_m": 234.8,
-      "width_m": 9.5,
-      "banking_deg": -1.0,
-      "elev_delta_m": -3.8
-    },
-    {
-      "number": 5,
-      "label": "5",
-      "name": "Turn 5",
+      "label": "4.1",
+      "name": "Turn 4.1",
       "direction": "right",
       "start_dist": 1187.2,
       "apex_dist": 1255.5,
@@ -83,9 +67,9 @@
       "elev_delta_m": -8.4
     },
     {
-      "number": 6,
-      "label": "6",
-      "name": "Turn 6",
+      "number": 5,
+      "label": "4.2",
+      "name": "Turn 4.2",
       "direction": "left",
       "start_dist": 1419.2,
       "apex_dist": 1501.1,
@@ -99,9 +83,9 @@
       "elev_delta_m": 1.4
     },
     {
-      "number": 7,
-      "label": "7",
-      "name": "Turn 7",
+      "number": 6,
+      "label": "5",
+      "name": "Turn 5",
       "direction": "right",
       "start_dist": 1555.7,
       "apex_dist": 1610.3,
@@ -115,9 +99,9 @@
       "elev_delta_m": 1.2
     },
     {
-      "number": 8,
-      "label": "8",
-      "name": "Turn 8",
+      "number": 7,
+      "label": "6",
+      "name": "Tertre Rouge",
       "direction": "right",
       "start_dist": 1855.9,
       "apex_dist": 1937.8,
@@ -131,25 +115,9 @@
       "elev_delta_m": -2.4
     },
     {
-      "number": 9,
-      "label": "9",
-      "name": "Turn 9",
-      "direction": "right",
-      "start_dist": 2047.0,
-      "apex_dist": 2128.8,
-      "end_dist": 2210.7,
-      "apexes": [
-        2128.8
-      ],
-      "radius_m": 444.3,
-      "width_m": 8.5,
-      "banking_deg": 1.6,
-      "elev_delta_m": -5.9
-    },
-    {
-      "number": 10,
-      "label": "10",
-      "name": "Turn 10",
+      "number": 8,
+      "label": "7A",
+      "name": "Turn 7A",
       "direction": "right",
       "start_dist": 3957.5,
       "apex_dist": 4039.3,
@@ -163,9 +131,9 @@
       "elev_delta_m": 0.0
     },
     {
-      "number": 11,
-      "label": "11",
-      "name": "Turn 11",
+      "number": 9,
+      "label": "7B",
+      "name": "Turn 7B",
       "direction": "left",
       "start_dist": 4093.9,
       "apex_dist": 4148.5,
@@ -179,9 +147,9 @@
       "elev_delta_m": 0.2
     },
     {
-      "number": 12,
-      "label": "12",
-      "name": "Turn 12",
+      "number": 10,
+      "label": "7C",
+      "name": "Turn 7C",
       "direction": "right",
       "start_dist": 4203.1,
       "apex_dist": 4257.7,
@@ -195,9 +163,9 @@
       "elev_delta_m": -0.3
     },
     {
-      "number": 13,
-      "label": "13",
-      "name": "Turn 13",
+      "number": 11,
+      "label": "8A",
+      "name": "Turn 8A",
       "direction": "left",
       "start_dist": 5949.8,
       "apex_dist": 6031.7,
@@ -211,9 +179,9 @@
       "elev_delta_m": 1.4
     },
     {
-      "number": 14,
-      "label": "14",
-      "name": "Turn 14",
+      "number": 12,
+      "label": "8B",
+      "name": "Turn 8B",
       "direction": "right",
       "start_dist": 6072.6,
       "apex_dist": 6113.6,
@@ -227,9 +195,9 @@
       "elev_delta_m": 1.6
     },
     {
-      "number": 15,
-      "label": "15",
-      "name": "Turn 15",
+      "number": 13,
+      "label": "8C",
+      "name": "Turn 8C",
       "direction": "left",
       "start_dist": 6168.2,
       "apex_dist": 6222.8,
@@ -243,41 +211,26 @@
       "elev_delta_m": 1.4
     },
     {
-      "number": 16,
-      "label": "16",
-      "name": "Turn 16",
+      "number": 14,
+      "label": "9",
+      "name": "Mulsanne Corner",
       "direction": "right",
-      "start_dist": 7505.5,
-      "apex_dist": 7587.4,
-      "end_dist": 7669.3,
-      "apexes": [
-        7587.4
-      ],
-      "radius_m": 294.6,
-      "width_m": 7.2,
-      "banking_deg": 0.7,
-      "elev_delta_m": 2.2
-    },
-    {
-      "number": 17,
-      "label": "17",
-      "name": "Turn 17",
-      "direction": "right",
-      "start_dist": 7669.3,
+      "start_dist": 7507.4,
       "apex_dist": 7751.2,
       "end_dist": 7833.0,
       "apexes": [
+        7587.4,
         7751.2
       ],
       "radius_m": 41.3,
       "width_m": 7.1,
       "banking_deg": 1.1,
-      "elev_delta_m": -1.1
+      "elev_delta_m": 1.1
     },
     {
-      "number": 18,
-      "label": "18",
-      "name": "Turn 18",
+      "number": 15,
+      "label": "10",
+      "name": "Turn 10",
       "direction": "right",
       "start_dist": 9579.8,
       "apex_dist": 9661.7,
@@ -291,57 +244,73 @@
       "elev_delta_m": -2.3
     },
     {
-      "number": 19,
-      "label": "19",
-      "name": "Turn 19",
+      "number": 16,
+      "label": "11",
+      "name": "Turn 11",
       "direction": "left",
-      "start_dist": 9770.8,
-      "apex_dist": 9852.7,
-      "end_dist": 9934.6,
+      "start_dist": 9798.1,
+      "apex_dist": 9880.0,
+      "end_dist": 9961.9,
       "apexes": [
-        9852.7
+        9880.0
       ],
       "radius_m": 46.4,
-      "width_m": 6.4,
-      "banking_deg": -5.1,
-      "elev_delta_m": -0.7
+      "width_m": 6.7,
+      "banking_deg": -4.2,
+      "elev_delta_m": -0.9
+    },
+    {
+      "number": 17,
+      "label": "12",
+      "name": "Arnage",
+      "direction": "right",
+      "start_dist": 10071.0,
+      "apex_dist": 10152.9,
+      "end_dist": 10234.8,
+      "apexes": [
+        10152.9
+      ],
+      "radius_m": 31.8,
+      "width_m": 7.7,
+      "banking_deg": 0.9,
+      "elev_delta_m": -0.2
+    },
+    {
+      "number": 18,
+      "label": "13",
+      "name": "Turn 13",
+      "direction": "left",
+      "start_dist": 11160.0,
+      "apex_dist": 11240.0,
+      "end_dist": 11300.0,
+      "apexes": [
+        11240.0
+      ],
+      "radius_m": 747.4,
+      "width_m": 8.0,
+      "banking_deg": -2.2,
+      "elev_delta_m": -0.2
+    },
+    {
+      "number": 19,
+      "label": "14",
+      "name": "Turn 14",
+      "direction": "right",
+      "start_dist": 11490.2,
+      "apex_dist": 11572.1,
+      "end_dist": 11653.9,
+      "apexes": [
+        11572.1
+      ],
+      "radius_m": 138.1,
+      "width_m": 8.5,
+      "banking_deg": 1.5,
+      "elev_delta_m": 2.1
     },
     {
       "number": 20,
-      "label": "20",
-      "name": "Turn 20",
-      "direction": "right",
-      "start_dist": 10098.3,
-      "apex_dist": 10180.2,
-      "end_dist": 10262.1,
-      "apexes": [
-        10180.2
-      ],
-      "radius_m": 31.8,
-      "width_m": 8.9,
-      "banking_deg": 0.6,
-      "elev_delta_m": 0.0
-    },
-    {
-      "number": 21,
-      "label": "21",
-      "name": "Turn 21",
-      "direction": "right",
-      "start_dist": 11463.0,
-      "apex_dist": 11544.9,
-      "end_dist": 11626.7,
-      "apexes": [
-        11544.9
-      ],
-      "radius_m": 138.1,
-      "width_m": 8.8,
-      "banking_deg": 1.8,
-      "elev_delta_m": 2.3
-    },
-    {
-      "number": 22,
-      "label": "22",
-      "name": "Turn 22",
+      "label": "15A",
+      "name": "Turn 15A",
       "direction": "left",
       "start_dist": 11708.6,
       "apex_dist": 11790.5,
@@ -355,9 +324,9 @@
       "elev_delta_m": -0.3
     },
     {
-      "number": 23,
-      "label": "23",
-      "name": "Turn 23",
+      "number": 21,
+      "label": "15B",
+      "name": "Turn 15B",
       "direction": "left",
       "start_dist": 11899.7,
       "apex_dist": 11981.5,
@@ -371,25 +340,25 @@
       "elev_delta_m": -3.0
     },
     {
-      "number": 24,
-      "label": "24",
-      "name": "Turn 24",
+      "number": 22,
+      "label": "16",
+      "name": "Turn 16",
       "direction": "right",
       "start_dist": 12090.7,
       "apex_dist": 12172.6,
-      "end_dist": 12227.2,
+      "end_dist": 12309.0,
       "apexes": [
         12172.6
       ],
       "radius_m": 145.4,
       "width_m": 7.4,
       "banking_deg": 1.8,
-      "elev_delta_m": -3.3
+      "elev_delta_m": -3.8
     },
     {
-      "number": 25,
-      "label": "25",
-      "name": "Turn 25",
+      "number": 23,
+      "label": "17",
+      "name": "Karting",
       "direction": "left",
       "start_dist": 12363.6,
       "apex_dist": 12445.5,
@@ -403,84 +372,68 @@
       "elev_delta_m": 0.9
     },
     {
-      "number": 26,
-      "label": "26",
-      "name": "Turn 26",
-      "direction": "right",
-      "start_dist": 12609.3,
-      "apex_dist": 12691.2,
-      "end_dist": 12745.8,
-      "apexes": [
-        12691.2
-      ],
-      "radius_m": 299.6,
-      "width_m": 7.2,
-      "banking_deg": 1.6,
-      "elev_delta_m": 0.8
-    },
-    {
-      "number": 27,
-      "label": "27",
-      "name": "Turn 27",
+      "number": 24,
+      "label": "18",
+      "name": "Turn 18",
       "direction": "left",
-      "start_dist": 12745.8,
-      "apex_dist": 12800.3,
-      "end_dist": 12882.2,
+      "start_dist": 13184.3,
+      "apex_dist": 13264.3,
+      "end_dist": 13289.6,
       "apexes": [
-        12800.3
-      ],
-      "radius_m": 223.2,
-      "width_m": 7.6,
-      "banking_deg": 1.7,
-      "elev_delta_m": 0.8
-    },
-    {
-      "number": 28,
-      "label": "28",
-      "name": "Turn 28",
-      "direction": "left",
-      "start_dist": 13155.1,
-      "apex_dist": 13237.0,
-      "end_dist": 13278.0,
-      "apexes": [
-        13237.0
+        13264.3
       ],
       "radius_m": 99.9,
-      "width_m": 6.9,
-      "banking_deg": 1.5,
-      "elev_delta_m": 0.8
+      "width_m": 7.5,
+      "banking_deg": 1.3,
+      "elev_delta_m": 0.6
     },
     {
-      "number": 29,
-      "label": "29",
-      "name": "Turn 29",
+      "number": 25,
+      "label": "19",
+      "name": "Turn 19",
       "direction": "right",
-      "start_dist": 13291.6,
-      "apex_dist": 13318.9,
-      "end_dist": 13373.5,
+      "start_dist": 13289.6,
+      "apex_dist": 13315.0,
+      "end_dist": 13357.5,
       "apexes": [
-        13318.9
+        13315.0
       ],
       "radius_m": 90.4,
       "width_m": 7.0,
       "banking_deg": 1.4,
-      "elev_delta_m": 0.5
+      "elev_delta_m": 0.3
     },
     {
-      "number": 30,
-      "label": "30",
-      "name": "Turn 30",
-      "direction": "right",
-      "start_dist": 13428.1,
-      "apex_dist": 13482.6,
-      "end_dist": 13564.5,
+      "number": 26,
+      "label": "20",
+      "name": "Turn 20",
+      "direction": "left",
+      "start_dist": 13358.0,
+      "apex_dist": 13400.0,
+      "end_dist": 13414.0,
       "apexes": [
-        13482.6
+        13400.0
+      ],
+      "radius_m": 126.0,
+      "width_m": 8.6,
+      "banking_deg": 0.7,
+      "elev_delta_m": 0.3
+    },
+    {
+      "number": 27,
+      "label": "21",
+      "name": "Turn 21",
+      "direction": "right",
+      "start_dist": 13414.0,
+      "apex_dist": 13428.1,
+      "end_dist": 13503.1,
+      "apexes": [
+        13428.1
       ],
       "radius_m": 76.1,
-      "width_m": 12.7,
-      "banking_deg": 0.4,
-      "elev_delta_m": 0.9
+      "width_m": 8.5,
+      "banking_deg": 0.6,
+      "elev_delta_m": 0.6
     }
   ],
   "ribbon": {
@@ -10003,33 +9956,73 @@
     1894.3,
     7724.6
   ],
-  "sections": [],
+  "sections": [
+    {
+      "name": "Dunlop Chicane",
+      "kind": "section",
+      "start_dist": 736.9,
+      "end_dist": 1009.8
+    },
+    {
+      "name": "Esses",
+      "kind": "section",
+      "start_dist": 1187.2,
+      "end_dist": 1692.2
+    },
+    {
+      "name": "Mulsanne Chicane 1",
+      "kind": "section",
+      "start_dist": 3957.5,
+      "end_dist": 4339.6
+    },
+    {
+      "name": "Mulsanne Chicane 2",
+      "kind": "section",
+      "start_dist": 5949.8,
+      "end_dist": 6304.6
+    },
+    {
+      "name": "Indianapolis",
+      "kind": "section",
+      "start_dist": 9579.8,
+      "end_dist": 9961.9
+    },
+    {
+      "name": "Porsche Curves",
+      "kind": "section",
+      "start_dist": 11490.2,
+      "end_dist": 12309.0
+    },
+    {
+      "name": "Ford Chicane 1",
+      "kind": "section",
+      "start_dist": 13184.3,
+      "end_dist": 13357.5
+    },
+    {
+      "name": "Ford Chicane 2",
+      "kind": "section",
+      "start_dist": 13358.0,
+      "end_dist": 13503.1
+    }
+  ],
   "length": 13619.12,
   "rotation": 0.0,
   "notes": {
-    "overview": "13.626 km, 38 turns, WEC layout -- by far the longest in the roster, and losing focus over the lap length is itself a common mistake. ABS activation is a recurring GT3 risk through the Dunlop and Ford chicanes: brake early and straight rather than trail-braking hard. Hypercar's main differentiator is hybrid-torque wheelspin on exits (Tertre Rouge, both Mulsanne chicanes) rather than different lines, plus energy management across the three long straights. Common mistakes: overdriving the chicane braking zones, aggressive kerbs through the Porsche Curves, early throttle at Tertre Rouge and Arnage, and fading concentration late in the lap.",
+    "overview": "13.626 km, 38 turns officially; this map follows the LMU wiki guide's T1–T21, with letter suffixes for the parts of the two Mulsanne chicanes and the Porsche Curves double left (15A/15B). WEC layout -- by far the longest in the roster, and losing focus over the lap length is itself a common mistake. ABS activation is a recurring GT3 risk through the Dunlop Chicane (T2–3) and Ford chicanes (T18–21): brake early and straight rather than trail-braking hard. Hypercar's main differentiator is hybrid-torque wheelspin on exits (Tertre Rouge, T6; both Mulsanne chicanes, T7 and T8) rather than different lines, plus energy management across the long straights. Common mistakes: overdriving the chicane braking zones, aggressive kerbs through the Porsche Curves (T14–16), early throttle at Tertre Rouge (T6) and Arnage (T12), and fading concentration late in the lap.",
     "corners": {
       "1": "Use the track and kerb on the left for entry, late apex staying close to the right, light lift if needed.",
       "6": "Critical right-hander onto the Mulsanne straight, light braking, late apex, cut the inside kerb, traction is everything (no wheelspin) -- a poor exit costs seconds on the straight.",
-      "7": "One of the hardest braking zones, brake early and straight between 100-75 m, careful downshifting to avoid rear instability, inside kerbs on entry; exit is a left-right sequence prioritizing traction over aggression.",
-      "8": "Similar braking around 75 m with a slight camber change, conservative brakes, slight kerb cut; on exit, straighten the car and use the full width before applying throttle past the right-hander's apex.",
+      "7A": "One of the hardest braking zones, brake early and straight between 100-75 m, careful downshifting to avoid rear instability, inside kerbs on entry; exit is a left-right sequence prioritizing traction over aggression.",
+      "8A": "Similar braking around 75 m with a slight camber change, conservative brakes, slight kerb cut; on exit, straighten the car and use the full width before applying throttle past the right-hander's apex.",
       "9": "Tight right-hander, brake early, rotate first and throttle second -- rear tyres overheat easily here.",
       "10": "High-speed kink taken under braking, brake in a straight line before turn-in, stability is critical.",
       "11": "Left-hand corner, late apex, don't over-rotate; the downhill exit needs gentle throttle (rear instability is common in GT3).",
       "12": "The slowest corner on the circuit, heavy braking at the second board, very late apex, don't run wide on exit, short-shift if traction is poor -- the exit defines the next straight.",
       "13": "A minor bend, not important, don't overuse steering.",
       "17": "Fast left, just a light brake tap, maintain rhythm -- any correction costs speed, inside kerbs are cuttable.",
-      "22": "",
-      "23": "",
-      "24": "",
-      "25": "",
-      "26": "",
-      "27": "",
-      "28": "",
-      "29": "",
-      "30": "",
       "2-3": "Heavy uphill braking, brake early and straight (ABS intervention is common in GT3 -- don't brake too deep into it), use the left kerb for rotation instead of aggressive trail-braking; on the right-hand exit, straighten the car before throttle and use all the exit kerb (track limits).",
-      "4-5": "A high-speed right (flat out, tight to the right on exit), a medium-speed left with smooth steering, then a right-hand continuation that balances the car before throttle to set up Tertre Rouge -- don't run wide.",
+      "4.1": "A high-speed right (flat out, tight to the right on exit), a medium-speed left with smooth steering, then a right-hand continuation that balances the car before throttle to set up Tertre Rouge -- don't run wide.",
       "14-16": "T14: fast right, light lift. T15: high-speed double-left -- aero balance matters, running wide means the wall; mid-apex first, late apex second. T16: long right using full width, lift early then reapply throttle, tight at the end to open Karting.",
       "18-19": "Heavy braking at the start of the kerb, use the full track to the right, cut the kerbs on entry with straight steering (ABS activation likely); stay right afterward to set up Ford Chicane 2.",
       "20-21": "The slowest chicane on the track -- cut the first kerb a little if the car is stable, smooth steering; use the flat kerbs mid-corner and on exit, avoid the sausage kerb/gravel, late apex for a clean run onto the main straight."
@@ -10044,35 +10037,38 @@
     }
   },
   "pronunciations": {
-    "Turn 1": "tˈɜːn wˈʌn",
+    "Arnage": "ɑːɹnˈɑːʒ",
+    "Dunlop Chicane": "dˈʌnləp ʃᵻkˈeɪn",
+    "Dunlop Curve": "dˈʌnləp kˈɜːv",
+    "Ford Chicane 1": "fˈɔːɹd ʃᵻkˈeɪn wˈʌn",
+    "Ford Chicane 2": "fˈɔːɹd ʃᵻkˈeɪn tˈuː",
+    "Indianapolis": "ˌɪndiənˈæpəlˌɪs",
+    "Mulsanne Chicane 1": "mʊlsˈæn ʃᵻkˈeɪn wˈʌn",
+    "Mulsanne Chicane 2": "mʊlsˈæn ʃᵻkˈeɪn tˈuː",
+    "Mulsanne Corner": "mʊlsˈæn kˈɔːɹnɚ",
+    "Porsche Curves": "pˈɔːɹʃ kˈɜːvz",
+    "Tertre Rouge": "tˈɛɹtɹə ɹˈuːʒ",
     "Turn 10": "tˈɜːn tˈɛn",
     "Turn 11": "tˈɜːn ɪlˈɛvən",
-    "Turn 12": "tˈɜːn twˈɛlv",
     "Turn 13": "tˈɜːn θˈɜːtiːn",
     "Turn 14": "tˈɜːn fˈɔːɹtiːn",
-    "Turn 15": "tˈɜːn fˈɪftiːn",
+    "Turn 15A": "tˈɜːn fˈɪftiːn ˈeɪ",
+    "Turn 15B": "tˈɜːn fˈɪftiːn bˈiː",
     "Turn 16": "tˈɜːn sˈɪkstiːn",
-    "Turn 17": "tˈɜːn sˈɛvəntˌiːn",
     "Turn 18": "tˈɜːn ˈeɪtiːn",
     "Turn 19": "tˈɜːn nˈaɪntiːn",
     "Turn 2": "tˈɜːn tˈuː",
     "Turn 20": "tˈɜːn twˈɛnti",
     "Turn 21": "tˈɜːn twˈɛnti wˈʌn",
-    "Turn 22": "tˈɜːn twˈɛnti tˈuː",
-    "Turn 23": "tˈɜːn twˈɛnti θɹˈiː",
-    "Turn 24": "tˈɜːn twˈɛnti fˈɔːɹ",
-    "Turn 25": "tˈɜːn twˈɛnti fˈaɪv",
-    "Turn 26": "tˈɜːn twˈɛnti sˈɪks",
-    "Turn 27": "tˈɜːn twˈɛnti sˈɛvən",
-    "Turn 28": "tˈɜːn twˈɛnti ˈeɪt",
-    "Turn 29": "tˈɜːn twˈɛnti nˈaɪn",
     "Turn 3": "tˈɜːn θɹˈiː",
-    "Turn 30": "tˈɜːn θˈɜːɾi",
-    "Turn 4": "tˈɜːn fˈɔːɹ",
+    "Turn 4.1": "tˈɜːn fˈɔːɹ pɔɪnt wˈʌn",
+    "Turn 4.2": "tˈɜːn fˈɔːɹ pɔɪnt tˈuː",
     "Turn 5": "tˈɜːn fˈaɪv",
-    "Turn 6": "tˈɜːn sˈɪks",
-    "Turn 7": "tˈɜːn sˈɛvən",
-    "Turn 8": "tˈɜːn ˈeɪt",
-    "Turn 9": "tˈɜːn nˈaɪn"
+    "Turn 7A": "tˈɜːn sˈɛvən ˈeɪ",
+    "Turn 7B": "tˈɜːn sˈɛvən bˈiː",
+    "Turn 7C": "tˈɜːn sˈɛvən sˈiː",
+    "Turn 8A": "tˈɜːn ˈeɪt ˈeɪ",
+    "Turn 8B": "tˈɜːn ˈeɪt bˈiː",
+    "Turn 8C": "tˈɜːn ˈeɪt sˈiː"
   }
 }

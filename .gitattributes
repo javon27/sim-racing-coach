@@ -1,1 +1,2 @@
 simcoach/cmudict/* -text
+*.toml text eol=lf

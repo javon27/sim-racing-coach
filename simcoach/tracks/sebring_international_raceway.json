@@ -1,0 +1,281 @@
+{
+  "track": "sebring_international_raceway",
+  "name": "Sebring International Raceway",
+  "_config_note": "DRAFT, not driver-verified. LMU/official numbering (17 turns; the S is split into 15A/15B). Names: LMU wiki Track Guide: Sebring (Big Bend, Collier, Tower, Bishop, Le Mans, Sunset Bend, Fangio, The S); Kristensen Corner (T3) and Hairpin (T7) from secondary sources. Directions computed from telemetry.",
+  "_distances_note": "No position telemetry on these laps, so no path/outline. Apexes from the lap-averaged steering peaks of 14 clean laps (ids 30-34, 36-44, 2026); windows apex +/-55 m (mapbuild), clamped at neighbour midpoints.",
+  "length_m": 5810.0,
+  "corners": [
+    {
+      "number": 1,
+      "label": "1",
+      "name": "Turn 1",
+      "direction": "left",
+      "start_dist": 440.0,
+      "apex_dist": 495.0,
+      "end_dist": 550.0,
+      "apexes": [
+        495.0
+      ]
+    },
+    {
+      "number": 2,
+      "label": "2",
+      "name": "Turn 2",
+      "direction": "right",
+      "start_dist": 735.0,
+      "apex_dist": 790.0,
+      "end_dist": 845.0,
+      "apexes": [
+        790.0
+      ]
+    },
+    {
+      "number": 3,
+      "label": "3",
+      "name": "Kristensen Corner",
+      "direction": "left",
+      "start_dist": 890.0,
+      "apex_dist": 945.0,
+      "end_dist": 977.5,
+      "apexes": [
+        945.0
+      ]
+    },
+    {
+      "number": 4,
+      "label": "4",
+      "name": "Turn 4",
+      "direction": "right",
+      "start_dist": 977.5,
+      "apex_dist": 1010.0,
+      "end_dist": 1065.0,
+      "apexes": [
+        1010.0
+      ]
+    },
+    {
+      "number": 5,
+      "label": "5",
+      "name": "Turn 5",
+      "direction": "left",
+      "start_dist": 1070.0,
+      "apex_dist": 1125.0,
+      "end_dist": 1180.0,
+      "apexes": [
+        1125.0
+      ]
+    },
+    {
+      "number": 6,
+      "label": "6",
+      "name": "Big Bend",
+      "direction": "right",
+      "start_dist": 1205.0,
+      "apex_dist": 1260.0,
+      "end_dist": 1315.0,
+      "apexes": [
+        1260.0
+      ]
+    },
+    {
+      "number": 7,
+      "label": "7",
+      "name": "Hairpin",
+      "direction": "right",
+      "start_dist": 1930.0,
+      "apex_dist": 1985.0,
+      "end_dist": 2040.0,
+      "apexes": [
+        1985.0
+      ]
+    },
+    {
+      "number": 8,
+      "label": "8",
+      "name": "Turn 8",
+      "direction": "right",
+      "start_dist": 2040.0,
+      "apex_dist": 2095.0,
+      "end_dist": 2150.0,
+      "apexes": [
+        2095.0
+      ]
+    },
+    {
+      "number": 9,
+      "label": "9",
+      "name": "Turn 9",
+      "direction": "left",
+      "start_dist": 2380.0,
+      "apex_dist": 2435.0,
+      "end_dist": 2490.0,
+      "apexes": [
+        2435.0
+      ]
+    },
+    {
+      "number": 10,
+      "label": "10",
+      "name": "Turn 10",
+      "direction": "right",
+      "start_dist": 2710.0,
+      "apex_dist": 2765.0,
+      "end_dist": 2807.5,
+      "apexes": [
+        2765.0
+      ]
+    },
+    {
+      "number": 11,
+      "label": "11",
+      "name": "Collier",
+      "direction": "left",
+      "start_dist": 2807.5,
+      "apex_dist": 2850.0,
+      "end_dist": 2905.0,
+      "apexes": [
+        2850.0
+      ]
+    },
+    {
+      "number": 12,
+      "label": "12",
+      "name": "Turn 12",
+      "direction": "right",
+      "start_dist": 3020.0,
+      "apex_dist": 3075.0,
+      "end_dist": 3130.0,
+      "apexes": [
+        3075.0
+      ]
+    },
+    {
+      "number": 13,
+      "label": "13",
+      "name": "Tower",
+      "direction": "right",
+      "start_dist": 3200.0,
+      "apex_dist": 3255.0,
+      "end_dist": 3310.0,
+      "apexes": [
+        3255.0
+      ]
+    },
+    {
+      "number": 14,
+      "label": "14",
+      "name": "Bishop",
+      "direction": "left",
+      "start_dist": 3605.0,
+      "apex_dist": 3815.0,
+      "end_dist": 3870.0,
+      "apexes": [
+        3660.0,
+        3815.0
+      ]
+    },
+    {
+      "number": 15,
+      "label": "15A",
+      "name": "Turn 15A",
+      "direction": "right",
+      "start_dist": 3975.0,
+      "apex_dist": 4030.0,
+      "end_dist": 4075.0,
+      "apexes": [
+        4030.0
+      ]
+    },
+    {
+      "number": 16,
+      "label": "15B",
+      "name": "Turn 15B",
+      "direction": "left",
+      "start_dist": 4075.0,
+      "apex_dist": 4120.0,
+      "end_dist": 4175.0,
+      "apexes": [
+        4120.0
+      ]
+    },
+    {
+      "number": 17,
+      "label": "16",
+      "name": "Le Mans",
+      "direction": "right",
+      "start_dist": 4200.0,
+      "apex_dist": 4255.0,
+      "end_dist": 4310.0,
+      "apexes": [
+        4255.0
+      ]
+    },
+    {
+      "number": 18,
+      "label": "17",
+      "name": "Sunset Bend",
+      "direction": "right",
+      "start_dist": 5315.0,
+      "apex_dist": 5370.0,
+      "end_dist": 5425.0,
+      "apexes": [
+        5370.0
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "name": "Fangio Chicane",
+      "kind": "section",
+      "start_dist": 2040.0,
+      "end_dist": 2490.0
+    },
+    {
+      "name": "The S",
+      "kind": "section",
+      "start_dist": 3975.0,
+      "end_dist": 4175.0
+    }
+  ],
+  "notes": {
+    "overview": "Sebring is a 17-corner lap on the old airfield: long stretches of rough concrete slabs keep loading and unloading the car, so a stable platform beats aggression everywhere. Most of the slow corners want a late apex and a late rotation, and the exit matters more than the entry. The kerbs are aggressive; use them only where the car stays settled. A Hypercar brakes far later and has much more front bite than a GT3, but it is more sensitive to pitch and ride height over the bumps, can snap on the throttle, and overheats the front tyres if the ABS is leaned on; Sebring punishes an unsettled Hypercar more than a GT3.",
+    "corners": {
+      "1": "Braking corner at the end of the front straight. In a GT3 start braking about two car lengths before the wall on the right ends, trail the brake off progressively and take a very late apex, using the numbered 0 sign above the inside barrier as the reference. A Hypercar can brake roughly 10 to 15 m deeper: brake in a straight line without steering at peak pressure, trail off to settle the rear, stay off the inside kerb, and feed the torque in gently because the rear can step out over the exit bumps.",
+      "2": "Flat-out kink. Its only job is to put the car on the right line for the braking zone into Turn 3; in a Hypercar keep the steering still and the aero platform settled.",
+      "3": "Kristensen Corner, a heavy stop. GT3: brake between the 300 m and 200 m boards and take a very late apex, aiming for the patch of darker asphalt. Hypercar: brake deeper, do not over-rotate the car on entry, and ramp the throttle smoothly because of the torque spike on exit.",
+      "4": "Short right-hander. Run close to the inside kerb but do not climb it; a Hypercar can take a tighter line, but hopping the kerb upsets the floor.",
+      "5": "Only a light brake, around 5 to 20 percent, at the blue and white kerb; the car is rotated mostly with engine braking on the downshift. In a Hypercar the braking phase is short and the rotation comes from weight transfer, so you can get on the throttle earlier than in a GT3, provided the rear hooks up.",
+      "6": "Big Bend, a long flat-out right-hander. Hug the inside kerb until the asphalt changes colour. The Hypercar's aero grip allows an even tighter line; do not scrub speed with extra steering.",
+      "7": "The hairpin at the end of Big Bend and the prime overtaking spot. GT3: brake between the 400 m and 300 m boards, late apex, and keep off the yellow sausage kerb. Hypercar: brakes extremely late, around the 250 m board; the ABS can hide a lock-up while cooking the front tyres, the rear gets unstable under trail braking, and a good exit pays off down the long run that follows.",
+      "8-9": "The Fangio chicane, flat out in normal conditions. Take the shortest, smoothest line and keep the steering inputs gentle; there is often traffic here. A Hypercar gains more time than a GT3 here thanks to its downforce.",
+      "10": "Important for both passing and defending. GT3: brake just before the 300 m board and trail-brake to a late apex. Hypercar: brake a little later, keep the trail-braking phase short, and beware of the rear snapping on early throttle; too much exit kerb unsettles it.",
+      "11-12": "Collier is a long left and Turn 12 a slight right; both are flat out if the exit of Turn 10 was right. Do not run wide on the exit of Collier, and stay to the left to shorten the line and set up the braking for Tower.",
+      "13": "Tower. Exit speed matters most because of the straight that follows. There is no clear visual braking marker, so it is done by feel: in a GT3 start braking just before the car is level with the left-hand kerb, trail-brake straight after the initial hit, and take a late apex without abusing the inside kerb. A Hypercar is best braked a little earlier for stability and is very sensitive to the brake release. The exit is extremely bumpy, so the throttle has to come in progressively.",
+      "14": "Bishop, a flat-out left kink. Mostly a matter of keeping a stable line and watching the traffic, while getting ready for the braking into the S.",
+      "15A": "First, right-hand leg of the S, a fast section and an overtaking spot. GT3: brake hard between the end of the left kerb and the 300 m board with only a light trail, take a medium apex and attack the inside kerb, keeping the outside wheels within track limits. A Hypercar can brake very hard and benefits from the kerb too, but must not bottom out on it.",
+      "15B": "Second, left-hand leg of the S. Transition on light throttle and let the car flow toward the next apex without the outside wheels going past the kerb. In a Hypercar the change of direction must be clean or the car snaps, so control the throttle between the two legs.",
+      "16": "Le Mans, one of the most important corners on the lap. The braking reference is the end of the left kerb at the exit of the S. A wide entry opens the angle and the inside kerb can be used hard; little trail braking is needed, then release the brake progressively straight onto the throttle and use all of the exit kerb. The big risk is getting on the power before the car has fully rotated. A Hypercar can brake very late and rotate early, but avoid a torque spike on exit.",
+      "17": "Sunset Bend, the famous bumpy last corner onto the front straight. Approach from the left and move toward the inside wall; the usual line has two apexes. GT3: brake just after the 100 m line across the track, short and firm; the second apex is near the Mobil signs on the inside wall, where a huge bump means staying tight to the wall. Short-shift for traction and use all of the exit. It is a strong passing spot: the inside line defends, the outside line gives the better run to Turn 1. A Hypercar is one of its hardest corners: brake a little earlier than a GT3 to settle the platform, keep the steering input small, and be very progressive on the throttle; the outside of the exit is very bumpy, so avoid sudden corrections."
+    },
+    "reference_times": {},
+    "source": "https://lemansultimate.wiki.gg/wiki/Track_Guide:_Sebring (LMU wiki track guide; paraphrased)"
+  },
+  "pronunciations": {
+    "Big Bend": "bˈɪɡ bˈɛnd",
+    "Fangio Chicane": "fˈændʒɪˌoʊ ʃᵻkˈeɪn",
+    "Kristensen Corner": "kɹˈɪstɛnsən kˈɔːɹnɚ",
+    "Le Mans": "lə mˈænz",
+    "Sunset Bend": "sˈʌnsɛt bˈɛnd",
+    "The S": "ðɪ ˈɛs",
+    "Turn 1": "tˈɜːn wˈʌn",
+    "Turn 10": "tˈɜːn tˈɛn",
+    "Turn 12": "tˈɜːn twˈɛlv",
+    "Turn 15A": "tˈɜːn fˈɪftiːn ˈeɪ",
+    "Turn 15B": "tˈɜːn fˈɪftiːn bˈiː",
+    "Turn 2": "tˈɜːn tˈuː",
+    "Turn 4": "tˈɜːn fˈɔːɹ",
+    "Turn 5": "tˈɜːn fˈaɪv",
+    "Turn 8": "tˈɜːn ˈeɪt",
+    "Turn 9": "tˈɜːn nˈaɪn"
+  }
+}
