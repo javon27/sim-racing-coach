@@ -2005,6 +2005,13 @@ def _track_limit_events(record: LapRecord, cmap: CornerMap) -> list[dict]:
     steps = np.asarray(steps, dtype=float)
     d = np.asarray(record.channels.get("lap_distance", []), dtype=float)
     n = min(steps.size, d.size)
+    # ponytail: each lap is diffed only against itself, so a rise on exactly a lap's
+    # first sample is lost; carry the previous lap's last value if one is ever missed.
+    # ponytail: LMU awards the strike AFTER the off (Laguna: 130-280 m later), so an
+    # off at a final corner can land on the next lap's opening metres -- pending a rig
+    # check; place it on the previous lap if that is seen.
+    # ponytail: uint8 -- a wrap past 255 reads as a drop and is silently missed; treat
+    # a drop to a small value with no session change as a wrap if a session ever gets there.
     rise = np.diff(steps[:n])
     return [{"kind": "track_limits", "corner_no": _corner_at(cmap, d[i]),
              "lap_distance": float(d[i]), "detail": {"steps": int(rise[i - 1])}}
@@ -2048,10 +2055,12 @@ def lap_events(record: LapRecord, cmap: CornerMap, analysis: "LapAnalysis | None
 def is_incident_lap(record: LapRecord, cmap: CornerMap,
                     analysis: "LapAnalysis | None") -> bool:
     """#161: a lap slowed by a spin, a stop, an off or contact -- the same detection
-    get_stint_events reports -- so its lap time says nothing about the tires.
+    get_stint_events reports -- so its lap time says nothing about the tires. #215: nor
+    does one LMU counted a time-gaining off on (a track-limits strike).
     Lockups/wheelspin are corner-level and don't cost a lap on their own."""
     return bool(damage_events(record.channels)) or any(
-        e["kind"] in ("spin", "stop", "off") for e in lap_events(record, cmap, analysis))
+        e["kind"] in ("spin", "stop", "off", "track_limits")
+        for e in lap_events(record, cmap, analysis))
 
 
 # #206: the ONE reader of mLastImpactPos's frame -- every consumer (damage_events,

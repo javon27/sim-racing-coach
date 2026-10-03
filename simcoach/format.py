@@ -828,17 +828,14 @@ def format_events(events, cmap, units: str = "metric") -> list[str]:
         elif kind == "off":
             # #207: read from the wheels' surface, not track_edge, whose metres
             # figure is unvalidated and withheld everywhere (the corner line too).
-            # #215: LMU's own counter rising in the same corner corroborates it
-            struck = any(x["kind"] == "track_limits" and x.get("corner_no") is not None
-                         and x["corner_no"] == e.get("corner_no") for x in events)
-            lines.append(f"{head}off track" + (", and LMU counted a track-limits strike "
-                                               "there" if struck else ""))
+            lines.append(f"{head}off track")
         elif kind == "track_limits":
             # #215: the rise is a size, never a count of offs, and the step-to-points
             # scale is unconfirmed -- so no points, and no distance to a penalty.
             lines.append(f"LMU counted a track-limits strike at "
                          f"{place_text(cmap, e['lap_distance'])} (its session "
-                         f"track-limits counter rose {d['steps']})")
+                         f"track-limits counter rose {d['steps']} steps; a step's points "
+                         f"value isn't known)")
         elif kind in ("lockup", "wheelspin"):
             lines.append(f"{head}{kind}")
         elif kind == "wear_step":
