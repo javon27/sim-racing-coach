@@ -77,6 +77,7 @@ BAKED_MAPS = [
     "grand_prix_of_long_beach",
     "michelin_raceway_road_atlanta",
     "monza_curva_grande_circuit",
+    "sebring_international_raceway",
     "silverstone_national_circuit",
     "weathertech_raceway_laguna_seca",
 ]
