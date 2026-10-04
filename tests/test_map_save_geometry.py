@@ -74,6 +74,7 @@ BAKED_MAPS = [
     "bahrain_paddock_circuit",
     "circuit_de_la_sarthe",
     "fuji_speedway",
+    "grand_prix_of_long_beach",
     "michelin_raceway_road_atlanta",
     "monza_curva_grande_circuit",
     "silverstone_national_circuit",
