@@ -114,29 +114,28 @@
       "direction": "left",
       "start_dist": 2005.2,
       "apex_dist": 2028.5,
-      "end_dist": 2203.3,
+      "end_dist": 2063.0,
       "apexes": [
-        2028.5,
-        2098.4
+        2028.5
       ],
-      "radius_m": 49.5,
       "width_m": 10.5,
-      "banking_deg": 0.1
+      "banking_deg": 0.1,
+      "radius_m": 49.5
     },
     {
       "number": 9,
       "label": "9",
       "name": "Turn 9",
-      "direction": "left",
-      "start_dist": 2343.2,
-      "apex_dist": 2424.8,
-      "end_dist": 2436.5,
+      "direction": "right",
+      "start_dist": 2063.4,
+      "apex_dist": 2098.4,
+      "end_dist": 2203.3,
       "apexes": [
-        2424.8
+        2098.4
       ],
-      "radius_m": 174.6,
-      "width_m": 11.2,
-      "banking_deg": -0.8
+      "width_m": 10.5,
+      "banking_deg": 0.1,
+      "radius_m": 69.8
     },
     {
       "number": 10,
