@@ -184,29 +184,6 @@ describe("Coach screen assembly", () => {
     expect(vi.mocked(getCurrentMap)).not.toHaveBeenCalled();
   });
 
-  it("dragging the chat bar resizes the Inputs panel (#95 round 2)", async () => {
-    const flat = (v: number[]) => ({ lo: [...v], hi: [...v], mean: [...v] });
-    vi.mocked(getLapInputs).mockResolvedValue({
-      lap: {
-        lap_id: 9, lap_time: 216.0, length: 1000, dist: [0, 500, 1000],
-        throttle: flat([1, 0, 1]), brake: flat([0, 1, 0]), steering: flat([0, 0, 0]),
-      },
-      best: null,
-      corners: [],
-    });
-    const { container } = render(App);
-    await screen.findByRole("navigation"); // shell mounts past the splash
-
-    await fireEvent.click(await screen.findByText("Lap 1")); // selects lap 9, feeds InputsPanel real channels
-    const panel = (await screen.findByTestId("inputs-panel-body")).closest(".panel") as HTMLElement;
-    await waitFor(() => expect(panel.style.getPropertyValue("--inputs-h")).toBe("220px"));
-
-    const bar = container.querySelector(".chat-bar") as HTMLElement;
-    await fireEvent.pointerDown(bar, { clientY: 300 });
-    await fireEvent.pointerMove(bar, { clientY: 360 });
-
-    expect(panel.style.getPropertyValue("--inputs-h")).toBe("280px");
-  });
 
   it("flows a selected lap's id into the corner panel and highlights the row", async () => {
     render(App);

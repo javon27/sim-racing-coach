@@ -1,17 +1,13 @@
 <!-- frontend/src/lib/InputsPanel.svelte
      The coaching screen's primary visual (#95): selected lap vs its track/car
      best, driver-input lines + corner markers, full width above the chat.
-     Collapsible (remembered in localStorage), expanded by default. Its height
-     is owned by App (round 2): the chat bar directly below doubles as the
-     drag handle, so App passes `height` down as a prop instead of this panel
-     tracking its own. -->
+     Collapsible (remembered in localStorage), expanded by default. It sizes to
+     the traces it draws -- no fixed height, no drag handle. -->
 <script lang="ts">
   import InputTraces from "./InputTraces.svelte";
   import { getLapInputs, type LapInputs } from "./api";
 
-  // height: driven by App (lifted so the chat bar below can double as the drag
-  // handle, #95 round 2); defaults to the same 220px round 1 used.
-  let { lapId, height = 220 }: { lapId: number | null; height?: number } = $props();
+  let { lapId }: { lapId: number | null } = $props();
 
   const STORAGE_KEY = "inputsPanel.collapsed";
 
@@ -72,7 +68,7 @@
   const showingTraces = $derived((phase as string) === "ok" && hasChannels);
 </script>
 
-<div class="panel" style={showingTraces ? `--inputs-h: ${height}px` : undefined}>
+<div class="panel">
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions
        (mouse-only convenience; the real button below already covers keyboard/a11y) -->
   <div class="hdr" onclick={onHdrClick}>
@@ -98,7 +94,7 @@
     </button>
   </div>
   {#if !collapsed}
-    <div class="body" class:sized={showingTraces} data-testid="inputs-panel-body">
+    <div class="body" data-testid="inputs-panel-body">
       {#if phase === "empty"}
         <p class="empty">Select a lap to see its inputs.</p>
       {:else if phase === "loading"}
@@ -188,9 +184,6 @@
   }
   .body {
     padding: 0 20px 12px;
-  }
-  .body.sized {
-    height: var(--inputs-h, 220px);
   }
   .empty {
     margin: 0;

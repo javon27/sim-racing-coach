@@ -68,19 +68,6 @@ describe("InputsPanel", () => {
     expect(container.querySelector('[data-testid="inputs-panel-body"]')).toBeNull();
   });
 
-  it("empty state has no fixed --inputs-h height", () => {
-    const { container } = render(InputsPanel, { props: { lapId: null } });
-    const panel = container.querySelector(".panel") as HTMLElement;
-    expect(panel.style.getPropertyValue("--inputs-h")).toBe("");
-  });
-
-  it("applies --inputs-h only once a lap's traces are showing", async () => {
-    vi.mocked(getLapInputs).mockResolvedValue({ lap: LAP, best: null, corners: [] });
-    const { container } = render(InputsPanel, { props: { lapId: 9 } });
-    const panel = container.querySelector(".panel") as HTMLElement;
-    await waitFor(() => expect(panel.style.getPropertyValue("--inputs-h")).toBe("220px"));
-  });
-
   it("collapse hides the body and flips aria-expanded", async () => {
     vi.mocked(getLapInputs).mockResolvedValue({ lap: LAP, best: null, corners: [] });
     const { container } = render(InputsPanel, { props: { lapId: 9 } });
@@ -94,14 +81,7 @@ describe("InputsPanel", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("applies the height prop to --inputs-h (height now lives in App, #95 round 2)", async () => {
-    vi.mocked(getLapInputs).mockResolvedValue({ lap: LAP, best: null, corners: [] });
-    const { container } = render(InputsPanel, { props: { lapId: 9, height: 340 } });
-    const panel = container.querySelector(".panel") as HTMLElement;
-    await waitFor(() => expect(panel.style.getPropertyValue("--inputs-h")).toBe("340px"));
-  });
-
-  it("no longer renders its own drag handle (the chat bar is the handle now)", async () => {
+  it("renders no drag handle (it sizes to its traces)", async () => {
     vi.mocked(getLapInputs).mockResolvedValue({ lap: LAP, best: null, corners: [] });
     const { container } = render(InputsPanel, { props: { lapId: 9 } });
     await waitFor(() => expect(container.querySelector(".panel")).toBeTruthy());
