@@ -1,9 +1,25 @@
-# simcoach
+# Nestor
 
 An AI sim-racing coach for **Le Mans Ultimate**. It captures your laps live from
 the game's shared memory, then answers setup and driving questions between laps in
 a running conversation — "where am I losing time?", "how do I fix corner-exit
 oversteer?" — grounded in your own telemetry and current car setup.
+
+Windows only (LMU is Windows-only). Free and open source under the MIT license.
+
+## Getting started
+
+1. Install from the latest [GitHub Release](https://github.com/javon27/sim-racing-coach/releases)
+   (MSI or NSIS installer), or build from source (below).
+2. Open **Settings → AI**, paste your own [Anthropic API key](https://console.anthropic.com/)
+   and pick a model.
+3. Start LMU and drive. Laps are captured automatically; ask the coach between laps.
+
+**Bring your own key.** Nestor has no server and no account: the coach calls the
+Anthropic API directly with your key, which is stored in the Windows Credential
+Manager, never in a file. You pay Anthropic for what you use. As a rough guide, the
+author's first 249 questions on Claude Sonnet averaged about **$0.04 per question**.
+The chat screen shows a running token and cost meter.
 
 ## How it works
 
@@ -97,32 +113,26 @@ The resolved model name loads its knowledge note from
 `simcoach/knowledge/<slug>.md` (slugged from the model, e.g.
 `porsche_911_gt3_r_lmgt3.md`).
 
-## Dev setup
+## Building from source
+
+Needs Python 3.11+, Node 20 and Rust (stable).
 
 ```
 python -m venv .venv
-.venv/Scripts/python.exe -m pip install -e ".[dev]"
-.venv/Scripts/python.exe -m pytest
+.venv/Scripts/python.exe -m pip install -e ".[dev]"   # voice loop: see packaging/README.md (GPL-free install)
+cd frontend && npm ci && cd ..
+cargo tauri dev                                      # run the app
 ```
 
-## Marketing site
+Installers are built by CI on a `vX.Y.Z` tag; see `packaging/README.md`.
+Contributing: see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-A standalone landing page for Nestor lives in [`site/`](site/) — a single static
-page (Caddy + Dockerfile) hosted on Railway (service `nestor`, live at
-`nestor-production-83cb.up.railway.app`). It **auto-deploys from GitHub**: a push to
-`main` that changes anything under `site/` triggers a build; unrelated commits are
-skipped (watch path `/site/**`). Its screenshots are real captures of this app. See
-[`site/README.md`](site/README.md) for local preview, how to refresh the screenshots
-and brand assets, and the deploy + CNAME details.
+## License
 
-## Status
+MIT, see [`LICENSE`](LICENSE). Some bundled content carries its own license (LMU
+wiki-derived track notes are CC BY-SA 4.0; CMUdict is BSD). See
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
-As of 2026-09-15: v1.0 desktop app (Tauri + Svelte + FastAPI sidecar), built and
-unit-tested (Python + frontend). The #99 course-correct is done — the coach only
-states measured values, and Phase 1 of the engineer-grade analysis is complete
-(ranked time loss, consistency, handling, tire trend, grip envelope, input
-shape all live as tools). Installer packaging has landed — CI freezes the
-sidecar and builds MSI/NSIS bundles on a `vX.Y.Z` tag (see
-`packaging/README.md`). Remaining: code signing (installers are unsigned, so
-SmartScreen warns), a full live shakedown at the rig, this docs pass, Phase 0
-setup-channel capture, and the voice loop.
+Nestor is an independent fan project. It is not affiliated with, endorsed by, or
+sponsored by Studio 397, Motorsport Games, or the Automobile Club de l'Ouest. Le
+Mans Ultimate and related names are trademarks of their respective owners.
