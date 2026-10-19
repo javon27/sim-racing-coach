@@ -239,13 +239,14 @@ class KokoroInstaller(ModelInstaller):
         installing = self._thread is not None and self._thread.is_alive()
         installed = all((self.dest / n).exists() for n in KOKORO_FILES)
         voices: list[str] = self._voices or []
-        if installed and not voices and self.voices_fn is not None:
+        if installed and self._voices is None and self.voices_fn is not None:
             try:
                 voices = self.voices_fn()
             except Exception:
                 voices = []
-            if voices:
-                self._voices = voices   # avoid loading the model on every 1 Hz status poll
+            # Memoised even when empty or failed (#225): a model that won't load must not
+            # be re-loaded (325 MB) on every 1 Hz /events tick. start() clears it.
+            self._voices = voices
         return {"engine": "kokoro", "installed": installed, "installing": installing,
                 "progress_bytes": _dir_bytes(self.dest), "total_bytes": KOKORO_TOTAL_BYTES,
                 "error": self._error, "voices": voices}

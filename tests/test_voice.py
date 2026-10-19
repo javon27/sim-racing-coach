@@ -282,3 +282,22 @@ def test_kokoro_installer_memoises_voices_once_populated(tmp_path):
     inst.start()   # a fresh install invalidates the memo
     assert inst.status()["voices"] == ["af_heart"]
     assert calls["n"] == 2
+
+
+def test_kokoro_installer_does_not_retry_a_failing_model_load_every_poll(tmp_path):
+    # #225: a failed load used to be retried on every 1 Hz /events tick.
+    inst = KokoroInstaller(str(tmp_path))
+    inst.dest.mkdir(parents=True, exist_ok=True)
+    for name in ("kokoro-v1.0.onnx", "voices-v1.0.bin"):
+        (inst.dest / name).write_bytes(b"0")
+    calls = {"n": 0}
+    def failing_voices():
+        calls["n"] += 1
+        raise RuntimeError("corrupt model")
+    inst.voices_fn = failing_voices
+    for _ in range(5):
+        assert inst.status()["voices"] == []
+    assert calls["n"] == 1
+    inst._voices = None   # what start() does for a reinstall: the next poll tries again
+    inst.status()
+    assert calls["n"] == 2
