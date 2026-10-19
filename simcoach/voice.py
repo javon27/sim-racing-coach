@@ -113,7 +113,10 @@ def _stub_av() -> None:
     """faster_whisper imports PyAV at module level, only for decode_audio (file input).
     We always pass a numpy array, so PyAV is never called -- and the frozen sidecar
     excludes it (#221): its wheel bundles GPL x264/x265. The stub stands in for it."""
-    sys.modules.setdefault("av", types.ModuleType("av"))
+    try:
+        import av  # noqa: F401 -- real PyAV when present (dev venv); the stub only fills a gap
+    except ImportError:
+        sys.modules.setdefault("av", types.ModuleType("av"))
 
 
 def _default_download(dest: Path) -> None:

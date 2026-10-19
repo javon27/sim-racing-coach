@@ -41,7 +41,7 @@ jobs:
         # deliberately -- see its header -- not implicitly here.
         run: |
           python -m pip install --upgrade pip
-          pip install --only-binary=:all: onnxruntime==1.30.0 regex faster-whisper pyinstaller==6.22.3
+          pip install --only-binary=:all: onnxruntime==1.30.0 regex faster-whisper==1.2.1 pyinstaller==6.22.3
           pip install --no-deps kokoro-onnx==0.6.1 misaki==0.7.4
           pip install . --constraint constraints.txt
 

@@ -15,8 +15,11 @@ lemansultimate.wiki.gg). Like the original, those adaptations are licensed under
 - the prose in `simcoach/knowledge/`: `circuit_de_spa_francorchamps.md`, `circuit_of_the_americas.md`, `circuit_paul_ricard.md`, `fuji_speedway.md`, `lusail_international_circuit.md`, `sebring_international_raceway.md`, `silverstone_grand_prix_circuit.md`
 
 The rest of each track file (corner geometry, numbering, reference times) is MIT.
-The other track maps' notes are our own wording (their `notes.source` says so) and
-are MIT.
+The notes of `bahrain_endurance_circuit.json`, `bahrain_paddock_circuit.json` and
+`monza_curva_grande_circuit.json` are our own wording but list the LMU wiki among
+their sources, so they are also offered under CC BY-SA 4.0. The remaining track
+maps' notes are our own wording from non-wiki sources (their `notes.source` says
+so) and are MIT.
 
 ### CMUdict: BSD-2-Clause
 `simcoach/cmudict/cmudict.dict` is the Carnegie Mellon Pronouncing Dictionary,
