@@ -1498,7 +1498,10 @@ class CoachContext:
         # belongs to this track/car, so it can never pull an unrelated lap (issue #34).
         if lid is None and not id_by_ref:
             raw = which.removeprefix("lap ")
-            if raw.isdigit() and int(raw) in set(self.store.list_lap_ids(self.track, self.car)):
+            # This car's class only (#190, #214 review): the model expands to its entries.
+            cls = self._class_scope()
+            if (raw.isdigit() and cls is not False and int(raw) in set(
+                    self.store.list_lap_ids(self.track, self.car, car_class=cls))):
                 lid = int(raw)
         if lid is None:
             return None, None

@@ -85,3 +85,11 @@ def test_distilled_entry_tagged_memories_reach_the_coach_by_model(store):
     texts = {r["text"] for r in store.active_learnings(car=Z06)}
     assert texts == {"trail-brake into T1", "coach-written, model tag", "general"}
     assert {r["text"] for r in store.active_learnings(car=None)} == {"general"}
+
+
+def test_a_raw_entry_name_still_matches_only_itself(store):
+    # #214 review: map building / Tracks counts pass the raw entry; the model expansion
+    # must not widen them to the same model's other entries.
+    turkey = store.list_lap_ids("test_track", TURKEY)
+    assert len(turkey) == 3
+    assert {r["lap_id"] for r in store.recent_laps("test_track", TURKEY)} == set(turkey)
