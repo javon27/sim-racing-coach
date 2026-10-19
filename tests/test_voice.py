@@ -301,3 +301,27 @@ def test_kokoro_installer_does_not_retry_a_failing_model_load_every_poll(tmp_pat
     inst._voices = None   # what start() does for a reinstall: the next poll tries again
     inst.status()
     assert calls["n"] == 2
+
+
+def test_kokoro_installer_retries_a_failed_voices_load_after_the_backoff(tmp_path, monkeypatch):
+    # #225 review: a transient failure must not leave the voice picker empty for the session.
+    from simcoach import voice
+    inst = KokoroInstaller(str(tmp_path))
+    inst.dest.mkdir(parents=True, exist_ok=True)
+    for name in ("kokoro-v1.0.onnx", "voices-v1.0.bin"):
+        (inst.dest / name).write_bytes(b"0")
+    now = {"t": 1000.0}
+    monkeypatch.setattr(voice.time, "monotonic", lambda: now["t"])
+    results = iter([RuntimeError("file locked"), ["af_heart"]])
+    def flaky_voices():
+        r = next(results)
+        if isinstance(r, Exception):
+            raise r
+        return r
+    inst.voices_fn = flaky_voices
+    assert inst.status()["voices"] == []
+    now["t"] += voice.VOICES_RETRY_S - 1
+    assert inst.status()["voices"] == []          # still inside the backoff: no reload
+    now["t"] += 2
+    assert inst.status()["voices"] == ["af_heart"]
+    assert inst.status()["voices"] == ["af_heart"]  # a non-empty memo is permanent
