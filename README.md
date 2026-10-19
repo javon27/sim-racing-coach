@@ -11,7 +11,7 @@ Windows only (LMU is Windows-only). Free and open source under the MIT license.
 
 1. Install from the latest [GitHub Release](https://github.com/javon27/sim-racing-coach/releases)
    (MSI or NSIS installer), or build from source (below).
-2. Open **Settings → AI**, paste your own [Anthropic API key](https://console.anthropic.com/)
+2. Open **Settings → AI / Coach**, paste your own [Anthropic API key](https://console.anthropic.com/)
    and pick a model.
 3. Start LMU and drive. Laps are captured automatically; ask the coach between laps.
 
@@ -56,7 +56,7 @@ sessions browser, and a settings screen. Dev run (needs Rust + Node):
 cargo tauri dev        # from repo root — spawns the Python sidecar + Vite dev server
 ```
 
-First run: open **Settings → AI**, paste your Anthropic API key and pick a model.
+First run: open **Settings → AI / Coach**, paste your Anthropic API key and pick a model.
 The key is stored in the OS keyring (via `keyring` — Windows Credential Manager),
 never in a file, and **no environment variables are required**. App data — config,
 laps, telemetry, logs — lives under `%APPDATA%\SimCoach` (override with
