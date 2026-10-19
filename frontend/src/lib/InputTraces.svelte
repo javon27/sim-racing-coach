@@ -271,6 +271,9 @@
     width: 100%;
     height: 100%;
     min-height: 108px;
+    /* #222: height otherwise follows the viewBox ratio and grows with width
+       (~670px on a 3440 ultrawide); 20vh = 288px at 1440p. */
+    max-height: 20vh;
   }
   .bed {
     fill: var(--surface-2);
