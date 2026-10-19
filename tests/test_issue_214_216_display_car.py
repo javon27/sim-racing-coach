@@ -74,3 +74,14 @@ def test_same_model_in_another_class_is_not_counted(store):
     ctx = _ctx(store)
     assert {r.car for r in ctx._recent_records()} == {TURKEY, TF}
     assert "all-time this track/car: 5" not in ctx.get_session_status()
+
+
+def test_distilled_entry_tagged_memories_reach_the_coach_by_model(store):
+    # #219: distill tags a memory with the lap's raw entry name; the coach asks by model.
+    store.add_learning("trail-brake into T1", status="active", car=TURKEY, source="distill")
+    store.add_learning("coach-written, model tag", status="active", car=Z06, source="coach")
+    store.add_learning("general", status="active", source="distill")
+    store.add_learning("another model", status="active", car="BMW M4 LMGT3", source="distill")
+    texts = {r["text"] for r in store.active_learnings(car=Z06)}
+    assert texts == {"trail-brake into T1", "coach-written, model tag", "general"}
+    assert {r["text"] for r in store.active_learnings(car=None)} == {"general"}

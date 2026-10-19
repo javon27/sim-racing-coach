@@ -2154,14 +2154,20 @@ class LapStore:
     def active_learnings(self, track: str | None = None, car: str | None = None,
                           limit: int = 50) -> list[dict]:
         """Active learnings for the coach prompt: general ones (track/car both
-        NULL) plus any tagged to match the given track/car, newest first."""
+        NULL) plus any tagged to match the given track/car, newest first.
+
+        #219: the coach passes the display model, but distill tags a memory with the
+        raw entry name it read off the laps -- so `car` matches itself (coach-written
+        memories) or any entry that resolves to it, like `timed_laps`."""
+        cars = list(dict.fromkeys([car, *self._teams(car, None)])) if car else [None]
         with self._lock:
             rows = self.conn.execute(
                 "SELECT id, text, status, track, car, source, session_id, "
                 "created_ts, updated_ts FROM driver_learnings "
                 "WHERE status = 'active' AND (track IS NULL OR track = ?) "
-                "AND (car IS NULL OR car = ?) ORDER BY updated_ts DESC LIMIT ?",
-                (track, car, limit),
+                f"AND (car IS NULL OR car IN ({','.join('?' * len(cars))})) "
+                "ORDER BY updated_ts DESC LIMIT ?",
+                (track, *cars, limit),
             ).fetchall()
             return [dict(zip(self._LEARNING_KEYS, r)) for r in rows]
 
