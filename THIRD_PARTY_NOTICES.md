@@ -1,0 +1,131 @@
+# Third-party notices
+
+Nestor's own code is MIT-licensed (see `LICENSE`). This file lists the third-party
+material it ships or builds on, and the parts of the repo that are **not** under MIT.
+
+## Content not under MIT
+
+### LMU wiki track notes: CC BY-SA 4.0
+The corner `notes` in `simcoach/tracks/*.json` whose `notes.source` names the LMU
+wiki, and the files in `simcoach/knowledge/*.md` that end with an LMU-wiki source
+line, are summaries adapted from the
+[Le Mans Ultimate wiki](https://lemansultimate.wiki.gg) (contributors to
+lemansultimate.wiki.gg). Like the original, those adaptations are licensed under
+[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/), not MIT. The
+rest of each file (corner geometry, numbering, reference times) is MIT.
+
+### CMUdict: BSD-2-Clause
+`simcoach/cmudict/cmudict.dict` is the Carnegie Mellon Pronouncing Dictionary,
+Copyright (C) 1993-2015 Carnegie Mellon University, redistributed under its BSD
+license (`simcoach/cmudict/LICENSE`). See `simcoach/cmudict/README.md` for the
+pinned commit.
+
+## Models downloaded at runtime (not in the repo)
+- **Kokoro-82M** text-to-speech (`kokoro-v1.0.onnx`, `voices-v1.0.bin`): Apache-2.0
+  ([hexgrad/Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M)), fetched from the
+  [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) model release (MIT).
+- **faster-whisper small** speech-to-text (`Systran/faster-whisper-small`): MIT,
+  converted from OpenAI Whisper (MIT).
+
+## Acknowledgements (interoperability)
+- The shared-memory struct layouts in `simcoach/lmu/rf2structs.py` were transcribed
+  from Image Space Inc.'s `InternalsPlugin.hpp`, the rFactor 2 plugin SDK header that
+  Le Mans Ultimate ships under `Support/SharedMemoryInterface/`.
+- The buffer names and version preamble follow The Iron Wolf's
+  [rF2SharedMemoryMapPlugin](https://github.com/TheIronWolfModding/rF2SharedMemoryMapPlugin)
+  (MIT), which publishes the shared memory Nestor reads.
+
+Le Mans Ultimate is a trademark of its owners. Nestor is not affiliated with or
+endorsed by Studio 397 or Motorsport Games.
+
+## Dependencies
+Generated 2026-10-18. To regenerate, run `pip-licenses` over the runtime closure,
+`cargo metadata` in `src-tauri/`, and `npx license-checker --production` in `frontend/`.
+GPL-licensed packages are not shipped: kokoro-onnx's `phonemizer`/`espeakng-loader`
+dependencies are deliberately left uninstalled (see `CLAUDE.md`). Build-only tools
+(PyInstaller, Vite, Svelte compiler, vitest) are not listed.
+
+### JavaScript (bundled in the frontend)
+
+| Package | License |
+|---|---|
+| @tauri-apps/api | Apache-2.0 OR MIT |
+| @tauri-apps/plugin-dialog | MIT OR Apache-2.0 |
+| svelte (runtime) | MIT |
+
+### Python (bundled in the sidecar; `voice` extra included)
+
+| Package | Version | License |
+|---|---|---|
+| annotated-doc | 0.0.5 | MIT |
+| annotated-types | 0.8.0 | MIT |
+| anthropic | 1.2.0 | MIT |
+| anyio | 4.14.2 | MIT |
+| av | 18.1.0 | BSD-3-Clause |
+| certifi | 2026.7.22 | MPL-2.0 |
+| click | 8.5.0 | BSD-3-Clause |
+| colorama | 0.4.6 | BSD-3-Clause |
+| ctranslate2 | 4.8.2 | MIT |
+| docstring_parser | 0.18.0 | MIT |
+| fastapi | 0.141.1 | MIT |
+| faster-whisper | 1.2.1 | MIT |
+| filelock | 3.32.6 | MIT |
+| flatbuffers | 25.12.19 | Apache-2.0 |
+| fsspec | 2026.7.0 | BSD-3-Clause |
+| h11 | 0.16.0 | MIT |
+| hf-xet | 1.6.0 | Apache-2.0 |
+| httpcore | 1.0.9 | BSD-3-Clause |
+| httpcore2 | 2.12.0 | BSD-3-Clause |
+| httpx | 0.28.1 | BSD-3-Clause |
+| httpx2 | 2.12.0 | BSD-3-Clause |
+| huggingface_hub | 1.31.0 | Apache-2.0 |
+| idna | 3.19 | BSD-3-Clause |
+| jaraco.classes | 3.4.0 | MIT |
+| jaraco.context | 6.1.2 | MIT |
+| jaraco.functools | 4.6.0 | MIT |
+| jiter | 0.16.0 | MIT |
+| keyring | 25.7.0 | MIT |
+| kokoro-onnx | 0.6.1 | MIT |
+| misaki | 0.7.4 | Apache-2.0 |
+| more-itertools | 11.1.0 | MIT |
+| numpy | 2.5.2 | BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 |
+| onnxruntime | 1.30.0 | MIT |
+| packaging | 26.3 | Apache-2.0 OR BSD-2-Clause |
+| protobuf | 7.36.1 | BSD-3-Clause |
+| pydantic | 2.13.4 | MIT |
+| pydantic_core | 2.46.4 | MIT |
+| pywin32-ctypes | 0.2.3 | BSD-3-Clause |
+| PyYAML | 6.0.3 | MIT |
+| regex | 2026.9.10 | Apache-2.0 AND CNRI-Python |
+| sniffio | 1.3.1 | MIT OR Apache-2.0 |
+| starlette | 1.6.0 | BSD-3-Clause |
+| tokenizers | 0.23.2 | Apache-2.0 |
+| tqdm | 4.70.1 | MPL-2.0 AND MIT |
+| truststore | 0.10.4 | MIT |
+| typing_extensions | 4.16.0 | PSF-2.0 |
+| typing-inspection | 0.4.4 | MIT |
+| uvicorn | 0.52.4 | BSD-3-Clause |
+| websockets | 17.1 | BSD-3-Clause |
+
+### Rust (Tauri shell, Windows target)
+
+| License | Crates |
+|---|---|
+| MIT OR Apache-2.0 | anyhow, base64, bitflags, block-buffer, camino, cargo-platform, cc, cfg-if, chrono, cookie, cpufeatures, crc32fast, crossbeam-channel, crossbeam-utils, crypto-common, deranged, digest, dirs, dirs-sys, displaydoc, dtoa, dyn-clone, erased-serde, fdeflate, find-msvc-tools, flate2, form_urlencoded, getrandom, glob, hashbrown, heck, hex, html5ever, http, ident_case, idna, itoa, json-patch, jsonptr, keyboard-types, libc, lock_api, log, markup5ever, mime, num-conv, num-traits, once_cell, parking_lot, parking_lot_core, percent-encoding, png, powerfmt, proc-macro2, quote, ref-cast, ref-cast-impl, regex, regex-automata, regex-syntax, rustc_version, scopeguard, semver, serde, serde-untagged, serde_core, serde_derive, serde_derive_internals, serde_json, serde_repr, serde_spanned, serde_with, serde_with_macros, serialize-to-javascript, serialize-to-javascript-impl, servo_arc, sha2, shlex, siphasher, smallvec, socket2, softbuffer, stable_deref_trait, string_cache, string_cache_codegen, syn, tendril, thiserror, thiserror-impl, time, time-core, time-macros, toml, toml_datetime, toml_parser, toml_writer, tray-icon, typeid, typenum, unic-char-property, unic-char-range, unic-common, unic-ucd-ident, unic-ucd-version, unicode-segmentation, url, version_check, web_atoms, windows, windows-collections, windows-core, windows-future, windows-implement, windows-interface, windows-link, windows-numerics, windows-result, windows-strings, windows-sys, windows-targets, windows-threading, windows-version, windows_x86_64_msvc |
+| MIT | bytes, cargo_metadata, cfb, darling, darling_core, darling_macro, derive_more, derive_more-impl, dom_query, embed-resource, fern, generic-array, ico, infer, mio, new_debug_unreachable, phf, phf_codegen, phf_generator, phf_macros, phf_shared, plist, precomputed-hash, quick-xml, rfd, schemars, schemars_derive, simd-adler32, strsim, synstructure, tauri-winres, tokio, tracing, tracing-core, urlpattern, vswhom, vswhom-sys, webview2-com, webview2-com-macros, webview2-com-sys, winnow, winreg, zmij |
+| Apache-2.0 OR MIT | autocfg, bit-set, bit-vec, cargo_toml, ctor, ctor-proc-macro, dtor, dtor-proc-macro, equivalent, fastrand, global-hotkey, idna_adapter, indexmap, muda, pin-project-lite, rustc-hash, tauri, tauri-build, tauri-codegen, tauri-macros, tauri-plugin, tauri-plugin-dialog, tauri-plugin-fs, tauri-plugin-global-shortcut, tauri-plugin-log, tauri-plugin-window-state, tauri-runtime, tauri-runtime-wry, tauri-utils, utf16_iter, utf8_iter, uuid, window-vibrancy, write16, wry |
+| Unicode-3.0 | icu_collections, icu_locid, icu_locid_transform, icu_locid_transform_data, icu_normalizer, icu_normalizer_data, icu_properties, icu_properties_data, icu_provider, icu_provider_macros, litemap, tinystr, writeable, yoke, yoke-derive, zerofrom, zerofrom-derive, zerovec, zerovec-derive |
+| Unlicense OR MIT | aho-corasick, byteorder, memchr, same-file, walkdir, winapi-util |
+| MPL-2.0 | cssparser, cssparser-macros, dtoa-short, option-ext, selectors |
+| BSD-3-Clause | alloc-no-stdlib, alloc-stdlib |
+| Zlib | foldhash, zlib-rs |
+| MIT OR Zlib OR Apache-2.0 | miniz_oxide |
+| 0BSD OR MIT OR Apache-2.0 | adler2 |
+| BSD-3-Clause AND MIT | brotli |
+| BSD-3-Clause OR MIT | brotli-decompressor |
+| Apache-2.0 AND MIT | dpi |
+| CC0-1.0 OR MIT-0 OR Apache-2.0 | dunce |
+| Apache-2.0 OR MIT | fnv |
+| MIT OR Apache-2.0 OR Zlib | raw-window-handle |
+| Apache-2.0 | tao |
+| (MIT OR Apache-2.0) AND Unicode-3.0 | unicode-ident |
