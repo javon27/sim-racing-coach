@@ -14,6 +14,14 @@ import pathlib
 import sys
 
 
+def dump_track_json(data: dict) -> bytes:
+    """Vendored copy of simcoach.track_lookup.dump_track_json (#197): this script runs
+    from a venv without simcoach, and importing track_lookup pulls in the whole
+    analysis stack. tests/test_harvest_pronunciations.py pins the two byte-identical."""
+    return json.dumps(data, indent=2, ensure_ascii=False,
+                      allow_nan=False).replace("\n", "\r\n").encode("utf-8")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("slug")
@@ -52,14 +60,7 @@ def main():
         existing = data.get("pronunciations") or {}
         merged = {**table, **existing} if not a.force else {**existing, **table}
         data["pronunciations"] = dict(sorted(merged.items()))
-        # Preserve the file's existing indent (2), line endings, and trailing-newline
-        # state; only the new "pronunciations" key is added, at the end of the object.
-        out = json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False)
-        if raw_bytes.endswith(b"\n"):
-            out += "\n"
-        if b"\r\n" in raw_bytes:
-            out = out.replace("\n", "\r\n")
-        path.write_bytes(out.encode("utf-8"))
+        path.write_bytes(dump_track_json(data))
         print(f"wrote {len(merged)} entries to {path}", file=sys.stderr)
 
 
