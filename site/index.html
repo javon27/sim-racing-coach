@@ -32,7 +32,7 @@
   *{box-sizing:border-box}
   html{scroll-behavior:smooth}
   /* Offset in-page anchor jumps so the sticky 64px header doesn't cover the target. */
-  :where(#top,#features,#how,#sims,#pitwall,#name,#download){scroll-margin-top:80px}
+  :where(#top,#features,#how,#sims,#name,#download){scroll-margin-top:80px}
   body{
     margin:0; background:var(--bg); color:var(--text);
     font-family:var(--body); font-size:16px; line-height:1.6;
@@ -140,7 +140,6 @@
   .trust .label{font-family:var(--mono); font-size:12px; letter-spacing:.12em; text-transform:uppercase; color:var(--faint)}
   .simchip{display:flex; align-items:center; gap:10px; padding:9px 16px; border:1px solid var(--line);
     border-radius:12px; background:var(--surface)}
-  .simchip img{height:22px; filter:brightness(0) invert(1); opacity:.92}
   .simchip.supported{border-color:rgba(109,74,255,.5)}
   .simchip.planned{opacity:.62}
   .simchip .txt{display:flex; flex-direction:column; align-items:flex-start; line-height:1.15}
@@ -163,11 +162,6 @@
     section.feat{padding:56px 0}
   }
 
-  /* Pit Wall — full-width intro over a two-up screenshot pair */
-  .pw-head{max-width:720px; margin:0 auto; text-align:center}
-  .pw-head .pw-lead{color:var(--muted); font-size:17px; margin-top:16px}
-  .pw-grid{display:grid; grid-template-columns:1fr 1fr; gap:28px; margin-top:44px}
-  @media(max-width:860px){ .pw-grid{grid-template-columns:1fr; gap:32px} }
 
   /* How it works — 3-step pipeline cards */
   .how-head{max-width:720px; margin:0 auto; text-align:center}
@@ -246,10 +240,10 @@
       reaching for exactly the data each question needs — and replies in plain English.
     </p>
     <div class="cta-row">
-      <button type="button" class="btn btn-primary" disabled>Get Nestor <span class="soon">soon</span></button>
+      <a class="btn btn-primary" href="https://github.com/javon27/sim-racing-coach/releases">Get Nestor</a>
       <a class="btn btn-ghost" href="#how">See how it works</a>
     </div>
-    <div class="cta-note">Windows desktop app · bring your own Anthropic API key</div>
+    <div class="cta-note">Free &amp; open source (MIT) · Windows desktop app · bring your own Anthropic API key</div>
 
     <div class="carousel" id="hero-carousel">
       <button class="car-arrow prev" type="button" aria-label="Previous screenshot">‹</button>
@@ -265,18 +259,6 @@
             <img src="assets/coach-chat.png" alt="A coaching conversation in Nestor about trail-braking, with per-corner numbers." loading="lazy">
           </button>
           <figcaption class="caption">Between-laps coaching, grounded in the lap you just drove.</figcaption>
-        </figure>
-        <figure class="car-slide">
-          <button class="shot car-zoom" type="button" data-full="assets/pit-wall.jpg" data-alt="Nestor's Pit Wall in Position view: a live timing tower beside a track map with every car placed.">
-            <img src="assets/pit-wall.jpg" alt="Nestor's Pit Wall in Position view: a live timing tower beside a track map with every car placed." loading="lazy">
-          </button>
-          <figcaption class="caption">Pit Wall — live timing and the whole field, mid-race.</figcaption>
-        </figure>
-        <figure class="car-slide">
-          <button class="shot car-zoom" type="button" data-full="assets/pit-wall-relative.jpg" data-alt="Nestor's Pit Wall in Relative view: the cars nearest you, ahead and behind, with live time gaps.">
-            <img src="assets/pit-wall-relative.jpg" alt="Nestor's Pit Wall in Relative view: the cars nearest you, ahead and behind, with live time gaps." loading="lazy">
-          </button>
-          <figcaption class="caption">Relative view — the cars nearest you, ahead and behind.</figcaption>
         </figure>
         <figure class="car-slide">
           <button class="shot car-zoom" type="button" data-full="assets/track-map.png" data-alt="Nestor's track map with every corner numbered, named, and marked left or right.">
@@ -301,7 +283,6 @@
   <div class="wrap">
     <span class="label">Works with</span>
     <div class="simchip supported">
-      <img src="assets/lmu-logo.png" alt="Le Mans Ultimate">
       <div class="txt"><span class="sim">Le Mans Ultimate</span><span class="st">Supported now</span></div>
     </div>
     <div class="simchip planned">
@@ -431,30 +412,6 @@
   </div>
 </section>
 
-<section class="feat" style="padding-top:0" id="pitwall">
-  <div class="wrap">
-    <div class="pw-head">
-      <div class="eyebrow">Live race dashboard</div>
-      <h2>The whole field, on your pit wall.</h2>
-      <p class="pw-lead">
-        While you drive, the Pit Wall shows live timing, the gap to every car and
-        where each one sits on track — across every class — so you know who’s
-        coming and how hard to push.
-      </p>
-    </div>
-    <div class="pw-grid">
-      <div>
-        <div class="shot"><img src="assets/pit-wall.jpg" alt="Nestor's Pit Wall in Position view: a live timing tower with the full GT3 field in race order beside a Monza track map with every car placed." loading="lazy"></div>
-        <div class="caption">Position — the full field in race order, class gaps and fastest laps.</div>
-      </div>
-      <div>
-        <div class="shot"><img src="assets/pit-wall-relative.jpg" alt="Nestor's Pit Wall in Relative view: the cars nearest you, ahead and behind across GT3 and Hypercar, with live time gaps." loading="lazy"></div>
-        <div class="caption">Relative — the cars nearest you, ahead and behind, with live time gaps.</div>
-      </div>
-    </div>
-  </div>
-</section>
-
 <section class="name-sec" id="name">
   <div class="wrap">
     <img class="helm helm-ol" src="assets/helm-color.svg" alt="The Nestor helm">
@@ -478,20 +435,18 @@
   <div class="wrap">
     <div class="card">
       <div class="eyebrow">Get Nestor</div>
-      <h2>Coming to Patreon.</h2>
+      <h2>Free and open source.</h2>
       <p>
-        Nestor will be available to download through Patreon. The page isn’t live
-        yet — check back soon.
+        Nestor is MIT-licensed. Download the Windows installer from GitHub Releases,
+        or read the code, report a bug, and contribute on GitHub.
       </p>
       <div class="cta-row">
-        <!-- TODO: restore as <a href="<patreon-url>"> once the Patreon account exists -->
-        <button type="button" class="btn btn-primary" disabled data-patreon-placeholder>
-          Support on Patreon <span class="soon">soon</span>
-        </button>
+        <a class="btn btn-primary" href="https://github.com/javon27/sim-racing-coach/releases">Download for Windows</a>
+        <a class="btn btn-ghost" href="https://github.com/javon27/sim-racing-coach">View on GitHub</a>
       </div>
       <div class="steps">
-        <span class="step"><b>1.</b> Join on Patreon</span>
-        <span class="step"><b>2.</b> Download the Windows app</span>
+        <span class="step"><b>1.</b> Download the installer</span>
+        <span class="step"><b>2.</b> Install the Windows app</span>
         <span class="step"><b>3.</b> Add your Anthropic API key &amp; drive</span>
       </div>
     </div>
@@ -506,8 +461,8 @@
     <p class="disclaimer">
       Nestor is an independent tool and is not affiliated with, endorsed by, or
       sponsored by Le Mans Ultimate, Studio 397, or Motorsport Games. “Le Mans
-      Ultimate” and its logo are the property of their respective owners.
-      © <span id="yr">2026</span> jaysontrades.
+      Ultimate” is the property of their respective owners.
+      © <span id="yr">2026</span> javon27 · MIT licensed.
     </p>
   </div>
 </footer>
