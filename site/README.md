@@ -11,7 +11,6 @@ site/
   assets/
     helm-color.svg        primary helm mark (colour)
     helm.svg              one-ink helm silhouette (favicon)
-    lmu-logo.png          Le Mans Ultimate mark (public domain, Wikimedia)
     coach-app.png         hero — full app, live coaching session
     coach-chat.png        the coaching conversation (crop of the hero)
     track-map.png         enlarged track map with numbered corners
