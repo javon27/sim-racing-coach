@@ -9668,23 +9668,23 @@
   "rotation": 0.0,
   "built_from": "live_laps",
   "notes": {
-    "overview": "A 3.167 km, 11-turn street circuit on the Long Beach waterfront, lined with concrete walls. The lap is defined by the long, slightly curved Shoreline Drive front straight: the slow Hairpin (T11) feeds it, and the heavy stop for T1 ends it. The back straight runs along Seaside Way under the Convention Center footbridge into T9.",
+    "overview": "Street circuit on the Long Beach waterfront: 3.167 km, 11 turns, concrete walls throughout. The lap revolves around the long, gently curving Shoreline Drive front straight, which starts at the slow Hairpin (T11) and ends in the heavy stop for T1. The back straight follows Seaside Way, passing under the Convention Center footbridge before T9.",
     "corners": {
-      "1": "The end of Shoreline Drive: the heaviest braking zone on the lap and the main overtaking spot.",
-      "2": "The Fountain, first part. Slow and tight around the fountain.",
-      "3": "The Fountain, second part. T3 to T5 wrap around the aquarium car park.",
-      "4": "Around the aquarium car park.",
-      "5": "The exit onto the run that parallels Shoreline Drive.",
-      "6": "Braking while dropping downhill into the corner.",
+      "1": "Heaviest stop of the lap, at the end of Shoreline Drive; the main place to pass.",
+      "2": "Start of the Fountain: slow and tight, wrapping round the fountain.",
+      "3": "Second part of the Fountain. T3-T5 circle the aquarium car park.",
+      "4": "Circles the aquarium car park.",
+      "5": "Exits onto the run alongside Shoreline Drive.",
+      "6": "Downhill braking zone into the corner.",
       "7": "",
-      "8": "Sharp right onto Seaside Way and the back straight.",
-      "9": "A 90-degree right at the end of the Seaside Way back straight, after the Convention Center footbridge.",
-      "10": "A sweeping, roughly 135-degree left past the grandstands that runs straight into the braking zone for the Hairpin.",
-      "11": "The Hairpin: the slowest corner (barely 30 mph in an IndyCar). The exit sets the speed for the whole of Shoreline Drive."
+      "8": "Sharp right that turns onto Seaside Way and the back straight.",
+      "9": "90-degree right ending the Seaside Way back straight, just past the Convention Center footbridge.",
+      "10": "Long left of about 135 degrees past the grandstands, leading directly into the Hairpin braking zone.",
+      "11": "The Hairpin, slowest corner on the track (an IndyCar takes it at barely 30 mph). Its exit decides your speed all the way down Shoreline Drive."
     },
     "reference_times": {
       "LMGT3": "1:18.5"
     },
-    "source": "Wikipedia (Long Beach Street Circuit); NBC LA course map; IMSA (Long Beach hairpin); Driving Line (Formula Drift T9-T11). Paraphrased."
+    "source": "Written for Nestor from public corner guides: Wikipedia (Long Beach Street Circuit); NBC LA course map; IMSA (Long Beach hairpin); Driving Line (Formula Drift T9-T11). Facts only; wording is our own."
   }
 }
