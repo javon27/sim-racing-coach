@@ -160,7 +160,9 @@ def catch_lap(lap_no: int, gap: float, slope: float, final_lap: int | None) -> i
     or None: not shrinking faster than the steady band, or not before the flag."""
     if slope > -GAP_STEADY_S_PER_LAP or gap <= 0:
         return None
-    lap = lap_no + math.ceil(gap / -slope)
+    # round() first: polyfit's slope carries BLAS-dependent ulp noise, so an exact
+    # 6.0 laps could ceil to 7 on one machine and 6 on another (#223).
+    lap = lap_no + math.ceil(round(gap / -slope, 9))
     return lap if final_lap is None or lap <= final_lap else None
 
 
