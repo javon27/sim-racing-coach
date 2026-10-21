@@ -9687,18 +9687,18 @@
     ]
   },
   "notes": {
-    "overview": "Bahrain's short Paddock loop shares the GP's heavy-braking opening (T1-T5), then takes a tighter return loop home. Abrasive, low-grip tarmac punishes wheelspin and overheats fronts, so exits are traction-limited and tyre management matters. Reward smooth, straight braking into the big stops and progressive throttle out of the slow corners rather than aggressive rotation.",
+    "overview": "Bahrain's short Paddock loop uses the GP's heavy-braking opening (T1-T5), then a tighter return loop to the line. The abrasive, low-grip surface punishes wheelspin and overheats the front tyres, so exits are limited by traction and tyre management counts. Brake hard and straight into the big stops and feed throttle progressively out of slow corners; don't force rotation.",
     "corners": {
-      "1": "The circuit's biggest stop. Brake hard and straight from the main straight, staying left on entry off the kerb; a compromised, patient exit sets up the immediate left of T2. Prime overtaking spot.",
-      "2": "Quick left flick straight after T1. Don't sacrifice it fighting for the T1 apex; roll speed and get the car pointed early to launch toward T3.",
-      "3": "Right kink taken near-flat as the track climbs toward the straight. Sacrifice nothing here, just carry speed and settle the car for the next braking zone.",
-      "4": "Heavy braking again at the end of the run. Wide entry allows alternate lines; take a mid-to-late apex, keep steering smooth to save the fronts, and use all the exit road.",
-      "5": "Left that opens the flowing section. Light braking or a lift depending on fuel and tyres; be smooth and progressive to keep the rear settled on the low-grip surface.",
-      "6": "Left in the return loop after a connecting run. Brake straight, take a clean single apex and prioritise a stable exit onto the following stretch.",
-      "7": "Right following T6. Position for a tidy line through here rather than overdriving entry; progressive throttle on exit to avoid wheelspin on the abrasive tarmac.",
-      "8": "Tight right, easy to lock up or run wide on worn tyres. Rotate the car first, then feed in throttle; short-shifting helps traction out.",
-      "9": "Right leading into the final complex. Combined braking and turning, so be measured on entry and keep the car stable for the linked T10.",
-      "10": "Last right before the line. Late apex and progressive throttle only, guarding against a wide exit that would cost you all the way down the straight."
+      "1": "Biggest braking zone on the circuit, off the main straight. Hard, straight braking, staying left off the kerb on entry. Accept a compromised, patient exit to set up the T2 left that follows straight away. Main overtaking spot.",
+      "2": "Fast left flick immediately after T1. Don't lose it by fighting for the T1 apex; keep speed rolling and point the car early to drive toward T3.",
+      "3": "Near-flat right kink as the road climbs toward the straight. Give nothing away: carry speed and settle the car for the next stop.",
+      "4": "Another heavy stop at the end of the straight. The wide entry allows different lines. Mid-to-late apex, smooth steering to spare the fronts, use the whole exit.",
+      "5": "Left opening the flowing section. Lift or brake lightly depending on fuel and tyres; smooth, progressive inputs keep the rear calm on low grip.",
+      "6": "Left in the return loop, after a connecting run. Brake in a straight line, one clean apex, and a stable exit onto the next stretch.",
+      "7": "Right after T6. Line it up tidily rather than overdriving the entry; build throttle progressively to avoid wheelspin on the abrasive surface.",
+      "8": "Tight right where worn tyres lock up or run wide easily. Rotate first, then add throttle; short-shift for traction on exit.",
+      "9": "Right into the final complex, braking and turning together. Measured entry, keep the car stable for the linked T10.",
+      "10": "Final right before the line. Late apex, progressive throttle only; a wide exit here costs time the whole way down the straight."
     },
     "reference_times": {
       "Hypercar": "1:13.125",
@@ -9707,7 +9707,7 @@
       "LMP3": "1:18.208",
       "GTE": "1:21.651"
     },
-    "source": "Bahrain International Circuit corner guides (Honda F1, RaceControl/Le Mans Ultimate wiki, Senate GP corner-by-corner, tracktitan.io); directions/apex positions taken from the app's computed corner map. T6-T10 return-loop notes grounded in geometry + Bahrain surface character; opening T1-T5 grounded in shared Bahrain GP knowledge."
+    "source": "Written for Nestor from public corner guides: Bahrain International Circuit corner guides (Honda F1, RaceControl/Le Mans Ultimate wiki, Senate GP corner-by-corner, tracktitan.io). Facts only; wording is our own. Directions/apex positions from the app's computed corner map; T6-T10 notes grounded in geometry + Bahrain surface character, T1-T5 in shared Bahrain GP knowledge."
   },
   "pronunciations": {
     "Michael Schumacher Corner": "mˈaɪkəl ʃˈuːmɑːkɚ kˈɔːɹnɚ",

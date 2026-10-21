@@ -87,7 +87,7 @@ def test_result_log_parses_every_class_rivals_best():
     rs = parse_result(XML, "Jayson G")
     assert rs.best_lap == 120.9103
     assert rs.class_bests == [
-        {"p": 1, "name": "Ryan Friend", "best": 114.9868, "me": False,
+        {"p": 1, "name": "Riley Fast", "best": 114.9868, "me": False,
          "st": "Finished Normally"},
         {"p": 8, "name": "Jayson G", "best": 120.9103, "me": True, "st": "Finished Normally"}]
 
@@ -101,10 +101,10 @@ def test_result_log_keeps_only_the_players_class(tmp_path):
 
 
 # A third LMP2, LAST in the file and in class: a 3-lap DNF with the fastest best of all
-# (the real logs' "1:55.030 Kyle Chan (P16)" shape). The file order is then not the
+# (the real logs' "1:55.030 Kai Chase (P16)" shape). The file order is then not the
 # fastest-first order, and his bracket is no finish.
 DNF = """<Driver>
-<Name>Kyle Chan</Name>
+<Name>Kai Chase</Name>
 <VehName>Some Team #9:LM</VehName>
 <CarClass>LMP2</CarClass>
 <Position>18</Position>
@@ -127,7 +127,7 @@ def _store_with_dnf(tmp_path, store=None, sid="log"):
 
 def test_get_race_result_ranks_the_class_bests_and_tags_a_dnf(tmp_path):
     assert ("Best laps in your class (result log), fastest first, class position in "
-            "brackets: 1:50.500 Kyle Chan (P9, DNF); 1:54.987 Ryan Friend (P1); 2:00.910 "
+            "brackets: 1:50.500 Kai Chase (P9, DNF); 1:54.987 Riley Fast (P1); 2:00.910 "
             "you (P8).") in race_result_text(_store_with_dnf(tmp_path), "log")
 
 
@@ -139,7 +139,7 @@ def test_a_logged_status_of_none_is_no_status(tmp_path):
         "<FinishStatus>DNF</FinishStatus>", "<FinishStatus>None</FinishStatus>"))
     store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
     store.save_result_session(parse_result(xml, "Jayson G"), session_id="log")
-    assert "1:50.500 Kyle Chan (P9); 1:54.987" in race_result_text(store, "log")
+    assert "1:50.500 Kai Chase (P9); 1:54.987" in race_result_text(store, "log")
 
 
 def test_the_profile_digest_leaves_the_rival_list_out(tmp_path, monkeypatch, mem_keyring,
@@ -154,12 +154,12 @@ def test_the_profile_digest_leaves_the_rival_list_out(tmp_path, monkeypatch, mem
     store.save(dataclasses.replace(synthetic_lap, session_id="sess-1", phase="race",
                                    timestamp=2.0, position=17))
     _store_with_dnf(tmp_path, store, "sess-1")
-    assert "Kyle Chan" in race_result_text(store, "sess-1")      # the coach tool keeps it
+    assert "Kai Chase" in race_result_text(store, "sess-1")      # the coach tool keeps it
     assert c.post("/profile/distill", json={"session_id": "sess-1"}).status_code == 200
     prompt = fake.last_system + " ".join(str(m) for m in fake.last_messages)
     assert "Finished P8 in class" in prompt                       # the digest's race is there
-    assert "Best laps" not in prompt and "Kyle Chan" not in prompt
-    assert "Ryan Friend" not in prompt
+    assert "Best laps" not in prompt and "Kai Chase" not in prompt
+    assert "Riley Fast" not in prompt
 
 
 def test_v27_db_gains_the_column_and_re_reads_the_logs(tmp_path):
@@ -177,4 +177,4 @@ def test_v27_db_gains_the_column_and_re_reads_the_logs(tmp_path):
         "PRAGMA table_info(race_sessions)")]
     assert store.ingested_files() == set()     # every log is re-read to backfill it
     store.save_result_session(parse_result(XML, "Jayson G"), session_id="log")
-    assert store.race_session("log")["class_bests"][0]["name"] == "Ryan Friend"
+    assert store.race_session("log")["class_bests"][0]["name"] == "Riley Fast"

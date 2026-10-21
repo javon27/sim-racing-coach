@@ -11,7 +11,6 @@ site/
   assets/
     helm-color.svg        primary helm mark (colour)
     helm.svg              one-ink helm silhouette (favicon)
-    lmu-logo.png          Le Mans Ultimate mark (public domain, Wikimedia)
     coach-app.png         hero — full app, live coaching session
     coach-chat.png        the coaching conversation (crop of the hero)
     track-map.png         enlarged track map with numbered corners
@@ -35,9 +34,6 @@ docker build -t nestor-site . && docker run --rm -p 8080:80 nestor-site
 
 ## Edit before launch
 
-- **Patreon link** — `index.html` has a placeholder CTA marked
-  `data-patreon-placeholder` (search `TODO`). Replace `href="#"` with the real
-  Patreon URL and drop the `soon` badges.
 - **OG image URL** — the `og:image` / `twitter:image` metas are relative. For
   reliable link previews, make them absolute once the domain is set, e.g.
   `https://nestor.jaysontrades.com/assets/brand/og-image.png`.

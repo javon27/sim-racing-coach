@@ -2,9 +2,9 @@
 name = "nestor"
 version = "0.1.0"
 description = "Nestor - AI sim-racing coach"
-authors = ["you"]
-license = ""
-repository = ""
+authors = ["javon27"]
+license = "MIT"
+repository = "https://github.com/javon27/sim-racing-coach"
 edition = "2021"
 rust-version = "1.77.2"
 
