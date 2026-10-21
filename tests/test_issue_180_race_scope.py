@@ -82,7 +82,8 @@ def test_unscoped_stint_events_read_the_current_phase(tmp_path, synthetic_lap):
     out = ctx.dispatch("get_stint_events", {"laps": 10})
     labels = _laps(out)
     assert labels[0] == "race lap 0" and labels.count("race lap 0") == 4
-    assert "RL wear step" not in out and "FR wear step" in out
+    # #217: race lap 0 is the formation -- its wear step is not a flat spot.
+    assert "RL wear step" not in out and "FR wear step" not in out
     # ...but a race lap 0 still carries no position: the formation lap's P9 is not one.
     assert "P9" not in out
     qualy = ctx.dispatch("get_stint_events", {"phase": "qualifying"})
