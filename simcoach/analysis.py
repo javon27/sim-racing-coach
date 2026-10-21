@@ -1717,6 +1717,7 @@ _OFF_SAMPLES = 5
 # doesn't flag every lap. A rig lap with a known flat spot settles both.
 _WEAR_STEP_MULT = 2.5
 _WEAR_STEP_MIN = 0.003    # fraction of tire life, i.e. 0.3 % in one lap
+_WEAR_STEP_MAX_WHEELS = 2  # a lock-up flat-spots one wheel, or one axle (#217)
 
 
 def _sample_time(record: LapRecord) -> np.ndarray:
@@ -1959,8 +1960,14 @@ def _stop_events(record: LapRecord, cmap: CornerMap, spins: list[dict],
 def _wear_step_events(record: LapRecord, cmap: CornerMap, baseline: dict) -> list[dict]:
     """Per-wheel wear STEPS: this lap's wear against the stint's own median. A step
     on one lap at one corner is a flat spot; a slope across the stint is
-    `stint_tire_trend`'s job, not this one."""
-    if not baseline:
+    `stint_tire_trend`'s job, not this one.
+
+    #217: never on an out/in lap or a lap through the pits (a tyre change), or race
+    lap 0 (the formation) -- and a "step" on 3+ wheels at once is new tyres or how wear
+    is measured, not a lock-up, so it isn't reported either. A 'partial' lap stays in:
+    a spin is exactly where a flat spot happens (#212 red team)."""
+    if (not baseline or record.partial in ("out", "in") or record.pit
+            or (record.phase == "race" and record.lap_no == 0)):
         return []
     ch = record.channels
     d = _interp_lap_distance(record)
@@ -1988,7 +1995,7 @@ def _wear_step_events(record: LapRecord, cmap: CornerMap, baseline: dict) -> lis
             "detail": {"wheel": w, "step_pct": lap_wear * 100.0,
                        "baseline_pct": baseline[w] * 100.0},
         })
-    return out
+    return out if len(out) <= _WEAR_STEP_MAX_WHEELS else []
 
 
 def _track_limit_events(record: LapRecord, cmap: CornerMap) -> list[dict]:

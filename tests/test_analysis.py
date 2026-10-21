@@ -2002,6 +2002,34 @@ def test_lap_events_wear_step_flags_the_wheel_and_places_it(synthetic_lap):
     assert e["detail"]["baseline_pct"] == pytest.approx(3.0, abs=0.01)
 
 
+@pytest.mark.parametrize("kind", [
+    {"partial": "out"}, {"partial": "in"}, {"pit": True},
+    {"phase": "race", "lap_no": 0}])
+def test_lap_events_no_wear_step_on_out_in_pit_or_formation_laps(synthetic_lap, kind):
+    # #217: new tyres or the formation lap, not a flat spot.
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    rec, _ = _wear_lap(synthetic_lap)
+    rec = dataclasses.replace(rec, **kind)
+    baseline = {w: 0.03 for w in ("fl", "fr", "rl", "rr")}
+    assert [e for e in lap_events(rec, cmap, analyze_lap(rec, cmap), baseline)
+            if e["kind"] == "wear_step"] == []
+
+
+def test_lap_events_wear_step_on_three_or_more_wheels_is_not_a_flat_spot(synthetic_lap):
+    # #217: a lock-up flat-spots one wheel (or one axle); all four at once is not one.
+    cmap = CornerMap.load("simcoach/tracks/test_track.json")
+    baseline = {w: 0.03 for w in ("fl", "fr", "rl", "rr")}
+    rec = synthetic_lap
+    for w in ("fl", "fr"):
+        rec, _ = _wear_lap(rec, wheel=w)
+    steps = [e for e in lap_events(rec, cmap, analyze_lap(rec, cmap), baseline)
+             if e["kind"] == "wear_step"]
+    assert {e["detail"]["wheel"] for e in steps} == {"fl", "fr"}    # one axle: kept
+    rec, _ = _wear_lap(rec, wheel="rl")
+    assert [e for e in lap_events(rec, cmap, analyze_lap(rec, cmap), baseline)
+            if e["kind"] == "wear_step"] == []
+
+
 def test_lap_events_no_wear_events_without_a_baseline(synthetic_lap):
     cmap = CornerMap.load("simcoach/tracks/test_track.json")
     rec, _ = _wear_lap(synthetic_lap)
