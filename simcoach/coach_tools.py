@@ -1384,11 +1384,12 @@ class CoachContext:
         if self._recent is not None:
             return self._recent
         records = []
-        if self.track and self.car:
+        # #216: this car's class only (#190); none when that can't be told.
+        if self.track and self.car and (cls := self._class_scope()) is not False:
             # Complete laps only: a half lap must not shape the grip envelope or
             # the wear baseline (#77).
             for row in self.store.recent_laps(self.track, self.car, limit=10,
-                                              complete_only=True):
+                                              complete_only=True, car_class=cls):
                 try:
                     rec = self.store.load(row["lap_id"])
                 except Exception:
@@ -1497,7 +1498,10 @@ class CoachContext:
         # belongs to this track/car, so it can never pull an unrelated lap (issue #34).
         if lid is None and not id_by_ref:
             raw = which.removeprefix("lap ")
-            if raw.isdigit() and int(raw) in set(self.store.list_lap_ids(self.track, self.car)):
+            # This car's class only (#190, #214 review): the model expands to its entries.
+            cls = self._class_scope()
+            if (raw.isdigit() and cls is not False and int(raw) in set(
+                    self.store.list_lap_ids(self.track, self.car, car_class=cls))):
                 lid = int(raw)
         if lid is None:
             return None, None
@@ -1542,11 +1546,14 @@ class CoachContext:
         # Complete laps only, in all three counts (#77): these say how much DATA the
         # coach has, and counting the newly-stored out/in/partial rows would inflate
         # every historical number the day they started being stored.
-        n_all = (len(self.store.list_lap_ids(self.track, self.car, complete_only=True))
-                 if (self.track and self.car) else 0)
+        # #214: this car's class only (#190); a count that can't be told is unknown.
+        cls = self._class_scope() if self.track and self.car else False
+        n_all = (len(self.store.list_lap_ids(self.track, self.car, complete_only=True,
+                                             car_class=cls)) if cls is not False
+                 else "unknown" if self.track and self.car else 0)
         n_sess = (len(self.store.session_lap_ids(self.session_id, complete_only=True))
                   if self.session_id else None)
-        has_ref = bool(self.track and self.car and (cls := self._class_scope()) is not False
+        has_ref = bool(cls is not False
                        and self.store.best_lap(self.track, self.car, car_class=cls))
         # #190: the class stored laps are matched by (PB labels, history) is stated
         # too when it isn't the shown one -- REST may call the ELMS Oreca 'LMP2'.
