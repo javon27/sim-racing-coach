@@ -1,5 +1,6 @@
 """#152: pure race-state + strategy math for the coach's race tools."""
 import dataclasses
+import math
 import time
 
 import numpy as np
@@ -863,7 +864,9 @@ def test_pick_formation_plans_the_largest_when_they_disagree_and_says_so():
     fuel, energy, _, how = pick_formation(new, None)
     days = [time.strftime("%Y-%m-%d", time.localtime(ts)) for ts, _, _ in reversed(new)]
     assert energy == pytest.approx(0.02408)
-    assert how == (f"stored formation laps differ: 2.4% ({days[0]}, {days[1]}) or 0.0% "
+    # The two 2.4% laps share one date in some timezones (UTC: both 09-18); the code
+    # lists each date once, so the expectation must too (#223: red in CI, green locally).
+    assert how == (f"stored formation laps differ: 2.4% ({', '.join(dict.fromkeys(days[:2]))}) or 0.0% "
                    f"({days[2]}); planning 2.4%")
     assert pick_formation(new, {"r"})[1] == 0.0          # its fuel-ratio pool only
 
@@ -1160,3 +1163,10 @@ def test_a_lap_count_race_keeps_its_own_catch_cutoff():
     snap = build_snapshot(_closing((3.5, 3.2, 2.9), position=7, time_left=None,
                                    max_laps=22), "s")
     assert snap.state.ahead.catch_lap == 22
+
+
+def test_catch_lap_ignores_ulp_noise_in_the_slope():
+    # #223: CI's numpy/BLAS fit (2,1.75),(3,1.5) a hair off -0.25; 1.5 s at 0.25 s/lap
+    # is exactly 6 laps on any machine, not 7.
+    for slope in (-0.25, math.nextafter(-0.25, 0.0), math.nextafter(-0.25, -1.0)):
+        assert catch_lap(3, 1.5, slope, None) == 9
