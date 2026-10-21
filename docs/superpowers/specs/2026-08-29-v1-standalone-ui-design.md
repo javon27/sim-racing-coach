@@ -199,9 +199,9 @@ inspiration only; architecture stays Tauri + Svelte + Python (lighter than their
   - **Player identification (VERIFIED — `isPlayer` is USELESS):** in MP result files `<isPlayer>1</isPlayer>`
     is set for EVERY driver (43/43 in the sample), so it cannot identify the user. Instead: read the XML's
     `<PlayerFile>` (e.g. "Settings") → load `UserData/player/{PlayerFile}.JSON` → its `"Player Name"` field
-    (sample: "Jayson G") → match against `<Driver><Name>`. The result file names its own active profile, so
+    (sample: "Alex D") → match against `<Driver><Name>`. The result file names its own active profile, so
     this is robust across multiple profiles. Add a Settings override; cache the resolved name.
-    CAVEAT FROM REAL DATA: the profile name ("Jayson G") differs from older driver names ("Jayson Gallardo")
+    CAVEAT FROM REAL DATA: the profile name ("Alex D") differs from older driver names ("Alex Driver")
     — display names change over time, BOTH appear across the corpus — so match an **alias SET** (profile name ∪
     Settings `lmu_player_names`), not one name. Per-lap **sectors are `<Lap>` attributes `s1/s2/s3`** (NOT `<Sector>`
     children = stream best-sector announcements). Validated: 66 real files parse, 0 exceptions (practice/qualy/race/endurance).

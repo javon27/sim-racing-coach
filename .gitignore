@@ -49,8 +49,9 @@ dist-sidecar/
 build/
 *.spec.bak
 
-# Tauri sidecar runtime log
+# Runtime logs
 sidecar.log
+logs/
 
 # PyInstaller sidecar work dir
 build-sidecar/

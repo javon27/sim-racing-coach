@@ -112,7 +112,7 @@ Every other patch in the server tests targets a core module attribute that is lo
 
 - [ ] **Step 1: Worktree and venv.**
   ```bash
-  cd D:/Users/javon27/source/repos/sim-racing-coach
+  cd path/to/sim-racing-coach
   git worktree add ../sim-racing-coach-113 -b refactor/113-split-server-app main
   cd ../sim-racing-coach-113
   python -m venv .venv && .venv/Scripts/python.exe -m pip install -e ".[dev]"

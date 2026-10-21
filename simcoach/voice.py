@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import io
+import sys
 import threading
 import time
+import types
 import wave
 from collections.abc import Callable
 from pathlib import Path
@@ -108,7 +110,18 @@ def migrate_model_dir(old_root: str, new_root: str) -> bool:
         return False
 
 
+def _stub_av() -> None:
+    """faster_whisper imports PyAV at module level, only for decode_audio (file input).
+    We always pass a numpy array, so PyAV is never called -- and the frozen sidecar
+    excludes it (#221): its wheel bundles GPL x264/x265. The stub stands in for it."""
+    try:
+        import av  # noqa: F401 -- real PyAV when present (dev venv); the stub only fills a gap
+    except ImportError:
+        sys.modules.setdefault("av", types.ModuleType("av"))
+
+
 def _default_download(dest: Path) -> None:
+    _stub_av()
     from faster_whisper import download_model  # optional extra; imported only here
     dest.mkdir(parents=True, exist_ok=True)
     download_model(MODEL_SIZE, output_dir=str(dest), revision=WHISPER_REVISION)
@@ -273,6 +286,7 @@ class WhisperTranscriber:
             raise NotInstalled("voice isn't set up yet — enable it in Settings")
         with self._lock:
             if self._model is None:
+                _stub_av()
                 from faster_whisper import WhisperModel
                 self._model = WhisperModel(str(model_dir(self.data_dir)), device="cpu", compute_type="int8")
             segments, _info = self._model.transcribe(
