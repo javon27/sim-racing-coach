@@ -6,6 +6,7 @@ from __future__ import annotations
 import io
 import sys
 import threading
+import time
 import types
 import wave
 from collections.abc import Callable
@@ -235,6 +236,9 @@ def _default_kokoro_download(dest: Path) -> None:
         tmp.replace(dest / name)
 
 
+VOICES_RETRY_S = 60.0
+
+
 class KokoroInstaller(ModelInstaller):
     """Same state machine as the whisper installer, for the Kokoro model pair."""
 
@@ -243,6 +247,7 @@ class KokoroInstaller(ModelInstaller):
         self.dest = kokoro_dir(data_dir)
         self.voices_fn: Callable[[], list[str]] | None = None   # set by app.py once the engine exists
         self._voices: list[str] | None = None   # memoised once populated -- loading the model just to list voices
+        self._voices_at = 0.0                   # when an EMPTY memo was taken (it expires, #225)
 
     def start(self) -> bool:
         self._voices = None    # a fresh install may change the voice list; drop the memo
@@ -252,13 +257,16 @@ class KokoroInstaller(ModelInstaller):
         installing = self._thread is not None and self._thread.is_alive()
         installed = all((self.dest / n).exists() for n in KOKORO_FILES)
         voices: list[str] = self._voices or []
-        if installed and not voices and self.voices_fn is not None:
+        stale = self._voices == [] and time.monotonic() - self._voices_at > VOICES_RETRY_S
+        if installed and (self._voices is None or stale) and self.voices_fn is not None:
             try:
                 voices = self.voices_fn()
             except Exception:
                 voices = []
-            if voices:
-                self._voices = voices   # avoid loading the model on every 1 Hz status poll
+            # Memoised even when empty or failed (#225): a model that won't load must not
+            # be re-loaded (325 MB) on every 1 Hz /events tick. An empty memo is retried
+            # every VOICES_RETRY_S so a transient failure heals; start() clears it.
+            self._voices, self._voices_at = voices, time.monotonic()
         return {"engine": "kokoro", "installed": installed, "installing": installing,
                 "progress_bytes": _dir_bytes(self.dest), "total_bytes": KOKORO_TOTAL_BYTES,
                 "error": self._error, "voices": voices}
