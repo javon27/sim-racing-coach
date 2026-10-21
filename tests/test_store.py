@@ -1105,7 +1105,7 @@ _LIVE_TIMES = [70.40680694580078, 88.20706176757812, 92.79763793945312,
 _LIVE_PLACES = [18, 2, 18, 18, 18, 18, 18, 18, 18]
 _RESULT_TIMES = [70.4068, None, 88.2071, 92.7976, 66.8710, 62.2533, 60.8125,
                  62.4133, 63.2741, 76.2119]
-_CONTACT = "Jayson G(0) reported contact (948.15) with another vehicle Francois Heriau(2)"
+_CONTACT = "Jayson G(0) reported contact (948.15) with another vehicle Frank Hairpin(2)"
 
 
 def _capture_live_race(s, synthetic_lap, session_id=_LIVE_SID, track=_TRACK, car=_CAR,

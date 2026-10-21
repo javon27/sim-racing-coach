@@ -84,7 +84,7 @@ def test_log_arrives_during_the_wait(tmp_path, monkeypatch, synthetic_lap):
     # Class result, grid slot and the car-to-car contact from the log.
     assert "P8 in class" in out and "P17 overall" in out
     assert "P4 in class" in out and "P9 overall" in out and "on the grid." in out
-    assert "reported contact (42.27) with another vehicle Enrique Ojeda(12)" in out
+    assert "reported contact (42.27) with another vehicle Eli Overtake(12)" in out
     assert "This race is FINISHED" in out and PROVISIONAL not in out
     # Waited only until the log landed: LMU wrote it 18.8 s in, seen within two polls.
     assert LOGGED < clock.now <= LOGGED + 2.0
