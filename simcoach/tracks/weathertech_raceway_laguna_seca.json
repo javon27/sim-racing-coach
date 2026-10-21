@@ -2707,27 +2707,27 @@
   "rotation": 0.0,
   "name": "WeatherTech Raceway Laguna Seca",
   "notes": {
-    "overview": "Laguna Seca is a short, brutally undulating 3.6 km circuit with over 90 m of elevation change, mixing slow hairpins with fast, blind, downhill corners. Rhythm and commitment matter more than outright grip. The signature is the Corkscrew (T8-T9), a blind plunging left-right drop. Nail the exits of the two hairpins (Andretti and the final left) for lap time, since both feed long straights.",
+    "overview": "Short 3.6 km track with savage undulation (more than 90 m of elevation change), combining slow hairpins with fast, blind downhill corners. Rhythm and commitment count for more than raw grip. Its signature is the Corkscrew (T8-T9), a blind left-right that plunges downhill. Lap time comes from the exits of the two hairpins, Andretti and the final left, as both lead onto long straights.",
     "corners": {
-      "1": "Downhill entry off the front straight into the hairpin braking zone. Brake in a straight line before turning in; the surface falls away, so early trail-braking upsets the car. Sets up the Andretti apex.",
-      "2": "The Andretti Hairpin. Long, downhill left; brake earlier than it looks because it drops away. Take a late apex around the second set of inside kerbs, then feed throttle progressively toward the climb.",
-      "3": "Quick right as the track begins to climb. Short braking, rotate the car early so you can commit to throttle up the hill and carry momentum toward Turn 4.",
-      "4": "Uphill right; keep the car settled on the climb. A clean, early apex lets you get power down for the run up to the mid-lap left-handers.",
-      "5": "Left as the track keeps rising. Momentum corner; protect entry speed and let the gradient scrub pace rather than over-braking, then flow toward Turn 6.",
-      "6": "Left near the top of the hill. Keep it tidy and positioned for the fast run up to the Corkscrew; don't waste speed you carry onto the climb.",
-      "7": "Fast right on the run toward the Corkscrew. Stay committed, settle the car and get positioned left, because this sets your entry line into the drop that follows.",
-      "8": "Corkscrew entry: blind, plunging left over the crest. Aim at your marker and commit, you can't see the exit. Turn in as the nose drops and the track falls away.",
-      "9": "Corkscrew exit: immediate right as the track plummets. Let the car fall down the hill, unwind the wheel and get throttle down early for the run to Rainey Curve.",
-      "10": "Rainey Curve: long, downhill left taken at speed after the Corkscrew drop. Be patient on entry; camber and gradient help, but running wide costs you all the way down toward the final complex.",
-      "11": "Downhill right leading toward the final hairpin. Short braking, rotate and settle the car so a tidy exit lines you up for the last corner.",
-      "12": "The final hairpin, a slow left onto the main straight. Brake deep, sacrifice entry for a clean early throttle exit; this drive sets your speed down the whole front straight."
+      "1": "Downhill approach off the front straight into the hairpin braking zone. Do the braking straight before turning in; the road drops away, so trail-braking early unsettles the car. Sets you up for the Andretti apex.",
+      "2": "Andretti Hairpin: long downhill left. It falls away, so brake earlier than it looks. Late apex at the second set of inside kerbs, then progressive throttle toward the climb.",
+      "3": "Fast right where the climb begins. Brief braking; rotate early so you can commit to throttle uphill and keep momentum toward T4.",
+      "4": "Right on the climb; keep the car settled. Clean, early apex so you can put power down for the run up to the mid-lap lefts.",
+      "5": "Left with the road still climbing. Momentum corner: keep entry speed and let the hill slow the car instead of overbraking, then flow into T6.",
+      "6": "Left close to the crest. Tidy it up and position for the fast run to the Corkscrew; keep the speed you carried up the hill.",
+      "7": "Fast right heading to the Corkscrew. Commit, settle the car and move to the left, since this sets the entry line for the drop.",
+      "8": "Corkscrew, first half: blind left that plunges over the crest. The exit is invisible, so aim at your marker and commit. Turn in as the nose dips and the road falls away.",
+      "9": "Corkscrew, second half: an instant right as the road drops steeply. Let the car fall down the slope, unwind the steering, and get on throttle early toward Rainey Curve.",
+      "10": "Rainey Curve: long, fast downhill left after the Corkscrew. Patient entry; camber and slope help, but running wide hurts all the way to the final complex.",
+      "11": "Downhill right toward the last hairpin. Short brake, rotate and settle so a tidy exit sets up the final corner.",
+      "12": "Final hairpin: slow left onto the main straight. Brake late, give up entry for a clean, early-throttle exit; this sets your speed for the whole front straight."
     },
     "reference_times": {
       "Hypercar": "1:12.445",
       "GT3": "1:21.186",
       "LMGT3": "1:21.186"
     },
-    "source": "IMSA (2024 Motul Course de Monterey: Bourdais GTP pole 1:12.445; GTD Pro race lap record 1:21.186), RaceControl.gg LMU track guide, Corkscrew Coaching corner-by-corner guide, official WeatherTech Raceway track information (elevation/Corkscrew/Rainey Curve/Andretti Hairpin)."
+    "source": "Written for Nestor from public corner guides: IMSA (2024 Motul Course de Monterey: Bourdais GTP pole 1:12.445; GTD Pro race lap record 1:21.186), RaceControl.gg LMU track guide, Corkscrew Coaching corner-by-corner guide, official WeatherTech Raceway track information. Facts only; wording is our own."
   },
   "pronunciations": {
     "Andretti Hairpin": "ændɹˈɛɾi hˈɛɹpɪn",

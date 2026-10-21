@@ -61,9 +61,14 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=["spacy", "phonemizer", "espeakng_loader", "num2words", "spacy_curated_transformers"],
+    # "av": faster_whisper imports PyAV only for file decoding, which we never use
+    # (voice._stub_av); its wheel bundles GPL libx264/libx265 (#221).
+    excludes=["spacy", "phonemizer", "espeakng_loader", "num2words", "spacy_curated_transformers", "av"],
     noarchive=False,
 )
+# CPU-only build (voice.py: device="cpu"): drop ctranslate2's NVIDIA cuDNN DLL. It is
+# proprietary-licensed and unused; ctranslate2 only loads the DLLs present (#221).
+a.binaries = [b for b in a.binaries if "cudnn" not in b[0].lower()]
 pyz = PYZ(a.pure)
 exe = EXE(
     pyz,

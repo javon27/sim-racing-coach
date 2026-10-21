@@ -6,6 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "simcoach"
 version = "0.1.0"
 requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "javon27"}]
 # fastapi>=0.132 is a SECURITY floor, not a feature floor: the CSRF guard on the
 # mutating POSTs (Body(...) -> browser must preflight -> origin allowlist blocks it)
 # relies on FastAPI's strict_content_type=True default, added in 0.132. On 0.115-0.131

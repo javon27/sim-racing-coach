@@ -1197,7 +1197,7 @@ Claude-Session: https://claude.ai/code/session_01Pywcy5ZyceRZNDLyjn3F35"
 
 **Files:**
 - Modify: `docs/vision.md`, `CLAUDE.md`
-- Modify (outside the repo, not committed): `C:\Users\javon27\.claude\projects\D--users-javon27-source-repos-sim-racing-coach\memory\pit-wall-voice-vision.md` and its `MEMORY.md` index line
+- Modify (outside the repo, not committed): the Claude project memory file `pit-wall-voice-vision.md` and its `MEMORY.md` index line
 
 **Interfaces:** none (docs).
 

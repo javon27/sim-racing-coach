@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- **Player-scoped, ALIAS SET:** `isPlayer` is 43/43 in MP files → useless. Seed the player name from `<PlayerFile>` → `UserData/player/{PlayerFile}.JSON` `"Player Name"`. BUT real data (this user) shows the profile name ("Jayson G") differs from older `<Driver><Name>` values ("Jayson Gallardo") — display names change over time, and BOTH appear across the corpus. So match against a **set of accepted names** = profile name ∪ config `lmu_player_names` (Settings-managed list of past/alias names). A driver matches if its `<Name>` (case/space-insensitive) is in the set. `Task 5` resolves this set; `parse_result` accepts a str OR an iterable of names.
+- **Player-scoped, ALIAS SET:** `isPlayer` is 43/43 in MP files → useless. Seed the player name from `<PlayerFile>` → `UserData/player/{PlayerFile}.JSON` `"Player Name"`. BUT real data (this user) shows the profile name ("Alex D") differs from older `<Driver><Name>` values ("Alex Driver") — display names change over time, and BOTH appear across the corpus. So match against a **set of accepted names** = profile name ∪ config `lmu_player_names` (Settings-managed list of past/alias names). A driver matches if its `<Name>` (case/space-insensitive) is in the set. `Task 5` resolves this set; `parse_result` accepts a str OR an iterable of names.
 - **Sectors are `<Lap>` ATTRIBUTES** (`s1`/`s2`/`s3`), NOT `<Sector>` children (those are stream best-sector announcements). Already implemented correctly in Task 3.
 - **Summary only, no telemetry:** backfilled laps have lap time + sectors, NO `.npz`. Corner analysis stays on live captures.
 - **Cross-platform path detection** for the LMU `UserData` dir (Steam library on any drive, Epic, standalone) + `SIMCOACH_LMU_DIR` override.
@@ -44,7 +44,7 @@
 **Interfaces:**
 - `player_name_for(result_root: ET.Element, player_dir: Path) -> str | None` — read `<PlayerFile>` text → load `player_dir/{PlayerFile}.JSON` → return its `"Player Name"`. Degrade to None (missing file/field). A `config` override (`lmu_player_name`) short-circuits.
 
-- [ ] Steps: fixture = a trimmed result XML (with `<PlayerFile>Settings</PlayerFile>`) + a fake `Settings.JSON` (`{"Player Name":"Jayson G"}`); assert the name resolves; assert override wins; assert None when profile missing. Implement, green, commit `feat(lmu): resolve player name from PlayerFile profile`.
+- [ ] Steps: fixture = a trimmed result XML (with `<PlayerFile>Settings</PlayerFile>`) + a fake `Settings.JSON` (`{"Player Name":"Alex D"}`); assert the name resolves; assert override wins; assert None when profile missing. Implement, green, commit `feat(lmu): resolve player name from PlayerFile profile`.
 
 ---
 

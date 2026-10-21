@@ -41,7 +41,7 @@ jobs:
         # deliberately -- see its header -- not implicitly here.
         run: |
           python -m pip install --upgrade pip
-          pip install --only-binary=:all: onnxruntime==1.30.0 regex faster-whisper pyinstaller==6.22.3
+          pip install --only-binary=:all: onnxruntime==1.30.0 regex faster-whisper==1.2.1 pyinstaller==6.22.3
           pip install --no-deps kokoro-onnx==0.6.1 misaki==0.7.4
           pip install . --constraint constraints.txt
 
@@ -85,6 +85,11 @@ jobs:
       - name: Build sidecar (PyInstaller onefile)
         run: pyinstaller packaging/simcoach-sidecar.spec --distpath dist-sidecar --workpath build-sidecar
 
+      - name: Verify the frozen sidecar ships no PyAV (GPL x264/x265) or cuDNN (#221)
+        shell: pwsh
+        run: |
+          if (Select-String -Path build-sidecar/simcoach-sidecar/PKG-00.toc -Pattern 'av\.libs|libx26[45]|cudnn' -Quiet) { throw "excluded binary found in the sidecar bundle" }
+
       - name: Prove /voice/speak works in the frozen exe
         # /voice/transcribe is NOT proven here: a real faster-whisper model (the
         # `small` int8 CTranslate2 conversion, several hundred MB from Hugging
@@ -124,6 +129,9 @@ jobs:
       - name: Install frontend deps
         working-directory: frontend
         run: npm ci
+
+      - name: Regenerate third-party license texts (bundled with the installer, #221)
+        run: python scripts/third_party_licenses.py
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
