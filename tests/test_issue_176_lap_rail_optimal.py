@@ -293,6 +293,11 @@ def test_events_laps_frame_is_not_delayed_by_a_slow_optimal_compute(
         time.sleep(1.0)
         return 90.0
     monkeypatch.setattr(core_mod.CoachContext, "get_optimal_seconds", _slow)
+    # The first tick's voice-installer status imports kokoro/onnxruntime when the voice
+    # extra is installed (~1 s, dev venvs only -- CI has no voice extra). Warm it so the
+    # timings below measure the optimal compute alone (#223).
+    for inst in (app.state.voice_installer, app.state.kokoro_installer):
+        inst.status()
 
     c = _tc(app)
     with c.websocket_connect("/events", headers={"host": "127.0.0.1"}) as ws:
