@@ -1160,10 +1160,17 @@ def _metrics_for_corner(
     # (turn-in) — so a window-only search misses it and falls back to the "no brake"
     # sentinel (this is why heavy-braking corners like Parabolica showed "—"). Search
     # an approach-extended region up to the apex, then isolate the braking run that
-    # leads INTO this corner (contiguous brake at/before the apex) so a nearby earlier
-    # corner's braking doesn't bleed in.
-    # ponytail: fixed 250 m look-back; the contiguous-run isolation guards the common
-    # case, but two heavy-braking corners <250 m apart could still confuse it.
+    # leads INTO this corner (contiguous brake at/before the apex).
+    # #233: that run must also START after the previous corner's end (`prev_end`,
+    # wrap-aware like the #169 zone). Otherwise a corner with no braking of its own
+    # (Bahrain Outer T2, ~85 m after T1) inherited T1's run: "brake 243m before apex".
+    # A run still ON at prev_end -- one application carried from the previous corner
+    # into this one (a chicane) -- is rejected too, not clipped there: the driver began
+    # it for the previous corner, and a clipped "brake point" at prev_end is a place
+    # they never chose to brake. Only braking that begins in this corner's approach
+    # is this corner's brake point.
+    # ponytail: fixed 250 m look-back; with no `prev_end` (one-corner map) only the
+    # contiguous-run isolation separates corners, so two <250 m apart could blur.
     #
     # Both the look-back and the walk are done on a wrap-aware "metres BEFORE the
     # apex" axis (issue #7). A raw distance window loses the approach whenever it
@@ -1180,10 +1187,11 @@ def _metrics_for_corner(
         j = 0
         while j < on.size and not on[j]:  # nearest braking sample at/before the apex
             j += 1
-        if j < on.size:
-            k = j
-            while k + 1 < on.size and on[k + 1]:  # walk back through its contiguous run
-                k += 1
+        k = j
+        while k + 1 < on.size and on[k + 1]:  # walk back through its contiguous run
+            k += 1
+        if j < on.size and (prev_end is None
+                            or back[order[k]] <= (corner.apex_dist - prev_end) % lap_len):
             d0 = float(dist[order[k]])
             # Selected samples sit at/before the apex on the wrapped axis, so a raw
             # distance ABOVE the apex is one that crossed S/F -- shift it a lap back
