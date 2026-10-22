@@ -64,7 +64,7 @@ class ResultSession:
     best_lap: float | None
     finish_status: str | None
     laps: list[ResultLap]
-    incidents: list[str]
+    incidents: list[dict]
     penalties: list[dict]
     # The grid slot the race was STARTED from. Live capture never samples it (the
     # first lap it records is already underway), so the result log is the only
@@ -163,18 +163,69 @@ def _player_laps(driver: ET.Element) -> list[ResultLap]:
     return laps
 
 
-def _player_texts(stream: ET.Element | None, tag: str, player_name: str) -> list[str]:
-    """<Incident>/<TrackLimits> lines naming the player -- either in the free
-    text or (TrackLimits) the Driver="..." attribute."""
+# A contact report as LMU writes it. The bracketed number after "contact" is the impact
+# magnitude, NOT a time: the time is the element's `et` attribute (#239).
+_CONTACT_RE = re.compile(
+    r"^(.+?)\(\d+\) reported contact \([\d.]+\) with (?:another vehicle (.+?)\(\d+\)|(.+))$")
+
+
+def _lap_at(driver: ET.Element):
+    """#239: session ET -> the player's race lap. A <Lap et> is that lap's START ET (68103 of
+    68103 consecutive real lap pairs: next et - et = this lap's time), so an ET is in lap n
+    from its et until its et + lap time (the next lap's et if untimed). Outside every lap (formation, after the flag, a
+    log without lap ets) -> None: never a guessed lap."""
+    laps = sorted((n, et, _to_float(el.text)) for el in driver.findall("Lap")
+                  if (n := _to_int(el.get("num"))) is not None
+                  and (et := _to_float(el.get("et"))) is not None)
+    # An untimed lap ("--.----") ends where the next lap starts; only the LAST lap may be
+    # open-ended, or a cooldown contact lands on an untimed lap 1 (red team: 53 incidents
+    # in 14 real race logs, e.g. 2025_07_12_20_35_58-55R1).
+    spans = [(n, start, start + t if t is not None
+              else laps[k + 1][1] if k + 1 < len(laps) else float("inf"))
+             for k, (n, start, t) in enumerate(laps)]
+
+    def lap(et: float | None) -> int | None:
+        if et is None:
+            return None
+        hits = [n for n, start, end in spans if start <= et < end]
+        return hits[-1] if hits else None
+    return lap
+
+
+def _player_incidents(stream: ET.Element | None, driver: ET.Element,
+                      player_name: str) -> list[dict]:
+    """<Incident>/<TrackLimits> lines naming the player -- either in the free text or
+    (TrackLimits) the Driver="..." attribute -- each with its ET and race lap (#239). A
+    contact also says who the other party is, whether it is a car, and whether the player
+    logged it: both cars log one touch, each from its own side."""
     if stream is None:
         return []
     needle = player_name.strip().lower()
+    lap_at = _lap_at(driver)
     out = []
-    for el in stream.findall(tag):
+    for el in stream.findall("Incident"):
         text = (el.text or "").strip()
-        driver_attr = (el.get("Driver") or "").strip().lower()
-        if needle in text.lower() or needle == driver_attr:
-            out.append(text)
+        if needle not in text.lower():
+            continue
+        et = _to_float(el.get("et"))
+        rec = {"kind": "other", "et": et, "lap": lap_at(et), "text": text}
+        if m := _CONTACT_RE.match(text):
+            # A parsed contact is the player's only when a side IS the player: the
+            # substring test alone counts rival "Jayson Gordon" as "Jayson G".
+            a, b, thing = m.groups()
+            if a.strip().lower() == needle:
+                rec = dict(rec, kind="contact", other=(b or thing).strip(), car=b is not None,
+                           by_me=True)
+            elif b and b.strip().lower() == needle:
+                rec = dict(rec, kind="contact", other=a.strip(), car=True, by_me=False)
+            else:
+                continue
+        out.append(rec)
+    for el in stream.findall("TrackLimits"):
+        text = (el.text or "").strip()
+        if needle in text.lower() or needle == (el.get("Driver") or "").strip().lower():
+            et = _to_float(el.get("et"))
+            out.append({"kind": "track_limits", "et": et, "lap": lap_at(et), "text": text})
     return out
 
 
@@ -237,7 +288,7 @@ def parse_result(path, player_names: str | Iterable[str]) -> ResultSession | Non
             best_lap=_to_float(driver.findtext("BestLapTime")),
             finish_status=driver.findtext("FinishStatus"),
             laps=_player_laps(driver),
-            incidents=_player_texts(stream, "Incident", player_name) + _player_texts(stream, "TrackLimits", player_name),
+            incidents=_player_incidents(stream, driver, player_name),
             penalties=_player_penalties(stream, player_name),
         )
     except Exception:

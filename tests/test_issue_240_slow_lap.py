@@ -155,3 +155,13 @@ def test_non_race_lap_in_a_race_scan_does_not_fire(tmp_path, synthetic_lap):
     ctx = _stint(tmp_path, synthetic_lap, _slowed(synthetic_lap), {5: 96.0},
                  special_phase="practice")
     assert "slow lap" not in ctx.dispatch("get_stint_events", {})
+
+
+def test_a_slow_time_with_no_localised_loss_does_not_fire(tmp_path, synthetic_lap):
+    # 5% slower through T1 only: its bucket (~0.75 s) clears _SLOW_LAP_BUCKET_S but not
+    # _SLOW_LAP_TOP_S, so a 5.5 s-off time with no concentrated loss is not called out
+    ch = {k: np.array(v, float) for k, v in synthetic_lap.channels.items()}
+    d = ch["lap_distance"]
+    ch["speed"][(d >= 790) & (d <= 1210)] *= 0.95
+    ctx = _stint(tmp_path, synthetic_lap, dataclasses.replace(synthetic_lap, channels=ch), {5: 96.0})
+    assert "slow lap" not in ctx.dispatch("get_stint_events", {})

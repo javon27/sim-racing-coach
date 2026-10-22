@@ -9,6 +9,7 @@ current session (track/car/lap), which the live-session re-resolution keeps fres
 """
 from __future__ import annotations
 
+import math
 import os
 import re
 import statistics
@@ -42,6 +43,7 @@ from simcoach.analysis import (
 )
 from simcoach.battle import (
     build_battle,
+    contact_nearest,
     format_battle,
     format_race_battle,
     rival_matches,
@@ -53,6 +55,7 @@ from simcoach.car_lookup import resolve_car_class
 from simcoach.coach import _setup_lines, live_electronics
 from simcoach.corners import CornerMap
 from simcoach.format import (
+    SLOWER_REF_NOTE,
     SUSPENSION_UNSEEN,
     corner_descriptor,
     find_corner,
@@ -913,11 +916,15 @@ def race_result_text(store, session_id, race: int | None = None, bests: bool = T
                          "in brackets: " + "; ".join(
                              f"{format_laptime(d['best'])} {'you' if d['me'] else d['name']}"
                              + tag(d) for d in ranked) + ".")
+        if ranked:
+            lines.append("A best lap is one lap, not race pace: a quicker best lap does not "
+                         "mean quicker over the race -- the finishing order says that.")
         incidents = rr["incidents"]
         if incidents:
-            head = "; ".join(incidents[:3])
-            more = f" (+{len(incidents) - 3} more)" if len(incidents) > 3 else ""
-            lines.append(f"Incidents ({len(incidents)}): {head}{more}")
+            lines.append(f"Incident reports in the result log ({len(incidents)}), grouped. "
+                         "Every car in a contact logs its own report, so one touch can be "
+                         "two or more reports, and a report does not say who was at fault:")
+            lines.extend(_incident_groups(incidents))
         penalties = rr["penalties"]
         if penalties:
             texts = [str(p.get("text") or p) for p in penalties[:3]]
@@ -938,7 +945,75 @@ def race_result_text(store, session_id, race: int | None = None, bests: bool = T
             line += (" The grid position was not captured, so the first captured lap "
                      "is NOT the starting position -- do not report a start.")
         lines.append(line)
+    if rr and (places := _net_places(rr, arc, multi)):
+        lines.append(places)
     return "\n".join(lines)
+
+
+def _incident_groups(incidents) -> list[str]:
+    """#239: the result log's incident reports grouped by the other party, each group with
+    its count and race laps -- every report is counted, none hides behind "+N more". A
+    pre-#239 row holds bare strings (no ET, so no lap): those are listed in full."""
+    groups: dict = {}
+    for i in incidents:
+        i = i if isinstance(i, dict) else {"kind": "other", "text": str(i)}
+        key = ((i["kind"], i.get("other"), i.get("car"))
+               if i.get("kind") == "contact" and i.get("other")
+               else ("track_limits",) if i.get("kind") == "track_limits"
+               else ("other", i.get("text") or "incident (no text logged)"))
+        groups.setdefault(key, []).append(i)
+    out = []
+    for key, items in groups.items():
+        n = len(items)
+        reports = f"{n} report{'' if n == 1 else 's'}"
+        if key[0] == "contact" and key[2]:
+            mine = sum(1 for i in items if i.get("by_me"))
+            head = (f"contact with {key[1]} (another car): {reports} ({mine} logged by you, "
+                    f"{n - mine} by {key[1]})")
+        elif key[0] == "contact":
+            head = f"contact with {key[1]} (not a car): {reports}"
+        elif key[0] == "track_limits":
+            kinds = ", ".join(dict.fromkeys(i.get("text") or "no resolution" for i in items))
+            head = f"track limits: {reports} ({kinds})"
+        else:
+            head = key[1] if n == 1 else f"{key[1]}: {reports}"
+        laps = sorted({i["lap"] for i in items if i.get("lap") is not None})
+        unknown = sum(1 for i in items if i.get("lap") is None)
+        where = (f"lap{'s' if len(laps) > 1 else ''} {', '.join(map(str, laps))}"
+                 if laps else "")
+        if unknown:
+            where = (f"{where}; {unknown} with lap not known" if laps else "lap not known")
+        out.append(f"- {head}, {where}")
+    return out
+
+
+def _net_places(rr, arc, multi) -> str | None:
+    """#239: places gained/lost, counted here so the model never does the arithmetic
+    ("clawing three back" from a low of P14 to a P12 finish). Grid and finish are the
+    result log's; the lowest place is the worst race lap the arc captured, never better
+    than the finish, pit laps left out (a car stopped in the pits reads far down the
+    order). Class places in a multiclass race, overall otherwise."""
+    grid, fin = ((rr["class_grid_position"], rr["class_position"]) if multi
+                 else (rr["grid_position"], rr["position"]))
+    if fin is None:
+        return None
+    pos = arc["positions"] if arc else []
+    pits = (arc.get("pit") if arc else None) or [None] * len(pos)
+    lows = [c if multi else p for (p, c), pit in zip(pos, pits) if not pit]
+    lows = [x for x in lows if x is not None]
+    # A lap with no pit flag recorded may have been a stop: say so, don't hide it.
+    what = ("worst captured lap place, pit stops included" if None in pits
+            else "lowest race-lap place (pit laps left out)")
+
+    def moved(a, b):
+        d = a - b
+        return "no change" if d == 0 else f"{abs(d)} {'gained' if d > 0 else 'lost'}"
+    parts = [f"grid P{grid} to finish P{fin} = {moved(grid, fin)}"] if grid else []
+    if lows:
+        low = max(*lows, fin)
+        parts.append(f"{what} P{low} to finish P{fin} = {low - fin} regained")
+    scope = "in class" if multi else "overall"
+    return f"Places (computed, {scope}): {'; '.join(parts)}." if parts else None
 
 
 _CLASS_ALIASES = {"HYPERCAR": "HYPER", "H": "HYPER", "DH": "HYPER"}  # LMH / LMDh
@@ -2189,14 +2264,21 @@ class CoachContext:
             # #143: contact is its own line, not folded into "none" -- a clean lap
             # (or one captured before #143, with no damage channels at all) says
             # nothing here rather than a "no damage" line on every lap.
-            damage_line = format_damage_line(damage_events(record.channels),
-                                             damage_state(record.channels), self.cmap)
+            hits = damage_events(record.channels)
+            damage_line = format_damage_line(hits, damage_state(record.channels), self.cmap)
             if slow:
                 lines += [ln for ln in [self._slow_lap_line(record, lap_id, *slow)] if ln]
             out.extend(f"  {line}" for line in (lines or ["none"]))
             if damage_line:
                 out.append(f"  {damage_line}")
                 contact = True
+                # #238: the car(s) nearest at the heaviest impact, from the stored field
+                # trace; nothing when the lap has none (offline, practice, unplaced hit).
+                heavy = max(hits, key=lambda e: e["magnitude"])["lap_distance"]
+                laps = self.store.battle_laps(lap_id) if math.isfinite(heavy) else []
+                near = contact_nearest(laps, self.cmap.corners, heavy) if laps else None
+                if near:
+                    out.append(f"  {near}")
         if unscanned:                # #207: once -- "none" above doesn't cover offs there
             which = "these laps" if unscanned == len(loaded) else (
                 f"{unscanned} of these {len(loaded)} laps")
@@ -2450,7 +2532,9 @@ class CoachContext:
         if ref_label:
             # #169: "vs best" on the line above means this reference -- the next-best
             # lap when this one is the best.
-            line += (f"\nDeltas ('vs best') are vs {ref_label}." if ref is not None
+            line += (f"\nDeltas ('vs best') are vs {ref_label}."
+                     + (SLOWER_REF_NOTE if ref_label.startswith(_NEXT_BEST) else "")
+                     if ref is not None
                      else f"\n{ref_label}.")
         ref_analysis = self._analysis_for(ref, None) if ref is not None else analysis
         descriptor = corner_descriptor(self.cmap, cm.corner_no, analysis=ref_analysis,
