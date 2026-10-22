@@ -899,11 +899,15 @@ def race_result_text(store, session_id, race: int | None = None, bests: bool = T
                          "in brackets: " + "; ".join(
                              f"{format_laptime(d['best'])} {'you' if d['me'] else d['name']}"
                              + tag(d) for d in ranked) + ".")
+        if ranked:
+            lines.append("A best lap is one lap, not race pace: a quicker best lap does not "
+                         "mean quicker over the race -- the finishing order says that.")
         incidents = rr["incidents"]
         if incidents:
-            head = "; ".join(incidents[:3])
-            more = f" (+{len(incidents) - 3} more)" if len(incidents) > 3 else ""
-            lines.append(f"Incidents ({len(incidents)}): {head}{more}")
+            lines.append(f"Incident reports in the result log ({len(incidents)}), grouped. "
+                         "Every car in a contact logs its own report, so one touch can be "
+                         "two or more reports, and a report does not say who was at fault:")
+            lines.extend(_incident_groups(incidents))
         penalties = rr["penalties"]
         if penalties:
             texts = [str(p.get("text") or p) for p in penalties[:3]]
@@ -924,7 +928,69 @@ def race_result_text(store, session_id, race: int | None = None, bests: bool = T
             line += (" The grid position was not captured, so the first captured lap "
                      "is NOT the starting position -- do not report a start.")
         lines.append(line)
+    if rr and (places := _net_places(rr, arc, multi)):
+        lines.append(places)
     return "\n".join(lines)
+
+
+def _incident_groups(incidents) -> list[str]:
+    """#239: the result log's incident reports grouped by the other party, each group with
+    its count and race laps -- every report is counted, none hides behind "+N more". A
+    pre-#239 row holds bare strings (no ET, so no lap): those are listed in full."""
+    groups: dict = {}
+    for i in incidents:
+        i = i if isinstance(i, dict) else {"kind": "other", "text": str(i)}
+        key = ((i["kind"], i.get("other"), i.get("car")) if i["kind"] == "contact"
+               else ("track_limits",) if i["kind"] == "track_limits"
+               else ("other", i.get("text")))
+        groups.setdefault(key, []).append(i)
+    out = []
+    for key, items in groups.items():
+        n = len(items)
+        reports = f"{n} report{'' if n == 1 else 's'}"
+        if key[0] == "contact" and key[2]:
+            mine = sum(1 for i in items if i.get("by_me"))
+            head = (f"contact with {key[1]} (another car): {reports} ({mine} logged by you, "
+                    f"{n - mine} by {key[1]})")
+        elif key[0] == "contact":
+            head = f"contact with {key[1]} (not a car): {reports}"
+        elif key[0] == "track_limits":
+            kinds = ", ".join(dict.fromkeys(i.get("text") or "no resolution" for i in items))
+            head = f"track limits: {reports} ({kinds})"
+        else:
+            head = key[1] if n == 1 else f"{key[1]}: {reports}"
+        laps = sorted({i["lap"] for i in items if i.get("lap") is not None})
+        unknown = sum(1 for i in items if i.get("lap") is None)
+        where = (f"lap{'s' if len(laps) > 1 else ''} {', '.join(map(str, laps))}"
+                 if laps else "")
+        if unknown:
+            where = (f"{where}; {unknown} with lap not known" if laps else "lap not known")
+        out.append(f"- {head}, {where}")
+    return out
+
+
+def _net_places(rr, arc, multi) -> str | None:
+    """#239: places gained/lost, counted here so the model never does the arithmetic
+    ("clawing three back" from a low of P14 to a P12 finish). Grid and finish are the
+    result log's; the lowest place is the worst race lap the arc captured, never better
+    than the finish. Class places in a multiclass race, overall otherwise."""
+    grid, fin = ((rr["class_grid_position"], rr["class_position"]) if multi
+                 else (rr["grid_position"], rr["position"]))
+    if fin is None:
+        return None
+    lows = [c if multi else p for p, c in (arc["positions"] if arc else [])]
+    lows = [x for x in lows if x is not None]
+
+    def moved(a, b):
+        d = a - b
+        return "no change" if d == 0 else f"{abs(d)} {'gained' if d > 0 else 'lost'}"
+    parts = [f"grid P{grid} to finish P{fin} = {moved(grid, fin)}"] if grid else []
+    if lows:
+        low = max(*lows, fin)
+        parts.append(f"lowest race-lap place P{low} to finish P{fin} = "
+                     f"{low - fin} regained")
+    scope = "in class" if multi else "overall"
+    return f"Places (computed, {scope}): {'; '.join(parts)}." if parts else None
 
 
 _CLASS_ALIASES = {"HYPERCAR": "HYPER", "H": "HYPER", "DH": "HYPER"}  # LMH / LMDh

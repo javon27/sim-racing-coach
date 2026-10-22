@@ -512,7 +512,7 @@ def test_get_race_result_formats_and_falls_back(tmp_path, synthetic_lap):
 
     out = ctx.dispatch("get_race_result", {})
     assert "P3 overall" in out and "P2 in class" in out and "Finished" in out
-    assert "Incidents (2)" in out and "Off track T7" in out
+    assert "result log (2)" in out and "- Off track T7, lap not known" in out
     # #162: the log lists issued AND served lines -- entries, not a penalty count.
     assert "Penalty log (1 entry)" in out and "Track limits DT" in out
 
@@ -580,7 +580,7 @@ def test_get_race_result_for_a_live_session_reports_the_real_arc(tmp_path, synth
 
     assert "Started P9 overall on the grid" in out
     assert "P18 overall" in out and "Finished Normally" in out
-    assert "Incidents (1)" in out and "contact" in out
+    assert "result log (1)" in out and "contact" in out
     # The first captured lap ran P18; that is not a start position and must not be sold
     # as one -- reporting it as the start is what inverted the whole race narrative.
     assert "started P18" not in out and "started p18" not in out.lower()

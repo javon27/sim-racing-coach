@@ -110,8 +110,8 @@ def test_parse_result_extracts_player_session():
     assert session.laps[2].lap_time is None
     assert session.laps[2].valid is False
 
-    assert any("Jayson G" in text for text in session.incidents)
-    assert any("Warning issued" in text for text in session.incidents)
+    assert any("Jayson G" in i["text"] for i in session.incidents)
+    assert any("Warning issued" in i["text"] for i in session.incidents)
     assert len(session.penalties) == 1
     assert "Drive Thru" in session.penalties[0]["text"]
 

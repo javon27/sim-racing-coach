@@ -92,7 +92,7 @@ def _session_base(sid: str) -> str:
     """The (track, car, mode) base of a session id, dropping any ~<instance> suffix."""
     return sid.split(_SESSION_SEP, 1)[0]
 
-SCHEMA_VERSION = 28
+SCHEMA_VERSION = 29
 
 # The coach conversation, persisted so a session's Q&A can be reviewed later and
 # fed to cross-session memory. lap_id is the lap the question was asked about
@@ -821,6 +821,13 @@ class LapStore:
                 cols = [r[1] for r in self.conn.execute("PRAGMA table_info(race_sessions)")]
                 if cols and "class_bests" not in cols:
                     _add_column(self.conn, "race_sessions", "class_bests TEXT")
+                self.conn.execute(
+                    "CREATE TABLE IF NOT EXISTS ingested_files (path TEXT PRIMARY KEY, mtime REAL)"
+                )
+                self.conn.execute("DELETE FROM ingested_files")
+            if current_version < 29:
+                # v28 -> v29: incidents gain their ET, race lap and other party (#239).
+                # Same column, richer JSON; re-read every log, as v28 did, to backfill.
                 self.conn.execute(
                     "CREATE TABLE IF NOT EXISTS ingested_files (path TEXT PRIMARY KEY, mtime REAL)"
                 )
