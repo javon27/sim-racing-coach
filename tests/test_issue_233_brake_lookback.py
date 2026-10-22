@@ -50,14 +50,46 @@ def test_own_braking_after_the_previous_corner_is_kept():
     assert "brake 60m before apex" in format_corner_line(t2)
 
 
-def test_run_still_on_at_the_previous_corners_end_is_not_this_corners():
+def test_run_begun_before_the_previous_apex_is_not_this_corners():
     """One continuous application from T1's approach through to T2: the driver
-    started braking for T1. Clipping it at T1's end would state a brake point
-    (740 m) the driver never chose -- so it is None, not a clipped point."""
-    rec = _lap(lambda d: (d >= 580.0) & (d <= 800.0))
+    started braking for T1 (before its apex). Clipping it at the bound would state a
+    brake point the driver never chose -- so it is None, and so is the #169 zone:
+    the two must never disagree ("no heavy braking" vs "braking from 80 m")."""
+    rec = _lap(lambda d: (d >= 580.0) & (d <= 820.0))    # on through T2's apex
     t1, t2, _ = analyze_lap(rec, CMAP).corners
     assert t1.brake_point == 580.0
     assert t2.brake_point is None
+    assert t2.brake_zone_start is None and t2.brake_zone_peak is None
+
+
+def test_stop_starting_before_turn_in_on_a_tiled_map_is_kept():
+    """Imola T17 Rivazza shape: maps tile corners (previous end == this start) and
+    the real stop begins ~30 m before turn-in, after the previous apex. An end bound
+    threw it away ("no heavy braking" on a 234->89 km/h stop)."""
+    p = Corner(1, "P", "left", start_dist=3900.0, apex_dist=3950.0, end_dist=4034.0)
+    r = Corner(2, "Rivazza", "left", start_dist=4034.0, apex_dist=4100.0, end_dist=4200.0)
+    far = Corner(3, "F", "right", start_dist=1000.0, apex_dist=1050.0, end_dist=1100.0)
+    cm = analyze_lap(_lap(lambda d: (d >= 4005.0) & (d <= 4100.0)),
+                     CornerMap([p, r, far], length=L)).corners[1]
+    assert cm.brake_point == 4005.0
+    assert cm.brake_zone_start == cm.brake_point       # zone and point agree
+    assert "brake 95m before apex" in format_corner_line(cm)
+
+
+def test_release_and_reapply_after_the_previous_apex_is_kept():
+    """Monza T2 shape: brake for T1, release to 0.09 (not off the brake, not on the
+    throttle) after T1's apex, re-apply for T2 -- before T1's mapped END (740). The
+    re-application is T2's own; an end bound threw it away."""
+    dist = np.arange(0.0, L, 5.0)
+    brake = np.select([(dist >= 580.0) & (dist <= 700.0), (dist > 700.0) & (dist < 735.0),
+                       (dist >= 735.0) & (dist <= 820.0)], [1.0, 0.09, 0.9], 0.0)
+    rec = LapRecord("lmu", "T", "C", 90.0, True, 0.0, {
+        "lap_distance": dist, "speed": np.where(brake > 0, 80.0, 200.0), "brake": brake,
+        "throttle": np.where(brake > 0, 0.0, 1.0), "steering": np.full(dist.size, 0.4),
+    })
+    t2 = analyze_lap(rec, CMAP).corners[1]
+    assert t2.brake_point == 735.0
+    assert t2.brake_zone_start == 735.0                # T1's run (580-700) not claimed
 
 
 def test_ordinary_heavy_braking_corner_is_unaffected():
