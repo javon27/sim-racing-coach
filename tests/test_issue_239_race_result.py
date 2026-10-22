@@ -8,7 +8,7 @@ real Weissel stream lines. The Carter contact and the Post touch are real line s
 the same log, re-pointed at the player so there are two other cars and a non-car."""
 import sqlite3
 
-from simcoach.coach_tools import race_result_text
+from simcoach.coach_tools import _incident_groups, _net_places, race_result_text
 from simcoach.lmu.results import parse_result
 from simcoach.store import SCHEMA_VERSION, LapStore
 
@@ -112,11 +112,11 @@ def test_net_places_are_computed_not_left_to_the_model(tmp_path, synthetic_lap):
     for i, p in enumerate([9, 8, 8, 13, 14, 14, 12]):
         store.save(dataclasses.replace(synthetic_lap, session_id="sess", phase="race",
                                        timestamp=1792626200.0 + i, position=p,
-                                       lap_no=i + 1))
+                                       lap_no=i + 1, pit=False))
     store.save_result_session(parse_result(xml, "Jayson G"), session_id="sess")
     out = race_result_text(store, "sess")
     assert ("Places (computed, overall): grid P15 to finish P12 = 3 gained; lowest race-lap place "
-            "P14 to finish P12 = 2 regained.") in out
+            "(pit laps left out) P14 to finish P12 = 2 regained.") in out
 
 
 def test_a_best_lap_is_not_race_pace(tmp_path):
@@ -148,3 +148,65 @@ def test_v28_db_re_reads_the_logs_to_backfill_lap_and_et(tmp_path):
     store = LapStore(str(db), str(tmp_path / "telem"))
     assert store.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert store.ingested_files() == set()
+
+
+def test_a_rival_whose_name_starts_with_the_players_is_not_the_player(tmp_path):
+    # "Jayson G" is a substring of "Jayson Gordon": his contact with Bob is not ours.
+    xml = tmp_path / "bahrain.xml"
+    xml.write_text(XML.replace(
+        "<Incident et=\"73.3\">",
+        "<Incident et=\"380.0\">Jayson Gordon(4) reported contact (88.10) with another "
+        "vehicle Bob(3)</Incident><Incident et=\"73.3\">"))
+    inc = parse_result(xml, "Jayson G").incidents
+    assert not any("Gordon" in i["text"] for i in inc)
+    assert len(inc) == 9
+
+
+def _rr(**kw):
+    return {"grid_position": 15, "position": 12, "class_grid_position": 5,
+            "class_position": 4, **kw}
+
+
+def _arc(positions, pit=None):
+    return {"positions": positions, "pit": pit if pit is not None else [False] * len(positions)}
+
+
+def test_net_places_leave_pit_laps_out_of_the_low():
+    # Running P3, P15 while stopped, finished P4: the stop is not a "regained 11".
+    arc = _arc([(3, None), (15, None), (4, None)], [False, True, False])
+    assert _net_places(_rr(grid_position=3, position=4), arc, False) == (
+        "Places (computed, overall): grid P3 to finish P4 = 1 lost; lowest race-lap place "
+        "(pit laps left out) P4 to finish P4 = 0 regained.")
+
+
+def test_net_places_say_pit_stops_are_included_when_a_lap_has_no_pit_flag():
+    arc = _arc([(3, None), (15, None), (4, None)], [False, None, False])
+    assert "worst captured lap place, pit stops included P15 to finish P12 = 3 regained"         in _net_places(_rr(), arc, False)
+
+
+def test_net_places_in_class_without_grid_or_lows():
+    # Multiclass: class numbers, never overall ones. No class grid, no class laps.
+    arc = _arc([(17, None), (19, None)])
+    assert _net_places(_rr(class_grid_position=None), arc, True) is None
+    assert _net_places(_rr(), arc, True) == (
+        "Places (computed, in class): grid P5 to finish P4 = 1 gained.")
+    assert _net_places(_rr(), _arc([(17, 6), (19, 4)]), True) == (
+        "Places (computed, in class): grid P5 to finish P4 = 1 gained; lowest race-lap "
+        "place (pit laps left out) P6 to finish P4 = 2 regained.")
+
+
+def test_net_places_low_never_better_than_the_finish():
+    # Every captured lap better than the finish (the last lap uncaptured): low = finish.
+    assert _net_places(_rr(), _arc([(10, None), (11, None)]), False).endswith(
+        "lowest race-lap place (pit laps left out) P12 to finish P12 = 0 regained.")
+    assert _net_places(_rr(), None, False) == (
+        "Places (computed, overall): grid P15 to finish P12 = 3 gained.")
+
+
+def test_a_contact_with_no_other_party_never_renders_none():
+    out = _incident_groups([{"kind": "contact", "other": None, "et": 1.0, "lap": 2,
+                             "text": "garbled contact line"},
+                            {"kind": "contact", "et": 1.0, "lap": None}])
+    assert not any("None" in line for line in out)
+    assert out == ["- garbled contact line, lap 2",
+                   "- incident (no text logged), lap not known"]

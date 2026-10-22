@@ -1754,7 +1754,7 @@ class LapStore:
 
         #208: `positions` is every lap's (overall, class) place pair, ts order -- the
         class place is None on a lap that didn't sample it."""
-        query = ("SELECT position, class_position FROM laps "
+        query = ("SELECT position, class_position, pit FROM laps "
                  "WHERE session_id = ? AND position IS NOT NULL")
         params: list = [session_id]
         if phase is not None:
@@ -1782,7 +1782,9 @@ class LapStore:
             "worst": max(places),
             "last": places[-1],
             "laps": len(places),
-            "positions": [tuple(r) for r in rows],
+            "positions": [tuple(r[:2]) for r in rows],
+            # #239: each lap's pit flag (None = not recorded), positions' order.
+            "pit": [None if r[2] is None else bool(r[2]) for r in rows],
         }
 
     def clear_all(self) -> None:

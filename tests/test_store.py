@@ -1328,7 +1328,7 @@ def test_race_session_link_answers_with_the_race_just_finished(tmp_path, synthet
     arc = s.session_position_arc(_LIVE_SID, phase="race", since=rr["race_ts"],
                                  until=rr["next_race_ts"])
     assert arc == {"start": 1, "best": 1, "worst": 3, "last": 3, "laps": 2,
-                   "positions": [(1, None), (3, None)]}
+                   "positions": [(1, None), (3, None)], "pit": [None, None]}
 
 
 def test_race_session_link_breaks_an_equidistant_tie_by_newest(tmp_path, synthetic_lap):
@@ -1399,7 +1399,7 @@ def test_race_session_link_refuses_a_stale_row_while_a_race_is_running(tmp_path,
     assert since == logged
     assert s.session_position_arc(_LIVE_SID, phase="race", since=since) == {
         "start": 18, "best": 16, "worst": 18, "last": 16, "laps": 3,
-        "positions": [(18, None), (17, None), (16, None)]}
+        "positions": [(18, None), (17, None), (16, None)], "pit": [None] * 3}
     # Once race 2's own log lands, the answer comes back -- and it is race 2's.
     s.save_result_session(
         _silverstone_result(times=[64.1, 64.2, 64.3], date_ts=_RACE_TS + 7200,
@@ -2378,7 +2378,7 @@ def test_save_persists_position_and_arc(tmp_path, synthetic_lap):
                             "timestamp": float(i), "position": place}))
     assert s.session_position_arc("race") == {
         "start": 5, "best": 3, "worst": 10, "last": 3, "laps": 4,
-        "positions": [(5, None), (8, None), (10, None), (3, None)],
+        "positions": [(5, None), (8, None), (10, None), (3, None)], "pit": [None] * 4,
     }
 
 

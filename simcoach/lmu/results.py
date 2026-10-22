@@ -204,12 +204,16 @@ def _player_incidents(stream: ET.Element | None, driver: ET.Element,
         et = _to_float(el.get("et"))
         rec = {"kind": "other", "et": et, "lap": lap_at(et), "text": text}
         if m := _CONTACT_RE.match(text):
+            # A parsed contact is the player's only when a side IS the player: the
+            # substring test alone counts rival "Jayson Gordon" as "Jayson G".
             a, b, thing = m.groups()
             if a.strip().lower() == needle:
                 rec = dict(rec, kind="contact", other=(b or thing).strip(), car=b is not None,
                            by_me=True)
             elif b and b.strip().lower() == needle:
                 rec = dict(rec, kind="contact", other=a.strip(), car=True, by_me=False)
+            else:
+                continue
         out.append(rec)
     for el in stream.findall("TrackLimits"):
         text = (el.text or "").strip()

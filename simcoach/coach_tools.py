@@ -940,9 +940,10 @@ def _incident_groups(incidents) -> list[str]:
     groups: dict = {}
     for i in incidents:
         i = i if isinstance(i, dict) else {"kind": "other", "text": str(i)}
-        key = ((i["kind"], i.get("other"), i.get("car")) if i["kind"] == "contact"
-               else ("track_limits",) if i["kind"] == "track_limits"
-               else ("other", i.get("text")))
+        key = ((i["kind"], i.get("other"), i.get("car"))
+               if i.get("kind") == "contact" and i.get("other")
+               else ("track_limits",) if i.get("kind") == "track_limits"
+               else ("other", i.get("text") or "incident (no text logged)"))
         groups.setdefault(key, []).append(i)
     out = []
     for key, items in groups.items():
@@ -973,13 +974,19 @@ def _net_places(rr, arc, multi) -> str | None:
     """#239: places gained/lost, counted here so the model never does the arithmetic
     ("clawing three back" from a low of P14 to a P12 finish). Grid and finish are the
     result log's; the lowest place is the worst race lap the arc captured, never better
-    than the finish. Class places in a multiclass race, overall otherwise."""
+    than the finish, pit laps left out (a car stopped in the pits reads far down the
+    order). Class places in a multiclass race, overall otherwise."""
     grid, fin = ((rr["class_grid_position"], rr["class_position"]) if multi
                  else (rr["grid_position"], rr["position"]))
     if fin is None:
         return None
-    lows = [c if multi else p for p, c in (arc["positions"] if arc else [])]
+    pos = arc["positions"] if arc else []
+    pits = (arc.get("pit") if arc else None) or [None] * len(pos)
+    lows = [c if multi else p for (p, c), pit in zip(pos, pits) if not pit]
     lows = [x for x in lows if x is not None]
+    # A lap with no pit flag recorded may have been a stop: say so, don't hide it.
+    what = ("worst captured lap place, pit stops included" if None in pits
+            else "lowest race-lap place (pit laps left out)")
 
     def moved(a, b):
         d = a - b
@@ -987,8 +994,7 @@ def _net_places(rr, arc, multi) -> str | None:
     parts = [f"grid P{grid} to finish P{fin} = {moved(grid, fin)}"] if grid else []
     if lows:
         low = max(*lows, fin)
-        parts.append(f"lowest race-lap place P{low} to finish P{fin} = "
-                     f"{low - fin} regained")
+        parts.append(f"{what} P{low} to finish P{fin} = {low - fin} regained")
     scope = "in class" if multi else "overall"
     return f"Places (computed, {scope}): {'; '.join(parts)}." if parts else None
 
