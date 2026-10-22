@@ -217,6 +217,25 @@ def _coast_totals(dist, speed, throttle, brake) -> tuple[float, float]:
     return float(np.sum(ds * (inv[:-1] + inv[1:]) / 2.0)), float(np.sum(ds))
 
 
+def window_inputs(record: LapRecord, start: float, end: float):
+    """(metres with neither pedal, max throttle 0..1) over lap distance start..end, or
+    None without pedal channels, a wrapped window or too few samples. Measured only."""
+    ch = record.channels
+    if "throttle" not in ch or "brake" not in ch or start >= end:
+        return None
+    idx = _monotonic_idx(record)
+    if idx.size < 2:
+        return None
+    d = _interp_lap_distance(record)[idx]
+    m = (d >= start) & (d <= end)
+    if m.sum() < 2:
+        return None
+    thr = np.asarray(ch["throttle"], dtype=float)[idx][m]
+    return (_coast_totals(d[m], np.asarray(ch["speed"], dtype=float)[idx][m], thr,
+                          np.asarray(ch["brake"], dtype=float)[idx][m])[1],
+            float(np.nanmax(thr)))
+
+
 def _brake_to_throttle(dist, brake, throttle, idx) -> float:
     """Distance from the last braking sample inside a corner window to the first
     throttle pickup after it. Searches up to `_THROTTLE_LOOKAHEAD_M` past the

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+import statistics
 import time
 from collections import Counter, defaultdict
 from dataclasses import replace
@@ -37,6 +38,7 @@ from simcoach.analysis import (
     stint_tire_trend,
     stint_wear_baseline,
     time_loss_buckets,
+    window_inputs,
 )
 from simcoach.battle import (
     build_battle,
@@ -115,6 +117,16 @@ _PHASES = ("practice", "qualifying", "warmup", "race")    # the store's phase la
 # The words for "the (latest) race as a whole" -- get_battle's `which`, and #204's race
 # grammar (_race_pick) reads them as no particular race.
 _WHOLE_RACE = ("race", "the race", "this race", "last race", "the whole race")
+
+# #240: a clean race lap is "slow" past max(_SLOW_LAP_MIN_S, _SLOW_LAP_FRAC of the stint
+# median). Real race stints (19, 2026-10): clean-lap noise runs to ~1.5 s on a 75-105 s
+# lap, so a flat 2 s catches only real losses there while 2.5% scales it to a 4 min lap.
+# ponytail: a guessed bar; a laps-per-stint rate across more stints settles it.
+_SLOW_LAP_MIN_S = 2.0
+_SLOW_LAP_FRAC = 0.025
+_SLOW_LAP_BUCKET_S = 0.5        # a bucket this far behind the stint's best lap is named
+_SLOW_LAP_COAST_M = 20.0        # coasting/low throttle only said past these
+_SLOW_LAP_THROTTLE = 0.5
 
 # How an unfinished lap (LapRecord.partial, #77) is named to the model: on the `Lap:`
 # identity line, and in the `list_recent_laps` listing where a lap time would go.
@@ -2164,6 +2176,7 @@ class CoachContext:
                         complete_only=True)
                     if (rec := self._load(row["lap_id"])) is not None]
         baseline = stint_wear_baseline(pool)
+        slow = self._slow_lap_context(loaded)
         out = cut
         contact = False
         unscanned = 0
@@ -2171,12 +2184,14 @@ class CoachContext:
             lines = self._events_for(record, lap_id, baseline)
             unscanned += self._offs_unscanned(record, lap_id)
             out.append(self._lap_line(record, lap_id))
-            out.extend(f"  {line}" for line in (lines or ["none"]))
             # #143: contact is its own line, not folded into "none" -- a clean lap
             # (or one captured before #143, with no damage channels at all) says
             # nothing here rather than a "no damage" line on every lap.
             damage_line = format_damage_line(damage_events(record.channels),
                                              damage_state(record.channels), self.cmap)
+            if not lines and not damage_line and slow:
+                lines = [ln for ln in [self._slow_lap_line(record, *slow)] if ln]
+            out.extend(f"  {line}" for line in (lines or ["none"]))
             if damage_line:
                 out.append(f"  {damage_line}")
                 contact = True
@@ -2189,6 +2204,47 @@ class CoachContext:
         if contact:                  # #206: once, not on every contact lap
             out.append(f"Note: {SUSPENSION_UNSEEN}.")
         return "\n".join(out)
+
+    @staticmethod
+    def _slow_lap_context(loaded):
+        """#240: (stint median, stint best lap) over the scanned clean timed race laps
+        (not the standing-start lap, out/in/pit/mapping laps), or None under 3 laps."""
+        clean = [r for r, _ in loaded
+                 if r.phase == "race" and r.lap_time and not r.partial and not r.pit
+                 and not r.mapping and (r.lap_no or 0) != 1 and not _pre_green(r.phase, r.lap_no)]
+        if len(clean) < 3:
+            return None
+        return (statistics.median(r.lap_time for r in clean),
+                min(clean, key=lambda r: r.lap_time))
+
+    def _slow_lap_line(self, record, median, best) -> str | None:
+        """#240: 'slow lap: +5.5 s vs the stint median; ...' for a clean race lap that is
+        far off pace and has no other event, else None. Measured only: the biggest
+        losses vs the stint's best lap, each with its coasting / peak throttle when
+        notable. Never a cause."""
+        if (record.phase != "race" or not record.lap_time or record.partial or record.pit
+                or record.mapping or (record.lap_no or 0) <= 1 or record is best):
+            return None
+        off = record.lap_time - median
+        if off <= max(_SLOW_LAP_MIN_S, _SLOW_LAP_FRAC * median):
+            return None
+        line = f"slow lap: +{off:.1f} s vs the stint median"
+        buckets = time_loss_buckets(record, best, self.cmap) or []
+        top = sorted((b for b in buckets if b["delta"] >= _SLOW_LAP_BUCKET_S),
+                     key=lambda b: -b["delta"])[:2]
+        parts = []
+        for b in top:
+            inputs = window_inputs(record, b["start_dist"], b["end_dist"])
+            sig = []
+            if inputs and inputs[0] >= _SLOW_LAP_COAST_M:
+                sig.append(f"{inputs[0]:.0f} m with neither pedal")
+            if inputs and inputs[1] < _SLOW_LAP_THROTTLE:
+                sig.append(f"max throttle {inputs[1] * 100:.0f}%")
+            parts.append(f"{b['label']} ({b['delta']:.1f} s" + (", " if sig else "")
+                         + ", ".join(sig) + ")")
+        if parts:
+            line += "; most time lost vs the stint's best lap at " + ", ".join(parts)
+        return line
 
     def get_consistency(self, phase=None):
         if not self.session_id:
