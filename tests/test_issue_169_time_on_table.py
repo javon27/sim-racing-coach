@@ -639,6 +639,17 @@ def test_best_lap_header_says_deltas_are_vs_a_slower_lap_not_time_lost(tmp_path,
     assert "SLOWER lap: the deltas are NOT where time was lost" in out
 
 
+def test_get_corner_and_summary_best_carry_the_slower_clause_nonbest_does_not(
+        tmp_path, synthetic_lap):
+    store = _store(tmp_path)
+    _save(store, synthetic_lap, 90.0, 1, 1)
+    _save(store, _variant(synthetic_lap, [(900.0, 1100.0, 0.9)]), 92.0, 2, 2)
+    ctx = _ctx(store)
+    assert "SLOWER lap: the deltas are NOT where time was lost" in ctx.get_corner("1", "best")
+    assert "SLOWER lap: the deltas are NOT where time was lost" in ctx.get_lap_summary("best")
+    assert "SLOWER lap" not in ctx.get_lap_summary("latest")      # the 92.0 lap is not best
+
+
 def test_optimal_line_says_own_sectors_not_a_ceiling(tmp_path, synthetic_lap):
     # #235
     store = _store(tmp_path)

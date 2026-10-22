@@ -531,6 +531,8 @@ def format_tire_report(analysis, units: str = "metric") -> str | None:
     return out
 
 
+SLOWER_REF_NOTE = (" This is the best lap, so that is a SLOWER lap: the deltas are NOT where"
+                   " time was lost; do not pick a corner to work on from them.")
 _OPT_NOTE = "(your own sectors only; not a ceiling on pace)"
 
 
@@ -547,9 +549,7 @@ def format_lap_facts(analysis, units: str = "metric", corner_order=None, top_los
     lines = ["Corner facts (authoritative, from telemetry):"]
     if analysis.has_reference:
         lines.append(f"Deltas below are vs {ref_label} (a line's 'vs best' means that lap)."
-                     + (" This is the best lap, so that is a SLOWER lap: the deltas are NOT"
-                        " where time was lost; do not pick a corner to work on from them."
-                        if ref_label.startswith("your next-best lap") else "")
+                     + (SLOWER_REF_NOTE if ref_label.startswith("your next-best lap") else "")
                      if ref_label else
                      "Deltas below are vs the driver's best lap on this track/car.")
     by_no = {cm.corner_no: cm for cm in analysis.corners}

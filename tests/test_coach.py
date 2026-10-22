@@ -352,11 +352,12 @@ def test_agentic_prompt_routes_race_questions_to_one_race_tool():
 def test_prompt_wording_rules_235_236_237():
     from simcoach.coach import AGENTIC_SYSTEM_PROMPT as p
     # #235: the optimal is not a pace limit.
-    assert "Never tell him how much faster he can or can't go" in p
+    assert "never as a limit on how fast he can go" in p
     # #236: a best lap goes to get_time_on_table, not get_lap_summary.
     refs = p.split("REFERENCES:", 1)[1][:900]
     assert "a best, a personal best or a breakthrough" in refs and "get_time_on_table" in refs
     # #237: supersession is an update, not a correction; phase always named.
     ident = p.split("LAP IDENTITY:", 1)[1][:1400]
+    assert "('qualifying lap 4 now shows" in ident and "is not correcting him" in ident
     assert "as an update" in ident and "never as a correction" in ident
     assert "never a bare 'lap 3'" in ident
