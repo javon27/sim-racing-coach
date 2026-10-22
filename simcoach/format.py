@@ -150,7 +150,10 @@ def format_corner_line(cm, units: str = "metric", envelope_formed: bool = True) 
     # to sit past the apex.
     brake_txt = (
         f"brake {cm.apex_dist - cm.brake_point:.0f}m before apex @ {cm.peak_brake:.0%} peak"
-        if cm.brake_point is not None else "no heavy braking"
+        if cm.brake_point is not None
+        # #233: the run here began for the previous corner -- say so, no distance.
+        else f"braking carried through from {cm.brake_carried_from}"
+        if getattr(cm, "brake_carried_from", None) else "no heavy braking"
     )
     # Same for the throttle gate: say nothing rather than turn the corner's own
     # geometry into a claimed driver input.
@@ -531,6 +534,11 @@ def format_tire_report(analysis, units: str = "metric") -> str | None:
     return out
 
 
+SLOWER_REF_NOTE = (" This is the best lap, so that is a SLOWER lap: the deltas are NOT where"
+                   " time was lost; do not pick a corner to work on from them.")
+_OPT_NOTE = "(your own sectors only; not a ceiling on pace)"
+
+
 def format_lap_facts(analysis, units: str = "metric", corner_order=None, top_loss=None,
                      ref_label: str | None = None) -> str:
     """The full per-corner table + tire report for one lap.
@@ -544,6 +552,7 @@ def format_lap_facts(analysis, units: str = "metric", corner_order=None, top_los
     lines = ["Corner facts (authoritative, from telemetry):"]
     if analysis.has_reference:
         lines.append(f"Deltas below are vs {ref_label} (a line's 'vs best' means that lap)."
+                     + (SLOWER_REF_NOTE if ref_label.startswith("your next-best lap") else "")
                      if ref_label else
                      "Deltas below are vs the driver's best lap on this track/car.")
     by_no = {cm.corner_no: cm for cm in analysis.corners}
@@ -670,7 +679,8 @@ def format_time_on_table(*, lap_time, sectors, optimal, all_time, benchmark, for
                        + "; ".join(parts) + ".")
         elif parts:
             out.append(f"Optimal lap from your best sectors this session: "
-                       f"{format_laptime(session_opt)}, {under:.2f} s under this lap:\n  "
+                       f"{format_laptime(session_opt)}, {under:.2f} s under this lap "
+                       f"{_OPT_NOTE}:\n  "
                        + "; ".join(parts) + ".")
         elif own_out:
             out.append("Optimal lap from your best sectors this session: no clean sector "
@@ -707,7 +717,7 @@ def format_time_on_table(*, lap_time, sectors, optimal, all_time, benchmark, for
                 opt = lap_time - sum(g for g, _, _ in gains(donors))
                 show = session_opt is not None and opt < session_opt - 0.005
             if show:
-                line += f"; optimal from best sectors {format_laptime(opt)}"
+                line += f"; optimal from best sectors {format_laptime(opt)} {_OPT_NOTE}"
         out.append(line + ".")
     if benchmark:
         cls, txt, secs = benchmark

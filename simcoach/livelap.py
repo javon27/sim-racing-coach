@@ -28,7 +28,7 @@ from .analysis import (
     damage_events,
     damage_state,
     lap_events,
-    prev_corner_end,
+    prev_corner,
     tag_sections,
 )
 from .corners import in_window
@@ -209,7 +209,7 @@ class LiveLap:
                            partial="partial")
         rpm = snap.get("rpm")
         rpm_max = float(np.nanmax(rpm)) if rpm is not None and np.isfinite(rpm).any() else None
-        cms = [_metrics_for_corner(record, c, cmap.length, None, rpm_max, prev_corner_end(cmap, c))
+        cms = [_metrics_for_corner(record, c, cmap.length, None, rpm_max, prev_corner(cmap, c))
                for c in todo]
         tag_sections(cms, cmap)
         for cm in cms:

@@ -9703,13 +9703,13 @@
     ]
   },
   "notes": {
-    "overview": "Very short (~3.5 km) and very fast: F1 laps are close to 55s, with about 74-80% of the lap at full throttle. Opens with Bahrain's right/left/right T1-T3, then a fast outer loop of near-flat kinks interrupted by a single medium-speed chicane, then a double-right final complex onto the 1.12 km main straight. Real braking happens only at T1, the chicane and the final complex; elsewhere it's high speed with minimal inputs. The final exit is your biggest gain.",
+    "overview": "Short (~3.5 km) and fast. Opens with Bahrain's right/left/right T1-T3, then a heavy stop at T4 onto the outer loop, a fast right at T6, the medium-speed T7/T8 chicane, the quick T9 kink and the double-right T10/T11 final complex onto the 1.12 km main straight. The real stops are T1, T4, the chicane and T10; elsewhere it's speed carried through kinks. The exits onto the straights (T1 through T2, T4 through T5, and T11) are where lap time lives.",
     "corners": {
       "1": "Sharp right after heavy braking at the end of the main straight. Finish slowing in a straight line, make the apex, and look after the exit for the short run to T2.",
-      "2": "Fast left kink: flat or a small lift. Little steering, car settled, positioned on the right for T3.",
+      "2": "Left on the exit of T1, with no braking of its own. The time here is T1's exit: traction in the low gears and progressive throttle, then set up on the right for T3.",
       "3": "Medium-speed right that ends the opening complex. Smooth in, don't scrub too much, and keep momentum onto the run to T4.",
-      "4": "Quick right with a wide exit, opening onto the top section. A lift or a dab of brake at most; use all the exit road and stay committed into the T5 kink.",
-      "5": "Flat left kink onto the outer loop. Tiny input, hold the line, throttle pinned.",
+      "4": "Heavy stop into a slow right, one of the lap's main braking zones. Brake in a straight line, rotate the car, and use all the exit road: the exit runs straight into T5.",
+      "5": "Left on the exit of T4, onto the outer loop, with no braking of its own. A clean T4 exit and early throttle make this corner.",
       "6": "Right on the fast outer loop, flat out or nearly. Commit and stay smooth so the car is calm arriving at the chicane.",
       "7": "Into the medium-speed left/right chicane. Brake straight, tidy left, and give a little away here to square off the T8 right.",
       "8": "Chicane's right-hand half. Rotate and straighten early, then full throttle; the exit leads onto the return straight.",
@@ -9718,7 +9718,7 @@
       "11": "Last right, onto the 1.12 km main straight. Straighten and get back to full throttle as soon as you can; exit speed here carries down the lap's longest straight."
     },
     "reference_times": {},
-    "source": "Written for Nestor from public corner guides: the-race.com (Bahrain Outer explainer), f1-fansite.com (Bahrain Outer Track layout/lap records), formula1.com (Sakhir outer track article). Facts only; wording is our own. No credible GT3/LMP2/Hypercar times were found for this specific layout, so reference_times left empty (F1's 55.404/53.377 are not LMU classes)."
+    "source": "Written for Nestor from public corner guides: the-race.com (Bahrain Outer explainer), f1-fansite.com (Bahrain Outer Track layout/lap records), formula1.com (Sakhir outer track article). Facts only; wording is our own. No credible GT3/LMP2/Hypercar times were found for this specific layout, so reference_times left empty (F1's 55.404/53.377 are not LMU classes). The overview and T2/T4/T5 were corrected against LMU telemetry (GT3, 2026-10-21, #234): the F1-derived text called T4 a lift and T2/T5 flat kinks."
   },
   "pronunciations": {
     "Michael Schumacher Corner": "mˈaɪkəl ʃˈuːmɑːkɚ kˈɔːɹnɚ",

@@ -51,6 +51,7 @@ from simcoach.car_lookup import resolve_car_class
 from simcoach.coach import _setup_lines, live_electronics
 from simcoach.corners import CornerMap
 from simcoach.format import (
+    SLOWER_REF_NOTE,
     SUSPENSION_UNSEEN,
     corner_descriptor,
     find_corner,
@@ -2455,7 +2456,9 @@ class CoachContext:
         if ref_label:
             # #169: "vs best" on the line above means this reference -- the next-best
             # lap when this one is the best.
-            line += (f"\nDeltas ('vs best') are vs {ref_label}." if ref is not None
+            line += (f"\nDeltas ('vs best') are vs {ref_label}."
+                     + (SLOWER_REF_NOTE if ref_label.startswith(_NEXT_BEST) else "")
+                     if ref is not None
                      else f"\n{ref_label}.")
         ref_analysis = self._analysis_for(ref, None) if ref is not None else analysis
         descriptor = corner_descriptor(self.cmap, cm.corner_no, analysis=ref_analysis,
