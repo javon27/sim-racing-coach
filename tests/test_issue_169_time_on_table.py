@@ -403,7 +403,7 @@ def test_get_time_on_table_finds_the_time_on_the_best_lap(tmp_path, synthetic_la
     assert lines[0].startswith("Lap: practice lap 8")
     # Headline: the game-sector optimal lap -- S1 from lap 1, never the off lap's 30.20.
     assert lines[1] == ("Optimal lap from your best sectors this session: 1:32.500, 0.20 s "
-                        "under this lap:")
+                        "under this lap (your own sectors only; not a ceiling on pace):")
     assert lines[2] == "  S1 (T1) 0.20 s on practice lap 1."
     assert "Quicker S1 (T1) on practice lap 7 doesn't count: a spin, a stop or an off" in out
     # All-time: the same as this session's optimal (no other session), so not
@@ -566,7 +566,7 @@ def test_all_time_optimal_never_rests_on_this_laps_off_sector():
     assert "All-time here in this car: best 1:31.500 (this lap)." in text
     # A clean 29.0 S1 from another session: 29.0 + 30.8 + 31.0 = 90.8.
     text = _table_all_time(91.5, [29.5, 31.0, 31.0], laps, 91.5, [29.0, None, None])
-    assert "(this lap); optimal from best sectors 1:30.800." in text
+    assert "(this lap); optimal from best sectors 1:30.800 (your own sectors only; not a ceiling on pace)." in text
 
 
 def test_all_time_optimal_is_built_like_the_session_one():
@@ -579,7 +579,7 @@ def test_all_time_optimal_is_built_like_the_session_one():
         assert "1:31.800, 0.20 s under this lap" in text
         assert "All-time here in this car: best 1:32.000 (this lap)." in text
     text = _table_all_time(92.0, [30.0, 31.0, 31.0], laps, 92.0, [None, 30.7, None])
-    assert "(this lap); optimal from best sectors 1:31.500." in text
+    assert "(this lap); optimal from best sectors 1:31.500 (your own sectors only; not a ceiling on pace)." in text
 
 
 def test_no_session_context_never_says_another_session(tmp_path, synthetic_lap):
@@ -628,3 +628,32 @@ def test_prompt_leads_with_the_diagnosis_and_drops_apply_freely():
     # PTT: one corner by default -- a default, never a cap (#168 dropped the code cut).
     assert "with ONE corner" in VOICE_PTT and "a default, not a cap" in VOICE_PTT
     assert "give the FULL answer" in VOICE_PTT
+
+
+def test_best_lap_header_says_deltas_are_vs_a_slower_lap_not_time_lost(tmp_path, synthetic_lap):
+    # #236
+    store = _store(tmp_path)
+    _save(store, _variant(synthetic_lap, [(900.0, 1100.0, 0.9)]), 92.0, 1, 1)
+    _save(store, synthetic_lap, 90.0, 2, 2)
+    out = _ctx(store).get_lap_summary("latest")
+    assert "SLOWER lap: the deltas are NOT where time was lost" in out
+
+
+def test_get_corner_and_summary_best_carry_the_slower_clause_nonbest_does_not(
+        tmp_path, synthetic_lap):
+    store = _store(tmp_path)
+    _save(store, synthetic_lap, 90.0, 1, 1)
+    _save(store, _variant(synthetic_lap, [(900.0, 1100.0, 0.9)]), 92.0, 2, 2)
+    ctx = _ctx(store)
+    assert "SLOWER lap: the deltas are NOT where time was lost" in ctx.get_corner("1", "best")
+    assert "SLOWER lap: the deltas are NOT where time was lost" in ctx.get_lap_summary("best")
+    assert "SLOWER lap" not in ctx.get_lap_summary("latest")      # the 92.0 lap is not best
+
+
+def test_optimal_line_says_own_sectors_not_a_ceiling(tmp_path, synthetic_lap):
+    # #235
+    store = _store(tmp_path)
+    _save(store, synthetic_lap, 90.0, 1, 1, sectors=[29.0, 30.5, 30.5])
+    _save(store, synthetic_lap, 91.0, 2, 2, sectors=[30.0, 30.5, 30.5])
+    out = _ctx(store).get_time_on_table("latest")
+    assert "(your own sectors only; not a ceiling on pace)" in out
