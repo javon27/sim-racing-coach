@@ -2310,7 +2310,9 @@ class CoachContext:
         None. Measured only: the concentrated losses vs the best scanned lap, each with
         its coasting / peak throttle where they differ materially from the best lap's.
         Never a cause."""
-        if (not record.lap_time or record.partial or record.pit
+        # phase: the scan can append laps stored after the race (a practice cool-down),
+        # which the race-only median says nothing about
+        if (not record.lap_time or record.partial or record.pit or record.phase != "race"
                 or record.mapping or (record.lap_no or 0) <= 1
                 or is_incident_lap(record, self.cmap, self._analysis_for(record, lap_id))):
             return None
