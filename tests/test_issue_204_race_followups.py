@@ -146,7 +146,7 @@ def test_race_1_result_is_race_1s_own_row(tmp_path, synthetic_lap):
     assert "Race 1 of this session" in out
     assert "Started P7 overall on the grid." in out          # R1's GridPos, not R3's P4
     assert "Finished P9 overall; P9 in class" in out
-    assert "Incidents (1): RJ PARENT(5) reported contact" in out
+    assert "Incident reports in the result log (1)" in out and "- RJ PARENT(5) reported contact" in out
     assert "This race is FINISHED" in out
     assert _tail(out) == ("Per-lap positions (overall) from race lap 1: race 1 lap 1 P6, "
                           "race 1 lap 2 P6, race 1 lap 3 P10, race 1 lap 4 P10, race 1 lap "
