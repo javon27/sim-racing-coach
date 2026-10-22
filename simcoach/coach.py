@@ -478,8 +478,26 @@ _FIGURE = re.compile(
     rf"|(?<!the )\b{_ORDINAL}\s+(?:place|in class|overall|position)\b"  # fifth place,
     # not the idiom "in the first place" (replay #195)
     rf"|\b{_NUMWORD}(?:[\s-]+{_NUMWORD})*\s+point\s+{_NUMWORD}\b"  # one twenty-three point four
-    rf"|\ba minute(?:\s+and)?\s+{_NUMWORD}\b",                     # a minute twenty-three
+    rf"|\ba minute(?:\s+and)?\s+{_NUMWORD}\b"                      # a minute twenty-three
+    # #232: amounts with no number word -- "a tenth and a half", "a bit over a tenth",
+    # "a couple of hundredths", "a few seconds". Not "a tenth here and there" (generic)
+    # nor a bare "a second" ("wait a second", "a second apex").
+    r"|\ba\s+(?:few\s+|couple\s+(?:of\s+)?)?(?:tenths?|hundredths?)\b(?!\s+here and there)"
+    r"|\ba\s+(?:few|couple(?:\s+of)?)\s+seconds\b|\ba second (?:and a half|or two)\b",
     re.IGNORECASE)
+# #232: a measured claim with no figure at all -- a rank of the driver's own lap/corner,
+# where a corner's time is, or what the driver does at a numbered corner (rig: "your
+# quickest of the race" was false). ponytail: anchored phrasings; "your best effort",
+# "your best shot" pass, and so do rephrasings ("the time is mostly at Turn 4").
+_CLAIM = re.compile(
+    r"\byour\s+(?:own\s+)?(?:quickest|fastest|best|slowest)\s+"
+    r"(?:lap\b|of\s+the\s+(?:race|session|stint|day|night)\b)"
+    r"|\bat\s+your\s+(?:own\s+)?best\b"
+    r"|\b(?:turn|t)\s?\d+\s+is\s+where\s+the\s+time\s+is\b"
+    r"|\bthe\s+time\s+(?:that's|that\s+is)\s+left\b"
+    r"|\ball\s+(?:in|on)\s+the\s+(?:entry|exit|apex|braking|mid-corner|throttle)\b"
+    r"|\blike\s+you\s+(?:do|did)\b[^.!?,]{0,15}?\b(?:into|at|through|in|out\s+of)\s+"
+    r"(?:turn|t)\s?\d+", re.IGNORECASE)
 # A bare "say again": answered by replaying the last answer, with no model call.
 _REPEAT = re.compile(
     r"(?:(?:(?:can|could) you\s+)?(?:please\s+)?(?:repeat(?: that| it)?|say (?:that |it )?"
@@ -563,12 +581,14 @@ def states_data(text: str, known: str) -> str:
     """Why an answer needs a tool call in its turn, or "" when it doesn't: it
     announces a lookup, or states a race/lap/telemetry fact -- a figure with a unit, a
     lap time, a position, a lap number (one `known` already holds, e.g. the driver's
-    own words or the injected CURRENT RACE line, doesn't count), or another driver's
-    name absent from `known`."""
+    own words or the injected CURRENT RACE line, doesn't count), a figure-free claim
+    (`_CLAIM`, #232), or another driver's name absent from `known`."""
     if m := _LOOKUP.search(text):
         return f"lookup {m.group(0)!r}"
     if m := _ABSENCE.search(text):
         return f"absence {m.group(0)!r}"
+    if m := _CLAIM.search(text):
+        return f"claim {m.group(0)!r}"
     for m in _FIGURE.finditer(text):
         if not re.search(rf"(?<!\w){re.escape(m.group(0))}(?!\w)", known, re.IGNORECASE):
             return f"figure {m.group(0)!r}"
