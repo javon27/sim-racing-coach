@@ -481,21 +481,40 @@ _FIGURE = re.compile(
     rf"|\ba minute(?:\s+and)?\s+{_NUMWORD}\b"                      # a minute twenty-three
     # #232: amounts with no number word -- "a tenth and a half", "a bit over a tenth",
     # "a couple of hundredths", "a few seconds". Not "a tenth here and there" (generic)
-    # nor a bare "a second" ("wait a second", "a second apex").
-    r"|\ba\s+(?:few\s+|couple\s+(?:of\s+)?)?(?:tenths?|hundredths?)\b(?!\s+here and there)"
-    r"|\ba\s+(?:few|couple(?:\s+of)?)\s+seconds\b|\ba second (?:and a half|or two)\b",
+    # nor a bare "a second" ("wait a second", "a second apex") or one followed by a
+    # timing word ("wait about a second before you pick up the throttle").
+    r"|\ba\s+(?:tenth|hundredth)\b(?!\s+here and there)"
+    r"|\b(?:few|couple(?:\s+of)?)\s+(?:tenths|hundredths|seconds\b(?![\s,]+(?:before|after|"
+    r"then|longer|earlier)))\b"
+    r"|\b(?:about|around|roughly|nearly|almost|just\s+over|just\s+under|over|under|"
+    r"a\s+hair\s+over|a\s+touch\s+over)\s+a\s+second\b(?![\s-]+(?:apex|gear|look|later))"
+    r"(?![\s,]+(?:before|after|then|longer|earlier))"
+    r"|\ba\s+second\s+(?:clear|back|behind|ahead|up\s+the\s+road|off|and\s+a\s+bit|"
+    r"and\s+a\s+half|or\s+two)\b"
+    r"|\b(?:tenth|second)\s+and\s+change\b",
     re.IGNORECASE)
 # #232: a measured claim with no figure at all -- a rank of the driver's own lap/corner,
-# where a corner's time is, or what the driver does at a numbered corner (rig: "your
-# quickest of the race" was false). ponytail: anchored phrasings; "your best effort",
-# "your best shot" pass, and so do rephrasings ("the time is mostly at Turn 4").
+# a race position, where a corner's time is, or what the driver does at a numbered
+# corner (rig: "your quickest of the race" was false). ponytail: anchored phrasings;
+# "your best shot", "your best lap will come" pass, and so do rephrasings ("the time is
+# mostly at Turn 4"); generic lore with a rank phrase ("your slowest lap of the day
+# usually comes from overdriving") still trips it. Follow-up: #241.
 _CLAIM = re.compile(
-    r"\byour\s+(?:own\s+)?(?:quickest|fastest|best|slowest)\s+"
-    r"(?:lap\b|of\s+the\s+(?:race|session|stint|day|night)\b)"
-    r"|\bat\s+your\s+(?:own\s+)?best\b"
+    r"\b(?:that's|that\s+was|it's|it\s+was|is|was)\s+your\s+(?:own\s+)?"
+    r"(?:quickest|fastest|best|slowest)\s+lap\b(?!-)"
+    r"|\b(?:quickest|fastest|best|slowest)\s+(?:lap\s+)?(?:of\s+the\s+(?:race|session|stint|"
+    r"day|night)\b|yet\b|so\s+far\b)"
+    r"|\b(?:quickest|fastest)\s+you've\s+been\b"
+    r"|\b(?:new\s+)?(?:personal\s+best|PB)\b"
+    r"|\b(?:is|was|'s|now)\s+at\s+your\s+(?:own\s+)?best\b"
+    rf"|\b(?:up\s+to|down\s+to|running|you're|you\s+are)\s+{_ORDINAL}\b(?!-)"
+    r"(?![\s-]+(?:gear|apex|corner|guess|half|time|attempt|try|lap|stint|sector|"
+    r"on\s+the\s+list))"
+    r"|\b(?:gained|lost|dropped|made\s+up|up|down)\s+(?:a\s+(?:place|position|spot)\b|"
+    rf"(?:{_NUMWORD}|couple(?:\s+of)?|few)\s+(?:places|positions|spots)\b)"
     r"|\b(?:turn|t)\s?\d+\s+is\s+where\s+the\s+time\s+is\b"
     r"|\bthe\s+time\s+(?:that's|that\s+is)\s+left\b"
-    r"|\ball\s+(?:in|on)\s+the\s+(?:entry|exit|apex|braking|mid-corner|throttle)\b"
+    r"|\ball\s+(?:in|on)\s+the\s+(?:entry|exit|apex|braking|mid-corner)\b"
     r"|\blike\s+you\s+(?:do|did)\b[^.!?,]{0,15}?\b(?:into|at|through|in|out\s+of)\s+"
     r"(?:turn|t)\s?\d+", re.IGNORECASE)
 # A bare "say again": answered by replaying the last answer, with no model call.

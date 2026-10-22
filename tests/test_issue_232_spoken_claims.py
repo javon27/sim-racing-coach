@@ -49,6 +49,17 @@ def test_the_rig_sentences_flag(text, known):
     "The time that's left is in the final sector.",
     "It's all on the exit.",
     "The loss is all in the braking.",
+    # red-team round 2: ranks without "your", positions, gaps
+    "That's a new personal best.",
+    "That's your PB.",
+    "Fastest lap of the race, well done.",
+    "That's your best yet.",
+    "You're up to fourth.",
+    "You're running fourth.",
+    "You gained two places.",
+    "The gap's about a second.",
+    "You're a second clear.",
+    "Couple of tenths on the exit.",
 ])
 def test_spoken_claims_flag(text):
     assert states_data(text, known=""), text
@@ -65,6 +76,18 @@ def test_spoken_claims_flag(text):
     "Brake a touch later and be patient with the throttle.",
     "Trail a little deeper, like you would on a dry track.",
     "Exit speed is what matters on this layout.",
+    # red-team round 2: on a model that can't be forced, an over-trigger replaces
+    # a good technique answer with UNCONFIRMED
+    "You're second-guessing the brake point.",
+    "Running second gear through there is fine.",
+    "Wait about a second before you pick up the throttle.",
+    "Take a second look at your line into Turn 4.",
+    "You're running wide on exit.",
+    "You're at your best when you're relaxed.",
+    "All on the throttle out of the hairpin is the classic mistake.",
+    "Your best lap will come when you stop overdriving.",
+    "Your fastest lap comes from a smooth exit.",
+    "Wait a few seconds after the green before you push.",
 ])
 def test_technique_and_small_talk_still_pass(text):
     assert not states_data(text, known=""), text
@@ -73,3 +96,5 @@ def test_technique_and_small_talk_still_pass(text):
 def test_a_spoken_amount_the_driver_gave_is_not_a_claim():
     q = "i think i lost a couple of tenths in turn 2"
     assert not states_data("A couple of tenths in Turn 2 sounds right to chase.", known=q)
+    assert not states_data("About a second, yes.", known="am i about a second off")
+    assert states_data("About a second, yes.", known="")
