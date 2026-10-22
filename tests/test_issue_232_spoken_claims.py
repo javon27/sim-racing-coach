@@ -88,6 +88,8 @@ def test_spoken_claims_flag(text):
     "Your best lap will come when you stop overdriving.",
     "Your fastest lap comes from a smooth exit.",
     "Wait a few seconds after the green before you push.",
+    # re-verify: an offer to look it up states nothing (coach_chat row 259)
+    "Give me a name and I'll pull the personal best for it here at La Sarthe.",
 ])
 def test_technique_and_small_talk_still_pass(text):
     assert not states_data(text, known=""), text

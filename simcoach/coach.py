@@ -505,7 +505,7 @@ _CLAIM = re.compile(
     r"|\b(?:quickest|fastest|best|slowest)\s+(?:lap\s+)?(?:of\s+the\s+(?:race|session|stint|"
     r"day|night)\b|yet\b|so\s+far\b)"
     r"|\b(?:quickest|fastest)\s+you've\s+been\b"
-    r"|\b(?:new\s+)?(?:personal\s+best|PB)\b"
+    r"|(?<!the\s)\b(?:new\s+)?(?:personal\s+best|PB)\b"   # not "pull the personal best"
     r"|\b(?:is|was|'s|now)\s+at\s+your\s+(?:own\s+)?best\b"
     rf"|\b(?:up\s+to|down\s+to|running|you're|you\s+are)\s+{_ORDINAL}\b(?!-)"
     r"(?![\s-]+(?:gear|apex|corner|guess|half|time|attempt|try|lap|stint|sector|"
