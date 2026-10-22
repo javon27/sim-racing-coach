@@ -1229,7 +1229,8 @@ def _metrics_for_corner(
                     n = s_ + 1                    # this corner's: its real start counts
                 else:
                     n = min(q, n)                 # carried: trimmed off whole
-                    carried_from = corner_tag(prev)
+                    if q < order.size:            # ...and only if it reaches the look-back
+                        carried_from = corner_tag(prev)
         if j < on.size and k < n:
             if q is not None and j == q and n > q:   # the run is the straddling one
                 run = full[j:s_ + 1]

@@ -184,3 +184,21 @@ def test_zone_stops_at_a_reacceleration_after_the_previous_corner():
     cm = analyze_lap(rec, CornerMap([a, b, FAR], length=L)).corners[1]
     assert cm.brake_point == 620.0
     assert cm.brake_zone_start == 620.0                 # not the dab at 520
+
+
+def test_carried_label_needs_the_run_to_reach_this_corners_look_back():
+    """The previous corner trail-brakes through its apex (a carried-style run), but
+    the next corner is ~400 m on, beyond its 250 m look-back, with no braking: there
+    is nothing carried INTO it, so no "carried through" label."""
+    a = Corner(1, "", "left", start_dist=400.0, apex_dist=450.0, end_dist=500.0)
+    b = Corner(2, "", "right", start_dist=800.0, apex_dist=850.0, end_dist=900.0)
+    rec = _shaped(
+        ((0.0, 0.0), (345.0, 0.0), (350.0, 1.0), (450.0, 0.4), (470.0, 0.4), (475.0, 0.0),
+         (L, 0.0)),
+        ((0.0, 200.0), (350.0, 200.0), (450.0, 90.0), (470.0, 88.0), (600.0, 200.0),
+         (L, 200.0)),
+        ((0.0, 1.0), (345.0, 1.0), (350.0, 0.0), (475.0, 0.0), (480.0, 1.0), (L, 1.0)))
+    cm = analyze_lap(rec, CornerMap([a, b, FAR], length=L)).corners[1]
+    assert cm.brake_point is None
+    assert cm.brake_carried_from is None
+    assert "no heavy braking" in format_corner_line(cm)
