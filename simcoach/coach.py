@@ -478,8 +478,45 @@ _FIGURE = re.compile(
     rf"|(?<!the )\b{_ORDINAL}\s+(?:place|in class|overall|position)\b"  # fifth place,
     # not the idiom "in the first place" (replay #195)
     rf"|\b{_NUMWORD}(?:[\s-]+{_NUMWORD})*\s+point\s+{_NUMWORD}\b"  # one twenty-three point four
-    rf"|\ba minute(?:\s+and)?\s+{_NUMWORD}\b",                     # a minute twenty-three
+    rf"|\ba minute(?:\s+and)?\s+{_NUMWORD}\b"                      # a minute twenty-three
+    # #232: amounts with no number word -- "a tenth and a half", "a bit over a tenth",
+    # "a couple of hundredths", "a few seconds". Not "a tenth here and there" (generic)
+    # nor a bare "a second" ("wait a second", "a second apex") or one followed by a
+    # timing word ("wait about a second before you pick up the throttle").
+    r"|\ba\s+(?:tenth|hundredth)\b(?!\s+here and there)"
+    r"|\b(?:few|couple(?:\s+of)?)\s+(?:tenths|hundredths|seconds\b(?![\s,]+(?:before|after|"
+    r"then|longer|earlier)))\b"
+    r"|\b(?:about|around|roughly|nearly|almost|just\s+over|just\s+under|over|under|"
+    r"a\s+hair\s+over|a\s+touch\s+over)\s+a\s+second\b(?![\s-]+(?:apex|gear|look|later))"
+    r"(?![\s,]+(?:before|after|then|longer|earlier))"
+    r"|\ba\s+second\s+(?:clear|back|behind|ahead|up\s+the\s+road|off|and\s+a\s+bit|"
+    r"and\s+a\s+half|or\s+two)\b"
+    r"|\b(?:tenth|second)\s+and\s+change\b",
     re.IGNORECASE)
+# #232: a measured claim with no figure at all -- a rank of the driver's own lap/corner,
+# a race position, where a corner's time is, or what the driver does at a numbered
+# corner (rig: "your quickest of the race" was false). ponytail: anchored phrasings;
+# "your best shot", "your best lap will come" pass, and so do rephrasings ("the time is
+# mostly at Turn 4"); generic lore with a rank phrase ("your slowest lap of the day
+# usually comes from overdriving") still trips it. Follow-up: #241.
+_CLAIM = re.compile(
+    r"\b(?:that's|that\s+was|it's|it\s+was|is|was)\s+your\s+(?:own\s+)?"
+    r"(?:quickest|fastest|best|slowest)\s+lap\b(?!-)"
+    r"|\b(?:quickest|fastest|best|slowest)\s+(?:lap\s+)?(?:of\s+the\s+(?:race|session|stint|"
+    r"day|night)\b|yet\b|so\s+far\b)"
+    r"|\b(?:quickest|fastest)\s+you've\s+been\b"
+    r"|(?<!the\s)\b(?:new\s+)?(?:personal\s+best|PB)\b"   # not "pull the personal best"
+    r"|\b(?:is|was|'s|now)\s+at\s+your\s+(?:own\s+)?best\b"
+    rf"|\b(?:up\s+to|down\s+to|running|you're|you\s+are)\s+{_ORDINAL}\b(?!-)"
+    r"(?![\s-]+(?:gear|apex|corner|guess|half|time|attempt|try|lap|stint|sector|"
+    r"on\s+the\s+list))"
+    r"|\b(?:gained|lost|dropped|made\s+up|up|down)\s+(?:a\s+(?:place|position|spot)\b|"
+    rf"(?:{_NUMWORD}|couple(?:\s+of)?|few)\s+(?:places|positions|spots)\b)"
+    r"|\b(?:turn|t)\s?\d+\s+is\s+where\s+the\s+time\s+is\b"
+    r"|\bthe\s+time\s+(?:that's|that\s+is)\s+left\b"
+    r"|\ball\s+(?:in|on)\s+the\s+(?:entry|exit|apex|braking|mid-corner)\b"
+    r"|\blike\s+you\s+(?:do|did)\b[^.!?,]{0,15}?\b(?:into|at|through|in|out\s+of)\s+"
+    r"(?:turn|t)\s?\d+", re.IGNORECASE)
 # A bare "say again": answered by replaying the last answer, with no model call.
 _REPEAT = re.compile(
     r"(?:(?:(?:can|could) you\s+)?(?:please\s+)?(?:repeat(?: that| it)?|say (?:that |it )?"
@@ -563,12 +600,14 @@ def states_data(text: str, known: str) -> str:
     """Why an answer needs a tool call in its turn, or "" when it doesn't: it
     announces a lookup, or states a race/lap/telemetry fact -- a figure with a unit, a
     lap time, a position, a lap number (one `known` already holds, e.g. the driver's
-    own words or the injected CURRENT RACE line, doesn't count), or another driver's
-    name absent from `known`."""
+    own words or the injected CURRENT RACE line, doesn't count), a figure-free claim
+    (`_CLAIM`, #232), or another driver's name absent from `known`."""
     if m := _LOOKUP.search(text):
         return f"lookup {m.group(0)!r}"
     if m := _ABSENCE.search(text):
         return f"absence {m.group(0)!r}"
+    if m := _CLAIM.search(text):
+        return f"claim {m.group(0)!r}"
     for m in _FIGURE.finditer(text):
         if not re.search(rf"(?<!\w){re.escape(m.group(0))}(?!\w)", known, re.IGNORECASE):
             return f"figure {m.group(0)!r}"
