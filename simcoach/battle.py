@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import bisect
 import dataclasses
+import itertools
 import math
 import re
 import statistics
@@ -42,6 +43,10 @@ TRACE_MAX_S = 900.0
 # No car covers more than this between two scoring frames (540 km/h). A frame implying
 # more is the lap count and lap distance disagreeing at S/F (see FieldTrace.feed).
 MAX_PLAUSIBLE_SPEED_MS = 150.0
+# #238: a rival this many seconds either side of the driver at a contact is named as
+# the nearest car there. PENDING RIG (#238): wide enough for the scoring feed's
+# interpolation error, narrow enough that a car a few lengths away isn't named.
+CONTACT_NEAR_S = 1.0
 
 
 class FieldTrace:
@@ -297,6 +302,43 @@ def _gap(me: CarLap, o: CarLap) -> float:
     corners both were timed at (inf when none)."""
     gaps = [abs(o.entry[n] - t) for n, t in me.entry.items() if n in o.entry]
     return statistics.median(gaps) if gaps else math.inf
+
+
+def _time_at_dist(car: CarLap, corners: list[Corner], dist: float) -> float | None:
+    """When `car` passed lap distance `dist`, interpolated between the two stored corner
+    crossings either side of it (entries and exits) -- only when both are on ONE of its
+    laps and in order. None outside the timed corners (no S/F seam bracket: the far side
+    is in another lap's row)."""
+    pts = sorted(((d, t, car.lap.get(c.number)) for c in corners if c.number in car.entry
+                  for d, t in ((c.start_dist, car.entry[c.number]),
+                               (c.end_dist, car.exit[c.number]))), key=lambda p: p[0])
+    for (d0, t0, k0), (d1, t1, k1) in itertools.pairwise(pts):
+        if d0 <= dist <= d1 and d1 > d0 and k0 == k1 and t1 >= t0:
+            return t0 + (t1 - t0) * (dist - d0) / (d1 - d0)
+    return None
+
+
+def contact_nearest(laps: list[CarLap], corners: list[Corner], dist: float) -> str | None:
+    """#238: the same-class car(s) nearest the driver as they passed `dist` (a contact's
+    heaviest impact) on a stored lap: up to two within CONTACT_NEAR_S, closest first.
+    Both times are the field trace's own scoring-clock crossings, so no two clocks are
+    mixed. None when the driver or nobody near is timed there. It is the NEAREST car,
+    never "who hit you": contact attribution is not measured."""
+    me = next((c for c in laps if c.is_player), None)
+    t_me = _time_at_dist(me, corners, dist) if me else None
+    if t_me is None:
+        return None
+    near = sorted(((t - t_me, o) for o in laps if not o.is_player
+                   and (t := _time_at_dist(o, corners, dist)) is not None
+                   and abs(t - t_me) <= CONTACT_NEAR_S), key=lambda x: abs(x[0]))[:2]
+    if not near:
+        return None
+    cars = "; ".join(
+        f"{o.driver} (P{o.class_position} in class), "
+        + ("level" if round(abs(g), 1) == 0 else f"{abs(g):.1f} s {'behind' if g > 0 else 'ahead'}")
+        for g, o in near)
+    return (f"Nearest same-class car at the heaviest impact ({dist:,.0f} m): {cars} -- the "
+            "nearest car, not a measured contact partner (who made contact is not measured).")
 
 
 def _rival_query(query: str) -> str:
