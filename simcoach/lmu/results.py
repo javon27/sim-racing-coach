@@ -172,16 +172,22 @@ _CONTACT_RE = re.compile(
 def _lap_at(driver: ET.Element):
     """#239: session ET -> the player's race lap. A <Lap et> is that lap's START ET (68103 of
     68103 consecutive real lap pairs: next et - et = this lap's time), so an ET is in lap n
-    from its et until its et + lap time. Outside every lap (formation, after the flag, a
+    from its et until its et + lap time (the next lap's et if untimed). Outside every lap (formation, after the flag, a
     log without lap ets) -> None: never a guessed lap."""
-    spans = [(n, et, _to_float(el.text)) for el in driver.findall("Lap")
-             if (n := _to_int(el.get("num"))) is not None
-             and (et := _to_float(el.get("et"))) is not None]
+    laps = sorted((n, et, _to_float(el.text)) for el in driver.findall("Lap")
+                  if (n := _to_int(el.get("num"))) is not None
+                  and (et := _to_float(el.get("et"))) is not None)
+    # An untimed lap ("--.----") ends where the next lap starts; only the LAST lap may be
+    # open-ended, or a cooldown contact lands on an untimed lap 1 (red team: 53 incidents
+    # in 14 real race logs, e.g. 2025_07_12_20_35_58-55R1).
+    spans = [(n, start, start + t if t is not None
+              else laps[k + 1][1] if k + 1 < len(laps) else float("inf"))
+             for k, (n, start, t) in enumerate(laps)]
 
     def lap(et: float | None) -> int | None:
         if et is None:
             return None
-        hits = [n for n, start, t in spans if start <= et and (t is None or et < start + t)]
+        hits = [n for n, start, end in spans if start <= et < end]
         return hits[-1] if hits else None
     return lap
 

@@ -1754,7 +1754,7 @@ class LapStore:
 
         #208: `positions` is every lap's (overall, class) place pair, ts order -- the
         class place is None on a lap that didn't sample it."""
-        query = ("SELECT position, class_position, pit FROM laps "
+        query = ("SELECT position, class_position, pit, lap_no FROM laps "
                  "WHERE session_id = ? AND position IS NOT NULL")
         params: list = [session_id]
         if phase is not None:
@@ -1783,8 +1783,10 @@ class LapStore:
             "last": places[-1],
             "laps": len(places),
             "positions": [tuple(r[:2]) for r in rows],
-            # #239: each lap's pit flag (None = not recorded), positions' order.
-            "pit": [None if r[2] is None else bool(r[2]) for r in rows],
+            # #239: each lap's pit STOP flag (None = not recorded), positions' order. Lap 1
+            # is never a stop: live capture flags the grid-start lap as pit (4 of 34 real
+            # races), which would drop a lap-1 low (Road Atlanta: P45 -> "P38").
+            "pit": [None if r[2] is None else bool(r[2]) and r[3] != 1 for r in rows],
         }
 
     def clear_all(self) -> None:

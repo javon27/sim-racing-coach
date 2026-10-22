@@ -210,3 +210,32 @@ def test_a_contact_with_no_other_party_never_renders_none():
     assert not any("None" in line for line in out)
     assert out == ["- garbled contact line, lap 2",
                    "- incident (no text logged), lap not known"]
+
+
+def test_an_untimed_lap_ends_at_the_next_lap_not_at_the_flag(tmp_path):
+    """Red team: 2025_07_12_20_35_58-55R1 logs lap 1 as "--.----"; read as open-ended it
+    claimed every cooldown contact (ET past the last lap's end) as "lap 1"."""
+    xml = tmp_path / "untimed.xml"
+    xml.write_text(XML.replace(">83.9040</Lap>", ">--.----</Lap>").replace(
+        '<Incident et="900.0">', '<Incident et="530.0">'))
+    inc = parse_result(xml, "Jayson G").incidents
+    by_et = {i["et"]: i["lap"] for i in inc}
+    assert by_et[150.2] == 1        # still inside the untimed lap 1 (ends at lap 2's et)
+    assert by_et[530.0] is None     # after lap 5 ended (446.12 + 75.60): no lap
+
+
+def test_a_lap_1_pit_flag_is_not_a_stop(tmp_path, synthetic_lap):
+    """Red team: live capture flags the grid-start lap 1 as pit (4 of 34 races); Road
+    Atlanta's P45 on lap 1 became "lowest P38 -> 17 regained"."""
+    import dataclasses
+    store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
+    for i, (p, pit) in enumerate([(45, True), (38, False), (30, True), (28, False)]):
+        store.save(dataclasses.replace(synthetic_lap, session_id="s", phase="race",
+                                       timestamp=1000.0 + i, position=p, lap_no=i + 1,
+                                       pit=pit))
+    arc = store.session_position_arc("s", phase="race")
+    assert arc["pit"] == [False, False, True, False]
+    rr = {"grid_position": 40, "position": 28, "class_grid_position": 40,
+          "class_position": 28}
+    assert "lowest race-lap place (pit laps left out) P45 to finish P28 = 17 regained" \
+        in _net_places(rr, arc, False)
