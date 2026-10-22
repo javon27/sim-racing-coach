@@ -93,7 +93,7 @@ export interface RaceResult {
   position: number | null;
   class_position: number | null;
   finish_status: string | null;
-  incidents: string[];
+  incidents: unknown[];
   penalties: unknown[];
 }
 

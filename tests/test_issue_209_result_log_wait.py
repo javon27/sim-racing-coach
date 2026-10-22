@@ -84,7 +84,7 @@ def test_log_arrives_during_the_wait(tmp_path, monkeypatch, synthetic_lap):
     # Class result, grid slot and the car-to-car contact from the log.
     assert "P8 in class" in out and "P17 overall" in out
     assert "P4 in class" in out and "P9 overall" in out and "on the grid." in out
-    assert "reported contact (42.27) with another vehicle Eli Overtake(12)" in out
+    assert "contact with Eli Overtake (another car): 1 report (1 logged by you" in out
     assert "This race is FINISHED" in out and PROVISIONAL not in out
     # Waited only until the log landed: LMU wrote it 18.8 s in, seen within two polls.
     assert LOGGED < clock.now <= LOGGED + 2.0
@@ -149,7 +149,7 @@ def test_no_wait_and_no_scan_when_the_log_is_already_in(tmp_path, monkeypatch, s
     scans.clear()
     out = ctx.get_race_result()
     assert scans == [] and clock.slept == 0
-    assert "P8 in class" in out and "reported contact" in out and PROVISIONAL not in out
+    assert "P8 in class" in out and "contact with Eli Overtake" in out and PROVISIONAL not in out
 
 
 class _Stop(BaseException):
@@ -219,4 +219,4 @@ def test_the_sidecar_coach_turn_wakes_the_importer(tmp_path, monkeypatch, synthe
     assert scans == [1]
     name, _, out = fake.dispatched[0]
     assert name == "get_race_result"
-    assert "P4 in class" in out and "reported contact" in out and PROVISIONAL not in out
+    assert "P4 in class" in out and "contact with Eli Overtake" in out and PROVISIONAL not in out
