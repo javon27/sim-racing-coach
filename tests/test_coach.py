@@ -330,7 +330,7 @@ def test_system_prompt_forbids_reusing_an_earlier_races_numbers():
     """#136: a chat spans the races of an evening, so an earlier turn's spin, lap time
     or position is history -- this turn's numbers come from this turn's tool calls."""
     from simcoach.coach import AGENTIC_SYSTEM_PROMPT
-    identity = AGENTIC_SYSTEM_PROMPT.split("LAP IDENTITY:", 1)[1][:800]
+    identity = AGENTIC_SYSTEM_PROMPT.split("LAP IDENTITY:", 1)[1][:1400]
     assert "more than one race" in identity
     assert "a tool call in THIS turn" in identity
     assert "marked as an earlier race" in identity
@@ -347,3 +347,16 @@ def test_agentic_prompt_routes_race_questions_to_one_race_tool():
     assert ("a rival's best/last lap → get_race_state (live) / get_race_result (after the "
             "race)") in p
     p.format(car="x", speed_unit="km/h", temp_unit="°C")    # no stray braces
+
+
+def test_prompt_wording_rules_235_236_237():
+    from simcoach.coach import AGENTIC_SYSTEM_PROMPT as p
+    # #235: the optimal is not a pace limit.
+    assert "Never tell him how much faster he can or can't go" in p
+    # #236: a best lap goes to get_time_on_table, not get_lap_summary.
+    refs = p.split("REFERENCES:", 1)[1][:900]
+    assert "a best, a personal best or a breakthrough" in refs and "get_time_on_table" in refs
+    # #237: supersession is an update, not a correction; phase always named.
+    ident = p.split("LAP IDENTITY:", 1)[1][:1400]
+    assert "as an update" in ident and "never as a correction" in ident
+    assert "never a bare 'lap 3'" in ident
