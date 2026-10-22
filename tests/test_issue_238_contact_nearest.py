@@ -41,8 +41,8 @@ FIELD = [ME, WEISSEL, RUPP, MANAUS]
 
 def test_names_weissel_nearest_at_the_real_lap_4_contact():
     line = contact_nearest(FIELD, CORNERS, 1578.68)
-    assert line.startswith("Nearest same-class car at the heaviest impact (1,579 m): "
-                           "Niklas Weissel (P7 in class), 0.1 s behind")
+    assert line.startswith("Nearest same-class car at the heaviest impact (1,579 m; other "
+                           "classes aren't tracked): Niklas Weissel (P7 in class), 0.1 s behind")
     assert "Manaus" not in line             # same corner, 5 s ahead: not near
     assert "Rupp" not in line               # 1.05 s ahead here: outside the window
     assert "hit you" not in line and "nearest" in line.lower()
@@ -50,9 +50,25 @@ def test_names_weissel_nearest_at_the_real_lap_4_contact():
 
 
 def test_two_cars_inside_the_window_are_both_named_closest_first():
-    # At the first impact (1,552 m) Rupp is 0.98 s ahead -- inside +/-1.0 s.
-    line = contact_nearest(FIELD, CORNERS, 1552.13)
-    assert line.index("Niklas Weissel") < line.index("Johannes Rupp (P6 in class), 1.0 s ahead")
+    # A second car 0.5 s ahead of the driver all through T4: inside +/-0.6 s.
+    close = _car(20, "Close Second", 5, {4: 390.8173}, {4: 395.7646})
+    line = contact_nearest(FIELD + [close], CORNERS, 1552.13)
+    assert line.index("Niklas Weissel") < line.index("Close Second (P5 in class), 0.5 s ahead")
+
+
+def test_the_window_is_0_6_s():
+    # #238 review: true contact partners sat 0.00-0.58 s away over 52 real laps; at 1.0 s
+    # wall hits still named a car. Rupp is 0.98 s ahead at 1,552 m: not named.
+    assert "Rupp" not in contact_nearest(FIELD, CORNERS, 1552.13)
+    at_065 = _car(21, "Just Out", 5, {4: 390.6673}, {4: 395.6146})     # 0.65 s ahead
+    assert contact_nearest([ME, at_065], CORNERS, 1552.13) is None
+
+
+def test_a_rival_in_the_pit_lane_at_that_moment_is_not_named():
+    pitting = dataclasses.replace(WEISSEL, pit=[(394.0, 420.0)])    # in the lane at 395.3
+    assert contact_nearest([ME, pitting], CORNERS, 1552.13) is None
+    earlier = dataclasses.replace(WEISSEL, pit=[(300.0, 340.0)])    # a stop laps before
+    assert "Niklas Weissel" in contact_nearest([ME, earlier], CORNERS, 1552.13)
 
 
 def test_a_bracket_across_two_of_a_rivals_laps_is_not_interpolated():
@@ -114,8 +130,9 @@ def test_get_stint_events_attaches_the_nearest_car_to_the_contact_line(contact_c
     line = next(x for x in out.splitlines() if "Contact:" in x)
     nearest = out.splitlines()[out.splitlines().index(line) + 1]
     assert nearest.strip() == (
-        f"Nearest same-class car at the heaviest impact ({hit:,.0f} m): Rival Driver "
-        "(P4 in class), 0.3 s behind -- the nearest car, not a measured contact "
+        f"Nearest same-class car at the heaviest impact ({hit:,.0f} m; other classes "
+        "aren't tracked): Rival Driver (P4 in class), 0.3 s behind -- the nearest car, "
+        "not a measured contact "
         "partner (who made contact is not measured).")
 
 

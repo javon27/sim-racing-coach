@@ -44,9 +44,9 @@ TRACE_MAX_S = 900.0
 # more is the lap count and lap distance disagreeing at S/F (see FieldTrace.feed).
 MAX_PLAUSIBLE_SPEED_MS = 150.0
 # #238: a rival this many seconds either side of the driver at a contact is named as
-# the nearest car there. PENDING RIG (#238): wide enough for the scoring feed's
-# interpolation error, narrow enough that a car a few lengths away isn't named.
-CONTACT_NEAR_S = 1.0
+# the nearest car there. Swept over 52 real contact laps (#238 review): true partners
+# sat 0.00-0.58 s away; at 1.0 s 7 of 16 wall/no-car hits still named a car, at 0.6 s 2.
+CONTACT_NEAR_S = 0.6
 
 
 class FieldTrace:
@@ -330,15 +330,18 @@ def contact_nearest(laps: list[CarLap], corners: list[Corner], dist: float) -> s
         return None
     near = sorted(((t - t_me, o) for o in laps if not o.is_player
                    and (t := _time_at_dist(o, corners, dist)) is not None
-                   and abs(t - t_me) <= CONTACT_NEAR_S), key=lambda x: abs(x[0]))[:2]
+                   and abs(t - t_me) <= CONTACT_NEAR_S and _clear(o, t, t)),
+                  key=lambda x: abs(x[0]))[:2]
     if not near:
         return None
     cars = "; ".join(
         f"{o.driver} (P{o.class_position} in class), "
         + ("level" if round(abs(g), 1) == 0 else f"{abs(g):.1f} s {'behind' if g > 0 else 'ahead'}")
         for g, o in near)
-    return (f"Nearest same-class car at the heaviest impact ({dist:,.0f} m): {cars} -- the "
-            "nearest car, not a measured contact partner (who made contact is not measured).")
+    # The field trace records the driver's class only: a car of another class is unseen.
+    return (f"Nearest same-class car at the heaviest impact ({dist:,.0f} m; other classes "
+            f"aren't tracked): {cars} -- the nearest car, not a measured contact partner "
+            "(who made contact is not measured).")
 
 
 def _rival_query(query: str) -> str:
