@@ -1,6 +1,7 @@
-"""#233: the brake-point look-back stops at the previous corner's end. Bahrain Outer
+"""#233: a corner's brake point is never the previous corner's braking. Bahrain Outer
 T2 (apex 823, ~85 m after T1's end) read "brake 243m before apex @ 94% peak" -- T1's
-braking -- and "brake 150 m earlier than best" off it."""
+braking -- and "brake 150 m earlier than best" off it. The bound is the previous
+corner's last apex; a run straddling it is split by where the speed is shed."""
 import numpy as np
 
 from simcoach.analysis import analyze_lap
@@ -113,3 +114,73 @@ def test_bound_wraps_across_the_seam():
     cb = analyze_lap(_lap(lambda d: (d >= 4970.0) | (d <= 20.0)), cmap).corners[1]
     assert cb.brake_point == 4970.0 - L
     assert cb.apex_dist - cb.brake_point == 70.0
+
+
+def _shaped(brake_pts, speed_pts, throttle_pts=((0.0, 1.0), (L, 1.0))):
+    """Channels from (distance, value) breakpoints, linearly interpolated."""
+    dist = np.arange(0.0, L, 5.0)
+    def f(pts):
+        return np.interp(dist, [d for d, _ in pts], [v for _, v in pts])
+    return LapRecord("lmu", "T", "C", 90.0, True, 0.0, {
+        "lap_distance": dist, "speed": f(speed_pts), "brake": f(brake_pts),
+        "throttle": f(throttle_pts), "steering": np.full(dist.size, 0.4),
+    })
+
+
+KINK = Corner(1, "", "right", start_dist=560.0, apex_dist=600.0, end_dist=620.0)
+HAIR = Corner(2, "", "right", start_dist=620.0, apex_dist=780.0, end_dist=820.0)
+FAR = Corner(3, "", "left", start_dist=2000.0, apex_dist=2050.0, end_dist=2100.0)
+KMAP = CornerMap([KINK, HAIR, FAR], length=L)
+_OFF_THR = ((0.0, 1.0), (585.0, 1.0), (590.0, 0.0), (780.0, 0.0), (790.0, 1.0), (L, 1.0))
+
+
+def test_stop_starting_just_before_a_kinks_apex_is_the_hairpins():
+    """Mulsanne shape: braking from 590, kink apex 600, hairpin apex 780; ~11 of the
+    205 km/h shed is before the kink apex. The run is the hairpin's, from its real
+    start -- rejecting it printed "no heavy braking" on a 270->65 km/h stop."""
+    rec = _shaped(
+        ((0.0, 0.0), (585.0, 0.0), (590.0, 1.0), (780.0, 1.0), (785.0, 0.0), (L, 0.0)),
+        ((0.0, 270.0), (590.0, 270.0), (780.0, 65.0), (850.0, 120.0), (L, 270.0)),
+        _OFF_THR)
+    hair = analyze_lap(rec, KMAP).corners[1]
+    assert hair.brake_point == 590.0                    # real start, not clipped at 600
+    assert hair.brake_zone_start == 590.0
+    assert hair.brake_carried_from is None
+    assert "brake 190m before apex" in format_corner_line(hair)
+
+
+def test_run_shedding_its_speed_before_the_previous_apex_is_carried():
+    """The negative: most of the loss happens before the kink's apex, then the car
+    holds speed into the next corner on a trailing brake -- that run is the kink's.
+    Rendered as carried, never as "no heavy braking"."""
+    rec = _shaped(
+        ((0.0, 0.0), (495.0, 0.0), (500.0, 1.0), (600.0, 0.3), (780.0, 0.3), (785.0, 0.0),
+         (L, 0.0)),
+        ((0.0, 250.0), (500.0, 250.0), (600.0, 100.0), (780.0, 95.0), (850.0, 150.0),
+         (L, 250.0)),
+        ((0.0, 1.0), (495.0, 1.0), (500.0, 0.0), (780.0, 0.0), (790.0, 1.0), (L, 1.0)))
+    hair = analyze_lap(rec, KMAP).corners[1]
+    assert hair.brake_point is None
+    assert hair.brake_zone_start is None and hair.brake_zone_peak is None
+    assert hair.brake_carried_from == "T1"
+    line = format_corner_line(hair)
+    assert "braking carried through from T1" in line
+    assert "no heavy braking" not in line and "before apex" not in line
+
+
+def test_zone_stops_at_a_reacceleration_after_the_previous_corner():
+    """A dab on the previous corner's exit (520-530, 150->140), speed back up to 170
+    on part throttle (never the 0.8 full-throttle cut), then this corner's own stop
+    from 620. The dab is not this corner's braking zone."""
+    a = Corner(1, "", "left", start_dist=400.0, apex_dist=450.0, end_dist=500.0)
+    b = Corner(2, "", "right", start_dist=560.0, apex_dist=700.0, end_dist=760.0)
+    rec = _shaped(
+        ((0.0, 0.0), (515.0, 0.0), (520.0, 0.3), (530.0, 0.3), (535.0, 0.0), (615.0, 0.0),
+         (620.0, 0.9), (700.0, 0.9), (705.0, 0.0), (L, 0.0)),
+        ((0.0, 150.0), (520.0, 150.0), (535.0, 140.0), (615.0, 170.0), (700.0, 80.0),
+         (800.0, 150.0), (L, 150.0)),
+        ((0.0, 1.0), (450.0, 1.0), (455.0, 0.5), (615.0, 0.5), (620.0, 0.0), (700.0, 0.0),
+         (710.0, 1.0), (L, 1.0)))
+    cm = analyze_lap(rec, CornerMap([a, b, FAR], length=L)).corners[1]
+    assert cm.brake_point == 620.0
+    assert cm.brake_zone_start == 620.0                 # not the dab at 520

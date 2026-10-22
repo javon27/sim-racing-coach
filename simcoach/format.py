@@ -150,7 +150,10 @@ def format_corner_line(cm, units: str = "metric", envelope_formed: bool = True) 
     # to sit past the apex.
     brake_txt = (
         f"brake {cm.apex_dist - cm.brake_point:.0f}m before apex @ {cm.peak_brake:.0%} peak"
-        if cm.brake_point is not None else "no heavy braking"
+        if cm.brake_point is not None
+        # #233: the run here began for the previous corner -- say so, no distance.
+        else f"braking carried through from {cm.brake_carried_from}"
+        if getattr(cm, "brake_carried_from", None) else "no heavy braking"
     )
     # Same for the throttle gate: say nothing rather than turn the corner's own
     # geometry into a claimed driver input.

@@ -41,6 +41,9 @@ class CornerMetrics:
     # with no braking in the zone. Not stored in corner_metrics: computed on read.
     brake_zone_start: float | None = None
     brake_zone_peak: float | None = None
+    # #233: brake_point is None because the braking run here was carried through from
+    # the previous corner (its tag, e.g. "T1") -- not "no heavy braking".
+    brake_carried_from: str | None = None
     peak_lat_g: float = 0.0          # max |lateral g| — how hard the car was loaded
     # Extended inputs/loads — nan when the source channel is absent (older laps).
     peak_brake_g: float = float("nan")   # max deceleration g while braking
@@ -178,6 +181,14 @@ _COAST_BRAKE = 0.05
 # ponytail: fixed look-ahead; two corners <250 m apart could see the next one's
 # throttle pickup, which under-reports nothing but caps the gap at that distance.
 _THROTTLE_LOOKAHEAD_M = 250.0
+
+# #233: a braking run straddling the previous corner's apex is this corner's only when
+# it sheds at least _CARRY_MIN_DV km/h after that apex and _CARRY_RATIO x what it
+# shed before it; the braking zone stops at a > _ZONE_REACCEL_KMH re-acceleration.
+# ponytail: tuning knobs, set on real laps (Mulsanne, Corkscrew, Interlagos T2).
+_CARRY_MIN_DV = 20.0
+_CARRY_RATIO = 2.0
+_ZONE_REACCEL_KMH = 10.0
 
 
 # An interval wider than this is not two adjacent ~50 Hz samples: it's a dropped
@@ -1079,10 +1090,10 @@ def input_shape(win_dist, win_brake, win_throttle, win_steering) -> dict:
 def _metrics_for_corner(
     record: LapRecord, corner: Corner, length: float | None = None,
     envelope: float | None = None, rpm_max_lap: float | None = None,
-    prev_apex: float | None = None,
+    prev: Corner | None = None,
 ) -> CornerMetrics:
-    """`prev_apex` (see `prev_corner_apex`): the previous corner's last apex, which
-    neither the brake point's run nor the braking zone reaches back to (#169, #233)."""
+    """`prev` (see `prev_corner`): the corner before this one, whose braking neither
+    the brake point nor the braking zone claims (#169, #233)."""
     dist = _interp_lap_distance(record)
     speed = record.channels["speed"]
     brake = record.channels["brake"]
@@ -1161,18 +1172,22 @@ def _metrics_for_corner(
     # sentinel (this is why heavy-braking corners like Parabolica showed "—"). Search
     # an approach-extended region up to the apex, then isolate the braking run that
     # leads INTO this corner (contiguous brake at/before the apex).
-    # #233: that run must also START after the previous corner's (last) apex,
-    # `prev_apex`. Otherwise a corner with no braking of its own (Bahrain Outer T2,
-    # ~85 m after T1) inherited T1's run: "brake 243m before apex". Not the previous
-    # corner's END: maps tile corners (prev end == this start) and a real stop begins
-    # 50-150 m before turn-in, so an end bound cut 91 genuine heavy stops on real laps
-    # (Imola Rivazza, Monza T2). A run that began at/before the previous apex is
-    # rejected whole, never clipped at the bound -- a clipped point is somewhere the
-    # driver never chose to brake.
-    # ponytail: fixed 250 m look-back, and an apex bound: a flat kink mapped just
-    # before a hairpin still claims the hairpin's run if it starts after the kink's
-    # apex (as before #233). No `prev_apex` (one-corner map): only the contiguous-run
-    # isolation separates corners.
+    # #233: and it must be THIS corner's run. Bounded at the previous corner's last
+    # apex (`prev`), not its end: maps tile corners (prev end == this start) and a real
+    # stop begins 50-150 m before turn-in, so an end bound cut 91 genuine heavy stops
+    # on real laps (Imola Rivazza, Monza T2). A run that ended by the previous apex is
+    # the previous corner's (Bahrain Outer T2, ~85 m after T1, inherited T1's run:
+    # "brake 243m before apex"). A run that STRADDLES the previous apex is split by
+    # speed: it is this corner's only when it sheds >= _CARRY_MIN_DV after that apex
+    # AND >= _CARRY_RATIO x what it shed before it (a stop that starts a few metres
+    # before a kink's apex: Mulsanne, Corkscrew); its brake point is then the run's
+    # real start -- the previous corner keeps its claim too, both facts are true.
+    # Otherwise it is carried: never clipped at the bound (a clipped point is a place
+    # the driver never chose to brake), and `brake_carried_from` says so instead of
+    # "no heavy braking".
+    # ponytail: fixed 250 m look-back; the split is a fixed 20 km/h / 2x knob (the 2x
+    # is hysteresis so a 50/50 run doesn't flip lap to lap); no `prev` (one-corner
+    # map): only the contiguous-run isolation separates corners.
     #
     # Both the look-back and the walk are done on a wrap-aware "metres BEFORE the
     # apex" axis (issue #7). A raw distance window loses the approach whenever it
@@ -1180,11 +1195,12 @@ def _metrics_for_corner(
     # even a wrap-aware mask can't be walked by array index, because the samples
     # either side of the seam are not in distance order.
     back = (corner.apex_dist - dist) % lap_len       # 0 at the apex, grows backwards
-    sel = np.where(back <= (corner.apex_dist - corner.start_dist + 250.0) % lap_len)[0]
+    full = np.argsort(back, kind="stable")           # whole lap, apex first, then backwards
+    order = full[:int(np.searchsorted(back[full], (
+        corner.apex_dist - corner.start_dist + 250.0) % lap_len, side="right"))]
     brake_point = None   # no braking found; never a distance standing in for that
-    run_peak = brake_zone_start = brake_zone_peak = None
-    if sel.size:
-        order = sel[np.argsort(back[sel], kind="stable")]  # apex first, then backwards
+    run_peak = brake_zone_start = brake_zone_peak = carried_from = None
+    if order.size:
         on = brake[order] > 0.1
         j = 0
         while j < on.size and not on[j]:  # nearest braking sample at/before the apex
@@ -1192,34 +1208,55 @@ def _metrics_for_corner(
         k = j
         while k + 1 < on.size and on[k + 1]:  # walk back through its contiguous run
             k += 1
-        # Samples strictly after the previous apex: a prefix of `order` (sorted by back).
-        # A braking run still on at the first sample at/before that apex (looked up on
-        # the whole lap: the look-back can end exactly there) began for the previous
-        # corner -- trim it off whole, so it can't be clipped into this corner's.
-        n = order.size
-        if prev_apex is not None:
+        n = order.size   # usable prefix of `full`: this corner's samples
+        q = s_ = None    # a run straddling the previous apex: full[q..s_]
+        if prev is not None:
+            pa_own = prev.apexes or [prev.apex_dist]
+            prev_apex = min(pa_own, key=lambda x: (prev.end_dist - x) % lap_len)  # last
             bound = (corner.apex_dist - prev_apex) % lap_len
-            n = int(np.searchsorted(back[order], bound, side="left"))
-            past = np.flatnonzero(back >= bound)
-            if past.size and brake[past[np.argmin(back[past])]] >= 0.1:
-                while n and brake[order[n - 1]] >= 0.1:
-                    n -= 1
+            p_ = int(np.searchsorted(back[full], bound, side="left"))  # first at/before it
+            n = min(p_, n)
+            if p_ < full.size and brake[full[p_]] >= 0.1:
+                q = s_ = p_
+                while q and brake[full[q - 1]] >= 0.1:
+                    q -= 1
+                while s_ + 1 < full.size and brake[full[s_ + 1]] >= 0.1:
+                    s_ += 1
+                v_pa = float(np.interp(bound, back[full], speed[full]))
+                dv_prev = float(speed[full[s_]]) - v_pa
+                dv_this = v_pa - float(np.nanmin(speed[full[:p_]])) if p_ else 0.0
+                if dv_this >= _CARRY_MIN_DV and dv_this >= _CARRY_RATIO * dv_prev:
+                    n = s_ + 1                    # this corner's: its real start counts
+                else:
+                    n = min(q, n)                 # carried: trimmed off whole
+                    carried_from = corner_tag(prev)
         if j < on.size and k < n:
-            d0 = float(dist[order[k]])
+            if q is not None and j == q and n > q:   # the run is the straddling one
+                run = full[j:s_ + 1]
+            else:
+                run = order[j:k + 1]
+            d0 = float(dist[run[-1]])
             # Selected samples sit at/before the apex on the wrapped axis, so a raw
             # distance ABOVE the apex is one that crossed S/F -- shift it a lap back
             # rather than report a "brake point" the apex appears to precede.
             brake_point = d0 - lap_len if d0 > corner.apex_dist else d0
-            run_peak = float(np.nanmax(brake[order[j:k + 1]]))
+            run_peak = float(np.nanmax(brake[run]))
+            carried_from = None
         # #169: the zone runs from the last full-throttle sample before the apex (the
-        # whole look-back when there is none) to the apex, and never back to the
-        # previous corner's apex -- a corner that never sees full throttle before the
-        # next must not hand it its own braking. #233: the same `n` as brake_point
-        # (straddling run trimmed), so the two never disagree. Its start is the braking
-        # sample furthest back inside it -- the same wrap shift as brake_point.
-        zone = order[:n]
+        # whole look-back when there is none) to the apex, over the same samples
+        # brake_point may use (#233: never a run carried from the previous corner), and
+        # never past a > _ZONE_REACCEL_KMH re-acceleration -- a dab on the previous
+        # corner's exit, then speed picked back up, is not this corner's braking.
+        # Its start is the braking sample furthest back inside it -- the same wrap
+        # shift as brake_point. (It can still be None with brake_point set: a
+        # full-throttle sample inside the run cuts it, as before #233.)
+        zone = full[:n]
         thr = np.flatnonzero(throttle[zone] >= 0.8)
         zone = zone[:thr[0]] if thr.size else zone
+        if j < zone.size:   # from the first braking sample back (the min may be pre-apex)
+            sp = speed[zone[j:]]
+            cut = np.flatnonzero(sp < np.fmax.accumulate(sp) - _ZONE_REACCEL_KMH)
+            zone = zone[:j + cut[0]] if cut.size else zone
         zb = np.flatnonzero(brake[zone] >= 0.1)
         if zb.size:
             dz = float(dist[zone[zb[-1]]])
@@ -1377,6 +1414,7 @@ def _metrics_for_corner(
         brake_point=brake_point,
         throttle_point=throttle_point,
         trailbrake_overlap=trailbrake_overlap,
+        brake_carried_from=carried_from,
         peak_brake=peak_brake,
         brake_zone_start=brake_zone_start,
         brake_zone_peak=brake_zone_peak,
@@ -1405,17 +1443,14 @@ def _metrics_for_corner(
     )
 
 
-def prev_corner_apex(cmap: CornerMap, corner: Corner) -> float | None:
-    """The last apex of the corner before `corner` in track order (the last corner's
-    for the first -- across S/F), or None on a one-corner map."""
+def prev_corner(cmap: CornerMap, corner: Corner) -> Corner | None:
+    """The corner before `corner` in track order (the last corner for the first --
+    across S/F), or None on a one-corner map. Every `_metrics_for_corner` caller
+    passes it, so a lap and its reference always split braking the same way."""
     cs = sorted(cmap.corners, key=lambda c: c.start_dist)
     if len(cs) < 2:
         return None
-    p = cs[cs.index(corner) - 1]
-    own = p.apexes or [p.apex_dist]
-    if not cmap.length:
-        return max(own)
-    return min(own, key=lambda x: (p.end_dist - x) % cmap.length)  # latest in window
+    return cs[cs.index(corner) - 1]
 
 
 def tag_sections(corners, cmap) -> None:
@@ -1461,7 +1496,7 @@ def analyze_lap(
         peak = float(np.nanmax(rpm_ch))
         rpm_max_lap = peak if math.isfinite(peak) else None
     corners = [_metrics_for_corner(record, corner, length, envelope, rpm_max_lap,
-                                   prev_corner_apex(cmap, corner))
+                                   prev_corner(cmap, corner))
               for corner in cmap.corners]
 
     tag_sections(corners, cmap)
@@ -1469,7 +1504,7 @@ def analyze_lap(
     has_reference = reference is not None
     if has_reference:
         ref_metrics = {c.number: _metrics_for_corner(reference, c, length,
-                                                     prev_apex=prev_corner_apex(cmap, c))
+                                                     prev=prev_corner(cmap, c))
                        for c in cmap.corners}
         for cm in corners:
             ref = ref_metrics.get(cm.corner_no)
