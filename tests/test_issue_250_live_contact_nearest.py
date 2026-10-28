@@ -64,10 +64,33 @@ def test_the_lap_in_progress_reads_across_the_s_f_line():
         28: car("Takeshi Kimura", 23, 895.8215, 905.5737),
         25: car("Augusto Farfus", 22, 895.4633, 905.0629),
         29: car("Finn Gehrsitz", 19, 894.6620, 904.2582)}}
-    line = live_contact_nearest(trace, 10, 384.0)
-    assert "Takeshi Kimura (P23 in class), 0.2 s ahead" in line
-    assert "Gehrsitz" not in line           # ~1.5 s ahead: outside the 0.6 s window
+    # Farfus (0.7 s ahead) and Gehrsitz (~1.5 s) are outside the 0.6 s window.
+    assert live_contact_nearest(trace, 10, 384.0) == (
+        "Nearest same-class car at the heaviest impact (384 m; other classes aren't "
+        "tracked): Takeshi Kimura (P23 in class), 0.2 s ahead -- the nearest car, not a "
+        "measured contact partner (who made contact is not measured).")
     assert live_contact_nearest(trace, 9, 384.0) is None   # the driver's lap 9: not there
+
+
+ME_LAP7 = _car("Jayson G", 25, (706.5586, _at(6, 3423.7)), (710.9006, _at(6, 3542.2)))
+
+
+def test_a_lapped_rival_is_paired_on_his_own_lap():
+    # A car a lap down (his k=5) through T10A beside the driver (k=6): paired by the
+    # crossing nearest in time, not by the driver's lap index -- he is named.
+    lapped = _car("Lapped Car", 30, (706.3586, _at(5, 3423.7)), (710.7006, _at(5, 3542.2)))
+    line = live_contact_nearest({"player_id": 0, "track_len": L,
+                                 "cars": {0: ME_LAP7, 50: lapped}}, 7, 3508.0)
+    assert "Lapped Car (P30 in class), 0.2 s ahead" in line
+
+
+def test_a_long_gap_between_samples_is_not_bridged():
+    # A rival whose samples are 40.8 s apart (a lap-count lag): the straight line
+    # between them would put him level with the driver at 3,508 m. Not measured there.
+    gap = {"driver": "Not There", "car": "E9", "class_position": 9,
+           "pts": [(686.1, _at(6, 0.0), 0.0, False), (726.9, _at(7, 2000.0), 0.0, False)]}
+    assert live_contact_nearest({"player_id": 0, "track_len": L,
+                                 "cars": {0: ME_LAP7, 9: gap}}, 7, 3508.0) is None
 
 
 def _vs(cid, laps, dist, *, player=False):

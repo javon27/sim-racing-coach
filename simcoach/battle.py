@@ -52,6 +52,10 @@ CONTACT_NEAR_S = 0.6
 # the formation lap ends with the grid at 3,777 m on lap 0, then the start reads -302 m
 # on lap 0, so every car's race lap 1 was dropped until it passed 3,777 m again.
 STALE_TRACE_S = 1.0
+# #250 review: no time or speed is interpolated between two samples further apart than
+# this (scoring is a few Hz): a long gap -- a lap-count lag, a restarted trace -- bridged
+# by one straight line invents a crossing time for a car that wasn't there.
+MAX_SAMPLE_GAP_S = 2.0
 
 
 class FieldTrace:
@@ -153,6 +157,8 @@ def _time_at(pts: list, s: float) -> float | None:
     if i == 0 or i == len(pts):
         return None
     (t0, s0), (t1, s1) = pts[i - 1][:2], pts[i][:2]
+    if t1 - t0 > MAX_SAMPLE_GAP_S:
+        return None
     return t0 + (t1 - t0) * (s - s0) / (s1 - s0)
 
 
@@ -165,7 +171,9 @@ def _speed_at(pts: list, s: float) -> float | None:
         return pts[i][2]
     if i == 0 or i == len(pts):
         return None
-    (_, s0, v0), (_, s1, v1) = pts[i - 1][:3], pts[i][:3]
+    (t0, s0, v0), (t1, s1, v1) = pts[i - 1][:3], pts[i][:3]
+    if t1 - t0 > MAX_SAMPLE_GAP_S:
+        return None
     return v0 + (v1 - v0) * (s - s0) / (s1 - s0)
 
 
