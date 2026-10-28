@@ -584,7 +584,8 @@ def _is_filler(chunk: str) -> bool:
 def _ungrounded_names(sentence: str, known: str) -> list[str]:
     if not _RIVAL_CUE.search(sentence):
         return []
-    # #252: "Matt Bell's" is Matt Bell (_WORD keeps the apostrophe for O'Brien).
+    # #252: "Matt Bell's" is Matt Bell (_WORD's ASCII-apostrophe tail captures the 's;
+    # a curly ’s already ends the word).
     names = [a + " " + b.removesuffix("'s") for a, b in _NAME.findall(sentence)
              if a not in _NOT_A_FIRST_NAME]
     return [n for n in names if n.lower() not in known]
