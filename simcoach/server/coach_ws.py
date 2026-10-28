@@ -435,6 +435,9 @@ def register(app, deps) -> None:
                 # Surface our own curated user-facing errors verbatim; hide any
                 # other internal error text (and generic RuntimeError/ValueError)
                 # from the client.
+                # Log it either way: a masked error otherwise leaves no trace.
+                logging.getLogger(__name__).warning("coach turn failed %s",
+                                                    TURN_TAG.get(), exc_info=True)
                 msg = str(e) if isinstance(e, CoachUserError) else "coach error"
                 terminal = {"type": "error", "message": msg}
             latency = {"tier": None if last_answer else tier, "tier_via": routed["via"],

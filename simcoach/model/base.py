@@ -8,6 +8,11 @@ from typing import Protocol
 TURN_TAG: ContextVar[str] = ContextVar("coach_turn_tag", default="")
 
 
+class CoachUserError(RuntimeError):
+    """Raised for errors whose message is safe (and useful) to show the user
+    verbatim, as opposed to internal errors that must be masked."""
+
+
 @dataclass(frozen=True)
 class TokenUsage:
 

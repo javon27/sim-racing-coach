@@ -5,7 +5,7 @@ import os
 import threading
 
 from ..secrets import get_api_key
-from .base import Model
+from .base import CoachUserError, Model
 from .claude import ClaudeModel
 
 SUPPORTED = ("anthropic", "fake")          # implemented now
@@ -19,11 +19,6 @@ MODEL_ALIASES = {
     # default. Settings name the ROLE, so no model id lives outside this package.
     "cheapest": "claude-haiku-4-5-20251001",
 }
-
-
-class CoachUserError(RuntimeError):
-    """Raised for errors whose message is safe (and useful) to show the user
-    verbatim, as opposed to internal errors that must be masked."""
 
 
 def make_model(provider: str | None = None, model: str | None = None,
