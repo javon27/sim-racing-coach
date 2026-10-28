@@ -124,6 +124,83 @@ def rival_laps_line(field: FieldSnapshot) -> str | None:
     return "Lap times now (live, this session): " + "; ".join(parts) + "." if parts else None
 
 
+def class_field_line(field: FieldSnapshot) -> str | None:
+    """#255: the class leader and the class fastest lap, from one live scoring frame --
+    the coach otherwise saw two cars and called the driver's own best 'fastest in
+    class'. The leader's gap is the sum of the game's own place-to-place links (as
+    `class_neighbours`), or its lap count when a link is a lap or more; neither stated
+    when unknown. None when the driver isn't placed."""
+    order = sorted((c for c in field.cars if c.place > 0), key=lambda c: (c.place, c.id))
+    me = next((i for i, c in enumerate(order) if c.is_player), None)
+    if me is None:
+        return None
+    cls = order[me].cls
+    mates = [c for c in order if c.cls == cls]
+    lead = order.index(mates[0])
+    if lead == me:
+        parts = ["you lead your class"]
+    else:
+        links = order[lead + 1:me + 1]
+        laps = sum(c.laps_behind_next for c in links)
+        gaps = [c.gap_next for c in links]
+        if laps > 0:
+            gap = f", {laps} lap{'s' if laps > 1 else ''} ahead of you"
+        elif all(g is not None and math.isfinite(g) and g >= 0 for g in gaps) and sum(gaps):
+            gap = f", {sum(gaps):.1f} s ahead of you"
+        else:
+            gap = ""
+        parts = [f"class leader (P1 in class) {_who(order[lead])}{gap}"]
+    timed = sorted((c for c in mates if c.best_lap), key=lambda c: c.best_lap)
+    if timed:
+        best = timed[0]
+        mine = next((k for k, c in enumerate(timed, 1) if c.is_player), None)
+        parts.append(f"class fastest lap {format_laptime(best.best_lap)} by "
+                     + ("you" if best.is_player else _who(best))
+                     + (f"; your best ranks {mine} of {len(timed)} timed in class"
+                        if mine else ""))
+    return "Class now (live, this session): " + "; ".join(parts) + "."
+
+
+def track_neighbours_line(field: FieldSnapshot) -> str | None:
+    """#254: the nearest car ahead and behind ON TRACK, any class -- 'car behind in
+    class' is by standings, so a class leader lapping the driver is never 'behind' and
+    the coach guessed 'a faster class'. Gaps are lap distance (metres, measured), never
+    a time; a car on a different lap is said to be lapping him / being lapped (laps
+    from mTotalLaps + lap distance). Cars in the pits are left out. None without a
+    track length or a player."""
+    length = field.session.track_len
+    me = next((c for c in field.cars if c.is_player), None)
+    if me is None or not length or length <= 0:
+        return None
+    rest = [c for c in field.cars if not c.is_player and not c.in_pits]
+    if not rest:
+        return None
+
+    def ahead_m(c):           # metres the car is ahead of the driver around the lap
+        return (c.lap_dist - me.lap_dist) % length
+
+    def lapping(c, metres_ahead):
+        # whole laps between them on the road: positive = that car is laps up
+        laps = round((c.laps * length + c.lap_dist
+                      - me.laps * length - me.lap_dist - metres_ahead) / length)
+        if laps > 0:
+            return f", {laps} lap{'s' if laps > 1 else ''} up on you (lapping you)"
+        if laps < 0:
+            return f", {-laps} lap{'s' if laps < -1 else ''} down (you are lapping it)"
+        return ""
+
+    out = []
+    a = min(rest, key=ahead_m)
+    pair = [("ahead", a, ahead_m(a))]
+    if others := [c for c in rest if c is not a]:     # one car out is only 'ahead'
+        b = min(others, key=lambda c: length - ahead_m(c))
+        pair.append(("behind", b, length - ahead_m(b)))
+    for side, c, m in pair:
+        signed = m if side == "ahead" else -m
+        out.append(f"{side} {_who(c)}, {c.cls}, {m:,.0f} m {side}{lapping(c, signed)}")
+    return "On track now (live, any class, by lap distance): " + "; ".join(out) + "."
+
+
 def live_battle_target(cars: list[VehicleState], direction: str | None,
                        position: int | None) -> tuple[VehicleState | None, str]:
     """#186: the car a get_battle `direction`/`position` asks for in the LIVE field --
