@@ -224,3 +224,37 @@ def test_a_dropped_s_f_mismatch_frame_still_interpolates():
            (10.8, 1030.0, 200.0)]
     assert _time_at(pts, 1010.0) == pytest.approx(10.4)
     assert _speed_at(pts, 1010.0) == pytest.approx(190.0)
+
+
+def _hits(*rows):
+    return [{"et": t, "lap_distance": d, "magnitude": m, "label": "front-left"}
+            for t, d, m in rows]
+
+
+def test_a_contact_chains_each_impact_to_the_previous_one():
+    # Real laps.id 7988: one contact from 1,273.5 m to 1,305.1 m (31.6 m end to end,
+    # each step <= 14 m). Its first touch is 1,273.5 m, never the trailing 99 graze.
+    real_7988 = _hits((141.72, 1273.5, 6854), (142.00, 1287.1, 1889),
+                      (142.26, 1293.4, 305), (142.60, 1305.1, 99))
+    assert contact_touch_dist(real_7988, newest=True) == 1273.5
+    assert contact_touch_dist(real_7988, newest=False) == 1273.5
+
+
+def test_a_long_scrape_is_one_contact_from_its_first_impact():
+    # Real laps.id 7688: a scrape 699.3 -> 757.1 m over 5.1 s, 11 impacts.
+    real_7688 = _hits((904.56, 699.3, 1112), (904.66, 703.8, 1467), (905.38, 716.1, 787),
+                      (905.60, 722.3, 877), (905.90, 724.6, 832), (906.34, 728.1, 919),
+                      (906.62, 731.7, 568), (906.84, 733.5, 666), (908.78, 746.6, 1051),
+                      (909.66, 757.1, 430), (909.68, 757.1, 623))
+    assert contact_touch_dist(real_7688, newest=True) == 699.3
+
+
+def test_an_unplaced_impact_does_not_split_a_contact():
+    hits = _hits((10.0, 1000.0, 300), (12.0, float("nan"), 900), (14.0, 1005.0, 200))
+    assert contact_touch_dist(hits, newest=True) == 1000.0
+
+
+def test_a_fast_scrape_chains_by_time():
+    # 60 m/s along a wall: 36 m between impacts 0.6 s apart -- still one contact.
+    hits = _hits((10.0, 1000.0, 300), (10.6, 1036.0, 400), (11.2, 1072.0, 500))
+    assert contact_touch_dist(hits, newest=True) == 1000.0

@@ -868,8 +868,9 @@ _IMPACT_GROUP_M = 30.0
 
 def impact_groups(events: list) -> list[int]:
     """Each damage_events event's place (group index): a new place starts more than
-    _IMPACT_GROUP_M from the current place's FIRST impact; impacts with no lap distance
-    share one unplaced group. One contact = one place (#206, #250)."""
+    _IMPACT_GROUP_M from the current place's FIRST impact; a run of consecutive impacts
+    with no lap distance shares a group (an unplaced one between two placed ones starts
+    its own). The damage line's places, not battle.contact_touch_dist's contacts."""
     starts: list[float] = []
     home = []
     for e in events:                       # damage_events order: as hit, along the lap

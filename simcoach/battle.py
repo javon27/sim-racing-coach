@@ -19,7 +19,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from simcoach.corners import Corner
-from simcoach.format import impact_groups, unit_fns
+from simcoach.format import unit_fns
 from simcoach.lmu.live import FieldSnapshot, VehicleState
 
 # A rival within this many seconds of the driver at a corner entry is "in the fight"
@@ -56,6 +56,10 @@ STALE_TRACE_S = 1.0
 # this (scoring is a few Hz): a long gap -- a lap-count lag, a restarted trace -- bridged
 # by one straight line invents a crossing time for a car that wasn't there.
 MAX_SAMPLE_GAP_S = 2.0
+# #250 review: one contact chains impacts each within this far or this long of the
+# previous one (a continuous scrape), so "first touch" is the scrape's start.
+CONTACT_CHAIN_M = 30.0
+CONTACT_CHAIN_S = 1.0
 
 
 class FieldTrace:
@@ -365,19 +369,31 @@ def _nearest_line(t_me: float, timed: list[tuple[CarLap, float]], dist: float) -
 
 def contact_touch_dist(hits: list[dict], newest: bool) -> float | None:
     """#250 (driver's call): where the nearest-car line is read -- the FIRST touch (by
-    et) of one contact, a place of format.impact_groups. Which contact: the newest on a
+    et) of one contact. A contact chains placed impacts in et order while each is within
+    CONTACT_CHAIN_M or CONTACT_CHAIN_S of the PREVIOUS one (a scrape runs on: 7688 went
+    699 -> 757 m over 5 s); unplaced impacts are skipped. Which contact: the newest on a
     live lap ("who hit me?" just now -- not an earlier tap on the same lap), else the one
-    holding the heaviest impact (#238). Race 2 lap 3 shows why the first touch: at
-    2,071 m two cars were alongside; at the spin's heaviest knock, 2,083 m a second
-    later, nobody was within 0.6 s. None: no hits, or that touch is unplaced."""
-    if not hits:
+    holding the heaviest impact (#238). Ties: newest is the last on equal et, heaviest
+    the first on equal magnitude. Race 2 lap 3 shows why the first touch: at 2,071 m two
+    cars were alongside; at the spin's heaviest knock a second later, nobody within
+    0.6 s. None when no impact is placed."""
+    placed = sorted((e for e in hits if math.isfinite(e["lap_distance"])),
+                    key=lambda e: e["et"])          # stable: equal et keeps capture order
+    contacts: list[list[dict]] = []
+    for e in placed:
+        p = contacts[-1][-1] if contacts else None
+        if p is not None and (abs(e["lap_distance"] - p["lap_distance"]) <= CONTACT_CHAIN_M
+                              or e["et"] - p["et"] <= CONTACT_CHAIN_S):
+            contacts[-1].append(e)
+        else:
+            contacts.append([e])
+    if not contacts:
         return None
-    home = impact_groups(hits)
-    pick = max(range(len(hits)),
-               key=lambda i: hits[i]["et"] if newest else hits[i]["magnitude"])
-    first = min((e for e, g in zip(hits, home) if g == home[pick]), key=lambda e: e["et"])
-    d = first["lap_distance"]
-    return d if math.isfinite(d) else None
+    if newest:
+        pick = contacts[-1]
+    else:   # max() keeps the first of equal magnitudes
+        pick = max(contacts, key=lambda c: max(e["magnitude"] for e in c))
+    return pick[0]["lap_distance"]
 
 
 def contact_nearest(laps: list[CarLap], corners: list[Corner], dist: float) -> str | None:
