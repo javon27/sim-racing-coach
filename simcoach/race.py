@@ -16,7 +16,7 @@ from itertools import pairwise
 
 import numpy as np
 
-from simcoach.analysis import _MIN_TIRE_TREND_LAPS, _WHEELS
+from simcoach.analysis import _MIN_TIRE_TREND_LAPS, _WHEELS, is_incident_lap
 from simcoach.battle import _SIDE, Battle, build_battle, car_laps
 from simcoach.car_lookup import resolve_car
 from simcoach.corners import CornerMap
@@ -295,9 +295,12 @@ class Strategy:
 
 def is_clean(record: LapRecord) -> bool:
     """A lap a rate may be measured on: timed, valid, not an out-/in-/partial lap and
-    never in the pits (spec: those are excluded from every rate)."""
+    never in the pits (spec: those are excluded from every rate). #251: nor a lap the
+    game kept valid through a spin, a stop on track or contact -- the same detection
+    get_stint_events reports -- or a 16 s stop sets the pace. No corner map here, so
+    an off (read per corner) doesn't count; a spin or stop it caused does."""
     return (bool(record.lap_time) and record.valid and record.partial is None
-            and not record.pit)
+            and not record.pit and not is_incident_lap(record, CornerMap([]), None))
 
 
 def _burn(ch: dict, key: str) -> tuple[float | None, float | None]:
