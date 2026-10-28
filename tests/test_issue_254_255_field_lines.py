@@ -122,3 +122,19 @@ def test_cars_in_the_pits_and_an_unknown_track_length_are_left_out():
     f = _frame(RIG)
     f.session.track_len = 0.0
     assert track_neighbours_line(f) is None
+
+
+@pytest.mark.parametrize("cars", [
+    # the driver's own mismatch frame: he is at 10 m, lap count not ticked yet
+    [("A", "GT3", 10, 2000.0, 83.0, 0.0, 0, False),
+     ("You", "GT3", 9, 10.0, 83.0, 0.5, 0, False)],
+    # the other car's mismatch frame, the driver mid-lap
+    [("A", "GT3", 10, 10.0, 83.0, 0.0, 0, False),      # really lap 11, not ticked
+     ("You", "GT3", 10, 2000.0, 83.0, 0.5, 0, False)],
+    # before race lap 1: the driver's stale grid reading 3,777 m, outside the guard
+    [("A", "GT3", 0, 200.0, 0.0, 0.0, 0, False),
+     ("You", "GT3", 0, 3777.0, 0.0, 0.5, 0, False)],
+])
+def test_each_lap_clause_guard_holds_on_its_own(cars):
+    line = track_neighbours_line(_frame(cars))
+    assert "lap up" not in line and "lap down" not in line, line
