@@ -24,3 +24,12 @@ def test_contact_alone_keeps_a_lap_clean():
     from simcoach.analysis import damage_events
     assert damage_events(hit.channels)                          # the fixture's premise
     assert is_clean(hit)
+
+
+def test_a_track_limits_strike_drops_the_lap():
+    lap = _lap([_FLAT, _FLAT])
+    n = len(lap.channels["lap_distance"])
+    steps = [0.0] * (n // 2) + [1.0] * (n - n // 2)          # mTrackLimitsSteps rises once
+    struck = _lap([_FLAT, _FLAT])
+    struck.channels["track_limits_steps"] = steps
+    assert is_clean(lap) and not is_clean(struck)
