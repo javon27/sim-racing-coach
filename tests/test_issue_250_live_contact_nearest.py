@@ -4,7 +4,8 @@
 Fixtures are the real Road Atlanta race 2 of 2026-10-27 (session
 michelin-raceway-road-atlanta--racing-team-turkey-by-tf-2026-34-lm--offline, track
 length 4,077.33 m): battle_laps crossings (scoring-clock seconds, unwrapped lap index)
-of laps.id 8199 (lap 7, hit 1098 at 3,508 m in T10A), 8201/8202 (laps 9/10, hit 2883 at
+of laps.id 8195 (lap 3, first touch at 2,071 m, the spin's heavier knocks at 2,083 m),
+8199 (lap 7, hit 1098 at 3,508 m in T10A), 8201/8202 (laps 9/10, hit 2883 at
 384 m, across S/F), and the lap 0/1 lap_distance channel (8192/8193) at the start. The
 live trace is 5 Hz scoring samples (t, unwrapped distance, km/h, in pits), as
 FieldTrace.feed stores them, laid between those real crossings."""
@@ -12,8 +13,18 @@ import dataclasses
 import itertools
 
 import numpy as np
+import pytest
 
-from simcoach.battle import FieldTrace, car_laps, live_contact_nearest
+from simcoach.battle import (
+    CarLap,
+    FieldTrace,
+    _speed_at,
+    _time_at,
+    car_laps,
+    contact_nearest,
+    first_contact_dist,
+    live_contact_nearest,
+)
 from simcoach.corners import Corner, CornerMap
 from simcoach.lmu.live import FieldSnapshot, VehicleState, empty_snapshot
 from tests.test_live_lap import _ctx, _Source, _store, _worker
@@ -49,7 +60,7 @@ def test_the_lap_in_progress_names_the_nearest_car_at_the_hit():
         42: _car("Riccardo Agostini", 23, (707.2330, _at(6, 3423.7)),
                  (711.7539, _at(6, 3542.2)))}}
     line = live_contact_nearest(trace, 7, 3508.0)
-    assert line == ("Nearest same-class car at the heaviest impact (3,508 m; other classes "
+    assert line == ("Nearest same-class car at the first contact (3,508 m; other classes "
                     "aren't tracked): Dan Harper (P19 in class), 0.4 s ahead -- the nearest "
                     "car, not a measured contact partner (who made contact is not measured).")
 
@@ -66,7 +77,7 @@ def test_the_lap_in_progress_reads_across_the_s_f_line():
         29: car("Finn Gehrsitz", 19, 894.6620, 904.2582)}}
     # Farfus (0.7 s ahead) and Gehrsitz (~1.5 s) are outside the 0.6 s window.
     assert live_contact_nearest(trace, 10, 384.0) == (
-        "Nearest same-class car at the heaviest impact (384 m; other classes aren't "
+        "Nearest same-class car at the first contact (384 m; other classes aren't "
         "tracked): Takeshi Kimura (P23 in class), 0.2 s ahead -- the nearest car, not a "
         "measured contact partner (who made contact is not measured).")
     assert live_contact_nearest(trace, 9, 384.0) is None   # the driver's lap 9: not there
@@ -132,16 +143,20 @@ def test_a_car_reversing_after_a_spin_keeps_its_trace():
 
 def test_get_stint_events_this_lap_so_far_carries_the_nearest_car(tmp_path, synthetic_lap):
     # The live path end to end: LiveLap.now reads the capture's field trace at the
-    # heaviest impact of the lap so far; THIS LAP SO FAR carries #238's line.
+    # FIRST impact of the lap so far (not the heavier one after it); THIS LAP SO FAR
+    # carries #238's line.
     lap = synthetic_lap
     n = len(lap.channels["lap_distance"])
     ch = dict(lap.channels)
     et = np.full(n, 10.0)
     hit = int(np.searchsorted(ch["lap_distance"], 1000.0))
     et[hit:] = 150.0                                     # a new impact at ~1,000 m (T1)
+    mag = np.where(et > 10, 1098.0, 20.0)
+    heavier = int(np.searchsorted(ch["lap_distance"], 1300.0))
+    et[heavier:], mag[heavier:] = 160.0, 2000.0          # and a heavier one at ~1,300 m
     ch.update({
         "elapsed_time": np.linspace(100.0, 192.5, n), "lap_start_et": np.full(n, 100.0),
-        "last_impact_et": et, "last_impact_mag": np.where(et > 10, 1098.0, 20.0),
+        "last_impact_et": et, "last_impact_mag": mag,
         "last_impact_x": np.full(n, -1.08), "last_impact_z": np.full(n, -1.83),
         "dent_max": np.zeros(n), "dent_total": np.zeros(n),
         "detached": np.zeros(n), "overheating": np.zeros(n)})
@@ -160,5 +175,50 @@ def test_get_stint_events_this_lap_so_far_carries_the_nearest_car(tmp_path, synt
     out = ctx.dispatch("get_stint_events", {})
     block = out[out.index("THIS LAP SO FAR"):]
     assert "impact 1098" in block
-    assert (f"Nearest same-class car at the heaviest impact ({hit_m:,.0f} m; other classes "
+    assert (f"Nearest same-class car at the first contact ({hit_m:,.0f} m; other classes "
             "aren't tracked): D7 (P8 in class), 0.3 s behind") in block
+
+
+# Real race 2 lap 3 (laps.id 8195): its first damage_events and the battle_laps T6/T7
+# crossings (entry, exit, lap index) of the driver and the two cars alongside.
+T6 = Corner(6, "Turn 6", "right", 1895.7, 1980.0, 2059.1, label="6")
+T7 = Corner(7, "Turn 7", "left", 2075.4, 2150.0, 2230.7, label="7")
+LAP3_HITS = [
+    {"et": 324.28, "magnitude": 20.12, "lap_distance": 2071.1, "label": "rear-left"},
+    {"et": 324.36, "magnitude": 27.14, "lap_distance": 2071.1, "label": "rear-left"},
+    {"et": 325.32, "magnitude": 519.95, "lap_distance": 2082.95, "label": "rear-left"},
+    {"et": 325.34, "magnitude": 684.74, "lap_distance": 2082.95, "label": "rear-left"}]
+
+
+def _stored(cid, driver, pos, t6, t7, player=False):
+    return CarLap(cid, driver, driver, pos, player, entry={6: t6[0], 7: t7[0]},
+                  exit={6: t6[1], 7: t7[1]}, lap={6: 2, 7: 2})
+
+
+def test_the_line_is_read_at_the_first_contact_not_the_heaviest():
+    # The driver's call (#250): at the 2,071 m touch two cars were alongside; at the
+    # spin's heaviest knock (685 at 2,083 m) a second later nobody was within 0.6 s.
+    field = [_stored(0, "Jayson G", 25, (318.4409, 323.4108), (324.5242, 350.7663), True),
+             _stored(20, "Matt Bell", 5, (319.0712, 323.4160), (323.8866, 329.3098)),
+             _stored(27, "Francesco Castellacci", 6, (319.7669, 323.8349),
+                     (324.2341, 329.8221))]
+    assert first_contact_dist(LAP3_HITS) == 2071.1
+    assert contact_nearest(field, [T6, T7], first_contact_dist(LAP3_HITS)) == (
+        "Nearest same-class car at the first contact (2,071 m; other classes aren't "
+        "tracked): Francesco Castellacci (P6 in class), 0.1 s ahead; Matt Bell (P5 in "
+        "class), 0.5 s ahead -- the nearest car, not a measured contact partner (who made "
+        "contact is not measured).")
+
+
+def test_speed_is_not_interpolated_across_a_long_sample_gap():
+    pts = [(10.0, 100.0, 180.0), (13.0, 250.0, 180.0)]        # 3 s apart
+    assert _speed_at(pts, 175.0) is None and _time_at(pts, 175.0) is None
+
+
+def test_a_dropped_s_f_mismatch_frame_still_interpolates():
+    # FieldTrace.feed drops the one frame where lap count and distance disagree at S/F:
+    # that leaves a 0.4 s gap in an otherwise 5 Hz trace, which is still measured.
+    pts = [(10.0, 990.0, 180.0), (10.2, 1000.0, 180.0), (10.6, 1020.0, 200.0),
+           (10.8, 1030.0, 200.0)]
+    assert _time_at(pts, 1010.0) == pytest.approx(10.4)
+    assert _speed_at(pts, 1010.0) == pytest.approx(190.0)

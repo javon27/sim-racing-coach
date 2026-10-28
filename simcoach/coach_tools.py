@@ -9,7 +9,6 @@ current session (track/car/lap), which the live-session re-resolution keeps fres
 """
 from __future__ import annotations
 
-import math
 import os
 import re
 import statistics
@@ -44,6 +43,7 @@ from simcoach.analysis import (
 from simcoach.battle import (
     build_battle,
     contact_nearest,
+    first_contact_dist,
     format_battle,
     format_race_battle,
     rival_matches,
@@ -2272,11 +2272,11 @@ class CoachContext:
             if damage_line:
                 out.append(f"  {damage_line}")
                 contact = True
-                # #238: the car(s) nearest at the heaviest impact, from the stored field
+                # #238: the car(s) nearest at the first contact, from the stored field
                 # trace; nothing when the lap has none (offline, practice, unplaced hit).
-                heavy = max(hits, key=lambda e: e["magnitude"])["lap_distance"]
-                laps = self.store.battle_laps(lap_id) if math.isfinite(heavy) else []
-                near = contact_nearest(laps, self.cmap.corners, heavy) if laps else None
+                first = first_contact_dist(hits)
+                laps = self.store.battle_laps(lap_id) if first is not None else []
+                near = contact_nearest(laps, self.cmap.corners, first) if laps else None
                 if near:
                     out.append(f"  {near}")
         if unscanned:                # #207: once -- "none" above doesn't cover offs there

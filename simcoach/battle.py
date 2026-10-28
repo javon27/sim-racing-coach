@@ -358,14 +358,23 @@ def _nearest_line(t_me: float, timed: list[tuple[CarLap, float]], dist: float) -
         + ("level" if round(abs(g), 1) == 0 else f"{abs(g):.1f} s {'behind' if g > 0 else 'ahead'}")
         for g, o in near)
     # The field trace records the driver's class only: a car of another class is unseen.
-    return (f"Nearest same-class car at the heaviest impact ({dist:,.0f} m; other classes "
+    return (f"Nearest same-class car at the first contact ({dist:,.0f} m; other classes "
             f"aren't tracked): {cars} -- the nearest car, not a measured contact partner "
             "(who made contact is not measured).")
 
 
+def first_contact_dist(hits: list[dict]) -> float | None:
+    """#250 (driver's call): the lap distance of the lap's FIRST placed impact
+    (damage_events), where the nearest-car line is read -- the touch that started the
+    contact, not its heaviest knock (race 2 lap 3: a car alongside at the 2,071 m touch,
+    nobody within 0.6 s of the spin's 2,083 m knock a second later). None: none placed."""
+    placed = [e for e in hits if math.isfinite(e["lap_distance"])]
+    return min(placed, key=lambda e: e["et"])["lap_distance"] if placed else None
+
+
 def contact_nearest(laps: list[CarLap], corners: list[Corner], dist: float) -> str | None:
     """#238: the same-class car(s) nearest the driver as they passed `dist` (a contact's
-    heaviest impact) on a stored lap: up to two within CONTACT_NEAR_S, closest first.
+    first impact, first_contact_dist) on a stored lap: up to two within CONTACT_NEAR_S, closest first.
     Both times are the field trace's own scoring-clock crossings, so no two clocks are
     mixed. None when the driver or nobody near is timed there. It is the NEAREST car,
     never "who hit you": contact attribution is not measured."""
