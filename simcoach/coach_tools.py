@@ -2483,6 +2483,8 @@ class CoachContext:
         incidents += incident_lines(scan, self.cmap, self.units)
         if incidents:
             out.extend(f"  {line}" for line in incidents)
+            if scan.get("nearest"):        # #250: LiveLap.now's, as #238 on a stored lap
+                out.append(f"  {scan['nearest']}")
         # #210: a buffer still behind the line (an out-lap before it) reads a negative
         # lap distance -- "scanned to -241 m" is no measured reach; the line is dropped.
         elif (scan.get("scanned_to") or -1) >= 0:

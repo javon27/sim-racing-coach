@@ -47,6 +47,11 @@ MAX_PLAUSIBLE_SPEED_MS = 150.0
 # the nearest car there. Swept over 52 real contact laps (#238 review): true partners
 # sat 0.00-0.58 s away; at 1.0 s 7 of 16 wall/no-car hits still named a car, at 0.6 s 2.
 CONTACT_NEAR_S = 0.6
+# #250: a car whose frames have read a lap or more BEHIND its trace for this long is not
+# at an S/F count/distance mismatch (one frame) -- its trace start was stale. Real case:
+# the formation lap ends with the grid at 3,777 m on lap 0, then the start reads -302 m
+# on lap 0, so every car's race lap 1 was dropped until it passed 3,777 m again.
+STALE_TRACE_S = 1.0
 
 
 class FieldTrace:
@@ -83,16 +88,30 @@ class FieldTrace:
             # At S/F the lap count and lap distance may not update in the same frame,
             # in either order: distance reset first reads a lap backwards, the count
             # ticking first reads a lap ahead. Either frame is dropped, not repaired.
-            # ponytail: if a car's very FIRST sample is a lap-ahead frame, its trace
-            # stays blocked until it really gets there; the next take() tail limits it.
+            # A run of lap-behind frames lasting STALE_TRACE_S means the trace was the
+            # bad side (#250): it restarts there. A car reversing a few metres never does.
             if e["pts"]:
                 t0, s0 = e["pts"][-1][:2]
-                if s < s0 or s - s0 > MAX_PLAUSIBLE_SPEED_MS * (t - t0):
-                    continue
+                if s0 - s > self._track_len / 2:
+                    if t - e.setdefault("behind_since", t) <= STALE_TRACE_S:
+                        continue
+                    e["pts"] = []
+                else:
+                    e.pop("behind_since", None)
+                    if s < s0 or s - s0 > MAX_PLAUSIBLE_SPEED_MS * (t - t0):
+                        continue
+            e.pop("behind_since", None)
             pts = e["pts"]
             pts.append((t, s, c.speed * 3.6, bool(c.in_pits)))
             if pts[0][0] < t - TRACE_MAX_S:
                 del pts[:bisect.bisect_left(pts, t - TRACE_MAX_S, key=lambda p: p[0])]
+
+    def peek(self) -> dict:
+        """The trace so far, copied, for a read off the capture thread (#250: the lap in
+        progress). The capture thread keeps feeding; nothing is trimmed."""
+        return {"player_id": self._player_id, "track_len": self._track_len,
+                "cars": {cid: {**e, "pts": e["pts"][:]}
+                         for cid, e in list(self._cars.items())}}
 
     def take(self) -> dict:
         """Hand over the trace so far; keep the last TRACE_TAIL_S seconds for the next
@@ -318,19 +337,11 @@ def _time_at_dist(car: CarLap, corners: list[Corner], dist: float) -> float | No
     return None
 
 
-def contact_nearest(laps: list[CarLap], corners: list[Corner], dist: float) -> str | None:
-    """#238: the same-class car(s) nearest the driver as they passed `dist` (a contact's
-    heaviest impact) on a stored lap: up to two within CONTACT_NEAR_S, closest first.
-    Both times are the field trace's own scoring-clock crossings, so no two clocks are
-    mixed. None when the driver or nobody near is timed there. It is the NEAREST car,
-    never "who hit you": contact attribution is not measured."""
-    me = next((c for c in laps if c.is_player), None)
-    t_me = _time_at_dist(me, corners, dist) if me else None
-    if t_me is None:
-        return None
-    near = sorted(((t - t_me, o) for o in laps if not o.is_player
-                   and (t := _time_at_dist(o, corners, dist)) is not None
-                   and abs(t - t_me) <= CONTACT_NEAR_S and _clear(o, t, t)),
+def _nearest_line(t_me: float, timed: list[tuple[CarLap, float]], dist: float) -> str | None:
+    """#238's line: up to two of `timed` (rival, when it passed `dist`) within
+    CONTACT_NEAR_S of the driver's `t_me`, closest first, none in the pit lane then."""
+    near = sorted(((t - t_me, o) for o, t in timed
+                   if abs(t - t_me) <= CONTACT_NEAR_S and _clear(o, t, t)),
                   key=lambda x: abs(x[0]))[:2]
     if not near:
         return None
@@ -342,6 +353,44 @@ def contact_nearest(laps: list[CarLap], corners: list[Corner], dist: float) -> s
     return (f"Nearest same-class car at the heaviest impact ({dist:,.0f} m; other classes "
             f"aren't tracked): {cars} -- the nearest car, not a measured contact partner "
             "(who made contact is not measured).")
+
+
+def contact_nearest(laps: list[CarLap], corners: list[Corner], dist: float) -> str | None:
+    """#238: the same-class car(s) nearest the driver as they passed `dist` (a contact's
+    heaviest impact) on a stored lap: up to two within CONTACT_NEAR_S, closest first.
+    Both times are the field trace's own scoring-clock crossings, so no two clocks are
+    mixed. None when the driver or nobody near is timed there. It is the NEAREST car,
+    never "who hit you": contact attribution is not measured."""
+    me = next((c for c in laps if c.is_player), None)
+    t_me = _time_at_dist(me, corners, dist) if me else None
+    if t_me is None:
+        return None
+    return _nearest_line(t_me, [(o, t) for o in laps if not o.is_player
+                                and (t := _time_at_dist(o, corners, dist)) is not None], dist)
+
+
+def live_contact_nearest(trace: dict, lap_no: int, dist: float) -> str | None:
+    """#250: contact_nearest for the lap IN PROGRESS (`lap_no`, the live meta's: the
+    driver's mTotalLaps + 1), read straight off the field trace so far (FieldTrace.peek):
+    every car's own scoring-clock samples interpolated at `dist`, so it needs no corner
+    crossing after the hit and holds across S/F. Each rival is read on the lap of his
+    that passed `dist` nearest in time to the driver (as car_laps pairs corners)."""
+    length, cars = trace.get("track_len") or 0.0, trace.get("cars") or {}
+    me = cars.get(trace.get("player_id"))
+    if not length or me is None or not me["pts"]:
+        return None
+    t_me = _time_at(me["pts"], (lap_no - 1) * length + dist)
+    if t_me is None:
+        return None
+    timed = []
+    for cid, e in cars.items():
+        pts = e["pts"]
+        if e is me or not pts or (k := _crossing_lap(pts, dist, length, t_me)) is None:
+            continue
+        o = CarLap(cid, e["driver"], e["car"], e.get("class_position", 0), False,
+                   pit=_pit_spans(pts))
+        timed.append((o, _time_at(pts, k * length + dist)))
+    return _nearest_line(t_me, timed, dist)
 
 
 def _rival_query(query: str) -> str:
