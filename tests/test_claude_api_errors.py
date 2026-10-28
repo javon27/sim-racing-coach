@@ -1,8 +1,12 @@
 """An API failure the driver can act on reaches them as a plain CoachUserError,
 not the masked "coach error" (rig 2026-10-27: an expired key read as "coach error")."""
 import anthropic
-import httpx
 import pytest
+
+try:            # the SDK's own HTTP library: httpx2 on newer anthropic, httpx before
+    import httpx2 as httpx
+except ImportError:
+    import httpx
 
 from simcoach.model.base import CoachUserError
 from simcoach.model.claude import ClaudeModel
