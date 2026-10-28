@@ -161,16 +161,26 @@ def class_field_line(field: FieldSnapshot) -> str | None:
     return "Class now (live, this session): " + "; ".join(parts) + "."
 
 
+# ponytail: guessed knobs -- 150 m is ~1 s at racing speed (a one-frame mismatch is
+# 0.2 s); 5 m is a car length. Tune at the rig.
+LINE_GUARD_M = 150.0
+ALONGSIDE_M = 5.0
+
+
 def track_neighbours_line(field: FieldSnapshot) -> str | None:
     """#254: the nearest car ahead and behind ON TRACK, any class -- 'car behind in
     class' is by standings, so a class leader lapping the driver is never 'behind' and
     the coach guessed 'a faster class'. Gaps are lap distance (metres, measured), never
     a time; a car on a different lap is said to be lapping him / being lapped (laps
     from mTotalLaps + lap distance). Cars in the pits are left out. None without a
-    track length or a player."""
+    track length or a player, or with the player in the pits (a pit-lane distance is
+    not his place on the road). #254 review: LMU's lap count and lap distance can be a
+    frame out of step at the line (#250's FieldTrace mismatch) and at the start, so the
+    lap clause is never said for a car within LINE_GUARD_M of the line, or before race
+    lap 1 -- a false 'lapping you' would be a stated value nothing measured."""
     length = field.session.track_len
     me = next((c for c in field.cars if c.is_player), None)
-    if me is None or not length or length <= 0:
+    if me is None or not length or length <= 0 or me.in_pits:
         return None
     rest = [c for c in field.cars if not c.is_player and not c.in_pits]
     if not rest:
@@ -179,7 +189,12 @@ def track_neighbours_line(field: FieldSnapshot) -> str | None:
     def ahead_m(c):           # metres the car is ahead of the driver around the lap
         return (c.lap_dist - me.lap_dist) % length
 
+    def near_line(c):
+        return not LINE_GUARD_M <= c.lap_dist <= length - LINE_GUARD_M
+
     def lapping(c, metres_ahead):
+        if me.laps < 1 or near_line(me) or near_line(c):
+            return ""
         # whole laps between them on the road: positive = that car is laps up
         laps = round((c.laps * length + c.lap_dist
                       - me.laps * length - me.lap_dist - metres_ahead) / length)
@@ -197,7 +212,8 @@ def track_neighbours_line(field: FieldSnapshot) -> str | None:
         pair.append(("behind", b, length - ahead_m(b)))
     for side, c, m in pair:
         signed = m if side == "ahead" else -m
-        out.append(f"{side} {_who(c)}, {c.cls}, {m:,.0f} m {side}{lapping(c, signed)}")
+        where = "alongside" if m < ALONGSIDE_M else f"{m:,.0f} m {side}"
+        out.append(f"{side} {_who(c)}, {c.cls}, {where}{lapping(c, signed)}")
     return "On track now (live, any class, by lap distance): " + "; ".join(out) + "."
 
 
