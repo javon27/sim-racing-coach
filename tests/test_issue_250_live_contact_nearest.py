@@ -250,8 +250,30 @@ def test_a_long_scrape_is_one_contact_from_its_first_impact():
 
 
 def test_an_unplaced_impact_does_not_split_a_contact():
-    hits = _hits((10.0, 1000.0, 300), (12.0, float("nan"), 900), (14.0, 1005.0, 200))
+    hits = _hits((10.0, 1000.0, 300), (11.2, float("nan"), 900), (11.9, 1005.0, 200))
     assert contact_touch_dist(hits, newest=True) == 1000.0
+
+
+def test_a_stopped_car_hit_again_seconds_later_is_a_new_contact():
+    # Real laps.id 7768: a hit at 829.6 m, then 5.9 s later two at 821.7 m -- 8 m away,
+    # but a second car arriving, not the same contact.
+    real_7768 = _hits((42.30, 483.2, 876), (42.56, 485.3, 22), (67.46, 829.6, 1771),
+                      (73.38, 821.7, 1791), (73.40, 821.2, 2288))
+    assert contact_touch_dist(real_7768, newest=False) == 821.7   # holds the 2288
+    assert contact_touch_dist(real_7768, newest=True) == 821.7
+
+
+def test_a_live_read_whose_newest_impact_is_unplaced_says_nothing():
+    hits = _hits((10.0, 1000.0, 300), (20.0, float("nan"), 900))
+    assert contact_touch_dist(hits, newest=True) is None
+    assert contact_touch_dist(hits, newest=False) == 1000.0      # stored: still placed
+
+
+def test_impacts_are_read_in_time_order():
+    # The 7988 contact handed over out of order: its first touch is still the earliest.
+    shuffled = _hits((142.60, 1305.1, 99), (141.72, 1273.5, 6854), (142.26, 1293.4, 305),
+                     (142.00, 1287.1, 1889))
+    assert contact_touch_dist(shuffled, newest=True) == 1273.5
 
 
 def test_a_fast_scrape_chains_by_time():

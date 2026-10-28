@@ -56,9 +56,12 @@ STALE_TRACE_S = 1.0
 # this (scoring is a few Hz): a long gap -- a lap-count lag, a restarted trace -- bridged
 # by one straight line invents a crossing time for a car that wasn't there.
 MAX_SAMPLE_GAP_S = 2.0
-# #250 review: one contact chains impacts each within this far or this long of the
-# previous one (a continuous scrape), so "first touch" is the scrape's start.
+# #250 review: an impact joins the contact before it when it is within CONTACT_CHAIN_S of
+# the previous impact, or within CONTACT_CHAIN_M AND CONTACT_NEAR_GAP_S of it -- a scrape
+# runs on (7688: steps up to 1.94 s), a stopped car hit again ~5 s later is a new contact
+# at the same spot (7768: 830 m then 822 m 5.9 s on; 7737: 743 m then 757 m 5.2 s on).
 CONTACT_CHAIN_M = 30.0
+CONTACT_NEAR_GAP_S = 2.0
 CONTACT_CHAIN_S = 1.0
 
 
@@ -369,21 +372,27 @@ def _nearest_line(t_me: float, timed: list[tuple[CarLap, float]], dist: float) -
 
 def contact_touch_dist(hits: list[dict], newest: bool) -> float | None:
     """#250 (driver's call): where the nearest-car line is read -- the FIRST touch (by
-    et) of one contact. A contact chains placed impacts in et order while each is within
-    CONTACT_CHAIN_M or CONTACT_CHAIN_S of the PREVIOUS one (a scrape runs on: 7688 went
-    699 -> 757 m over 5 s); unplaced impacts are skipped. Which contact: the newest on a
-    live lap ("who hit me?" just now -- not an earlier tap on the same lap), else the one
-    holding the heaviest impact (#238). Ties: newest is the last on equal et, heaviest
-    the first on equal magnitude. Race 2 lap 3 shows why the first touch: at 2,071 m two
-    cars were alongside; at the spin's heaviest knock a second later, nobody within
-    0.6 s. None when no impact is placed."""
+    et) of one contact. A contact chains placed impacts in et order while each is close
+    to the PREVIOUS one (CONTACT_CHAIN_S, or CONTACT_CHAIN_M within CONTACT_NEAR_GAP_S:
+    a scrape runs on -- 7688 went 699 -> 757 m over 5 s); unplaced impacts are skipped.
+    Which contact: the newest on a live lap ("who hit me?" just now -- not an earlier tap
+    on the same lap), else the one holding the heaviest impact (#238). Ties: newest is
+    the last on equal et, heaviest the first on equal magnitude. Race 2 lap 3 shows why
+    the first touch: at 2,071 m two cars were alongside; at the spin's heaviest knock a
+    second later, nobody within 0.6 s. None when no impact is placed, or on a live read
+    whose newest impact is unplaced (never an older contact in its place)."""
+    if newest and hits and not math.isfinite(
+            max(reversed(hits), key=lambda e: e["et"])["lap_distance"]):
+        return None
     placed = sorted((e for e in hits if math.isfinite(e["lap_distance"])),
                     key=lambda e: e["et"])          # stable: equal et keeps capture order
     contacts: list[list[dict]] = []
     for e in placed:
         p = contacts[-1][-1] if contacts else None
-        if p is not None and (abs(e["lap_distance"] - p["lap_distance"]) <= CONTACT_CHAIN_M
-                              or e["et"] - p["et"] <= CONTACT_CHAIN_S):
+        gap = e["et"] - p["et"] if p is not None else math.inf
+        if gap <= CONTACT_CHAIN_S or (
+                gap <= CONTACT_NEAR_GAP_S
+                and abs(e["lap_distance"] - p["lap_distance"]) <= CONTACT_CHAIN_M):
             contacts[-1].append(e)
         else:
             contacts.append([e])
