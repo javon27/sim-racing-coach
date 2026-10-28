@@ -16,7 +16,7 @@ from itertools import pairwise
 
 import numpy as np
 
-from simcoach.analysis import _MIN_TIRE_TREND_LAPS, _WHEELS, is_incident_lap
+from simcoach.analysis import _MIN_TIRE_TREND_LAPS, _WHEELS, lap_events
 from simcoach.battle import _SIDE, Battle, build_battle, car_laps
 from simcoach.car_lookup import resolve_car
 from simcoach.corners import CornerMap
@@ -296,11 +296,18 @@ class Strategy:
 def is_clean(record: LapRecord) -> bool:
     """A lap a rate may be measured on: timed, valid, not an out-/in-/partial lap and
     never in the pits (spec: those are excluded from every rate). #251: nor a lap the
-    game kept valid through a spin, a stop on track or contact -- the same detection
-    get_stint_events reports -- or a 16 s stop sets the pace. No corner map here, so
-    an off (read per corner) doesn't count; a spin or stop it caused does."""
+    game kept valid through a spin, a stop on track or a track-limits strike -- the
+    detection get_stint_events reports -- or a 16 s stop sets the pace. Contact alone
+    keeps a lap clean: most contact laps run at pace and burn normal fuel, and dropping
+    them left pace/strategy with under 2 clean laps for whole race openings (#251
+    review, 43 of 58 dropped laps over 11 real races). No corner map here, so an off
+    (read per corner) doesn't count; a spin or stop it caused does."""
     return (bool(record.lap_time) and record.valid and record.partial is None
-            and not record.pit and not is_incident_lap(record, CornerMap([]), None))
+            and not record.pit
+            and not any(e["kind"] in _UNCLEAN for e in lap_events(record, CornerMap([]), None)))
+
+
+_UNCLEAN = ("spin", "stop", "track_limits")
 
 
 def _burn(ch: dict, key: str) -> tuple[float | None, float | None]:

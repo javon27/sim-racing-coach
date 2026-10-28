@@ -15,3 +15,12 @@ def test_a_valid_lap_with_a_spin_or_a_stop_is_not_clean():
         assert rec.valid and rec.lap_time                       # the game kept it
         assert not is_clean(rec)
         assert not lap_facts(rec).clean
+
+
+def test_contact_alone_keeps_a_lap_clean():
+    # #251 review: most contact laps ran at pace (7801 55.255 s vs a 55.586 s pace);
+    # dropping them starved pace and strategy for whole race openings.
+    hit = _lap([_FLAT, _FLAT], hit_at_m=1500.0)
+    from simcoach.analysis import damage_events
+    assert damage_events(hit.channels)                          # the fixture's premise
+    assert is_clean(hit)
