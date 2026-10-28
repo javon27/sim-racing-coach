@@ -4,7 +4,7 @@
 Fixtures are the real Road Atlanta race 2 of 2026-10-27 (session
 michelin-raceway-road-atlanta--racing-team-turkey-by-tf-2026-34-lm--offline, track
 length 4,077.33 m): battle_laps crossings (scoring-clock seconds, unwrapped lap index)
-of laps.id 8195 (lap 3, first touch at 2,071 m, the spin's heavier knocks at 2,083 m),
+of laps.id 8195 (lap 3, the contact's first touch at 2,071 m, the spin's heavier knocks at 2,083 m),
 8199 (lap 7, hit 1098 at 3,508 m in T10A), 8201/8202 (laps 9/10, hit 2883 at
 384 m, across S/F), and the lap 0/1 lap_distance channel (8192/8193) at the start. The
 live trace is 5 Hz scoring samples (t, unwrapped distance, km/h, in pits), as
@@ -22,7 +22,7 @@ from simcoach.battle import (
     _time_at,
     car_laps,
     contact_nearest,
-    first_contact_dist,
+    contact_touch_dist,
     live_contact_nearest,
 )
 from simcoach.corners import Corner, CornerMap
@@ -60,8 +60,8 @@ def test_the_lap_in_progress_names_the_nearest_car_at_the_hit():
         42: _car("Riccardo Agostini", 23, (707.2330, _at(6, 3423.7)),
                  (711.7539, _at(6, 3542.2)))}}
     line = live_contact_nearest(trace, 7, 3508.0)
-    assert line == ("Nearest same-class car at the first contact (3,508 m; other classes "
-                    "aren't tracked): Dan Harper (P19 in class), 0.4 s ahead -- the nearest "
+    assert line == ("Nearest same-class car at the first touch of the contact (3,508 m; "
+                    "other classes aren't tracked): Dan Harper (P19 in class), 0.4 s ahead -- the nearest "
                     "car, not a measured contact partner (who made contact is not measured).")
 
 
@@ -77,8 +77,8 @@ def test_the_lap_in_progress_reads_across_the_s_f_line():
         29: car("Finn Gehrsitz", 19, 894.6620, 904.2582)}}
     # Farfus (0.7 s ahead) and Gehrsitz (~1.5 s) are outside the 0.6 s window.
     assert live_contact_nearest(trace, 10, 384.0) == (
-        "Nearest same-class car at the first contact (384 m; other classes aren't "
-        "tracked): Takeshi Kimura (P23 in class), 0.2 s ahead -- the nearest car, not a "
+        "Nearest same-class car at the first touch of the contact (384 m; other classes "
+        "aren't tracked): Takeshi Kimura (P23 in class), 0.2 s ahead -- the nearest car, not a "
         "measured contact partner (who made contact is not measured).")
     assert live_contact_nearest(trace, 9, 384.0) is None   # the driver's lap 9: not there
 
@@ -142,18 +142,19 @@ def test_a_car_reversing_after_a_spin_keeps_its_trace():
 
 
 def test_get_stint_events_this_lap_so_far_carries_the_nearest_car(tmp_path, synthetic_lap):
-    # The live path end to end: LiveLap.now reads the capture's field trace at the
-    # FIRST impact of the lap so far (not the heavier one after it); THIS LAP SO FAR
-    # carries #238's line.
+    # The live path end to end: "who hit me?" just now is the lap's NEWEST contact,
+    # read at its first touch -- not an earlier, heavier wall hit on the same lap, and
+    # not the contact's heavier second impact. THIS LAP SO FAR carries #238's line.
     lap = synthetic_lap
     n = len(lap.channels["lap_distance"])
     ch = dict(lap.channels)
-    et = np.full(n, 10.0)
+    et, mag = np.full(n, 10.0), np.full(n, 20.0)
+    for at_m, t, m in ((900.0, 148.0, 2000.0),           # an unrelated wall hit
+                       (1000.0, 150.0, 300.0),           # the newest contact's touch...
+                       (1015.0, 150.3, 1098.0)):         # ...and its heavy impact
+        i = int(np.searchsorted(ch["lap_distance"], at_m))
+        et[i:], mag[i:] = t, m
     hit = int(np.searchsorted(ch["lap_distance"], 1000.0))
-    et[hit:] = 150.0                                     # a new impact at ~1,000 m (T1)
-    mag = np.where(et > 10, 1098.0, 20.0)
-    heavier = int(np.searchsorted(ch["lap_distance"], 1300.0))
-    et[heavier:], mag[heavier:] = 160.0, 2000.0          # and a heavier one at ~1,300 m
     ch.update({
         "elapsed_time": np.linspace(100.0, 192.5, n), "lap_start_et": np.full(n, 100.0),
         "last_impact_et": et, "last_impact_mag": mag,
@@ -175,8 +176,8 @@ def test_get_stint_events_this_lap_so_far_carries_the_nearest_car(tmp_path, synt
     out = ctx.dispatch("get_stint_events", {})
     block = out[out.index("THIS LAP SO FAR"):]
     assert "impact 1098" in block
-    assert (f"Nearest same-class car at the first contact ({hit_m:,.0f} m; other classes "
-            "aren't tracked): D7 (P8 in class), 0.3 s behind") in block
+    assert (f"Nearest same-class car at the first touch of the contact ({hit_m:,.0f} m; "
+            "other classes aren't tracked): D7 (P8 in class), 0.3 s behind") in block
 
 
 # Real race 2 lap 3 (laps.id 8195): its first damage_events and the battle_laps T6/T7
@@ -195,17 +196,18 @@ def _stored(cid, driver, pos, t6, t7, player=False):
                   exit={6: t6[1], 7: t7[1]}, lap={6: 2, 7: 2})
 
 
-def test_the_line_is_read_at_the_first_contact_not_the_heaviest():
+def test_the_line_is_read_at_the_contacts_first_touch_not_its_heaviest():
     # The driver's call (#250): at the 2,071 m touch two cars were alongside; at the
     # spin's heaviest knock (685 at 2,083 m) a second later nobody was within 0.6 s.
     field = [_stored(0, "Jayson G", 25, (318.4409, 323.4108), (324.5242, 350.7663), True),
              _stored(20, "Matt Bell", 5, (319.0712, 323.4160), (323.8866, 329.3098)),
              _stored(27, "Francesco Castellacci", 6, (319.7669, 323.8349),
                      (324.2341, 329.8221))]
-    assert first_contact_dist(LAP3_HITS) == 2071.1
-    assert contact_nearest(field, [T6, T7], first_contact_dist(LAP3_HITS)) == (
-        "Nearest same-class car at the first contact (2,071 m; other classes aren't "
-        "tracked): Francesco Castellacci (P6 in class), 0.1 s ahead; Matt Bell (P5 in "
+    # One contact (format.impact_groups): 2,083 m is within 30 m of the 2,071 m touch.
+    assert contact_touch_dist(LAP3_HITS, newest=False) == 2071.1
+    assert contact_nearest(field, [T6, T7], contact_touch_dist(LAP3_HITS, newest=False)) == (
+        "Nearest same-class car at the first touch of the contact (2,071 m; other classes "
+        "aren't tracked): Francesco Castellacci (P6 in class), 0.1 s ahead; Matt Bell (P5 in "
         "class), 0.5 s ahead -- the nearest car, not a measured contact partner (who made "
         "contact is not measured).")
 

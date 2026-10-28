@@ -19,7 +19,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from simcoach.corners import Corner
-from simcoach.format import unit_fns
+from simcoach.format import impact_groups, unit_fns
 from simcoach.lmu.live import FieldSnapshot, VehicleState
 
 # A rival within this many seconds of the driver at a corner entry is "in the fight"
@@ -358,23 +358,31 @@ def _nearest_line(t_me: float, timed: list[tuple[CarLap, float]], dist: float) -
         + ("level" if round(abs(g), 1) == 0 else f"{abs(g):.1f} s {'behind' if g > 0 else 'ahead'}")
         for g, o in near)
     # The field trace records the driver's class only: a car of another class is unseen.
-    return (f"Nearest same-class car at the first contact ({dist:,.0f} m; other classes "
-            f"aren't tracked): {cars} -- the nearest car, not a measured contact partner "
+    return (f"Nearest same-class car at the first touch of the contact ({dist:,.0f} m; "
+            f"other classes aren't tracked): {cars} -- the nearest car, not a measured contact partner "
             "(who made contact is not measured).")
 
 
-def first_contact_dist(hits: list[dict]) -> float | None:
-    """#250 (driver's call): the lap distance of the lap's FIRST placed impact
-    (damage_events), where the nearest-car line is read -- the touch that started the
-    contact, not its heaviest knock (race 2 lap 3: a car alongside at the 2,071 m touch,
-    nobody within 0.6 s of the spin's 2,083 m knock a second later). None: none placed."""
-    placed = [e for e in hits if math.isfinite(e["lap_distance"])]
-    return min(placed, key=lambda e: e["et"])["lap_distance"] if placed else None
+def contact_touch_dist(hits: list[dict], newest: bool) -> float | None:
+    """#250 (driver's call): where the nearest-car line is read -- the FIRST touch (by
+    et) of one contact, a place of format.impact_groups. Which contact: the newest on a
+    live lap ("who hit me?" just now -- not an earlier tap on the same lap), else the one
+    holding the heaviest impact (#238). Race 2 lap 3 shows why the first touch: at
+    2,071 m two cars were alongside; at the spin's heaviest knock, 2,083 m a second
+    later, nobody was within 0.6 s. None: no hits, or that touch is unplaced."""
+    if not hits:
+        return None
+    home = impact_groups(hits)
+    pick = max(range(len(hits)),
+               key=lambda i: hits[i]["et"] if newest else hits[i]["magnitude"])
+    first = min((e for e, g in zip(hits, home) if g == home[pick]), key=lambda e: e["et"])
+    d = first["lap_distance"]
+    return d if math.isfinite(d) else None
 
 
 def contact_nearest(laps: list[CarLap], corners: list[Corner], dist: float) -> str | None:
     """#238: the same-class car(s) nearest the driver as they passed `dist` (a contact's
-    first impact, first_contact_dist) on a stored lap: up to two within CONTACT_NEAR_S, closest first.
+    first touch, contact_touch_dist) on a stored lap: up to two within CONTACT_NEAR_S, closest first.
     Both times are the field trace's own scoring-clock crossings, so no two clocks are
     mixed. None when the driver or nobody near is timed there. It is the NEAREST car,
     never "who hit you": contact attribution is not measured."""

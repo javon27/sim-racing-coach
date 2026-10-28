@@ -43,7 +43,7 @@ from simcoach.analysis import (
 from simcoach.battle import (
     build_battle,
     contact_nearest,
-    first_contact_dist,
+    contact_touch_dist,
     format_battle,
     format_race_battle,
     rival_matches,
@@ -2272,9 +2272,9 @@ class CoachContext:
             if damage_line:
                 out.append(f"  {damage_line}")
                 contact = True
-                # #238: the car(s) nearest at the first contact, from the stored field
+                # #238: the car(s) nearest at the heaviest contact's first touch, from the stored field
                 # trace; nothing when the lap has none (offline, practice, unplaced hit).
-                first = first_contact_dist(hits)
+                first = contact_touch_dist(hits, newest=False)
                 laps = self.store.battle_laps(lap_id) if first is not None else []
                 near = contact_nearest(laps, self.cmap.corners, first) if laps else None
                 if near:

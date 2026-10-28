@@ -31,7 +31,7 @@ from .analysis import (
     prev_corner,
     tag_sections,
 )
-from .battle import first_contact_dist, live_contact_nearest
+from .battle import contact_touch_dist, live_contact_nearest
 from .corners import in_window
 from .format import SUSPENSION_UNSEEN, format_events, place_text
 from .model_types import LapRecord
@@ -256,10 +256,10 @@ class LiveLap:
             return None, None
         cmap = self.cmap_for(meta["track"])
         incidents = lap_incidents(ch, cmap)
-        # #250: the same-class car(s) nearest at this lap's first contact so far, off
+        # #250: the same-class car(s) nearest at the first touch of the lap's NEWEST contact, off
         # the capture's live field trace (the committed lap reads its stored crossings).
         trace = getattr(self.source, "_trace", None)
-        first = first_contact_dist(incidents["impacts"])
+        first = contact_touch_dist(incidents["impacts"], newest=True)
         if first is not None and trace is not None:
             try:
                 near = live_contact_nearest(trace.peek(), meta["lap_no"], first)
