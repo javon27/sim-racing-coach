@@ -127,9 +127,13 @@ def rival_laps_line(field: FieldSnapshot) -> str | None:
 def class_field_line(field: FieldSnapshot) -> str | None:
     """#255: the class leader and the class fastest lap, from one live scoring frame --
     the coach otherwise saw two cars and called the driver's own best 'fastest in
-    class'. The leader's gap is the sum of the game's own place-to-place links (as
-    `class_neighbours`), or its lap count when a link is a lap or more; neither stated
-    when unknown. None when the driver isn't placed."""
+    class'. The leader's lead in laps is from mTotalLaps + lap distance, as
+    `track_neighbours_line` (rig 2026-10-29: summing the per-link mLapsBehindNext read
+    '1 lap ahead' for a leader 1.8 laps up -- each link drops its part-lap), and is never
+    said near the line, before race lap 1 or from the pits; a measured lead under a lap,
+    with no link a lap or more, is the sum of the game's place-to-place time links (as
+    `class_neighbours`) -- unmeasured, no seconds either (in the pits the summed links
+    read 97.8 s, more than a lap). Neither stated when unknown. None when the driver isn't placed."""
     order = sorted((c for c in field.cars if c.place > 0), key=lambda c: (c.place, c.id))
     me = next((i for i, c in enumerate(order) if c.is_player), None)
     if me is None:
@@ -141,11 +145,13 @@ def class_field_line(field: FieldSnapshot) -> str | None:
         parts = ["you lead your class"]
     else:
         links = order[lead + 1:me + 1]
-        laps = sum(c.laps_behind_next for c in links)
         gaps = [c.gap_next for c in links]
-        if laps > 0:
-            gap = f", {laps} lap{'s' if laps > 1 else ''} ahead of you"
-        elif all(g is not None and math.isfinite(g) and g >= 0 for g in gaps) and sum(gaps):
+        laps = _laps_ahead(order[lead], order[me], field.session.track_len)
+        if laps is not None and laps >= 1:
+            gap = f", {laps:.1f} laps ahead of you"
+        elif (laps is not None and laps >= 0 and sum(gaps)
+              and not any(c.laps_behind_next for c in links)
+              and all(g is not None and math.isfinite(g) and g >= 0 for g in gaps)):
             gap = f", {sum(gaps):.1f} s ahead of you"
         else:
             gap = ""
@@ -165,6 +171,21 @@ def class_field_line(field: FieldSnapshot) -> str | None:
 # 0.2 s); 5 m is a car length. Tune at the rig.
 LINE_GUARD_M = 150.0
 ALONGSIDE_M = 5.0
+
+
+def _near_line(c, length):
+    return not LINE_GUARD_M <= c.lap_dist <= length - LINE_GUARD_M
+
+
+def _laps_ahead(c, me, length):
+    """Laps `c` is ahead of `me` on the road (mTotalLaps + lap distance; negative =
+    behind), or None where that isn't measured: no track length, before race lap 1,
+    either car in the pits or near the line (#254 review: lap count and lap distance
+    can be a frame out of step there)."""
+    if (not length or length <= 0 or me.laps < 1 or me.in_pits or c.in_pits
+            or _near_line(me, length) or _near_line(c, length)):
+        return None
+    return (c.laps * length + c.lap_dist - me.laps * length - me.lap_dist) / length
 
 
 def track_neighbours_line(field: FieldSnapshot) -> str | None:
@@ -189,19 +210,21 @@ def track_neighbours_line(field: FieldSnapshot) -> str | None:
     def ahead_m(c):           # metres the car is ahead of the driver around the lap
         return (c.lap_dist - me.lap_dist) % length
 
-    def near_line(c):
-        return not LINE_GUARD_M <= c.lap_dist <= length - LINE_GUARD_M
-
     def lapping(c, metres_ahead):
-        if me.laps < 1 or near_line(me) or near_line(c):
+        up = _laps_ahead(c, me, length)
+        if up is None:
             return ""
-        # whole laps between them on the road: positive = that car is laps up
-        laps = round((c.laps * length + c.lap_dist
-                      - me.laps * length - me.lap_dist - metres_ahead) / length)
+        # whole laps between them on the road: positive = that car is laps up. Rig
+        # 2026-10-29: a car a lap up and AHEAD has lapped him, not 'is lapping' him.
+        laps = round(up - metres_ahead / length)
+        # alongside is a pass still happening
         if laps > 0:
-            return f", {laps} lap{'s' if laps > 1 else ''} up on you (lapping you)"
+            return (f", {laps} lap{'s' if laps > 1 else ''} up on you "
+                    + ("(has lapped you)" if metres_ahead >= ALONGSIDE_M else "(lapping you)"))
         if laps < 0:
-            return f", {-laps} lap{'s' if laps < -1 else ''} down (you are lapping it)"
+            return (f", {-laps} lap{'s' if laps < -1 else ''} down "
+                    + ("(you have lapped it)" if metres_ahead <= -ALONGSIDE_M
+                       else "(you are lapping it)"))
         return ""
 
     out = []
