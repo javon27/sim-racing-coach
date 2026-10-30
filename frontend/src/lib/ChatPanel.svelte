@@ -125,7 +125,6 @@
   // Settings `show_cost` hides only the dollar figure; tokens always show. Read the
   // same way CornerPanel reads `units` — defaults on, so a settings hiccup shows it.
   let showCost = $state(true);
-  // #183: the last turn's timing, as the server measured it.
 
   // --- voice (#104) ---
   let activeVoice: VoiceLoop | null = $state(null);
@@ -331,12 +330,6 @@
     if (shellAttached || !activeVoice || e.code !== pttKey) return;
     if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
     activeVoice.release();
-  }
-
-  function formatSecs(ms: number): string {
-    if (ms < 60000) return `${(ms / 1000).toFixed(1)} s`;
-    const s = Math.round(ms / 1000);
-    return `${Math.floor(s / 60)} m ${String(s % 60).padStart(2, "0")} s`;
   }
 
   function formatTokens(n: number): string {
