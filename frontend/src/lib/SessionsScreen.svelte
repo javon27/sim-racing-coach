@@ -7,6 +7,7 @@
     getSessions,
     getSessionsSummary,
     getSessionChats,
+    exportDebugBundle,
     withRetry,
     type SessionRow,
     type SessionsSummary,
@@ -31,6 +32,27 @@
     }
     if (token !== clickToken) return;
     onselectSession?.(sessionId, chatId);
+  }
+
+  // #267: one session as a .zip for a bug report. In the app the save dialog picks
+  // where; in a plain browser (no Tauri) the sidecar saves it under app data.
+  let exportStatus: string | null = $state(null);
+  async function exportBundle(sessionId: string) {
+    let path: string | undefined;
+    try {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      const picked = await save({ defaultPath: "nestor-debug.zip", filters: [{ name: "Zip", extensions: ["zip"] }] });
+      if (picked === null) return;            // cancelled
+      path = picked;
+    } catch {
+      path = undefined;
+    }
+    exportStatus = "Exporting…";
+    try {
+      exportStatus = `Saved: ${(await exportDebugBundle(sessionId, path)).path}`;
+    } catch {
+      exportStatus = "Export failed.";
+    }
   }
 
   const ALL = "All";
@@ -212,10 +234,14 @@
               <div class="tk">{s.track}{#if s.has_chat}<span class="chat-flag" title="has coaching chat" aria-label="has coaching chat">💬</span>{/if}<div class="ln"><small>{s.car_model ?? s.car}</small></div></div>
               <div class="lp">{s.laps} laps</div>
               <div class="bt">{formatBest(s.best)}</div>
+              <button type="button" class="xp" title="Export for a bug report" aria-label="Export session for debugging"
+                onclick={(e) => { e.stopPropagation(); exportBundle(s.session_id); }}
+                onkeydown={(e) => e.stopPropagation()}>⤓</button>
             </div>
           {/each}
         {/if}
       </div>
+      {#if exportStatus}<p class="xp-status">{exportStatus}</p>{/if}
       {#if pageCount > 1}
         <div class="pager">
           <button type="button" disabled={page <= 1} onclick={() => (page -= 1)}>Prev</button>
@@ -371,7 +397,7 @@
   }
   .srow {
     display: grid;
-    grid-template-columns: 80px 1fr auto auto;
+    grid-template-columns: 80px 1fr auto auto auto;
     gap: 14px;
     align-items: center;
     background: var(--surface);
@@ -379,6 +405,23 @@
     border-radius: 10px;
     padding: 11px 15px;
     cursor: pointer;
+  }
+  .srow .xp {
+    background: none;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--faint);
+    padding: 2px 7px;
+    cursor: pointer;
+  }
+  .srow .xp:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+  .xp-status {
+    font-size: 12px;
+    color: var(--faint);
+    word-break: break-all;
   }
   .srow:hover {
     border-color: var(--accent);

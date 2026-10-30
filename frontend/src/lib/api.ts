@@ -295,6 +295,15 @@ export function getSessionRace(sid: string): Promise<RaceResult | Record<string,
   return request<RaceResult | Record<string, never>>(`/sessions/${sid}/race`);
 }
 
+/** #267: write the session's debug bundle to `path` (or under app data without one). */
+export function exportDebugBundle(sid: string, path?: string): Promise<{ path: string }> {
+  return request<{ path: string }>(`/sessions/${sid}/debug-bundle`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(path ? { path } : {}),
+  });
+}
+
 export function getLapAnalysis(id: number): Promise<LapAnalysisResponse> {
   return request<LapAnalysisResponse>(`/laps/${id}/analysis`);
 }

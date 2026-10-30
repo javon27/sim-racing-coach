@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, within, waitFor } from "@testing-library/svelte";
-import { getSessions, getSessionsSummary, getSessionChats, type SessionsFilter } from "./api";
+import { getSessions, getSessionsSummary, getSessionChats, exportDebugBundle, type SessionsFilter } from "./api";
 import SessionsScreen from "./SessionsScreen.svelte";
 
 function sessList(container: HTMLElement) {
@@ -14,6 +14,7 @@ vi.mock("./api", async () => {
     getSessions: vi.fn(),
     getSessionsSummary: vi.fn(),
     getSessionChats: vi.fn(),
+    exportDebugBundle: vi.fn(),
   };
 });
 
@@ -115,6 +116,21 @@ describe("SessionsScreen", () => {
 
     await waitFor(() => expect(onselectSession).toHaveBeenCalledWith("s1", "chatA"));
     expect(getSessionChats).toHaveBeenCalledWith("s1");
+  });
+
+  it("exports a row's session for a bug report without opening it (#267)", async () => {
+    vi.mocked(exportDebugBundle).mockResolvedValue({ path: "C:/x/nestor-debug.zip" });
+    const onselectSession = vi.fn();
+    const { container } = render(SessionsScreen, { props: { onselectSession } });
+    await within(sessList(container)).findByText("Sebring");
+
+    const row = container.querySelectorAll(".srow")[0] as HTMLElement;
+    await fireEvent.click(within(row).getByRole("button", { name: /export session/i }));
+
+    // no Tauri in the test DOM: no save dialog, so the sidecar picks the place
+    await waitFor(() => expect(exportDebugBundle).toHaveBeenCalledWith("s1", undefined));
+    expect(await screen.findByText("Saved: C:/x/nestor-debug.zip")).toBeTruthy();
+    expect(onselectSession).not.toHaveBeenCalled();
   });
 
   it("ignores a stale resolve from a superseded click (#98)", async () => {
