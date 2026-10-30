@@ -866,6 +866,23 @@ SUSPENSION_UNSEEN = ("suspension and mechanical damage are not visible in the te
 _IMPACT_GROUP_M = 30.0
 
 
+def impact_groups(events: list) -> list[int]:
+    """Each damage_events event's place (group index): a new place starts more than
+    _IMPACT_GROUP_M from the current place's FIRST impact; a run of consecutive impacts
+    with no lap distance shares a group (an unplaced one between two placed ones starts
+    its own). The damage line's places, not battle.contact_touch_dist's contacts."""
+    starts: list[float] = []
+    home = []
+    for e in events:                       # damage_events order: as hit, along the lap
+        d = e["lap_distance"]
+        p = starts[-1] if starts else None
+        if p is None or not (abs(d - p) <= _IMPACT_GROUP_M
+                             or not (math.isfinite(d) or math.isfinite(p))):
+            starts.append(d)
+        home.append(len(starts) - 1)
+    return home
+
+
 def format_damage_line(events: list, state: dict, cmap=None) -> str | None:
     """One line for a lap that took contact, or None for a clean lap -- and None
     for a lap with no damage channels (older capture), never implied clean.
@@ -879,17 +896,13 @@ def format_damage_line(events: list, state: dict, cmap=None) -> str | None:
     # heaviest was the rear-right of a scrape whose front-right was the real damage.
     # A place is shown at its first impact's distance, with its sides in the order
     # they were hit; impacts with no lap distance share one unplaced group.
+    home = impact_groups(events)           # each event's group index
     groups: list[tuple[float, list[str]]] = []
-    home = []                              # each event's group index
-    for e in events:                       # damage_events order: as hit, along the lap
-        d = e["lap_distance"]
-        p = groups[-1][0] if groups else None
-        if p is None or not (abs(d - p) <= _IMPACT_GROUP_M
-                             or not (math.isfinite(d) or math.isfinite(p))):
-            groups.append((d, []))
-        if e["label"] not in groups[-1][1]:
-            groups[-1][1].append(e["label"])
-        home.append(len(groups) - 1)
+    for e, g in zip(events, home):
+        if g == len(groups):
+            groups.append((e["lap_distance"], []))
+        if e["label"] not in groups[g][1]:
+            groups[g][1].append(e["label"])
     n = len(events)
     hi = max(range(n), key=lambda i: events[i]["magnitude"])
     # #210: each place on the corner map; "; " between places, as one may hold a comma.

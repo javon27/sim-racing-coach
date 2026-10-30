@@ -31,6 +31,7 @@ from .analysis import (
     prev_corner,
     tag_sections,
 )
+from .battle import contact_touch_dist, live_contact_nearest
 from .corners import in_window
 from .format import SUSPENSION_UNSEEN, format_events, place_text
 from .model_types import LapRecord
@@ -254,5 +255,18 @@ class LiveLap:
         if session_id is not None and meta["session_id"] != session_id:
             return None, None
         cmap = self.cmap_for(meta["track"])
-        return (dict(meta, incidents=lap_incidents(ch, cmap)),
+        incidents = lap_incidents(ch, cmap)
+        # #250: the same-class car(s) nearest at the first touch of the lap's NEWEST contact, off
+        # the capture's live field trace (the committed lap reads its stored crossings).
+        trace = getattr(self.source, "_trace", None)
+        first = contact_touch_dist(incidents["impacts"], newest=True)
+        if first is not None and trace is not None:
+            try:
+                near = live_contact_nearest(trace.peek(), meta["lap_no"], first)
+            except Exception:   # a nice-to-have: never costs the lap or the car status
+                logging.getLogger(__name__).warning("live nearest car not read", exc_info=True)
+                near = None
+            if near:
+                incidents["nearest"] = near
+        return (dict(meta, incidents=incidents),
                 car_status_text(meta, _snapshot(ch), state, cmap))

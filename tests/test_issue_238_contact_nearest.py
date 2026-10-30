@@ -3,14 +3,15 @@ field trace -- "nearest car", never "who hit you" (contact attribution isn't mea
 
 Fixtures are the real battle_laps crossings of Bahrain Outer race lap 4 (laps.id 8078,
 2026-10-21), trimmed to T3-T5: scoring-clock seconds at each corner's entry/exit, and
-the car's unwrapped lap index each corner was timed on. The contact's heaviest impact
-was at 1,578.7 m (T4); the result log named Niklas Weissel."""
+the car's unwrapped lap index each corner was timed on. The contact's first impact was
+at 1,552.1 m and its heaviest at 1,578.7 m (T4); the result log named Niklas Weissel.
+#250: the line is read at the contact's FIRST touch."""
 import dataclasses
 
 import numpy as np
 import pytest
 
-from simcoach.battle import CarLap, contact_nearest
+from simcoach.battle import CarLap, contact_nearest, contact_touch_dist
 from simcoach.coach_tools import CoachContext
 from simcoach.corners import Corner, CornerMap
 from simcoach.store import LapStore
@@ -39,12 +40,21 @@ MANAUS = _car(2, "Manaus SimRacing", 4, {3: 376.1115, 4: 386.4652, 5: 391.3362},
 FIELD = [ME, WEISSEL, RUPP, MANAUS]
 
 
+# The lap's real damage_events (laps.id 8078), in the order hit.
+HITS = [{"et": 395.18, "magnitude": 202.0, "lap_distance": 1552.13, "label": "rear-right"},
+        {"et": 395.28, "magnitude": 319.0, "lap_distance": 1557.2, "label": "rear-right"},
+        {"et": 395.38, "magnitude": 458.0, "lap_distance": 1557.2, "label": "rear-right"},
+        {"et": 395.78, "magnitude": 375.0, "lap_distance": 1567.8, "label": "rear-right"},
+        {"et": 396.04, "magnitude": 668.0, "lap_distance": 1578.68, "label": "rear-right"}]
+
+
 def test_names_weissel_nearest_at_the_real_lap_4_contact():
-    line = contact_nearest(FIELD, CORNERS, 1578.68)
-    assert line.startswith("Nearest same-class car at the heaviest impact (1,579 m; other "
-                           "classes aren't tracked): Niklas Weissel (P7 in class), 0.1 s behind")
+    line = contact_nearest(FIELD, CORNERS, contact_touch_dist(HITS, newest=False))
+    # All five impacts are one contact (within format._IMPACT_GROUP_M of 1,552 m).
+    assert line.startswith("Nearest same-class car at the first touch of the contact "
+                           "(1,552 m; other classes aren't tracked): Niklas Weissel (P7 in class), 0.1 s behind")
     assert "Manaus" not in line             # same corner, 5 s ahead: not near
-    assert "Rupp" not in line               # 1.05 s ahead here: outside the window
+    assert "Rupp" not in line               # 0.98 s ahead here: outside the window
     assert "hit you" not in line and "nearest" in line.lower()
     assert "not measured" in line
 
@@ -97,19 +107,23 @@ def test_missing_field_or_untimed_player_says_nothing():
 
 @pytest.fixture
 def contact_ctx(tmp_path, synthetic_lap):
-    """One race lap with a hit at 1,240 m on test_track (between T1's exit at 1,200 m
-    and T2's entry at 2,000 m)."""
+    """One race lap on test_track, every hit between T1's exit (1,200 m) and T2's entry
+    (2,000 m): a light tap at 1,240 m, then a contact that touches at 1,690 m and lands
+    its heavy hit at 1,700 m, then another light tap at 1,950 m. #250: a stored lap
+    reads the heaviest CONTACT (impact group) at its FIRST touch -- 1,690 m."""
     ch = dict(synthetic_lap.channels)
     d = np.asarray(ch["lap_distance"], float)
     n = len(d)
-    idx = int(np.argmin(np.abs(d - 1240.0)))
     for key in ("last_impact_et", "last_impact_mag", "last_impact_x", "last_impact_z",
                 "dent_max", "dent_total", "overheating", "detached"):
         ch[key] = np.zeros(n)
-    ch["last_impact_et"][idx:] = 2178.5
-    ch["last_impact_mag"][idx:] = 365.0
-    ch["last_impact_x"][idx:] = -1.08
-    ch["last_impact_z"][idx:] = -1.83
+    ch["last_impact_x"][:] = -1.08
+    ch["last_impact_z"][:] = -1.83
+    for at_m, et, mag in ((1240.0, 2178.5, 365.0), (1690.0, 2189.8, 300.0),
+                          (1700.0, 2190.0, 1200.0), (1950.0, 2196.0, 200.0)):
+        i = int(np.argmin(np.abs(d - at_m)))
+        ch["last_impact_et"][i:], ch["last_impact_mag"][i:] = et, mag
+    idx = int(np.argmin(np.abs(d - 1690.0)))
     store = LapStore(str(tmp_path / "db.sqlite"), str(tmp_path / "telem"))
     lap = dataclasses.replace(synthetic_lap, channels=ch, session_id="s1--online",
                               phase="race", lap_time=90.0, timestamp=90.0)
@@ -130,8 +144,8 @@ def test_get_stint_events_attaches_the_nearest_car_to_the_contact_line(contact_c
     line = next(x for x in out.splitlines() if "Contact:" in x)
     nearest = out.splitlines()[out.splitlines().index(line) + 1]
     assert nearest.strip() == (
-        f"Nearest same-class car at the heaviest impact ({hit:,.0f} m; other classes "
-        "aren't tracked): Rival Driver (P4 in class), 0.3 s behind -- the nearest car, "
+        f"Nearest same-class car at the first touch of the contact ({hit:,.0f} m; "
+        "other classes aren't tracked): Rival Driver (P4 in class), 0.3 s behind -- the nearest car, "
         "not a measured contact "
         "partner (who made contact is not measured).")
 
