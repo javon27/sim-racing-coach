@@ -91,6 +91,7 @@ from simcoach.race import (
     YOU_LEAD,
     HistLap,
     _clock,
+    class_field_line,
     departure,
     fill_ratio,
     flag_counts,
@@ -108,6 +109,7 @@ from simcoach.race import (
     provisional_strategy,
     race_sample,
     rival_laps_line,
+    track_neighbours_line,
 )
 from simcoach.store import _SESSION_GAP_S, _session_base
 from simcoach.track_lookup import load_track_knowledge, note_key_binds
@@ -484,7 +486,11 @@ TOOLS = [
                        "overall and class position, laps or time remaining (and laps left at "
                        "the recent clean pace), and the in-class car ahead and behind with the "
                        "gap TREND (s/lap) and the lap he'd be caught at that rate, and their "
-                       "best and last lap times; a "
+                       "best and last lap times; the class leader (gap or laps ahead) and the "
+                       "class fastest lap with who set it; and the nearest car ahead and "
+                       "behind ON TRACK in any class, in metres, with whether it is lapping "
+                       "him or being lapped ('behind in class' is standings, not the road -- "
+                       "'who's behind me / lapping me' is the on-track line); a "
                        "'Penalties:' line appears only when the game reports one outstanding "
                        "(no line says nothing either way). Use for position, gap, "
                        "'am I catching him', 'how long is left'. One call "
@@ -2961,9 +2967,10 @@ class CoachContext:
         if text is None:
             live = self._live()
             text = format_race_state(self.race, (live[2].place, live[1]) if live else None)
-            laps = rival_laps_line(live[0]) if live else None
-            if laps:
-                text += "\n" + laps
+            for line in ((rival_laps_line(live[0]), class_field_line(live[0]),
+                          track_neighbours_line(live[0])) if live else ()):
+                if line:
+                    text += "\n" + line
         # #162: the game's live penalty count (lmu.live.SessionState.penalties), read
         # when the question came in. What a penalty is for only reaches us in the result
         # log after the race (get_race_result). Only a positive count is said: the channel

@@ -15,7 +15,7 @@ from simcoach.lmu.results import parse_result
 from simcoach.lmu.rf2structs import VehicleScoringInfoV01, rF2Scoring
 from simcoach.model.fake import FakeModel
 from simcoach.model_types import RaceSample
-from simcoach.race import LapFacts, build_snapshot, rival_laps_line
+from simcoach.race import LapFacts, build_snapshot, class_field_line, rival_laps_line
 from simcoach.server.app import create_app
 from simcoach.store import SCHEMA_VERSION, LapStore
 
@@ -77,7 +77,9 @@ def test_get_race_state_states_them(tmp_path):
     out = CoachContext(store, on_track=True, race=snap,
                        live_field=lambda: read_field(frame)).dispatch("get_race_state", {})
     assert "Car ahead in class (P1) at the end of lap 3: A (A Entry), 3.0 s ahead" in out
-    assert out.splitlines()[-1] == rival_laps_line(read_field(frame))
+    # #254/#255 lines follow it; the frame has no track length, so no on-track line
+    assert out.splitlines()[-2:] == [rival_laps_line(read_field(frame)),
+                                     class_field_line(read_field(frame))]
     # Without a live frame there is no measured time to state.
     plain = CoachContext(store, on_track=True, race=snap).dispatch("get_race_state", {})
     assert "Lap times" not in plain

@@ -124,6 +124,122 @@ def rival_laps_line(field: FieldSnapshot) -> str | None:
     return "Lap times now (live, this session): " + "; ".join(parts) + "." if parts else None
 
 
+def class_field_line(field: FieldSnapshot) -> str | None:
+    """#255: the class leader and the class fastest lap, from one live scoring frame --
+    the coach otherwise saw two cars and called the driver's own best 'fastest in
+    class'. The leader's lead in laps is from mTotalLaps + lap distance, as
+    `track_neighbours_line` (rig 2026-10-29: summing the per-link mLapsBehindNext read
+    '1 lap ahead' for a leader 1.8 laps up -- each link drops its part-lap), and is never
+    said near the line, before race lap 1 or from the pits; a measured lead under a lap,
+    with no link a lap or more, is the sum of the game's place-to-place time links (as
+    `class_neighbours`) -- unmeasured, no seconds either (in the pits the summed links
+    read 97.8 s, more than a lap). Neither stated when unknown. None when the driver isn't placed."""
+    order = sorted((c for c in field.cars if c.place > 0), key=lambda c: (c.place, c.id))
+    me = next((i for i, c in enumerate(order) if c.is_player), None)
+    if me is None:
+        return None
+    cls = order[me].cls
+    mates = [c for c in order if c.cls == cls]
+    lead = order.index(mates[0])
+    if lead == me:
+        parts = ["you lead your class"]
+    else:
+        links = order[lead + 1:me + 1]
+        gaps = [c.gap_next for c in links]
+        laps = _laps_ahead(order[lead], order[me], field.session.track_len)
+        if laps is not None and laps >= 1:
+            gap = f", {laps:.1f} laps ahead of you"
+        elif (laps is not None and laps >= 0 and sum(gaps)
+              and not any(c.laps_behind_next for c in links)
+              and all(g is not None and math.isfinite(g) and g >= 0 for g in gaps)):
+            gap = f", {sum(gaps):.1f} s ahead of you"
+        else:
+            gap = ""
+        parts = [f"class leader (P1 in class) {_who(order[lead])}{gap}"]
+    timed = sorted((c for c in mates if c.best_lap), key=lambda c: c.best_lap)
+    if timed:
+        best = timed[0]
+        mine = next((k for k, c in enumerate(timed, 1) if c.is_player), None)
+        parts.append(f"class fastest lap {format_laptime(best.best_lap)} by "
+                     + ("you" if best.is_player else _who(best))
+                     + (f"; your best ranks {mine} of {len(timed)} timed in class"
+                        if mine else ""))
+    return "Class now (live, this session): " + "; ".join(parts) + "."
+
+
+# ponytail: guessed knobs -- 150 m is ~1 s at racing speed (a one-frame mismatch is
+# 0.2 s); 5 m is a car length. Tune at the rig.
+LINE_GUARD_M = 150.0
+ALONGSIDE_M = 5.0
+
+
+def _near_line(c, length):
+    return not LINE_GUARD_M <= c.lap_dist <= length - LINE_GUARD_M
+
+
+def _laps_ahead(c, me, length):
+    """Laps `c` is ahead of `me` on the road (mTotalLaps + lap distance; negative =
+    behind), or None where that isn't measured: no track length, before race lap 1,
+    either car in the pits or near the line (#254 review: lap count and lap distance
+    can be a frame out of step there)."""
+    if (not length or length <= 0 or me.laps < 1 or me.in_pits or c.in_pits
+            or _near_line(me, length) or _near_line(c, length)):
+        return None
+    return (c.laps * length + c.lap_dist - me.laps * length - me.lap_dist) / length
+
+
+def track_neighbours_line(field: FieldSnapshot) -> str | None:
+    """#254: the nearest car ahead and behind ON TRACK, any class -- 'car behind in
+    class' is by standings, so a class leader lapping the driver is never 'behind' and
+    the coach guessed 'a faster class'. Gaps are lap distance (metres, measured), never
+    a time; a car on a different lap is said to be lapping him / being lapped (laps
+    from mTotalLaps + lap distance). Cars in the pits are left out. None without a
+    track length or a player, or with the player in the pits (a pit-lane distance is
+    not his place on the road). #254 review: LMU's lap count and lap distance can be a
+    frame out of step at the line (#250's FieldTrace mismatch) and at the start, so the
+    lap clause is never said for a car within LINE_GUARD_M of the line, or before race
+    lap 1 -- a false 'lapping you' would be a stated value nothing measured."""
+    length = field.session.track_len
+    me = next((c for c in field.cars if c.is_player), None)
+    if me is None or not length or length <= 0 or me.in_pits:
+        return None
+    rest = [c for c in field.cars if not c.is_player and not c.in_pits]
+    if not rest:
+        return None
+
+    def ahead_m(c):           # metres the car is ahead of the driver around the lap
+        return (c.lap_dist - me.lap_dist) % length
+
+    def lapping(c, metres_ahead):
+        up = _laps_ahead(c, me, length)
+        if up is None:
+            return ""
+        # whole laps between them on the road: positive = that car is laps up. Rig
+        # 2026-10-29: a car a lap up and AHEAD has lapped him, not 'is lapping' him.
+        laps = round(up - metres_ahead / length)
+        # alongside is a pass still happening
+        if laps > 0:
+            return (f", {laps} lap{'s' if laps > 1 else ''} up on you "
+                    + ("(has lapped you)" if metres_ahead >= ALONGSIDE_M else "(lapping you)"))
+        if laps < 0:
+            return (f", {-laps} lap{'s' if laps < -1 else ''} down "
+                    + ("(you have lapped it)" if metres_ahead <= -ALONGSIDE_M
+                       else "(you are lapping it)"))
+        return ""
+
+    out = []
+    a = min(rest, key=ahead_m)
+    pair = [("ahead", a, ahead_m(a))]
+    if others := [c for c in rest if c is not a]:     # one car out is only 'ahead'
+        b = min(others, key=lambda c: length - ahead_m(c))
+        pair.append(("behind", b, length - ahead_m(b)))
+    for side, c, m in pair:
+        signed = m if side == "ahead" else -m
+        where = "alongside" if m < ALONGSIDE_M else f"{m:,.0f} m {side}"
+        out.append(f"{side} {_who(c)}, {c.cls}, {where}{lapping(c, signed)}")
+    return "On track now (live, any class, by lap distance): " + "; ".join(out) + "."
+
+
 def live_battle_target(cars: list[VehicleState], direction: str | None,
                        position: int | None) -> tuple[VehicleState | None, str]:
     """#186: the car a get_battle `direction`/`position` asks for in the LIVE field --
