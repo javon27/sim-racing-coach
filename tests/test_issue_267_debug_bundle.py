@@ -102,7 +102,10 @@ def test_no_path_lands_under_app_data_and_bad_input_is_refused(
     assert c.post("/sessions/no-such-session/debug-bundle", json={}).status_code == 404
     # review: only a local absolute drive path -- no UNC (an SMB login), relative path,
     # NTFS stream, folder or non-string
-    for bad in ("rel.zip", str(tmp_path / "note.txt:ads.zip"), str(tmp_path), 123):
+    drive = str(tmp_path)[:2]
+    for bad in ("rel.zip", str(tmp_path / "note.txt:ads.zip"), str(tmp_path), 123,
+                drive + "x.zip", r"\\?" + "\\" + str(tmp_path / "x.zip"),
+                r"\\." + "\\" + str(tmp_path / "x.zip")):
         assert c.post(f"/sessions/{sid}/debug-bundle", json={"path": bad}).status_code == 400, bad
     # a UNC path is refused by its shape alone, before any filesystem call (is_dir() on
     # it would send an SMB login): every folder "exists" here, and it's still refused

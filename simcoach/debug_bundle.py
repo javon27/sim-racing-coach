@@ -4,9 +4,10 @@ rows, laps and log lines needed to replay what the coach saw, and nothing else.
 Never in a bundle: the API key (it lives in the OS keyring, never in config or the
 DB, and the log slice is scrubbed of key-shaped strings besides), other sessions'
 rows, the cross-session driver profile (driver_learnings / driver_summary and the
-config's driver prefs), the driver's own names and local paths. Other drivers' names
-from the session stay: name handling is a class of coach bug (#252, #258), and the
-manifest says they are there.
+config's driver prefs), the driver's real-name aliases (lmu_player_names) and local
+paths. In-game display names stay -- the field's AND the driver's own, which the
+result logs and battle rows carry -- since name handling is a class of coach bug
+(#252, #258); the manifest says they are there.
 """
 from __future__ import annotations
 
