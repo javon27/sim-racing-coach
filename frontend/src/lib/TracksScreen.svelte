@@ -7,7 +7,7 @@
 </script>
 
 <script lang="ts">
-  import { listTracks, draftNotes, saveNotes, getTrackNotes, getTrackMap, type TrackNotes, type TrackMap } from "./api";
+  import { listTracks, draftNotes, failureReason, saveNotes, getTrackNotes, getTrackMap, type TrackNotes, type TrackMap } from "./api";
   import TrackMapEditor from "./TrackMapEditor.svelte";
   import TrackMapView from "./TrackMap.svelte";
 
@@ -217,6 +217,7 @@
   async function generateDraft() {
     if (!selected) return;
     drafting = true;
+    saveStatus = null;
     try {
       const { draft } = await draftNotes(selected.slug, selected.name, guides);
       notes.overview = draft.overview ?? "";
@@ -224,6 +225,8 @@
       // reference_times is deliberately left untouched: the draft endpoint
       // never returns it, and overwriting would wipe saved community times.
       notes.source = draft.source ?? "";
+    } catch (e) {
+      saveStatus = failureReason(e, "Draft failed.");   // #259: say why
     } finally {
       drafting = false;
     }

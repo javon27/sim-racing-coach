@@ -8,6 +8,7 @@ from fastapi import Body, HTTPException
 
 from ..analysis import CORNER_GEOMETRY_KEYS, corner_geometry, geometry_clause
 from ..corners import Corner, clamp_corner_windows, in_window
+from ..model.base import CoachUserError
 from ..track_lookup import carried_geometry, corner_apex_key, fill_blank_labels, track_slug
 from ..trackmap import average_racing_line, direction_from_path
 from .trackfile import content_rev, map_rev
@@ -426,7 +427,10 @@ def register(app, deps) -> None:
         user = "Corner geometry:\n" + "\n".join(digest_lines)
         if guides:
             user += "\n\nExternal guide material (reference):\n" + guides
-        raw = app.state.coach.model.complete(system, [{"role": "user", "content": user}])
+        try:
+            raw = app.state.coach.model.complete(system, [{"role": "user", "content": user}])
+        except CoachUserError as e:      # #259: say why, not a bare 500
+            raise HTTPException(502, str(e)) from e
         try:
             draft = json.loads(raw)
         except (ValueError, TypeError):

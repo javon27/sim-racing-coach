@@ -504,6 +504,21 @@ describe("SettingsScreen", () => {
     );
   });
 
+  it("a failed review says why (#259)", async () => {
+    vi.mocked(getSettings).mockResolvedValue(baseSettings());
+    vi.mocked(getStatus).mockResolvedValue(baseStatus({ session_id: "sess-42" }));
+    vi.mocked(distillProfile).mockRejectedValue(new Error(
+      "API request failed: POST /profile/distill -> 502: Anthropic rejected the API key (expired or revoked) — add a valid one in Settings."));
+
+    render(SettingsScreen);
+
+    await screen.findByText("Driver Memories");
+    await fireEvent.click(screen.getByRole("button", { name: /review session learnings/i }));
+
+    await waitFor(() => expect(screen.getByText(
+      "Anthropic rejected the API key (expired or revoked) — add a valid one in Settings.")).toBeTruthy());
+  });
+
   // --- Settings -> Voice (#104) ---
 
   const voiceDefaults = {
