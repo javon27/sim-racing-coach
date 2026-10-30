@@ -598,10 +598,10 @@ def _ungrounded_names(sentence: str, known: str) -> list[str]:
     def grounded(n):
         # #258: a whole-name match (a known "Matt Bellamy" or "Matt Bell-Smith" never
         # grounds "Matt Bell"); a curly apostrophe matches a straight one (`known`
-        # arrives normalised); a French article is optional ("L'Eau Rouge").
+        # arrives normalised); the French article l' is optional ("L'Eau Rouge").
         n = n.lower().replace("’", "'")
         return any(re.search(r"(?<![\w-])" + re.escape(v) + r"(?![\w-])", known)
-                   for v in (n, re.sub(r"^[a-z]'", "", n)))
+                   for v in (n, re.sub(r"^l'", "", n)))
     return [n for n in names if not grounded(n)]
 
 

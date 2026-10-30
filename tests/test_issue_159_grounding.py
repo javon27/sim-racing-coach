@@ -578,3 +578,7 @@ def test_review_258_whole_name_edges():
     # Spa: the model's "L'Eau Rouge" is grounded by the map's "Eau Rouge"
     text = "L'Eau Rouge is where you lose the gap."
     assert ground_names(text, "T3 Eau Rouge: left") == (text, [])
+    # only the article l' is optional: a made-up O'Neil / D'Angelo is not grounded
+    # by a real Neil / Angelo (#258 re-review)
+    assert ground_names("O'Neil Hart is behind you.", "Neil Hart P4")[1] == ["O'Neil Hart"]
+    assert ground_names("D'Angelo Russell is behind.", "Angelo Russell P4")[1] == ["D'Angelo Russell"]
