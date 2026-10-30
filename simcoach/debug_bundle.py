@@ -7,10 +7,10 @@ rows, and the cross-session driver profile (driver_learnings / driver_summary).
 """
 from __future__ import annotations
 
-import datetime as _dt
 import json
 import re
 import sqlite3
+import time
 import zipfile
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -25,6 +25,7 @@ _SECRET_KEY = re.compile(r"key|token|secret|password", re.IGNORECASE)
 _LOG_BEFORE_S = 10 * 60
 _LOG_AFTER_S = 30 * 60
 _LOG_TS = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)")
+_LOG_FMT = "%Y-%m-%d %H:%M:%S"
 
 
 def _scrub(text: str) -> str:
@@ -48,15 +49,16 @@ def _settings() -> dict:
 def _log_slice(log_dir: Path, start: float, end: float) -> str:
     """server.log and its rotations, oldest first, cut to [start, end] by each line's
     timestamp; an untimestamped line (a traceback) goes with the line before it."""
-    lo = _dt.datetime.fromtimestamp(start - _LOG_BEFORE_S)
-    hi = _dt.datetime.fromtimestamp(end + _LOG_AFTER_S)
+    # the log's own local-time stamps, compared as text (the format sorts as time)
+    lo = time.strftime(_LOG_FMT, time.localtime(start - _LOG_BEFORE_S))
+    hi = time.strftime(_LOG_FMT, time.localtime(end + _LOG_AFTER_S))
     files = sorted(log_dir.glob("server.log*"),
                    key=lambda p: -int(p.suffix[1:]) if p.suffix[1:].isdigit() else 0)
     out, keep = [], False
     for f in files:
         for line in f.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True):
             if m := _LOG_TS.match(line):
-                keep = lo <= _dt.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S") <= hi
+                keep = lo <= m.group(1) <= hi
             if keep:
                 out.append(line)
     return _scrub("".join(out))
@@ -106,7 +108,7 @@ def build(db_path: str, data_dir: str, log_dir: str, session_id: str, dest: str)
     manifest = {
         "format": 1, "app_version": app_version, "session_id": session_id,
         "track": track, "car": (laps or chat)[0]["car"],
-        "created": _dt.datetime.now().isoformat(timespec="seconds"),
+        "created": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "window": {"start": start, "end": end},
         "tables": {t: len(rows) for t, rows in tables.items()},
         "telemetry": [f"telemetry/{p.name}" for p in npz],
