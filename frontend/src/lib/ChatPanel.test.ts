@@ -445,67 +445,15 @@ describe("ChatPanel", () => {
     await waitFor(() => expect(screen.queryByTestId("usage-meter")).toBeNull());
   });
 
-  // --- the per-turn latency readout (#183) ---
-
-  it("shows the last turn's tier, rounds and timing next to the meter", async () => {
-    const stream = new FakeStream();
-    stream.latency = { tier: "deep", tier_via: "rules: classifier timeout", classify_ms: 801,
-      first_text_ms: 12300, total_ms: 185000, rounds: 4, tools: 3 };
-    await answerWith(stream, { usage: usage({ total: 1200 }), cost: 0.011 });
-
-    const line = await screen.findByTestId("turn-latency");
-    expect(line.textContent).toBe("deep · 4 rounds · first text 12.3 s · total 3 m 05 s");
-    expect(line.title).toBe("Last turn: routed tier via rules: classifier timeout, classifier 801 ms, 3 tool calls. First text = when the answer first appeared on screen, not the model's first token (a PTT or held answer appears at the end).");
-  });
-
-  it("switching chats shows the opened thread's last-turn latency, never the old one's", async () => {
-    const c2Latency = { tier: "standard", tier_via: "classifier", classify_ms: 900,
-      first_text_ms: 4100, total_ms: 6200, rounds: 2, tools: 1 };
-    vi.mocked(getChatMessages).mockImplementation(async (id: string) => id === "c2"
-      ? [{ ts: 1, session_id: "s", track: "Spa", car: "F", lap_id: null, question: "q2",
-           answer: "a2", tool_calls: null, latency: c2Latency }]
-      : [{ ts: 1, session_id: "s", track: "Spa", car: "F", lap_id: null, question: "q3",
-           answer: "a3", tool_calls: null }]); // a pre-v27 row: no latency
+  // The per-turn latency (#183) is stored on the chat row for debugging, not shown.
+  it("shows no latency readout even when the done frame carries one", async () => {
     const stream = new FakeStream();
     stream.latency = { tier: "deep", tier_via: "gate", classify_ms: null,
       first_text_ms: 12300, total_ms: 185000, rounds: 4, tools: 3 };
-    const { rerender } = render(ChatPanel, { props: { stream } });
-    const textarea = await screen.findByPlaceholderText(/ask your engineer/i);
-    await fireEvent.input(textarea, { target: { value: "how was that race?" } });
-    await fireEvent.click(screen.getByRole("button", { name: /send/i }));
-    await answerAgain(stream, { usage: usage({ total: 1200 }), cost: 0.011 });
-    expect((await screen.findByTestId("turn-latency")).textContent).toMatch(/^deep · 4 rounds/);
-
-    await rerender({ stream, chatId: "c2" });
-    await screen.findByText("q2");
-    await waitFor(() => expect(screen.getByTestId("turn-latency").textContent)
-      .toBe("standard · 2 rounds · first text 4.1 s · total 6.2 s"));
-
-    await rerender({ stream, chatId: "c3" });
-    await screen.findByText("q3");
-    await waitFor(() => expect(screen.queryByTestId("turn-latency")).toBeNull());
-  });
-
-  it("an error turn clears the previous turn's latency readout", async () => {
-    const stream = new FakeStream();
-    stream.latency = { tier: "deep", tier_via: "gate", classify_ms: null,
-      first_text_ms: 12300, total_ms: 185000, rounds: 4, tools: 3 };
-    await answerWith(stream, { usage: usage({ total: 1200 }), cost: 0.011 });
-    await screen.findByTestId("turn-latency");
-
-    stream.phase = "error";
-    stream.error = "coach error";
-    stream.notify();
-
-    await waitFor(() => expect(screen.queryByTestId("turn-latency")).toBeNull());
-  });
-
-  it("shows no latency readout when the done frame carries none", async () => {
-    const stream = new FakeStream();
     await answerWith(stream, { usage: usage({ total: 1200 }), cost: 0.011 });
 
     expect(await screen.findByTestId("usage-meter")).toBeTruthy();
-    expect(screen.queryByTestId("turn-latency")).toBeNull();
+    expect(screen.queryByText(/rounds/)).toBeNull();
   });
 
   // --- the soft long-chat nudge (issue #39, task 7) ---

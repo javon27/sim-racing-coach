@@ -445,7 +445,7 @@ def register(app, deps) -> None:
                        "total_ms": round((time.monotonic() - t0) * 1000),
                        "rounds": rounds, "tools": tools}
             if terminal["type"] == "done":
-                terminal["latency"] = latency      # the chat meter's per-turn readout
+                terminal["latency"] = latency      # per-turn timing; stored, not displayed
             logging.getLogger(__name__).info("coach turn latency %s %s", TURN_TAG.get(),
                                              latency)
             # Persist best-effort, but only when there's a real turn to keep —

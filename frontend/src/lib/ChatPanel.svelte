@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import { CoachStream, type CoachPhase, type ToolActivity, type TurnLatency } from "./coach";
+  import { CoachStream, type CoachPhase, type ToolActivity } from "./coach";
   import { getChatMessages, getChatUsage, getSettings, kokoroStatus, type ChatUsage, type VoiceSettings } from "./api";
   import { VoiceLoop, type VoiceMode, type VoiceState } from "./voice";
   import { MicRecorder, HttpTranscriber, SynthSpeaker, KokoroSpeaker, makeSpeaker, crewChiefHoldFor } from "./audio";
@@ -125,8 +125,6 @@
   // Settings `show_cost` hides only the dollar figure; tokens always show. Read the
   // same way CornerPanel reads `units` — defaults on, so a settings hiccup shows it.
   let showCost = $state(true);
-  // #183: the last turn's timing, as the server measured it.
-  let turnLatency: TurnLatency | null = $state(null);
 
   // --- voice (#104) ---
   let activeVoice: VoiceLoop | null = $state(null);
@@ -334,25 +332,6 @@
     activeVoice.release();
   }
 
-  function formatSecs(ms: number): string {
-    if (ms < 60000) return `${(ms / 1000).toFixed(1)} s`;
-    const s = Math.round(ms / 1000);
-    return `${Math.floor(s / 60)} m ${String(s % 60).padStart(2, "0")} s`;
-  }
-
-  function formatLatency(l: TurnLatency): string {
-    return [l.tier ?? "repeat", `${l.rounds} round${l.rounds === 1 ? "" : "s"}`,
-      ...(l.first_text_ms === null ? [] : [`first text ${formatSecs(l.first_text_ms)}`]),
-      `total ${formatSecs(l.total_ms)}`].join(" · ");
-  }
-
-  function latencyTitle(l: TurnLatency): string {
-    const clf = l.classify_ms === null ? "" : `, classifier ${l.classify_ms} ms`;
-    return `Last turn: routed tier via ${l.tier_via}${clf}, ${l.tools} tool call${l.tools === 1 ? "" : "s"}. `
-      + "First text = when the answer first appeared on screen, not the model's first token "
-      + "(a PTT or held answer appears at the end).";
-  }
-
   function formatTokens(n: number): string {
     return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
   }
@@ -379,7 +358,6 @@
     costComplete = true;
     longChat = false;
     nudgeDismissed = false;
-    turnLatency = null;
   }
 
   function nearBottom(el: HTMLDivElement): boolean {
@@ -431,11 +409,8 @@
         hist.push({ role: "coach", text: row.answer });
       }
       messages = hist;
-      // #183: the readout is this thread's last turn, never another chat's.
-      turnLatency = rows.at(-1)?.latency ?? null;
     } catch {
       messages = [];
-      turnLatency = null;
     }
     // Seed the meter so reopening a thread shows what it has already cost.
     // Best-effort, same shape as above: a sidecar hiccup hides the meter, it
@@ -499,7 +474,7 @@
     let voiced = "";   // the answer text already handed to the voice loop
     let acked: string | null = null;   // #175: the deep-tier ack already voiced
     const unsubscribe = stream.subscribe((s) => {
-      const snap = s as { phase: CoachPhase; toolActivity: ToolActivity | null; answer: string; ack: string | null; chatId: string | null; error: string | null; usage?: ChatUsage | null; cost?: number | null; costComplete?: boolean; longChat?: boolean; latency?: TurnLatency | null };
+      const snap = s as { phase: CoachPhase; toolActivity: ToolActivity | null; answer: string; ack: string | null; chatId: string | null; error: string | null; usage?: ChatUsage | null; cost?: number | null; costComplete?: boolean; longChat?: boolean };
       phase = snap.phase;
       toolActivity = snap.toolActivity;
       answer = snap.answer;
@@ -530,7 +505,6 @@
         waiting = false;
         // Adopt the server's chat id so follow-ups append to this thread.
         if (snap.chatId) currentChatId = snap.chatId;
-        turnLatency = snap.latency ?? null;
         // ...and its cumulative usage snapshot (the persisted chat total).
         if (snap.usage) {
           usedTokens = snap.usage.total;
@@ -543,7 +517,6 @@
         const message = snap.error ?? "Something went wrong.";
         messages = [...messages, { role: "coach", text: message }];
         waiting = false;
-        turnLatency = null; // #183: never show the previous turn's timing as this one's
         activeVoice?.onError(message);
       }
     });
@@ -585,13 +558,6 @@
 
 <section class="chat">
   <div class="chat-bar">
-    {#if turnLatency}
-      <span
-        class="latency"
-        data-testid="turn-latency"
-        title={latencyTitle(turnLatency)}
-      >{formatLatency(turnLatency)}</span>
-    {/if}
     {#if usedTokens > 0}
       <span
         class="meter"
@@ -725,18 +691,6 @@
   }
   /* With a meter present the meter takes the auto margin; alone, the button does. */
   .meter + .new-chat {
-    margin-left: 0;
-  }
-  /* #183: the last turn's timing, left of the meter; it then takes the auto margin. */
-  .latency {
-    margin-left: auto;
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--faint);
-    white-space: nowrap;
-  }
-  .latency + .meter,
-  .latency + .new-chat {
     margin-left: 0;
   }
   .new-chat {
