@@ -534,3 +534,13 @@ def test_a_cut_numbered_item_keeps_the_next_item(tmp_path, voice):
                 voice)
     assert said.endswith("Push on exit.") and "Kevin" not in said
     assert "1." not in said and UNCONFIRMED not in said
+
+
+def test_a_possessive_name_matches_the_grounded_name():
+    # #252 (rig 2026-10-27): "Matt Bell's four tenths behind" was cut although the
+    # tool result named "Matt Bell (13 Autosport 2026 #13:LM), 0.4 s behind".
+    known = "Car behind in class now (live, P6): Matt Bell (13 Autosport 2026 #13:LM), 0.4 s behind."
+    for text in ("Matt Bell's four tenths behind you.", "Matt Bell’s four tenths behind you."):
+        assert ground_names(text, known) == (text, []), text
+    # a possessive of an ungrounded driver is still cut
+    assert ground_names("Joe Bloggs's car is closing.", known)[1] == ["Joe Bloggs"]
