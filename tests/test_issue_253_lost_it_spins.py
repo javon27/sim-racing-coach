@@ -26,8 +26,13 @@ def test_car_status_lists_this_laps_spins_beside_no_impacts(tmp_path):
     assert [e["kind"] for e in events] == ["spin"]            # the fixture's premise
     out = _ctx(store, events).dispatch("get_car_status", {})
     assert "No impacts since the start of this lap." in out
-    assert "Spins and stops since the start of this lap (1):" in out
+    assert ("Spins and stops since the start of this lap (1) -- lead with these when he "
+            "says he lost it or went off:") in out
     assert "\n  spin at 1,5" in out
+    # rig 2026-10-29: after the damage lines the coach led with the dent and dropped the
+    # spin -- the spins lead, straight under the status header, before "On track."
+    assert out.startswith(_STATUS.split("\n")[0] + "\nSpins and stops since"), out
+    assert out.index("spin at 1,5") < out.index("On track.") < out.index("No impacts")
     # none measured: nothing added (never "no spins" -- off-corner scans may lag)
     assert _ctx(store, []).dispatch("get_car_status", {}) == _STATUS
 
