@@ -79,3 +79,12 @@ def test_complete_says_why_too():
         _status_error(400, "invalid_request_error", "bad"))})()
     with pytest.raises(anthropic.BadRequestError):
         m.complete("sys", [{"role": "user", "content": "q"}])
+
+
+def test_a_bare_404_stays_masked():
+    # #259 re-review: only a not_found_error body names the model; a bare 404 (a
+    # misconfigured base URL / proxy) is not blamed on the model id
+    exc = _status_error(404, "")
+    with pytest.raises(anthropic.NotFoundError) as ei:
+        _run(exc)
+    assert ei.value is exc
