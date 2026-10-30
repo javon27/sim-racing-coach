@@ -621,23 +621,25 @@ def test_analyze_lap_diffs_extended_corner_metrics_vs_reference(synthetic_lap):
     assert c1.abs_pct_delta is not None and c1.abs_pct_delta < 0
 
 
-def test_analyze_lap_direction_is_computed_not_read_from_map(synthetic_lap):
-    """Live analysis must COMPUTE direction from telemetry, not just echo the map's
-    stated direction. Use a map with a deliberately WRONG direction and assert the
-    analysis reports the telemetry-computed direction instead."""
+def test_analyze_lap_direction_is_the_maps_not_this_laps_steering(synthetic_lap):
+    """Direction is the corner map's (computed from geometry when the map is built, and
+    verified), never re-computed from one lap's steering: rig 2026-10-29, the lap he spun
+    at Road Atlanta's right-hand T6 read "left" -- countersteer flips the mean. Here the
+    lap's steering through corner 1 says "left" (as countersteer would) while the map
+    says "right": the map stands. A map corner with no direction falls back to the lap."""
     from simcoach.analysis import analyze_lap
-    from simcoach.corners import Corner, CornerMap
+    from simcoach.corners import Corner, CornerMap, compute_direction
 
+    assert compute_direction(synthetic_lap, 800, 1200) == "left"     # the premise
     cmap = CornerMap.load("simcoach/tracks/test_track.json")
-    # Corner 1 is actually "left" per telemetry; flip the map to say "right".
-    cmap.corners[0] = Corner(
-        number=1, name="Left Hairpin", direction="right",
-        start_dist=800, apex_dist=1000, end_dist=1200,
-    )
-
+    cmap.corners[0] = Corner(number=1, name="Turn 1", direction="right",
+                             start_dist=800, apex_dist=1000, end_dist=1200)
     a = analyze_lap(synthetic_lap, cmap)
-    assert a.corners[0].direction == "left"  # telemetry-computed, not the map's "right"
-    assert a.corners[1].direction == "right"
+    assert a.corners[0].direction == "right"
+
+    cmap.corners[0] = Corner(number=1, name="Turn 1", direction="",
+                             start_dist=800, apex_dist=1000, end_dist=1200)
+    assert analyze_lap(synthetic_lap, cmap).corners[0].direction == "left"
 
 
 def test_analyze_lap_rejects_reference_from_different_track(synthetic_lap):

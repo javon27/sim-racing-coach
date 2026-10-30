@@ -1400,10 +1400,16 @@ def _metrics_for_corner(
     # from this corner's own already-windowed channels.
     shape_info = input_shape(win_dist, win_brake, win_throttle, win_steering)
 
-    try:
-        direction = compute_direction(record, corner.start_dist, corner.end_dist)
-    except ValueError:
-        direction = corner.direction
+    # The map's direction (computed from geometry when the map was built, and verified):
+    # rig 2026-10-29, re-computing it from THIS lap's steering read Road Atlanta's
+    # right-hand T6 as "left" on the lap he spun there -- countersteer flips the mean.
+    # This lap's steering only fills in a map corner with no direction.
+    direction = corner.direction
+    if direction not in ("left", "right"):
+        try:
+            direction = compute_direction(record, corner.start_dist, corner.end_dist)
+        except ValueError:
+            pass
 
     # Per-apex min speed: split the window at midpoints between consecutive apexes
     # (a double-apex corner reports a min for each apex, so the coach can advise on
