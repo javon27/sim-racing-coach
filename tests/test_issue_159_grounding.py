@@ -544,3 +544,24 @@ def test_a_possessive_name_matches_the_grounded_name():
         assert ground_names(text, known) == (text, []), text
     # a possessive of an ungrounded driver is still cut
     assert ground_names("Joe Bloggs's car is closing.", known)[1] == ["Joe Bloggs"]
+
+
+@pytest.mark.parametrize("name", ["Conor O'Brien", "Conor O’Brien"])
+def test_a_capital_apostrophe_capital_name_is_checked(name):
+    # #258: _WORD needed a lowercase letter after the first capital, so "O'Brien" never
+    # matched and a fabricated rival by that name passed the guard untouched.
+    text = f"{name} is right behind you."
+    assert ground_names(text, "")[1] == [name]
+    # grounded either way round: a straight apostrophe in the data, a curly one spoken
+    known = "Car behind in class now (live, P6): Conor O'Brien (Team 2026 #9:LM), 0.4 s behind."
+    assert ground_names(text, known) == (text, [])
+    assert ground_names(f"{name}'s car is closing.", known)[1] == []
+    curly = known.replace("O'Brien", "O’Brien")       # a curly apostrophe in the data
+    assert ground_names(text, curly) == (text, [])
+
+
+def test_a_name_is_grounded_only_by_the_whole_name():
+    # #258: the lookup was a substring match -- a known "Matt Bellamy" grounded "Matt Bell"
+    known = "Car ahead in class now (live, P5): Matt Bellamy (Team 2026 #4:LM), 1.2 s ahead."
+    assert ground_names("Matt Bell is right behind you.", known)[1] == ["Matt Bell"]
+    assert ground_names("Matt Bellamy is 1.2 s ahead.", known)[1] == []

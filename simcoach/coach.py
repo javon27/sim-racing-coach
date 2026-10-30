@@ -542,7 +542,8 @@ _REPEAT = re.compile(
 # another driver. ponytail: a heuristic -- a single name ("Kevin is behind"), an
 # all-caps or lowercase name slips through, and a corner/track name beside a cue
 # that no tool result spelled out is cut too. Upgrade: match the field's entry list.
-_WORD = r"[A-Z][a-z]+(?:[A-Z][a-z]+)?(?:['-][A-Z]?[a-z]+)?"
+# #258: "O'Brien" / "O’Brien" (capital-apostrophe-capital) is a word too.
+_WORD = r"[A-Z](?:[a-z]+|['’][A-Z][a-z]+)(?:[A-Z][a-z]+)?(?:['-][A-Z]?[a-z]+)?"
 _NAME = re.compile(rf"\b({_WORD})\s+({_WORD})\b")
 _NOT_A_FIRST_NAME = {"The", "This", "That", "Your", "Turn", "Lap", "Sector", "As", "In",
                      "At", "On", "From", "After", "Before"}   # "At Turn 7 ... gap"
@@ -593,7 +594,10 @@ def _ungrounded_names(sentence: str, known: str) -> list[str]:
     # a curly ’s already ends the word).
     names = [a + " " + b.removesuffix("'s") for a, b in _NAME.findall(sentence)
              if a not in _NOT_A_FIRST_NAME]
-    return [n for n in names if n.lower() not in known]
+    # #258: a whole-name match, so a known "Matt Bellamy" never grounds "Matt Bell"; a
+    # curly apostrophe matches a straight one (`known` arrives normalised).
+    return [n for n in names if not re.search(
+        r"(?<!\w)" + re.escape(n.lower().replace("’", "'")) + r"(?!\w)", known)]
 
 
 def ground_names(text: str, known: str) -> tuple[str, list[str]]:
@@ -602,7 +606,7 @@ def ground_names(text: str, known: str) -> tuple[str, list[str]]:
     sentence goes with its list marker and the space after it (the break before it
     stays, for the text that follows), and nothing is spliced in its place. Returns (text, the ungrounded names). Limits: see
     _NAME."""
-    known = known.lower()
+    known = known.lower().replace("’", "'")
     names: list[str] = []
 
     def cut(m):
