@@ -2502,7 +2502,19 @@ class CoachContext:
         if self.car_status is None:
             return ("Car status isn't readable yet: no lap under way in this session since "
                     "it (re)started.")
-        return self.car_status
+        # #253: "no impacts" beside three spins read as "nothing happened" -- the lap's
+        # measured spins and stops travel with it (stated only when there are some), and
+        # lead it: rig 2026-10-29, listed after the damage, "I lost it" got the dent read
+        # and no word of the 9 s spin.
+        events = [e for e in ((self.live_lap or {}).get("incidents") or {}).get("events", [])
+                  if e["kind"] in ("spin", "stop")]
+        if not events:
+            return self.car_status
+        lines = format_events(events, self.cmap, self.units)
+        head, _, rest = self.car_status.partition("\n")
+        return "\n".join([head, (f"Spins and stops since the start of this lap ({len(lines)}) "
+                                 "-- lead with these when he says he lost it or went off:")]
+                         + [f"  {line}" for line in lines] + ([rest] if rest else []))
 
     def get_corner(self, corner, which="latest"):
         if (which or "").strip().lower() in _THIS_LAP:
