@@ -4,7 +4,7 @@ from collections.abc import Callable, Iterator
 
 import anthropic
 
-from .base import TURN_TAG, RunResult, TokenUsage
+from .base import TURN_TAG, CoachUserError, RunResult, TokenUsage
 
 _log = logging.getLogger(__name__)
 
@@ -189,7 +189,20 @@ class ClaudeModel:
         demand, executing each via `dispatch`, until it stops calling tools.
         Yields a `tool` event before dispatching each tool_use block, and
         streams the answer as one or more `text` delta events. `thinking` is the
-        #175 tier for every round (a forced #159 round runs without it)."""
+        #175 tier for every round (a forced #159 round runs without it). An API
+        failure the driver can act on (bad key, no credit, rate limit, offline)
+        raises CoachUserError with a plain message instead of the masked
+        "coach error"."""
+        try:
+            yield from self._run_stream(system, messages, tools, dispatch,
+                                        force_tool=force_tool, thinking=thinking)
+        except anthropic.APIError as e:
+            msg = _api_error_message(e)
+            if msg is None:
+                raise
+            raise CoachUserError(msg) from e
+
+    def _run_stream(self, system, messages, tools, dispatch, force_tool, thinking):
         # Copy so we don't mutate the caller's history (the coach appends only the
         # final Q/A itself). tool_use/tool_result turns stay internal to this call.
         convo = list(messages)
@@ -241,6 +254,30 @@ class ClaudeModel:
             elif ev["type"] == "usage":
                 usage = usage + TokenUsage(**ev["usage"])
         return RunResult(text=text, usage=usage)
+
+
+def _api_error_message(e: Exception) -> str | None:
+    """A driver-facing message for an API failure they can act on, or None (stays
+    masked). Keyed on the body's error `type` first: an error that arrives
+    mid-stream comes back as a bare APIStatusError carrying the stream's HTTP 200,
+    so the exception class alone can't tell an overload from a bad key."""
+    if isinstance(e, anthropic.APIConnectionError):     # includes APITimeoutError
+        return "Can't reach Anthropic — check your internet connection."
+    body = getattr(e, "body", None)
+    err = body.get("error") if isinstance(body, dict) else None
+    kind = err.get("type") if isinstance(err, dict) else None
+    status = getattr(e, "status_code", None)
+    if kind == "authentication_error" or status == 401:
+        return "Anthropic rejected the API key (expired or revoked) — add a valid one in Settings."
+    if kind == "billing_error" or status == 402 or "credit balance" in str(e).lower():
+        return "Your Anthropic account is out of credit — top it up in the Anthropic Console."
+    if kind == "permission_error" or status == 403:
+        return "This API key isn't allowed to use the coach's model — check it in the Anthropic Console."
+    if kind == "rate_limit_error" or status == 429:
+        return "Anthropic's rate limit was hit — try again in a moment."
+    if kind in ("overloaded_error", "api_error") or (status or 0) >= 500:
+        return "Anthropic is having trouble right now — try again in a moment."
+    return None
 
 
 def _cached_system(system: str):
