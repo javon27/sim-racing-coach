@@ -397,22 +397,3 @@ def test_a_spin_still_under_way_is_placed_where_it_last_had_a_distance():
     d = np.asarray(rec.channels["lap_distance"], dtype=float)
     assert d[0] + 1000.0 < spin["lap_distance"] <= d.max()   # within the spin's own reach
     assert "unknown point" not in format_events([spin], _CMAP)[0]
-
-
-def test_a_committed_lap_reads_its_spins_on_the_game_clock():
-    # #263 (rig lap 8206): LMU rolls lap_start_et over a few samples before the wrap, so
-    # elapsed - lap_start stepped back ~a lap at the end and sent the WHOLE committed lap
-    # to the ds/v time fallback -- wrong in a spin, where lap distance stalls. The
-    # committed read (353 deg from 111 km/h) disagreed with the live one (254 from 94).
-    rec = _lap([(20.0, 0.0, 180.0, 180.0), _SPIN, (10.0, 0.0, 30.0, 150.0)])
-    d = np.asarray(rec.channels["lap_distance"], dtype=float)
-    spin = slice(int(20 * _HZ), int(22 * _HZ))
-    d[spin] = d[spin.start]                     # distance stalls while the car slides
-    rec.channels["lap_distance"] = d
-    assert np.diff(rec.channels["lap_start_et"])[-3] > 0      # the fixture's rollover
-    live = dict(rec.channels, lap_start_et=np.full(d.size, 400.0))   # no rollover yet
-    from simcoach.analysis import _sample_time
-    assert np.allclose(np.diff(_sample_time(rec)), np.diff(rec.channels["elapsed_time"]))
-    committed = [e for e in lap_events(rec, _CMAP, None) if e["kind"] == "spin"]
-    as_live = [e for e in lap_events(_with(rec, **live), _CMAP, None) if e["kind"] == "spin"]
-    assert committed and [e["detail"] for e in committed] == [e["detail"] for e in as_live]

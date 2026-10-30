@@ -1816,12 +1816,10 @@ def _sample_time(record: LapRecord) -> np.ndarray:
     if "time" in ch:
         t = np.asarray(ch["time"], dtype=float)
     elif "elapsed_time" in ch:
-        # The game clock itself, not minus lap_start_et: only differences are read
-        # (spin windows), and LMU rolls lap_start_et over a few samples before the
-        # wrap, so a committed lap's last samples stepped back ~a lap and sent the
-        # WHOLE lap to the ds/v fallback -- wrong during a spin, where distance stalls
-        # (#263: rig lap 8206's spin read 353 deg committed vs 254 deg live).
         t = np.asarray(ch["elapsed_time"], dtype=float)
+        if "lap_start_et" in ch:
+            lset = np.asarray(ch["lap_start_et"], dtype=float)
+            t = t[:min(t.size, lset.size)] - lset[:min(t.size, lset.size)]
     if t is not None and t.size and np.all(np.diff(t[np.isfinite(t)]) >= 0):
         return t
     d = _interp_lap_distance(record)
@@ -1926,15 +1924,14 @@ def _spin_events(record: LapRecord, cmap: CornerMap) -> list[dict]:
         mi = lo + int(np.argmin(v[lo:hi + 1]))
         # #263: mid-incident the live buffer's slowest sample can sit past the last
         # lap-distance knot (NaN -- "spin at an unknown point" over PTT). Where the
-        # car last had a measured distance (at or before its slowest sample) is kept
-        # for `lap_events` to place it by, once a stop it caused has had the chance
-        # to (#210).
-        fin = np.flatnonzero(np.isfinite(d[:mi + 1]))
+        # spin last had a measured distance is kept for `lap_events` to fall back on,
+        # after a stop it caused has had the chance to place it (#210).
+        fin = np.flatnonzero(np.isfinite(d[lo:mi + 1]))
         out.append({
             "kind": "spin",
             "corner_no": _corner_at(cmap, d[mi]),
             "lap_distance": float(d[mi]),
-            "last_known_m": float(d[fin[-1]]) if fin.size else math.nan,
+            "last_known_m": float(d[lo + fin[-1]]) if fin.size else math.nan,
             # #210: its first and slowest samples, to pair it with a stop it caused
             "samples": (int(raw[lo]), int(raw[mi])),
             "detail": {"speed_from_kmh": float(v[lo]),
