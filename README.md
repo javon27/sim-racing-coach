@@ -6,6 +6,7 @@ a running conversation — "where am I losing time?", "how do I fix corner-exit
 oversteer?" — grounded in your own telemetry and current car setup.
 
 Windows only (LMU is Windows-only). Free and open source under the MIT license.
+If it helps your driving, you can [leave a tip on Ko-fi](https://ko-fi.com/javon27).
 
 ## Getting started
 
