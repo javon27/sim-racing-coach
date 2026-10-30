@@ -236,10 +236,17 @@ def register(app, deps) -> None:
         # #267: Body(...) is the CSRF guard (as /ingest). `path` is the user's pick from
         # the save dialog; without one (a plain browser) it lands under app data.
         dest = body.get("path")
-        if dest:
-            dest = Path(dest)
-            if dest.suffix.lower() != ".zip" or not dest.parent.is_dir():
-                raise HTTPException(400, "pick a .zip file in an existing folder")
+        if dest is not None:
+            # a local, absolute drive path only (review): never UNC -- even is_dir() on
+            # \\host\share would send an SMB login -- relative, or an NTFS stream. The
+            # shape is checked before the filesystem is touched.
+            p = Path(dest) if isinstance(dest, str) else None
+            if (p is None or not p.is_absolute() or not p.drive
+                    or p.drive.startswith(("\\\\", "//"))
+                    or ":" in str(p)[len(p.drive):] or p.suffix.lower() != ".zip"
+                    or not p.parent.is_dir() or p.is_dir()):
+                raise HTTPException(400, "pick a .zip file in an existing local folder")
+            dest = p
         else:
             out = paths.app_data_dir() / "exports"
             out.mkdir(exist_ok=True)
@@ -250,6 +257,8 @@ def register(app, deps) -> None:
                                           session_id, str(dest))
         except LookupError as e:
             raise HTTPException(404, str(e)) from e
+        except OSError as e:
+            raise HTTPException(500, f"couldn't write the bundle: {e.strerror or e}") from e
         return {"path": str(dest), "manifest": manifest}
 
     @app.delete("/data")

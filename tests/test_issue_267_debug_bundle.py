@@ -35,8 +35,15 @@ def _setup(tmp_path, monkeypatch, synthetic_lap):
         "Traceback (most recent call last):\n  boom\n", encoding="utf-8")
     # load_config keeps only known keys: a secret-shaped one is injected to prove redaction
     real = debug_bundle.config.load_config
-    monkeypatch.setattr(debug_bundle.config, "load_config",
-                        lambda: {**real(), "some_api_token": "tok-123"})
+    monkeypatch.setattr(debug_bundle.config, "load_config", lambda: {
+        **real(), "some_api_token": "tok-123", "lmu_player_names": ["Jane Q Driver"],
+        "lmu_dir": str(tmp_path / "LMU")})
+    # result-log races at this track: this car's, near the session (in) and another
+    # car's at the same time (out -- review: race_sessions over-matched by track only)
+    for rid, car in (("2026_R1", synthetic_lap.car), ("2026_OTHER", "Other Car")):
+        store.conn.execute("INSERT INTO race_sessions (session_id, track, car, ts, phase) "
+                           "VALUES (?, ?, ?, ?, 'race')", (rid, synthetic_lap.track, car, now))
+    store.conn.commit()
     c = TestClient(create_app(store, Coach(FakeModel())), base_url="http://127.0.0.1")
     return c, sid, mine
 
@@ -63,6 +70,23 @@ def test_a_session_bundle_has_its_rows_telemetry_and_log_slice_and_no_key(
     assert "yesterday" not in log                                       # outside the window
     assert settings["some_api_token"] == "[redacted]" and settings["units"] == "metric"
     assert "db/driver_learnings.json" not in names                      # no cross-session profile
+    # review: no personal data -- the driver's names, local paths, the profile prefs
+    assert b"Jane Q Driver" not in blob and str(tmp_path).encode() not in blob
+    assert str(tmp_path).replace("\\", "\\\\").encode() not in blob     # JSON-escaped too
+    assert settings["driver"] == "[redacted]"
+    assert laps[0]["telemetry_path"] == f"telemetry/{lap_id}.npz"
+    races = json.loads(zipfile.ZipFile(dest).read("db/race_sessions.json"))
+    assert [r["session_id"] for r in races] == ["2026_R1"]
+    assert manifest["contains_other_drivers_names"] is True
+
+
+def test_telemetry_over_the_budget_is_left_out_and_named(
+        tmp_path, monkeypatch, mem_keyring, synthetic_lap):
+    # review: a real session's .npz set was 47-97 MB, over GitHub's 25 MB attachment cap
+    c, sid, lap_id = _setup(tmp_path, monkeypatch, synthetic_lap)
+    monkeypatch.setattr(debug_bundle, "TELEMETRY_BUDGET", 10)
+    manifest = c.post(f"/sessions/{sid}/debug-bundle", json={}).json()["manifest"]
+    assert manifest["telemetry"] == [] and manifest["telemetry_omitted_lap_ids"] == [lap_id]
 
 
 def test_no_path_lands_under_app_data_and_bad_input_is_refused(
@@ -76,4 +100,14 @@ def test_no_path_lands_under_app_data_and_bad_input_is_refused(
     assert c.post(f"/sessions/{sid}/debug-bundle",
                   json={"path": str(tmp_path / "nope" / "x.zip")}).status_code == 400
     assert c.post("/sessions/no-such-session/debug-bundle", json={}).status_code == 404
+    # review: only a local absolute drive path -- no UNC (an SMB login), relative path,
+    # NTFS stream, folder or non-string
+    for bad in ("rel.zip", str(tmp_path / "note.txt:ads.zip"), str(tmp_path), 123):
+        assert c.post(f"/sessions/{sid}/debug-bundle", json={"path": bad}).status_code == 400, bad
+    # a UNC path is refused by its shape alone, before any filesystem call (is_dir() on
+    # it would send an SMB login): every folder "exists" here, and it's still refused
+    import pathlib
+    monkeypatch.setattr(pathlib.Path, "is_dir", lambda self: not str(self).endswith(".zip"))
+    for unc in (r"\\attacker\share\x.zip", "//attacker/share/x.zip"):
+        assert c.post(f"/sessions/{sid}/debug-bundle", json={"path": unc}).status_code == 400, unc
     assert c.post(f"/sessions/{sid}/debug-bundle").status_code == 422     # CSRF: JSON body
