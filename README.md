@@ -1,5 +1,9 @@
 # Nestor
 
+[![Test](https://github.com/javon27/sim-racing-coach/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/javon27/sim-racing-coach/actions/workflows/test.yml)
+[![Release](https://img.shields.io/github/v/release/javon27/sim-racing-coach)](https://github.com/javon27/sim-racing-coach/releases/latest)
+[![License: MIT](https://img.shields.io/github/license/javon27/sim-racing-coach)](LICENSE)
+
 An AI sim-racing coach for **Le Mans Ultimate**. It captures your laps live from
 the game's shared memory, then answers setup and driving questions between laps in
 a running conversation — "where am I losing time?", "how do I fix corner-exit
