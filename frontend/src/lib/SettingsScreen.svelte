@@ -13,6 +13,7 @@
     addMemory,
     updateMemory,
     distillProfile,
+    failureReason,
     voiceStatus,
     voiceSetup,
     kokoroStatus,
@@ -620,6 +621,8 @@
       summaryText = res.summary;
       summaryStatus = "pending";
       distillStatus = "New proposals ready for review below.";
+    } catch (e) {
+      distillStatus = failureReason(e, "Review failed.");   // #259: say why
     } finally {
       distilling = false;
     }

@@ -281,7 +281,7 @@ def _api_error_message(e: Exception) -> str | None:
         return "Your Anthropic account is out of credit — top it up in the Anthropic Console."
     if kind == "permission_error" or status == 403:
         return "This API key isn't allowed to use the coach's model — check it in the Anthropic Console."
-    if kind == "not_found_error" or status == 404:     # #259: a mistyped model id
+    if kind == "not_found_error":     # #259: a mistyped model id (a bare proxy 404 stays masked)
         return "Anthropic doesn't recognise the coach's model — pick one in Settings."
     if kind == "rate_limit_error" or status == 429:
         return "Anthropic's rate limit was hit — try again in a moment."
