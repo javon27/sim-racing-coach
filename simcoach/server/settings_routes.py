@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
+from pathlib import Path
 
 from fastapi import Body, HTTPException, Request, Response
 
-from .. import config, logging_setup, paths, secrets
+from .. import config, debug_bundle, logging_setup, paths, secrets
 from ..lmu.ingest import ingest_all
 from ..model.factory import make_model
 from ..pronunciations import table_for
@@ -228,6 +230,36 @@ def register(app, deps) -> None:
         # Body(...) forces a JSON content-type -- CSRF guard, same mechanism as
         # /mapcapture/* (see comment above them).
         return ingest_all(store)
+
+    @app.post("/sessions/{session_id}/debug-bundle")
+    def debug_bundle_export(session_id: str, body: dict = Body(...)):
+        # #267: Body(...) is the CSRF guard (as /ingest). `path` is the user's pick from
+        # the save dialog; without one (a plain browser) it lands under app data.
+        dest = body.get("path")
+        if dest is not None:
+            # a local, absolute drive path only (review): never UNC -- even is_dir() on
+            # \\host\share would send an SMB login -- relative, or an NTFS stream. The
+            # shape is checked before the filesystem is touched.
+            p = Path(dest) if isinstance(dest, str) else None
+            if (p is None or not p.is_absolute() or not p.drive
+                    or p.drive.startswith(("\\\\", "//"))
+                    or ":" in str(p)[len(p.drive):] or p.suffix.lower() != ".zip"
+                    or not p.parent.is_dir() or p.is_dir()):
+                raise HTTPException(400, "pick a .zip file in an existing local folder")
+            dest = p
+        else:
+            out = paths.app_data_dir() / "exports"
+            out.mkdir(exist_ok=True)
+            dest = out / f"nestor-debug-{track_slug(session_id)[:60]}-{time.strftime('%Y%m%d-%H%M%S')}.zip"
+        db_path = store.conn.execute("PRAGMA database_list").fetchone()[2]
+        try:
+            manifest = debug_bundle.build(db_path, store.data_dir, str(paths.logs_dir()),
+                                          session_id, str(dest))
+        except LookupError as e:
+            raise HTTPException(404, str(e)) from e
+        except OSError as e:
+            raise HTTPException(500, f"couldn't write the bundle: {e.strerror or e}") from e
+        return {"path": str(dest), "manifest": manifest}
 
     @app.delete("/data")
     def delete_data(body: dict = Body(default={})):
