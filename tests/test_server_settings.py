@@ -97,6 +97,20 @@ def test_test_key_never_raises(tmp_path, monkeypatch, mem_keyring):
     r = c.post("/settings/test-key", json={})
     assert r.status_code == 200
     assert r.json()["ok"] is False
+    # #259: the plain message, not raw SDK text
+    assert r.json()["error"] == "No Anthropic API key set — add one in Settings."
+
+
+def test_test_key_hides_an_unexpected_error_text(tmp_path, monkeypatch, mem_keyring, caplog):
+    import simcoach.server.settings_routes as sr
+
+    def boom(**kw):
+        raise RuntimeError("Error code: 400 - {'type': 'error', 'error': {...raw sdk...}}")
+    monkeypatch.setattr(sr, "make_model", boom)
+    c, _ = _client(tmp_path, monkeypatch, mem_keyring)
+    r = c.post("/settings/test-key", json={})
+    assert r.json() == {"ok": False, "error": "The key test failed — the log has the details."}
+    assert "raw sdk" in caplog.text                 # the detail is in the log
 
 
 def test_test_key_requires_json_body(tmp_path, monkeypatch, mem_keyring):

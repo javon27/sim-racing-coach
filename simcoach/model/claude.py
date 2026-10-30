@@ -82,13 +82,21 @@ class ClaudeModel:
         # cache and charges no write premium. Their bulk (pasted guides, digests) is
         # in the USER message, which is after this breakpoint — moving that content
         # into `system`, or marking the user block, is what would make it bite.
-        resp = self.client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            system=_cached_system(system),
-            messages=messages,
-            **self._tier_kw("quick"),
-        )
+        # #259: the same plain message as the tool loop for an API failure the driver
+        # can act on -- the key test, distill and track-notes draft showed raw SDK text.
+        try:
+            resp = self.client.messages.create(
+                model=self.model,
+                max_tokens=self.max_tokens,
+                system=_cached_system(system),
+                messages=messages,
+                **self._tier_kw("quick"),
+            )
+        except anthropic.APIError as e:
+            msg = _api_error_message(e)
+            if msg is None:
+                raise
+            raise CoachUserError(msg) from e
         return _first_text(resp)
 
     def classify(self, prompt: str, schema: dict, *,
@@ -273,6 +281,8 @@ def _api_error_message(e: Exception) -> str | None:
         return "Your Anthropic account is out of credit — top it up in the Anthropic Console."
     if kind == "permission_error" or status == 403:
         return "This API key isn't allowed to use the coach's model — check it in the Anthropic Console."
+    if kind == "not_found_error" or status == 404:     # #259: a mistyped model id
+        return "Anthropic doesn't recognise the coach's model — pick one in Settings."
     if kind == "rate_limit_error" or status == 429:
         return "Anthropic's rate limit was hit — try again in a moment."
     if kind in ("overloaded_error", "api_error") or (status or 0) >= 500:
