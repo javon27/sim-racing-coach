@@ -37,7 +37,9 @@
   // #267: one session as a .zip for a bug report. In the app the save dialog picks
   // where; in a plain browser (no Tauri) the sidecar saves it under app data.
   let exportStatus: string | null = $state(null);
+  let exporting = $state(false);           // one export at a time: a bundle can be 20 MB
   async function exportBundle(sessionId: string) {
+    if (exporting) return;
     let path: string | undefined;
     try {
       const { save } = await import("@tauri-apps/plugin-dialog");
@@ -48,10 +50,13 @@
       path = undefined;
     }
     exportStatus = "Exporting…";
+    exporting = true;
     try {
       exportStatus = `Saved: ${(await exportDebugBundle(sessionId, path)).path}`;
     } catch {
       exportStatus = "Export failed.";
+    } finally {
+      exporting = false;
     }
   }
 
@@ -229,14 +234,16 @@
           <p class="empty">No sessions match these filters.</p>
         {:else}
           {#each rows as s (s.session_id)}
+            <div class="srow-wrap">
             <div class="srow" role="button" tabindex="0" onclick={() => selectSession(s.session_id)} onkeydown={(e) => e.key === "Enter" && selectSession(s.session_id)}>
               <div class="d">{formatDate(s.started)}</div>
               <div class="tk">{s.track}{#if s.has_chat}<span class="chat-flag" title="has coaching chat" aria-label="has coaching chat">💬</span>{/if}<div class="ln"><small>{s.car_model ?? s.car}</small></div></div>
               <div class="lp">{s.laps} laps</div>
               <div class="bt">{formatBest(s.best)}</div>
-              <button type="button" class="xp" title="Export for a bug report" aria-label="Export session for debugging"
-                onclick={(e) => { e.stopPropagation(); exportBundle(s.session_id); }}
-                onkeydown={(e) => e.stopPropagation()}>⤓</button>
+            </div>
+            <!-- a sibling of the row, never inside its role=button (#267 review: nested-interactive) -->
+            <button type="button" class="xp" title="Export for a bug report" aria-label="Export session for debugging"
+              disabled={exporting} onclick={() => exportBundle(s.session_id)}>⤓</button>
             </div>
           {/each}
         {/if}
@@ -397,7 +404,7 @@
   }
   .srow {
     display: grid;
-    grid-template-columns: 80px 1fr auto auto auto;
+    grid-template-columns: 80px 1fr auto auto;
     gap: 14px;
     align-items: center;
     background: var(--surface);
@@ -406,7 +413,13 @@
     padding: 11px 15px;
     cursor: pointer;
   }
-  .srow .xp {
+  .srow-wrap {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+    align-items: center;
+  }
+  .xp {
     background: none;
     border: 1px solid var(--line);
     border-radius: 6px;
@@ -414,7 +427,7 @@
     padding: 2px 7px;
     cursor: pointer;
   }
-  .srow .xp:hover {
+  .xp:hover:not(:disabled) {
     color: var(--accent);
     border-color: var(--accent);
   }

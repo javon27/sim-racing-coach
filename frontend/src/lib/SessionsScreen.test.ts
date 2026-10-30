@@ -124,8 +124,10 @@ describe("SessionsScreen", () => {
     const { container } = render(SessionsScreen, { props: { onselectSession } });
     await within(sessList(container)).findByText("Sebring");
 
-    const row = container.querySelectorAll(".srow")[0] as HTMLElement;
-    await fireEvent.click(within(row).getByRole("button", { name: /export session/i }));
+    const wrap = container.querySelectorAll(".srow-wrap")[0] as HTMLElement;
+    const btn = within(wrap).getByRole("button", { name: /export session/i });
+    expect(btn.closest(".srow")).toBeNull();          // not nested in the row's role=button
+    await fireEvent.click(btn);
 
     // no Tauri in the test DOM: no save dialog, so the sidecar picks the place
     await waitFor(() => expect(exportDebugBundle).toHaveBeenCalledWith("s1", undefined));
