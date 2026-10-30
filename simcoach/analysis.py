@@ -1922,10 +1922,16 @@ def _spin_events(record: LapRecord, cmap: CornerMap) -> list[dict]:
     for lo, hi in spans:
         k = min(hi, m - 1)
         mi = lo + int(np.argmin(v[lo:hi + 1]))
+        # #263: mid-incident the live buffer's slowest sample can sit past the last
+        # lap-distance knot (NaN -- "spin at an unknown point" over PTT). Where the
+        # spin last had a measured distance is kept for `lap_events` to fall back on,
+        # after a stop it caused has had the chance to place it (#210).
+        fin = np.flatnonzero(np.isfinite(d[lo:mi + 1]))
         out.append({
             "kind": "spin",
             "corner_no": _corner_at(cmap, d[mi]),
             "lap_distance": float(d[mi]),
+            "last_known_m": float(d[lo + fin[-1]]) if fin.size else math.nan,
             # #210: its first and slowest samples, to pair it with a stop it caused
             "samples": (int(raw[lo]), int(raw[mi])),
             "detail": {"speed_from_kmh": float(v[lo]),
@@ -2126,6 +2132,10 @@ def lap_events(record: LapRecord, cmap: CornerMap, analysis: "LapAnalysis | None
     than guessed against a single lap."""
     events = _spin_events(record, cmap)
     events += _stop_events(record, cmap, events, live)
+    for e in events:
+        last = e.pop("last_known_m", math.nan)
+        if e["kind"] == "spin" and not math.isfinite(e["lap_distance"]) and math.isfinite(last):
+            e["lap_distance"], e["corner_no"] = last, _corner_at(cmap, last)
     events += _track_limit_events(record, cmap)
     for cm in (analysis.corners if analysis is not None else []):
         if cm.lockup:

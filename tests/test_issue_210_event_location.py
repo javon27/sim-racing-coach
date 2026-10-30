@@ -386,3 +386,14 @@ def test_a_scan_still_behind_the_line_prints_no_negative_distance():
     ctx._provisional = lambda: ({"incidents": lap_incidents(fwd.channels, _CMAP)}, [],
                                 "Lap: game lap 1 so far")
     assert "no incidents so far (whole lap scanned to 2" in ctx._this_lap_events()
+
+
+def test_a_spin_still_under_way_is_placed_where_it_last_had_a_distance():
+    # #263 (rig lap 8206 replayed as the buffer grows): mid-incident the slowest sample
+    # sits past the last lap-distance knot -- "spin at an unknown point" over PTT.
+    rec = _lap([(20.0, 0.0, 180.0, 180.0), _SPIN])           # the buffer ends in the spin
+    [spin] = [e for e in lap_events(rec, _CMAP, None, live=True) if e["kind"] == "spin"]
+    assert math.isfinite(spin["lap_distance"]), spin
+    d = np.asarray(rec.channels["lap_distance"], dtype=float)
+    assert d[0] + 1000.0 < spin["lap_distance"] <= d.max()   # within the spin's own reach
+    assert "unknown point" not in format_events([spin], _CMAP)[0]
