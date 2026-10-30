@@ -590,14 +590,19 @@ def _is_filler(chunk: str) -> bool:
 def _ungrounded_names(sentence: str, known: str) -> list[str]:
     if not _RIVAL_CUE.search(sentence):
         return []
-    # #252: "Matt Bell's" is Matt Bell (_WORD's ASCII-apostrophe tail captures the 's;
-    # a curly ’s already ends the word).
-    names = [a + " " + b.removesuffix("'s") for a, b in _NAME.findall(sentence)
-             if a not in _NOT_A_FIRST_NAME]
-    # #258: a whole-name match, so a known "Matt Bellamy" never grounds "Matt Bell"; a
-    # curly apostrophe matches a straight one (`known` arrives normalised).
-    return [n for n in names if not re.search(
-        r"(?<!\w)" + re.escape(n.lower().replace("’", "'")) + r"(?!\w)", known)]
+    # #252: "Matt Bell's" is Matt Bell -- a possessive 's is made curly, which ends
+    # the word, so it never joins a name ("Here's Matt Bell" pairs Matt Bell, #258).
+    sentence = re.sub(r"'s\b", "’s", sentence)
+    names = [a + " " + b for a, b in _NAME.findall(sentence) if a not in _NOT_A_FIRST_NAME]
+
+    def grounded(n):
+        # #258: a whole-name match (a known "Matt Bellamy" or "Matt Bell-Smith" never
+        # grounds "Matt Bell"); a curly apostrophe matches a straight one (`known`
+        # arrives normalised); a French article is optional ("L'Eau Rouge").
+        n = n.lower().replace("’", "'")
+        return any(re.search(r"(?<![\w-])" + re.escape(v) + r"(?![\w-])", known)
+                   for v in (n, re.sub(r"^[a-z]'", "", n)))
+    return [n for n in names if not grounded(n)]
 
 
 def ground_names(text: str, known: str) -> tuple[str, list[str]]:

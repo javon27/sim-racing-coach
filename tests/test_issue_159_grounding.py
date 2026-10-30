@@ -565,3 +565,16 @@ def test_a_name_is_grounded_only_by_the_whole_name():
     known = "Car ahead in class now (live, P5): Matt Bellamy (Team 2026 #4:LM), 1.2 s ahead."
     assert ground_names("Matt Bell is right behind you.", known)[1] == ["Matt Bell"]
     assert ground_names("Matt Bellamy is 1.2 s ahead.", known)[1] == []
+
+
+def test_review_258_whole_name_edges():
+    known = "Car ahead in class now (live, P5): Matt Bell-Smith (Team 2026 #4:LM), 1.2 s ahead."
+    assert ground_names("Matt Bell is right behind you.", known)[1] == ["Matt Bell"]
+    # a possessive in the data still grounds the bare name
+    assert ground_names("Matt Bell is 1.2 s ahead.", "Matt Bell's car, P5")[1] == []
+    # a contraction before a name never pairs with it ("Here's Matt" was cut)
+    assert ground_names("Here's Matt Bell, 1.2 s behind.", "Matt Bell P6")[1] == []
+    assert ground_names("That's Joe Bloggs behind you.", "Matt Bell P6")[1] == ["Joe Bloggs"]
+    # Spa: the model's "L'Eau Rouge" is grounded by the map's "Eau Rouge"
+    text = "L'Eau Rouge is where you lose the gap."
+    assert ground_names(text, "T3 Eau Rouge: left") == (text, [])
