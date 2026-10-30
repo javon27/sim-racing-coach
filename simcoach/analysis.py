@@ -1923,15 +1923,17 @@ def _spin_events(record: LapRecord, cmap: CornerMap) -> list[dict]:
         k = min(hi, m - 1)
         mi = lo + int(np.argmin(v[lo:hi + 1]))
         # #263: mid-incident the live buffer's slowest sample can sit past the last
-        # lap-distance knot (NaN -- "spin at an unknown point" over PTT). Where the
-        # spin last had a measured distance is kept for `lap_events` to fall back on,
-        # after a stop it caused has had the chance to place it (#210).
-        fin = np.flatnonzero(np.isfinite(d[lo:mi + 1]))
+        # lap-distance knot (NaN -- "spin at an unknown point" over PTT; the whole spin
+        # can). Where the car last had a measured distance -- at or before its slowest
+        # sample, never across a teleport/clock break -- is kept for `lap_events` to
+        # place it by, once a stop it caused has had the chance to (#210).
+        same = nbrk[raw[:mi + 1]] == nbrk[raw[mi]]
+        fin = np.flatnonzero(np.isfinite(d[:mi + 1]) & same)
         out.append({
             "kind": "spin",
             "corner_no": _corner_at(cmap, d[mi]),
             "lap_distance": float(d[mi]),
-            "last_known_m": float(d[lo + fin[-1]]) if fin.size else math.nan,
+            "last_known_m": float(d[fin[-1]]) if fin.size else math.nan,
             # #210: its first and slowest samples, to pair it with a stop it caused
             "samples": (int(raw[lo]), int(raw[mi])),
             "detail": {"speed_from_kmh": float(v[lo]),
