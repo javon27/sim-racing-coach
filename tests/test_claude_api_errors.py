@@ -41,6 +41,7 @@ def _run(exc):
     (_status_error(403, "permission_error"), "isn't allowed"),
     (_status_error(429, "rate_limit_error"), "rate limit"),
     (_status_error(529, "overloaded_error"), "having trouble"),
+    (_status_error(404, "not_found_error"), "doesn't recognise the coach's model"),  # #259
     # mid-stream error event: the stream's HTTP 200 + an error body
     (_status_error(200, "overloaded_error"), "having trouble"),
     (_status_error(200, "authentication_error"), "API key"),
@@ -54,7 +55,36 @@ def test_actionable_api_error_is_curated(exc, needle):
 
 
 def test_other_api_error_stays_masked():
-    exc = _status_error(404, "not_found_error")
+    exc = _status_error(400, "invalid_request_error", "messages: field required")
+    with pytest.raises(anthropic.BadRequestError) as ei:
+        _run(exc)
+    assert ei.value is exc
+
+
+class _RaisingCreate:
+    def __init__(self, exc): self.exc = exc
+    def create(self, **kw): raise self.exc
+
+
+def test_complete_says_why_too():
+    # #259: the key test, distill and track-notes draft go through complete(), which
+    # let the raw SDK error out (a 500, or the raw text in Settings).
+    m = ClaudeModel(api_key="x")
+    exc = _status_error(401, "authentication_error")
+    m.client = type("C", (), {"messages": _RaisingCreate(exc)})()
+    with pytest.raises(CoachUserError, match="API key") as ei:
+        m.complete("sys", [{"role": "user", "content": "q"}])
+    assert ei.value.__cause__ is exc
+    m.client = type("C", (), {"messages": _RaisingCreate(
+        _status_error(400, "invalid_request_error", "bad"))})()
+    with pytest.raises(anthropic.BadRequestError):
+        m.complete("sys", [{"role": "user", "content": "q"}])
+
+
+def test_a_bare_404_stays_masked():
+    # #259 re-review: only a not_found_error body names the model; a bare 404 (a
+    # misconfigured base URL / proxy) is not blamed on the model id
+    exc = _status_error(404, "")
     with pytest.raises(anthropic.NotFoundError) as ei:
         _run(exc)
     assert ei.value is exc

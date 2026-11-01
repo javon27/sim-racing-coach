@@ -256,6 +256,20 @@ describe("VoiceLoop conversation", () => {
     expect(speaker.enqueued).toEqual(["Good pace.", "Correction: Good pace.", "Keep pushing."]);
     expect(speaker.enqueued.join(" ")).not.toMatch(/Kevin|can't confirm/);
   });
+  it("an error mid-stream stops the half answer and says the error (#259)", async () => {
+    const { loop, recorder, speaker } = make();
+    loop.toggleConversation(); await flush();
+    recorder.frame(0.2); for (let i = 0; i < 20; i++) recorder.frame(0); await flush(); await flush();
+    loop.onText("Good pace. Matt Bell is "); await flush();
+    expect(loop.state).toBe("speaking");
+    const cancels = speaker.cancels;
+    loop.onError("Anthropic is having trouble right now — try again in a moment."); await flush();
+    expect(speaker.cancels).toBeGreaterThan(cancels);           // the queued answer stops
+    expect(speaker.spoken.at(-1)).toMatch(/having trouble/);
+    loop.onAnswer("Good pace. Matt Bell is "); await flush();    // nothing late is spoken
+    expect(speaker.enqueued).toEqual(["Good pace."]);
+    expect(loop.state).toBe("idle"); expect(recorder.open).toBe(false);
+  });
   it("onRevised is a no-op in PTT (it speaks only the final answer)", async () => {
     const { loop, speaker } = make();
     loop.onRevised("Good pace."); await flush();

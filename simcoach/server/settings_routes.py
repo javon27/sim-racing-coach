@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from fastapi import Body, HTTPException, Request, Response
 
 from .. import config, debug_bundle, logging_setup, paths, secrets
 from ..lmu.ingest import ingest_all
+from ..model.base import CoachUserError
 from ..model.factory import make_model
 from ..pronunciations import table_for
 from ..track_lookup import track_slug
@@ -109,8 +111,11 @@ def register(app, deps) -> None:
             model = make_model(model=cfg.get("model"))
             model.complete("ping", [{"role": "user", "content": "ping"}])
             return {"ok": True, "error": None}
-        except Exception as e:
+        except CoachUserError as e:      # #259: the plain message, not raw SDK text
             return {"ok": False, "error": str(e)}
+        except Exception:
+            logging.getLogger(__name__).warning("key test failed", exc_info=True)
+            return {"ok": False, "error": "The key test failed — the log has the details."}
 
     VOICE_MAX_BODY = 8_000_000   # bytes; a 30 s 16 kHz mono WAV is ~1 MB
 

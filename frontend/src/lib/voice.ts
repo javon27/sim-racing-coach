@@ -285,7 +285,10 @@ export class VoiceLoop {
     this.onText(`Correction: ${answer}`);
   }
   onError(message: string): void {
-    if (this.state !== "asking") return;
+    // #259: in conversation mode the answer is already "speaking" by its first
+    // sentence -- a mid-stream error there must still stop the half answer and be said.
+    const streaming = this.state === "speaking" && this.mode === "conversation";
+    if (this.state !== "asking" && !streaming) return;
     this.#fail(message);
   }
 
