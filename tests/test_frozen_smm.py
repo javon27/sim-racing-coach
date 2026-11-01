@@ -1,20 +1,28 @@
-"""Rig 2026-10-31: in LMU's race-weekend menus the game runs but the plugin stops
-writing -- the buffer keeps the last session's frame, frozen, and the app read it as
-"on track" at Road Atlanta. A scoring update counter that hasn't moved for
-_FROZEN_S is a dead buffer: every live reader reads it as no session."""
-from types import SimpleNamespace
-
+"""Rig 2026-10-31: in LMU's race-weekend menus the game runs but the shared memory keeps
+the last session's frame -- the app read it as "on track" at Road Atlanta. LMU's REST
+game state tells the menus (503, "Game is not in an active session") from a pause (a
+vehicle loaded; the update counters freeze then too, so they can't), and every live
+reader then reads no session."""
 from simcoach.lmu import smm
+from simcoach.lmu.rest import LmuRest
+
+MENU = {"status": "unavailable", "reason": "Game is not in an active session", "gameState": "Setup"}
+PAUSED = {"MultiStintState": "PAUSED", "playerVehicleLoaded": True, "inControlOfVehicle": True}
 
 
-def test_a_scoring_counter_that_stops_moving_reads_as_frozen(monkeypatch):
-    clock = [100.0]
-    monkeypatch.setattr(smm.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(smm, "_scoring_seen", [None, 0.0])
-    frame = SimpleNamespace(mVersionUpdateBegin=1065)
-    assert smm.scoring_frozen(frame) is False                 # first sight: assume live
-    clock[0] += smm._FROZEN_S - 0.5
-    assert smm.scoring_frozen(frame) is False                 # not long enough yet
-    clock[0] += 1.0
-    assert smm.scoring_frozen(frame) is True                  # frozen past the window
-    assert smm.scoring_frozen(SimpleNamespace(mVersionUpdateBegin=1066)) is False  # moving
+def test_rest_game_state_tells_the_menus_from_a_pause():
+    assert LmuRest(fetch=lambda p: MENU).in_active_session() is False
+    assert LmuRest(fetch=lambda p: PAUSED).in_active_session() is True
+    assert LmuRest(fetch=lambda p: {"weird": 1}).in_active_session() is None
+
+    def down(p):
+        raise OSError("refused")
+    assert LmuRest(fetch=down).in_active_session() is None
+
+
+def test_session_left_only_when_rest_says_no_session(monkeypatch):
+    for state, left in ((MENU, True), (PAUSED, False), (None, False)):
+        monkeypatch.setattr(smm, "_rest_session_cache", [-smm._REST_TTL_S, None])
+        monkeypatch.setattr("simcoach.lmu.rest.LmuRest.in_active_session",
+                            lambda self, s=state: None if s is None else s is PAUSED)
+        assert smm.session_left() is left, state      # unreachable REST stays live

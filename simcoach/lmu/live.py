@@ -201,7 +201,7 @@ def read_field_snapshot() -> FieldSnapshot:
         SCORING_CANDIDATES,
         open_first_available,
         read_consistent,
-        scoring_frozen,
+        session_left,
     )
     try:
         name, handle = open_first_available(SCORING_CANDIDATES, _C.sizeof(rF2Scoring))
@@ -209,4 +209,4 @@ def read_field_snapshot() -> FieldSnapshot:
         scoring = read_consistent(name, rF2Scoring)
     except Exception:
         return empty_snapshot()
-    return empty_snapshot() if scoring_frozen(scoring) else read_field(scoring)
+    return empty_snapshot() if session_left(scoring) else read_field(scoring)
