@@ -197,6 +197,9 @@ def _no_live_game(monkeypatch):
     # The suite's own test-named mappings have a live writer (the test itself), so
     # the #147 "is the LMU process running" guard must not depend on the dev box.
     monkeypatch.setattr(smm, "_lmu_alive", lambda: True, raising=False)
+    # Nor may LMU's REST "in a session?" probe reach a real game: a cache entry from
+    # the future never refreshes and reads "can't tell" (live).
+    monkeypatch.setattr(smm, "_rest_session_cache", [float("inf"), None], raising=False)
 
 
 @pytest.fixture(autouse=True)
