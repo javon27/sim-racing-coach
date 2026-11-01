@@ -27,7 +27,7 @@ jobs:
         run: ruff check simcoach tests scripts
 
       - name: pytest
-        run: pytest -q
+        run: pytest -q -n auto
 
   frontend:
     runs-on: windows-latest
