@@ -20,26 +20,26 @@
       "label": "2",
       "name": "Fountain entry",
       "direction": "left",
-      "start_dist": 868.3,
-      "apex_dist": 881.1,
-      "end_dist": 887.5,
+      "start_dist": 840.0,
+      "apex_dist": 860.0,
+      "end_dist": 875.0,
       "apexes": [
-        881.1
+        860.0
       ],
-      "radius_m": 23.5
+      "radius_m": 57.5
     },
     {
       "number": 3,
       "label": "3",
       "name": "Fountain exit",
-      "direction": "right",
-      "start_dist": 906.6,
-      "apex_dist": 919.4,
-      "end_dist": 976.9,
+      "direction": "left",
+      "start_dist": 932.0,
+      "apex_dist": 940.0,
+      "end_dist": 993.0,
       "apexes": [
-        919.4
+        940.0
       ],
-      "radius_m": 21.2
+      "radius_m": 23.6
     },
     {
       "number": 4,
