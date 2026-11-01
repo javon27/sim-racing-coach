@@ -110,7 +110,7 @@
     {:else if !sessionId && !liveTrack}
       <!-- No live session and none picked: the app starts blank -- point at Sessions. -->
       <div class="empty">
-        <p>No live session — start LMU or pick one in Sessions.</p>
+        <p>No live session — join one in LMU or pick one in Sessions.</p>
         {#if onpicksession}<button type="button" onclick={() => onpicksession?.()}>Open Sessions</button>{/if}
       </div>
     {:else}
@@ -214,5 +214,19 @@
     font-size: 13px;
     text-align: center;
     padding: 16px 12px;
+  }
+  .empty button {
+    font: inherit;
+    font-size: 12px;
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 6px 12px;
+    margin-top: 8px;
+    cursor: pointer;
+  }
+  .empty button:hover {
+    border-color: var(--accent);
   }
 </style>
