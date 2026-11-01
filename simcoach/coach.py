@@ -542,7 +542,8 @@ _REPEAT = re.compile(
 # another driver. ponytail: a heuristic -- a single name ("Kevin is behind"), an
 # all-caps or lowercase name slips through, and a corner/track name beside a cue
 # that no tool result spelled out is cut too. Upgrade: match the field's entry list.
-_WORD = r"[A-Z][a-z]+(?:[A-Z][a-z]+)?(?:['-][A-Z]?[a-z]+)?"
+# #258: "O'Brien" / "O’Brien" (capital-apostrophe-capital) is a word too.
+_WORD = r"[A-Z](?:[a-z]+|['’][A-Z][a-z]+)(?:[A-Z][a-z]+)?(?:['-][A-Z]?[a-z]+)?"
 _NAME = re.compile(rf"\b({_WORD})\s+({_WORD})\b")
 _NOT_A_FIRST_NAME = {"The", "This", "That", "Your", "Turn", "Lap", "Sector", "As", "In",
                      "At", "On", "From", "After", "Before"}   # "At Turn 7 ... gap"
@@ -589,11 +590,19 @@ def _is_filler(chunk: str) -> bool:
 def _ungrounded_names(sentence: str, known: str) -> list[str]:
     if not _RIVAL_CUE.search(sentence):
         return []
-    # #252: "Matt Bell's" is Matt Bell (_WORD's ASCII-apostrophe tail captures the 's;
-    # a curly ’s already ends the word).
-    names = [a + " " + b.removesuffix("'s") for a, b in _NAME.findall(sentence)
-             if a not in _NOT_A_FIRST_NAME]
-    return [n for n in names if n.lower() not in known]
+    # #252: "Matt Bell's" is Matt Bell -- a possessive 's is made curly, which ends
+    # the word, so it never joins a name ("Here's Matt Bell" pairs Matt Bell, #258).
+    sentence = re.sub(r"'s\b", "’s", sentence)
+    names = [a + " " + b for a, b in _NAME.findall(sentence) if a not in _NOT_A_FIRST_NAME]
+
+    def grounded(n):
+        # #258: a whole-name match (a known "Matt Bellamy" or "Matt Bell-Smith" never
+        # grounds "Matt Bell"); a curly apostrophe matches a straight one (`known`
+        # arrives normalised); the French article l' is optional ("L'Eau Rouge").
+        n = n.lower().replace("’", "'")
+        return any(re.search(r"(?<![\w-])" + re.escape(v) + r"(?![\w-])", known)
+                   for v in (n, re.sub(r"^l'", "", n)))
+    return [n for n in names if not grounded(n)]
 
 
 def ground_names(text: str, known: str) -> tuple[str, list[str]]:
@@ -602,7 +611,7 @@ def ground_names(text: str, known: str) -> tuple[str, list[str]]:
     sentence goes with its list marker and the space after it (the break before it
     stays, for the text that follows), and nothing is spliced in its place. Returns (text, the ungrounded names). Limits: see
     _NAME."""
-    known = known.lower()
+    known = known.lower().replace("’", "'")
     names: list[str] = []
 
     def cut(m):
