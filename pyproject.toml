@@ -26,7 +26,7 @@ dependencies = ["numpy>=1.26", "anthropic>=0.40", "keyring>=25", "fastapi>=0.132
 include = ["simcoach*"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff==0.16.8"]
+dev = ["pytest>=8", "pytest-xdist>=3", "ruff==0.16.8"]
 voice = ["faster-whisper>=1.1", "kokoro-onnx==0.6.1", "misaki==0.7.4", "onnxruntime==1.30.0", "regex>=2024.0"]
 
 [tool.pytest.ini_options]
