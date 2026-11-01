@@ -120,9 +120,10 @@ def car_status_text(meta: dict, ch: dict, state: dict | None, cmap) -> str:
 
     A NEGATIVE ("no impacts", dent 0) is stated only for channels rig-confirmed live
     and populated (#143, Imola 2026-09-20): mLastImpact* and mDentSeverity. The
-    bodywork-detached, overheating, flat and wheel-detached flags have never been seen
-    set at the rig, so only a SET flag is reported, marked unverified -- an unset one
-    proves nothing and is not stated."""
+    bodywork-detached, overheating and flat flags have never been confirmed at the rig,
+    so only a SET flag is reported, marked unverified -- an unset one proves nothing
+    and is not stated. Wheel-detached is rig-confirmed (Long Beach 2026-10-31: both
+    fronts flagged, driver confirmed both gone) and reported unmarked, still set-only."""
     phase = meta.get("phase") or "session"
     lines = [f"Car status now (live), game lap {meta['lap_no']} in progress ({phase}):"]
     where = {"track": "On track.", "pits": "In the pit lane.",
@@ -155,13 +156,13 @@ def car_status_text(meta: dict, ch: dict, state: dict | None, cmap) -> str:
         lines.append(f"Bodywork: dent severity max {st['dent_max']:.0f}, total "
                      f"{st['dent_total']:.0f} (raw 0\N{EN DASH}255 scale, panel unknown).")
         lines.append(f"Note: {SUSPENSION_UNSEEN}.")
-        flags = (["bodywork part detached"] if st["detached"] else []) \
-            + (["engine overheating"] if st["overheating"] else []) \
-            + [f"{w.upper()} flat" for w in st["wheels_flat"]] \
-            + [f"{w.upper()} wheel detached" for w in st["wheels_detached"]]
+        flags = [f"{w.upper()} wheel detached" for w in st["wheels_detached"]] \
+            + [f"{f} (unverified channel)" for f in
+               (["bodywork part detached"] if st["detached"] else [])
+               + (["engine overheating"] if st["overheating"] else [])
+               + [f"{w.upper()} flat" for w in st["wheels_flat"]]]
         if flags:
-            lines.append("Flags set: " + ", ".join(f"{f} (unverified channel)"
-                                                   for f in flags) + ".")
+            lines.append("Flags set: " + ", ".join(flags) + ".")
     return "\n".join(lines)
 
 

@@ -2234,9 +2234,8 @@ def damage_events(channels: dict) -> list[dict]:
 
 def damage_state(channels: dict) -> dict:
     """End-of-lap damage snapshot: dent_max/dent_total (raw 0-255 severity,
-    UNVERIFIED which panel), detached/overheating, and which wheels read flat or
-    detached (also UNVERIFIED -- nothing broke on the rig hit that confirmed the
-    other fields). {} for a lap with no damage channels -- never fabricated as
+    UNVERIFIED which panel), detached/overheating, and which wheels read flat
+    (also UNVERIFIED) or detached (rig-confirmed, Long Beach 2026-10-31). {} for a lap with no damage channels -- never fabricated as
     clean."""
     dent_max = channels.get("dent_max")
     if dent_max is None or not len(dent_max):
