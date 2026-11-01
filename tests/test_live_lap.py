@@ -194,8 +194,8 @@ def test_car_status_reports_an_impact_mid_lap_and_a_detached_wheel(tmp_path, syn
     ctx = _ctx(store, on_track=True, live=live)
     out = ctx.dispatch("get_car_status", {})
     assert "365" in out and "front-right" in out and "T1" in out
-    # Positive only, and marked: flat_*/wheel_detached_* are not rig-verified (#143).
-    assert "FL wheel detached (unverified channel)" in out
+    # Positive only. wheel_detached_* is rig-confirmed (Long Beach 2026-10-31): unmarked.
+    assert "FL wheel detached" in out and "FL wheel detached (unverified" not in out
     assert "game lap 5" in out
 
 
