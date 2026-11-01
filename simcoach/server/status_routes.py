@@ -6,7 +6,6 @@ from .core import export
 
 
 def register(app, deps) -> None:
-    store = app.state.store
     _has_canonical = deps._has_canonical
     _live_map_key = deps._live_map_key
     _ensure_rest = deps._ensure_rest
@@ -48,16 +47,12 @@ def register(app, deps) -> None:
             # of waiting on that lap (#127). lap_id stays None -- no lap yet.
             session_id = _live_session_id(base)
         else:
-            # #137: no live SMM and nothing captured this process (a sidecar
-            # restart with LMU in the lobby) -- fall back to the newest stored
-            # lap so the strip isn't blank. on_track/activity stay False/None
-            # below (live is None here), which is correct: we don't know the
-            # driver is on track, only what they last drove.
-            row = store.latest_lap_row()
-            if row is not None:
-                track, car, session_id = row["track"], row["car"], row["session_id"]
-            else:
-                track, car = None, None
+            # No live session and nothing captured this process: the app starts blank
+            # (driver, 2026-10-31) -- the last stored session's laps and map no longer
+            # open on launch; the Sessions screen picks one. (#137 had fallen back to
+            # the newest stored lap "so the strip isn't blank"; the coach keeps its
+            # own newest-lap context fallback, coach_ws.)
+            track, car = None, None
         # `activity` is the live driving state (track/pits/garage), detected from
         # scoring immediately — not gated on a captured lap. on_track mirrors it.
         activity = live["state"] if live else None
