@@ -786,10 +786,11 @@ def test_status_has_map_reflects_canonical(tmp_path, monkeypatch):
     assert _tc(app).get("/status").json()["has_map"] is False
 
 
-def test_status_falls_back_to_newest_stored_lap_after_restart(tmp_path, monkeypatch, synthetic_lap):
-    # #137: sidecar restarted with LMU sitting in the lobby -- no live SMM, and
-    # nothing captured yet by THIS process (app.state.latest stays None). /status
-    # must still report the newest stored lap's track/car/session, not a blank strip.
+def test_status_starts_blank_with_no_live_session(tmp_path, monkeypatch, synthetic_lap):
+    # Driver, 2026-10-31: launching the app opened the last session's laps and map.
+    # With no live session and nothing captured by this process (app.state.latest is
+    # None), /status names no track/car/session -- the app starts blank. (#137 used to
+    # fall back to the newest stored lap here.)
     from simcoach.lmu import smm
     monkeypatch.setattr(smm, "read_live_status", lambda: None)
     store = LapStore(str(tmp_path / "c.sqlite"), str(tmp_path / "data"))
@@ -799,9 +800,8 @@ def test_status_falls_back_to_newest_stored_lap_after_restart(tmp_path, monkeypa
     app = create_app(store, coach, tracks_dir=str(tmp_path / "tracks"))
 
     body = _tc(app).get("/status").json()
-    assert body["track"] == synthetic_lap.track
-    assert body["car"] == synthetic_lap.car
-    assert body["session_id"] == "s1"
+    assert body["track"] is None and body["car"] is None
+    assert body["session_id"] is None and body["lap_id"] is None
     assert body["on_track"] is False
     assert body["activity"] is None
 
