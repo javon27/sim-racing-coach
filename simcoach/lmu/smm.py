@@ -934,24 +934,21 @@ class LmuSource:
         if player is None or vt is None:
             return None
 
-        # A new session loaded with no lap wrap (qualifying -> race, a restart): the game
-        # clock steps back. Rig 2026-10-31: the buffer then held both sessions, so
-        # livelap refused it (_mixed) and "I spun out" on the race's first lap got
-        # nothing until the next wrap. Drop the old session's buffer, as a wrap that
-        # doesn't commit -- the new session's lap is live from its first sample.
-        et = self._channels.get("elapsed_time")
-        if et and vt.mElapsedTime < et[-1] - _SESSION_CLOCK_BACK_S:
-            self._trace.take()
-            self._channels, self._sector_seq, self._prev_dist = {}, [], None
-            self._pit_during_lap = self._finished_at_lap_start = False
-            self._pit_at_lap_start = None
-
         self._feed_trace(scoring, player, vt)
 
         record = None
         dist = player.mLapDist
+        # A new session loaded (qualifying -> race, a restart, the race start after the
+        # formation): the game clock steps back. Rig 2026-10-31: with no lap wrap the
+        # buffer held both sessions, so livelap refused it (_mixed) and "I spun out" on
+        # the race's first lap got nothing until the next wrap. It is a lap boundary
+        # like a wrap -- the SAME decision below, so a lap timed on the switch frame
+        # still commits (review: rig 7843, 7475, 8246) and a fragment is stored (#77) --
+        # and the new session's lap is live from its first sample.
+        et = self._channels.get("elapsed_time")
+        clock_back = bool(et) and vt.mElapsedTime < et[-1] - _SESSION_CLOCK_BACK_S
         # Finish line / lap boundary: lap distance jumped backward a long way.
-        if self._prev_dist is not None and dist < self._prev_dist - _LAP_WRAP_M:
+        if self._prev_dist is not None and (dist < self._prev_dist - _LAP_WRAP_M or clock_back):
             # #152: hand over the lap's field trace at EVERY wrap, committed or not, so a
             # trace never spans two of the driver's laps.
             trace = self._trace.take()

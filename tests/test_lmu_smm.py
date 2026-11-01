@@ -1525,13 +1525,31 @@ def test_a_new_session_without_a_wrap_starts_a_fresh_live_lap():
     is live from its first sample, and the jump is never read as a lap."""
     from simcoach.livelap import _mixed
     write, step, records, close = _partial_rig(uuid.uuid4().hex)
-    for i in range(100):                                      # the previous session
+    for i in range(250):                                      # the previous session
         write(1000.0 + i * 5.0, -1.0, total_laps=4, et=900.0 + i * 0.1); step()
     old = step.src.live_lap[0]
     for i in range(50):                                       # the race: clock restarts
-        write(1300.0 + i * 5.0, -1.0, total_laps=0, et=30.0 + i * 0.1); step()  # no wrap
+        write(1900.0 + i * 5.0, -1.0, total_laps=0, et=30.0 + i * 0.1); step()  # no wrap
     meta, ch = step.src.live_lap
     close()
-    assert records == []                                      # no lap out of the jump
+    assert [r.lap_time for r in records] == [None]            # the old buffer: a fragment,
+    assert records[0].partial == "partial"                    # stored (#77), never timed
     assert meta is not old and meta["lap_no"] == 1            # a fresh live lap
     assert len(ch["elapsed_time"]) == 50 and not _mixed(ch)   # only the race's samples
+
+
+def test_a_lap_timed_on_the_session_switch_frame_still_commits():
+    """Review, rig 7843 -> 7845: practice's last lap (84.94 s) ended at 3,582 m and the
+    very next frame was qualifying -- -4 m in the pits, the clock back at 119.5 s. The
+    wrap and the clock step land on ONE poll; the timed lap must commit, and the next
+    session's out lap must not pick up its time."""
+    write, step, records, close = _partial_rig(uuid.uuid4().hex)
+    write(5.0, 85.10, total_laps=8, et=3990.0); step()
+    for i in range(1, 300):                                   # practice's last lap
+        write(5.0 + i * 12.0, 85.10, total_laps=8, et=3990.0 + i * 0.3); step()
+    write(-4.0, 84.94, total_laps=9, in_pits=True, et=119.5); step()   # the switch frame
+    for i in range(1, 250):                                   # qualifying's out lap
+        write(-4.0 + i * 16.0, 84.94, total_laps=0, et=119.5 + i * 0.3); step()
+    write(3.0, 84.94, total_laps=0, et=119.5 + 250 * 0.3); step()     # its first wrap
+    close()
+    assert [(r.lap_time, r.partial) for r in records] == [(84.94, None), (None, "out")]
