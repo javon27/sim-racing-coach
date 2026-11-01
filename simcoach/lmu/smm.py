@@ -68,6 +68,9 @@ _PARTIAL_MIN_SPAN_M = 200.0
 # lap-distance wrap (rig lap 7640), so the flag lap's own last frames may already read
 # finished -- a whole-lap check would then call the real last racing lap a cool-down.
 _FLAG_GRACE_S = 2.0
+# The game clock stepping back by more than this is a new session (livelap._mixed's
+# own test, so a buffer that test would refuse is never kept).
+_SESSION_CLOCK_BACK_S = 1.0
 
 
 class _PROCESSENTRY32W(C.Structure):
@@ -935,8 +938,17 @@ class LmuSource:
 
         record = None
         dist = player.mLapDist
+        # A new session loaded (qualifying -> race, a restart, the race start after the
+        # formation): the game clock steps back. Rig 2026-10-31: with no lap wrap the
+        # buffer held both sessions, so livelap refused it (_mixed) and "I spun out" on
+        # the race's first lap got nothing until the next wrap. It is a lap boundary
+        # like a wrap -- the SAME decision below, so a lap timed on the switch frame
+        # still commits (review: rig 7843, 7475, 8246) and a fragment is stored (#77) --
+        # and the new session's lap is live from its first sample.
+        et = self._channels.get("elapsed_time")
+        clock_back = bool(et) and vt.mElapsedTime < et[-1] - _SESSION_CLOCK_BACK_S
         # Finish line / lap boundary: lap distance jumped backward a long way.
-        if self._prev_dist is not None and dist < self._prev_dist - _LAP_WRAP_M:
+        if self._prev_dist is not None and (dist < self._prev_dist - _LAP_WRAP_M or clock_back):
             # #152: hand over the lap's field trace at EVERY wrap, committed or not, so a
             # trace never spans two of the driver's laps.
             trace = self._trace.take()
