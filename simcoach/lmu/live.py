@@ -197,11 +197,16 @@ def read_field_snapshot() -> FieldSnapshot:
     """Read one live scoring frame and map it. Never raises: returns
     empty_snapshot() (live=False) when LMU isn't running / the read fails, so the
     /live socket can keep polling instead of dropping."""
-    from simcoach.lmu.smm import SCORING_CANDIDATES, open_first_available, read_consistent
+    from simcoach.lmu.smm import (
+        SCORING_CANDIDATES,
+        open_first_available,
+        read_consistent,
+        session_left,
+    )
     try:
         name, handle = open_first_available(SCORING_CANDIDATES, _C.sizeof(rF2Scoring))
         handle.close()
         scoring = read_consistent(name, rF2Scoring)
     except Exception:
         return empty_snapshot()
-    return read_field(scoring)
+    return empty_snapshot() if session_left(scoring) else read_field(scoring)

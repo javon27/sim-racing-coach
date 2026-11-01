@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import urllib.error
 import urllib.request
 
 from simcoach.tiers import adjustable_from_setup
@@ -36,6 +37,27 @@ class LmuRest:
                 return True
         except OSError:
             return False
+
+    def in_active_session(self, timeout: float = 0.5) -> bool | None:
+        """GET /rest/sessions/GetGameState: False in the menus (rig 2026-10-31: {"status":
+        "unavailable", "reason": "Game is not in an active session", "gameState":
+        "Setup"}), True with a player vehicle loaded (paused included: "MultiStintState":
+        "PAUSED", "playerVehicleLoaded": true), None when it can't tell."""
+        try:
+            d = (self._http_get("/rest/sessions/GetGameState", timeout=timeout)
+                 if self._fetch is self._http_get else self._fetch("/rest/sessions/GetGameState"))
+        except urllib.error.HTTPError as e:     # the menus answer 503 WITH that body
+            try:
+                d = json.loads(e.read().decode("utf-8"))
+            except Exception:
+                return None
+        except Exception:
+            return None
+        if not isinstance(d, dict):
+            return None
+        if d.get("status") == "unavailable":
+            return False
+        return True if d.get("playerVehicleLoaded") else None
 
     # --- raw endpoints ---
     def get_setup(self, probe_timeout: float | None = None) -> dict:

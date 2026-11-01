@@ -716,6 +716,26 @@ def _find_telem_by_id(telem: rF2Telemetry, vehicle_id: int) -> TelemInfoV01 | No
     return None
 
 
+# Rig 2026-10-31: in LMU's menus (race weekend setup) the game runs but the buffer
+# keeps the last session's frame -- read as "on track" at Road Atlanta; #147's process
+# check can't see that. LMU's REST game state says it plainly ("Game is not in an
+# active session"), and tells a pause apart (vehicle loaded) -- the update counters
+# freeze for a pause too, so they can't. Cached: the readers run up to ~5 Hz.
+_REST_TTL_S = 1.0
+_rest_session_cache: list = [-_REST_TTL_S, None]   # [when read, in_active_session()]
+
+
+def session_left(scoring=None) -> bool:
+    """True when LMU's REST API says no session is active (the menus): the buffer is
+    the last session's stale frame. An unreachable REST API, or a state it can't
+    read, stays live -- fails open, like #147."""
+    now = time.monotonic()
+    if now - _rest_session_cache[0] >= _REST_TTL_S:
+        from .rest import LmuRest
+        _rest_session_cache[:] = [now, LmuRest().in_active_session()]
+    return _rest_session_cache[1] is False
+
+
 def read_session_track_car() -> tuple[str, str] | None:
     """Peek the current player's (track, car) from live shared memory, or None if
     LMU isn't running / no player on track. Used at startup to pick the corner map."""
@@ -723,6 +743,8 @@ def read_session_track_car() -> tuple[str, str] | None:
         telem = read_consistent(TELEMETRY_CANDIDATES[0], rF2Telemetry)
         scoring = read_consistent(SCORING_CANDIDATES[0], rF2Scoring)
     except Exception:
+        return None
+    if session_left(scoring):
         return None
     player = _find_player(scoring)
     vt = _find_telem_by_id(telem, player.mID) if player is not None else None
@@ -751,6 +773,8 @@ def read_live_status() -> dict | None:
         scoring = read_consistent(SCORING_CANDIDATES[0], rF2Scoring)
     except Exception:
         return None
+    if session_left(scoring):
+        return None
     player = _find_player(scoring)
     if player is None:
         return None
@@ -776,6 +800,8 @@ def read_live_session_id() -> str | None:
         telem = read_consistent(TELEMETRY_CANDIDATES[0], rF2Telemetry)
         scoring = read_consistent(SCORING_CANDIDATES[0], rF2Scoring)
     except Exception:
+        return None
+    if session_left(scoring):
         return None
     player = _find_player(scoring)
     vt = _find_telem_by_id(telem, player.mID) if player is not None else None
