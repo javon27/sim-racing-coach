@@ -90,9 +90,13 @@ describe("TrackMapPane", () => {
 
   afterEach(cleanup);
 
-  it("shows the empty state with no session and no live track, pointing editing to Track view", async () => {
-    render(TrackMapPane, { props: { sessionId: undefined } });
-    expect(screen.getByText(/no map yet/i)).toBeTruthy();
+  it("with no session and no live track, points to Sessions (the app starts blank)", async () => {
+    const onpicksession = vi.fn();
+    render(TrackMapPane, { props: { sessionId: undefined, onpicksession } });
+    expect(screen.getByText(/no live session/i)).toBeTruthy();
+    expect(screen.queryByText(/no map yet/i)).toBeNull();
+    await fireEvent.click(screen.getByRole("button", { name: "Open Sessions" }));
+    expect(onpicksession).toHaveBeenCalledOnce();
     // Editing/capture moved to Track view — the rail no longer offers Generate map.
     expect(screen.queryByText("Generate map")).toBeNull();
     expect(getSessionLaps).not.toHaveBeenCalled();
@@ -121,7 +125,7 @@ describe("TrackMapPane", () => {
 
   it("picks up a track detected after mount (a frame, not a poll)", async () => {
     render(TrackMapPane, { props: { sessionId: undefined } });
-    expect(screen.getByText(/no map yet/i)).toBeTruthy();
+    expect(screen.getByText(/no live session/i)).toBeTruthy();   // blank until a session
 
     eventFeed.push("status", { ...noStatus, track: "Live Track", on_track: true, activity: "track", has_map: true });
     eventFeed.push("map", { ...mapFixture, track_name: "Live Track" });

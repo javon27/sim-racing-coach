@@ -259,7 +259,8 @@
               onpointermove={mapResizeMove}
               onpointerup={mapResizeUp}
             ></div>
-            <TrackMapPane sessionId={selectedSessionId} expanded={railWide} onexpand={toggleRailWide} />
+            <TrackMapPane sessionId={selectedSessionId} expanded={railWide} onexpand={toggleRailWide}
+              onpicksession={() => (screen = "sessions")} />
           </aside>
           <div class="coach-main">
             <InputsPanel lapId={selectedLapId ?? null} />

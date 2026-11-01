@@ -4,11 +4,13 @@
   import { liveField } from "./live";
   import TrackMap from "./TrackMap.svelte";
 
-  let { sessionId, expanded = false, onexpand }: {
+  let { sessionId, expanded = false, onexpand, onpicksession }: {
     sessionId: string | undefined;
     // #151: App owns the rail width; this pane only asks for it to change.
     expanded?: boolean;
     onexpand?: () => void;
+    // The app starts blank with no live session (driver, 2026-10-31): App opens Sessions.
+    onpicksession?: () => void;
   } = $props();
 
   let lapId: number | null = $state(null);
@@ -105,6 +107,12 @@
            waiting on a lap. TrackMap's own "none" phase (mapData === null) covers
            "track detected, no map built yet" with its own build-me hint. -->
       <TrackMap mapData={liveMap} fill={expanded} />
+    {:else if !sessionId && !liveTrack}
+      <!-- No live session and none picked: the app starts blank -- point at Sessions. -->
+      <div class="empty">
+        <p>No live session — start LMU or pick one in Sessions.</p>
+        {#if onpicksession}<button type="button" onclick={() => onpicksession?.()}>Open Sessions</button>{/if}
+      </div>
     {:else}
       <p class="empty">No map yet — build one in Track view (Tracks → Edit).</p>
     {/if}
