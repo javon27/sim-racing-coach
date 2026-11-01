@@ -223,3 +223,18 @@ def test_distill_bad_model_json_502(tmp_path, monkeypatch, mem_keyring, syntheti
     r = c.post("/profile/distill", json={"session_id": "sess-1"})
     assert r.status_code == 502
     assert store.list_learnings(status="pending") == []
+
+
+def test_distill_api_failure_says_why(tmp_path, monkeypatch, mem_keyring, synthetic_lap):
+    # #259: an SDK failure the driver can act on escaped distill as a bare 500
+    from simcoach.model.base import CoachUserError
+    c, store = _client(tmp_path, monkeypatch, mem_keyring, model_reply="{}")
+    _seed_session(store, synthetic_lap, session_id="sess-1")
+
+    def fail(system, messages):
+        raise CoachUserError("Anthropic rejected the API key (expired or revoked) — add a valid one in Settings.")
+    c.app.state.coach.model.complete = fail
+    r = c.post("/profile/distill", json={"session_id": "sess-1"})
+    assert r.status_code == 502
+    assert "rejected the API key" in r.json()["detail"]
+    assert store.list_learnings(status="pending") == []

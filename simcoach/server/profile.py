@@ -8,6 +8,7 @@ from fastapi import Body, HTTPException
 from .. import config
 from ..analysis import analyze_lap
 from ..coach_tools import race_result_text, scrub_stored_answer
+from ..model.base import CoachUserError
 
 
 def register(app, deps) -> None:
@@ -135,7 +136,11 @@ def register(app, deps) -> None:
             "memory is one short, durable observation about THIS DRIVER (not the car or "
             "track), grounded only in the digest below -- do not invent facts. summary is "
             "an updated 1-2 sentence always-on profile blurb.")
-        raw = app.state.coach.model.complete(system, [{"role": "user", "content": "\n".join(digest)}])
+        try:
+            raw = app.state.coach.model.complete(
+                system, [{"role": "user", "content": "\n".join(digest)}])
+        except CoachUserError as e:      # #259: say why, not a bare 500
+            raise HTTPException(502, str(e)) from e
         try:
             parsed = json.loads(raw)
         except (ValueError, TypeError):

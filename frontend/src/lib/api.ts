@@ -217,6 +217,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** #259: the server's reason from a `request()` failure ("-> 502: <detail>"), or `fallback`. */
+export function failureReason(e: unknown, fallback: string): string {
+  const m = e instanceof Error ? /-> \d+: (.+)$/s.exec(e.message) : null;
+  return m ? m[1] : fallback;
+}
+
 export function getHealth(): Promise<HealthResponse> {
   return request<HealthResponse>("/health");
 }

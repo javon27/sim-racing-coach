@@ -62,6 +62,20 @@ def test_draft_notes_returns_draft_without_writing(tmp_path):
     assert before == after                     # endpoint wrote nothing
 
 
+def test_draft_notes_api_failure_says_why(tmp_path):
+    # #259: an SDK failure the driver can act on escaped as a bare 500
+    from simcoach.model.base import CoachUserError
+    client, _ = _make_client_with_fake_model(tmp_path, model_reply="{}")
+
+    def fail(system, messages):
+        raise CoachUserError("Anthropic rejected the API key (expired or revoked) — add a valid one in Settings.")
+    client.app.state.coach.model.complete = fail
+    r = client.post("/tracks/algarve_international_circuit/draft-notes",
+                     json={"track": "Algarve International Circuit"})
+    assert r.status_code == 502
+    assert "rejected the API key" in r.json()["detail"]
+
+
 def test_draft_notes_bad_slug_400(tmp_path):
     client, _ = _make_client_with_fake_model(tmp_path, model_reply="{}")
     r = client.post("/tracks/..%2f..%2fetc/draft-notes", json={"track": "../../etc"})
