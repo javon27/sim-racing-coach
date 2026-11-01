@@ -68,6 +68,9 @@ _PARTIAL_MIN_SPAN_M = 200.0
 # lap-distance wrap (rig lap 7640), so the flag lap's own last frames may already read
 # finished -- a whole-lap check would then call the real last racing lap a cool-down.
 _FLAG_GRACE_S = 2.0
+# The game clock stepping back by more than this is a new session (livelap._mixed's
+# own test, so a buffer that test would refuse is never kept).
+_SESSION_CLOCK_BACK_S = 1.0
 
 
 class _PROCESSENTRY32W(C.Structure):
@@ -930,6 +933,18 @@ class LmuSource:
         vt = _find_telem_by_id(telem, player.mID) if player is not None else None
         if player is None or vt is None:
             return None
+
+        # A new session loaded with no lap wrap (qualifying -> race, a restart): the game
+        # clock steps back. Rig 2026-10-31: the buffer then held both sessions, so
+        # livelap refused it (_mixed) and "I spun out" on the race's first lap got
+        # nothing until the next wrap. Drop the old session's buffer, as a wrap that
+        # doesn't commit -- the new session's lap is live from its first sample.
+        et = self._channels.get("elapsed_time")
+        if et and vt.mElapsedTime < et[-1] - _SESSION_CLOCK_BACK_S:
+            self._trace.take()
+            self._channels, self._sector_seq, self._prev_dist = {}, [], None
+            self._pit_during_lap = self._finished_at_lap_start = False
+            self._pit_at_lap_start = None
 
         self._feed_trace(scoring, player, vt)
 

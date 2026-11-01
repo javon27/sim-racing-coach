@@ -1081,6 +1081,7 @@ def _partial_rig(tag: str):
     def close():
         tmap.close(); smap.close()
 
+    step.src = src     # for a test that reads the live lap
     return write, step, records, close
 
 
@@ -1514,3 +1515,23 @@ def test_a_field_trace_failure_never_costs_the_lap(monkeypatch, caplog):
     assert len(rig.records) == 1 and rig.records[0].lap_time == pytest.approx(92.5)
     assert rig.records[0].race is not None
     assert caplog.text.count("field trace") == 1
+
+
+def test_a_new_session_without_a_wrap_starts_a_fresh_live_lap():
+    """Rig 2026-10-31 (Road Atlanta): the race loaded straight after the previous
+    session with no lap wrap, so the buffer held both sessions -- livelap refused it
+    (_mixed) and "I spun out" on the race's first lap read nothing until a lap
+    finished. The game clock stepping back now drops the old buffer: the race's lap
+    is live from its first sample, and the jump is never read as a lap."""
+    from simcoach.livelap import _mixed
+    write, step, records, close = _partial_rig(uuid.uuid4().hex)
+    for i in range(100):                                      # the previous session
+        write(1000.0 + i * 5.0, -1.0, total_laps=4, et=900.0 + i * 0.1); step()
+    old = step.src.live_lap[0]
+    for i in range(50):                                       # the race: clock restarts
+        write(1300.0 + i * 5.0, -1.0, total_laps=0, et=30.0 + i * 0.1); step()  # no wrap
+    meta, ch = step.src.live_lap
+    close()
+    assert records == []                                      # no lap out of the jump
+    assert meta is not old and meta["lap_no"] == 1            # a fresh live lap
+    assert len(ch["elapsed_time"]) == 50 and not _mixed(ch)   # only the race's samples
