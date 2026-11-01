@@ -552,7 +552,9 @@ class LapStore:
             "SELECT 1 FROM sqlite_master WHERE type = 'table' LIMIT 1").fetchone() is not None
         stamp = SCHEMA_VERSION   # lowered only by a step that must retry next open (v16+)
         if current_version == 0 and not has_tables:
-            self.conn.executescript(_SCHEMA)
+            # One transaction: autocommitted, each CREATE pays its own fsync on
+            # Windows (~45 ms vs ~6 ms per fresh db; the test suite builds thousands).
+            self.conn.executescript("BEGIN;" + _SCHEMA + ";COMMIT;")
         else:
             # Cumulative migrations: an old db steps through each version it's behind.
             if current_version < 2:
