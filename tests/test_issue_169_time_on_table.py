@@ -657,3 +657,65 @@ def test_optimal_line_says_own_sectors_not_a_ceiling(tmp_path, synthetic_lap):
     _save(store, synthetic_lap, 91.0, 2, 2, sectors=[30.0, 30.5, 30.5])
     out = _ctx(store).get_time_on_table("latest")
     assert "(your own sectors only; not a ceiling on pace)" in out
+
+
+def test_all_time_reference_reaches_an_earlier_sessions_telemetry_lap(tmp_path, synthetic_lap):
+    # Rig 2026-11-01 (Long Beach): the corner tools compared only within the session, so
+    # the coach couldn't use the driver's 1:20.874 from 27 Sep. reference='all-time best'
+    # is the fastest lap WITH telemetry from any session; a faster result-log lap (the
+    # game's time, no corners) is skipped for the next fastest that has them.
+    store = _store(tmp_path)
+    _save(store, synthetic_lap, 88.0, 1, 1, sid="OTHER")
+    store.conn.execute(
+        "INSERT INTO laps (ts, sim, track, car, lap_time, valid, telemetry_path, phase, "
+        "session_id, source, mapping) VALUES (5, 'lmu', ?, ?, 85.0, 1, NULL, 'practice', "
+        "'R1', 'result', 0)", (synthetic_lap.track, synthetic_lap.car))
+    store.conn.commit()
+    _save(store, _variant(synthetic_lap, [(900.0, 1100.0, 0.9)]), 91.0, 10, 1)
+    _save(store, synthetic_lap, 90.0, 11, 2)
+    ctx = _ctx(store)
+    # The default stays this session's own comparison.
+    assert "vs next-best: practice lap 1" in ctx.get_time_loss("latest").splitlines()[0]
+    out = ctx.get_time_loss("latest", "all-time best")
+    assert "vs all-time best: a lap from another session" in out.splitlines()[0], out
+    assert "your all-time best lap with telemetry (1:28.000, set " in out, out
+    corner = ctx.get_corner("1", "latest", "all-time best")
+    assert "Deltas ('vs best') are vs your all-time best lap with telemetry (1:28.000" in corner
+    assert "next-best" in ctx.get_corner("1", "latest")
+    # Quicker than every other telemetry lap: the reference is named next-best, never best.
+    _save(store, synthetic_lap, 87.0, 12, 3)
+    out = _ctx(store).get_time_loss("latest", "all-time best")
+    assert "your next-best lap with telemetry from any session (1:28.000" in out, out
+
+
+def test_all_time_reference_with_no_other_telemetry_lap_says_so(tmp_path, synthetic_lap):
+    store = _store(tmp_path)
+    _save(store, synthetic_lap, 90.0, 1, 1)
+    out = _ctx(store).get_time_loss("latest", "all-time best")
+    assert out == "No other lap with telemetry here in this car to compare against."
+
+
+def test_an_explicit_reference_is_never_the_lap_itself_or_a_silent_miss(tmp_path, synthetic_lap):
+    # #294 review: get_corner gained `reference`, and naming the subject lap compared it
+    # with itself (+0.0 everywhere); an unknown name ('pb' before it was an alias,
+    # 'fastest ever') fell through to "you need a second valid lap", which was false.
+    store = _store(tmp_path)
+    _save(store, _variant(synthetic_lap, [(900.0, 1100.0, 0.9)]), 91.0, 10, 1)
+    _save(store, synthetic_lap, 90.0, 11, 2)
+    ctx = _ctx(store)
+    corner = ctx.get_corner("1", "lap 2", "lap 2")
+    assert "That lap IS the reference -- a lap can't be compared to itself." in corner
+    assert "Deltas ('vs best')" not in corner
+    out = ctx.get_time_loss("latest", "fastest ever")
+    assert out.startswith("No lap matching 'fastest ever' as a reference"), out
+
+
+def test_a_pit_lap_is_never_the_all_time_reference(tmp_path, synthetic_lap):
+    # #294 review: best_lap didn't filter pit laps (timed_laps does), so the PB line and
+    # the comparison could name different laps.
+    store = _store(tmp_path)
+    _save(store, synthetic_lap, 85.0, 1, 1, sid="OTHER", pit=True)
+    _save(store, synthetic_lap, 88.0, 2, 2, sid="OTHER")
+    _save(store, synthetic_lap, 90.0, 11, 1)
+    out = _ctx(store).get_time_loss("latest", "all-time best")
+    assert "(1:28.000, set " in out and "1:25.000" not in out, out
