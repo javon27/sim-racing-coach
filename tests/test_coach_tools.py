@@ -1269,6 +1269,20 @@ def test_personal_best_tie_prefers_the_telemetry_lap(tmp_path, synthetic_lap, mo
     out = CoachContext(store, track=_SARTHE, car="Chevrolet Corvette Z06 LMGT3.R").dispatch(
         "get_personal_best", {})
     assert "4:02.141" in out and "no telemetry" not in out, out
+    assert "WITH telemetry" not in out, out   # the PB itself is analysable: no pointer
+
+
+def test_result_log_personal_best_points_at_the_fastest_lap_with_telemetry(
+        tmp_path, synthetic_lap, monkeypatch):
+    # Rig 2026-11-01 (Long Beach): the PB was a result-log 1:20.133 and the coach said
+    # there was nothing to analyse, though a 1:20.874 telemetry lap existed. A result-log
+    # PB names the next fastest lap the corner tools CAN read, and how to compare to it.
+    store = _sarthe_store(tmp_path, synthetic_lap, monkeypatch)
+    out = CoachContext(store, track=_SARTHE, car="Chevrolet Corvette Z06 LMGT3.R").dispatch(
+        "get_personal_best", {})
+    assert "4:00.009" in out and "no telemetry" in out, out
+    assert "Fastest lap WITH telemetry: 4:02.141" in out, out
+    assert "reference='all-time best'" in out, out
 
 
 def test_personal_best_class_mode_lists_one_best_per_car(tmp_path, synthetic_lap, monkeypatch):

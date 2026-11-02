@@ -203,6 +203,14 @@ def _pre_green(phase, lap_no) -> bool:
 _PACE_GATE = 1.07
 # The reference label when the subject IS the best lap: a slower lap, never "best".
 _NEXT_BEST = "your next-best lap"
+# A `reference` naming the fastest lap WITH telemetry on any date, any session.
+_ALL_TIME_REFS = frozenset({"all time best", "all time", "all time best lap"})
+_REFERENCE_DESC = ("What to compare against: 'best' (default — this session's best, else "
+                   "all-time best), an in-session lap number, or 'all-time best' — the "
+                   "fastest lap WITH telemetry here in this car from ANY session (a "
+                   "result-log best has no corner data, so this is the next fastest that "
+                   "does). Use 'all-time best' when the driver asks about earlier sessions "
+                   "or historic laps.")
 
 # Tool specs advertised to the model (Anthropic tool-use format).
 TOOLS = [
@@ -252,10 +260,7 @@ TOOLS = [
                 "which": {"type": "string",
                           "description": "Which lap to analyse: 'latest' (default) or an "
                                          "in-session lap number like 'race lap 3'."},
-                "reference": {"type": "string",
-                              "description": "What to compare against: 'best' (default — "
-                                             "this session's best, else all-time best) or "
-                                             "an in-session lap number."},
+                "reference": {"type": "string", "description": _REFERENCE_DESC},
             },
         },
     },
@@ -393,6 +398,9 @@ TOOLS = [
                                          "'lap 2', or 'this lap' (also 'current', 'now') "
                                          "-- the lap being driven now, readable corner by "
                                          "corner as each is completed (provisional)."},
+                "reference": {"type": "string",
+                              "description": "Whose numbers the 'vs best' deltas are "
+                                             "against. " + _REFERENCE_DESC},
             },
             "required": ["corner"],
         },
@@ -1545,14 +1553,17 @@ class CoachContext:
         self._envelope = grip_envelope(records) if records else None
         return self._envelope
 
-    def _analysis_for(self, record, lap_id):
+    def _analysis_for(self, record, lap_id, reference="best"):
         # #157: no corner map still gets the lap-level reads (tires, wheels, lap-time
         # spread) -- just no corners. Per-corner tools guard `self.cmap` themselves.
+        reference = (reference or "best").strip().lower()
         key = lap_id if lap_id is not None else id(record)
+        if reference != "best":
+            key = (key, reference)
         if key not in self._analysis_cache:
             # The same reference get_lap_summary names (#169): never the lap itself,
             # never a lap outside the comparable-pace gate.
-            ref, _ = self._reference_lap(record, lap_id)
+            ref, _ = self._reference_lap(record, lap_id, reference)
             envelope = self._grip_envelope(ref)
             self._analysis_cache[key] = analyze_lap(record, self.cmap or CornerMap([]),
                                                      reference=ref,
@@ -1839,6 +1850,8 @@ class CoachContext:
         pace gate.
         """
         reference = (reference or "best").strip().lower()
+        if re.sub(r"[\s_-]+", " ", reference) in _ALL_TIME_REFS:
+            return self._all_time_reference(record, lap_id)
         if reference not in ("best", ""):
             ref, _ = self._resolve_lap(reference)
             return ref, f"your {reference}"
@@ -1882,6 +1895,30 @@ class CoachContext:
             return ref, (f"{_NEXT_BEST} (another session, "
                          f"+{ref.lap_time - record.lap_time:.2f} s)")
         return ref, "your all-time best"
+
+    def _all_time_reference(self, record, lap_id):
+        """(record, label) for reference='all-time best': the fastest lap WITH telemetry
+        here in this car (this class, #190) from any session -- `store.best_lap` only
+        returns laps with channels, so a result-log best (the game's time, no corners)
+        is skipped for the next fastest that has them. Never the subject lap itself."""
+        cls = self._class_scope()
+        if cls is False:
+            return None, self._mixed_classes(self.car or record.car)
+        ref = self.store.best_lap(self.track or record.track, self.car or record.car,
+                                  exclude_lap_id=lap_id, car_class=cls)
+        if ref is not None and ref.timestamp == record.timestamp:
+            ref = None   # `which='best'` resolves no id: the subject found itself
+        if ref is None:
+            return None, ("No other lap with telemetry here in this car to compare "
+                          "against")
+        when = ("this session" if self.session_id and ref.session_id == self.session_id
+                else f"set {time.strftime('%Y-%m-%d', time.localtime(ref.timestamp))}")
+        what = (f"{format_laptime(ref.lap_time)}, {when}" if ref.lap_time else when)
+        if record.valid and record.lap_time and ref.lap_time and ref.lap_time > record.lap_time:
+            # This lap is quicker than every other telemetry lap: name it, never "best".
+            return ref, (f"{_NEXT_BEST} with telemetry from any session ({what}, "
+                         f"+{ref.lap_time - record.lap_time:.2f} s)")
+        return ref, f"your all-time best lap with telemetry ({what})"
 
     def _session_laps(self) -> list[dict]:
         """This session's lap rows, read once per context (each read resolves every
@@ -1941,8 +1978,9 @@ class CoachContext:
                     "against the reference.")
         ref, ref_label = self._reference_lap(record, lap_id, reference)
         if ref is None:
-            if ref_label and ref_label.startswith("No comparable"):
-                return ref_label + "."
+            if ref_label and ref_label.startswith(("No comparable", "No other lap",
+                                                   "Can't tell")):
+                return ref_label.rstrip(".") + "."
             return ("No reference lap to compare against yet — you need a second valid "
                     "lap on this track/car.")
         # `which='best'` resolves no lap_id, so exclude_lap_id can't keep the best lap
@@ -2522,7 +2560,7 @@ class CoachContext:
                                  "-- lead with these when he says he lost it or went off:")]
                          + [f"  {line}" for line in lines] + ([rest] if rest else []))
 
-    def get_corner(self, corner, which="latest"):
+    def get_corner(self, corner, which="latest", reference="best"):
         if (which or "").strip().lower() in _THIS_LAP:
             return self._this_lap_corner(corner)
         record, lap_id = self._resolve_lap(which)
@@ -2530,7 +2568,7 @@ class CoachContext:
             return self._no_lap_msg(which)
         if self.cmap is None:
             return "No corner map for this track yet — can't break the lap into corners."
-        analysis = self._analysis_for(record, lap_id)
+        analysis = self._analysis_for(record, lap_id, reference)
         cm = find_corner(analysis, corner)
         if cm is None:
             names = ", ".join(corner_tag(c) for c in analysis.corners)
@@ -2550,7 +2588,7 @@ class CoachContext:
         # #108 item 12: locate it by direction/speed/position, not a bare number --
         # the reference/best lap's speeds when one resolves (a spun lap's min speed
         # lies), else this lap's own.
-        ref, ref_label = self._reference_lap(record, lap_id, "best")
+        ref, ref_label = self._reference_lap(record, lap_id, reference)
         if ref_label:
             # #169: "vs best" on the line above means this reference -- the next-best
             # lap when this one is the best.
@@ -3556,6 +3594,15 @@ class CoachContext:
             return f"{prefix} — that's {this_lap}, set {_lap_age(best['ts'])}."
         when = time.strftime("%Y-%m-%d", time.localtime(best["ts"]))
         out = f"{prefix}, set {when}."
+        if not best["telemetry"] and (tele := min((r for r in rows if r["telemetry"]),
+                                                  key=lambda r: r["lap_time"], default=None)):
+            # The driver's fastest lap the corner tools CAN read: name it, so a result-log
+            # PB isn't the end of the answer.
+            set_ = ("this session" if self.session_id and tele["session_id"] == self.session_id
+                    else "set " + time.strftime("%Y-%m-%d", time.localtime(tele["ts"])))
+            out += (f" Fastest lap WITH telemetry: {format_laptime(tele['lap_time'])} "
+                    f"({set_}) -- get_time_loss / get_corner with reference='all-time "
+                    "best' compare against it corner by corner.")
         session = [r["lap_time"] for r in rows if self.session_id
                    and r["session_id"] == self.session_id]
         if session and min(session) != best["lap_time"]:
@@ -3671,7 +3718,8 @@ class CoachContext:
             "get_tire_trend": lambda: self.get_tire_trend(args.get("phase")),
             "get_handling": lambda: self.get_handling(args.get("which", "latest")),
             "list_track_corners": lambda: self.list_track_corners(),
-            "get_corner": lambda: self.get_corner(args.get("corner", ""), args.get("which", "latest")),
+            "get_corner": lambda: self.get_corner(args.get("corner", ""), args.get("which", "latest"),
+                                                  args.get("reference", "best")),
             "get_tire_report": lambda: self.get_tire_report(),
             "get_wheel_report": lambda: self.get_wheel_report(),
             "get_track_notes": lambda: self.get_track_notes(args.get("corner")),
