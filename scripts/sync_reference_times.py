@@ -7,7 +7,8 @@ commit:
     .venv/Scripts/python.exe scripts/sync_reference_times.py --write    # rewrite the track files
 
 The value per class is the sheet's "Laptime" of its "Fastest car" (the class's fastest
-hotlap on the current patch). A mapped track's reference_times is replaced whole; a track
+hotlap). Only rows on the newest patch in the sheet are kept: an older-patch time is
+stale (GTE is mostly 0.5+ to 1.2+), so that class gets no benchmark rather than an old one. A mapped track's reference_times is replaced whole; a track
 not in TRACKS is left alone. Each updated track's notes.source gets one credit sentence
 (CREDIT, dated by the sheet's own "Last updated"), replacing any earlier one, so the
 credit shows on the Tracks screen; THIRD_PARTY_NOTICES.md carries the project-level
@@ -66,33 +67,50 @@ CREDIT = (CREDIT_PREFIX + "fastest car per class from the community LMU lap-time
           "ohne_speed (youtube.com/@ohne_speed; sources beAlien, Hymo, GoSetups), "
           "sheet updated {updated}.")
 
-_TIME = re.compile(r"^\d{1,2}:\d{2}\.\d{2,3}$")
+_TIME = re.compile(r"^(\d{1,2}):(\d{2}\.\d{2,3})$")
+_PATCH = re.compile(r"^(\d+)\.(\d+)")
+MIN_LAP_S = 30.0   # no LMU layout laps faster; a shorter "time" is a sheet typo
+
+
+def _plausible(time: str) -> bool:
+    """m:ss.ss with seconds under 60 and a lap of at least MIN_LAP_S. Rejects the
+    sheet's 0:00.00 'no time' placeholder (GTE at Long Beach) and typos like 99:99.999."""
+    m = _TIME.match(time)
+    return bool(m) and float(m[2]) < 60 and int(m[1]) * 60 + float(m[2]) >= MIN_LAP_S
 
 
 def parse_laptimes(text: str) -> dict[tuple[str, str], str]:
-    """{(sheet track, sheet class): 'm:ss.ss'} from the Laptimes tab CSV. Columns are
-    found by the header row (Track / Laptime), not by position. Raises ValueError when
-    the header is missing, so a re-laid-out sheet fails loudly instead of writing junk."""
+    """{(sheet track, sheet class): 'm:ss.ss'} from the Laptimes tab CSV, keeping only
+    rows on the NEWEST patch in the sheet: an older-patch row (the GTE times are 0.5+ to
+    1.2+ while every other class is 1.4+) is stale, so it is cut, not shipped as a
+    current benchmark. Columns are found by the header row (Track / Patch / Laptime),
+    not by position. Raises ValueError when the header is missing or a track/class
+    appears twice, so a re-laid-out sheet fails loudly instead of writing junk."""
     rows = list(csv.reader(io.StringIO(text)))
     for i, row in enumerate(rows):
-        if "Track" in row and "Laptime" in row:
-            track_col, time_col = row.index("Track"), row.index("Laptime")
+        if "Track" in row and "Patch" in row and "Laptime" in row:
+            cols = row.index("Track"), row.index("Patch"), row.index("Laptime")
             break
     else:
-        raise ValueError("Laptimes header (Track ... Laptime) not found: the sheet changed")
-    out = {}
+        raise ValueError("Laptimes header (Track, Patch, Laptime) not found: the sheet changed")
+    found = {}
     for row in rows[i + 1:]:
-        if len(row) <= max(track_col, time_col):
+        if len(row) <= max(cols):
             continue
-        key, track, time = row[0].strip(), row[track_col].strip(), row[time_col].strip()
+        key = row[0].strip()
+        track, patch, time = (row[c].strip() for c in cols)
         # Column A is the track name with the class glued on: "Bahrain (outer)LMGT3".
         if not track or not key.startswith(track):
             continue
         cls = key[len(track):]
-        # The sheet writes 0:00.00 where a class has no time (GTE at Long Beach).
-        if cls in CLASSES and _TIME.match(time) and time.strip("0:.") != "":
-            out[(track, cls)] = time
-    return out
+        version = _PATCH.match(patch)
+        if cls not in CLASSES or not version or not _plausible(time):
+            continue
+        if (track, cls) in found:
+            raise ValueError(f"{track} {cls} appears twice in the sheet")
+        found[(track, cls)] = (time, (int(version[1]), int(version[2])))
+    newest = max((v for _, v in found.values()), default=None)
+    return {k: t for k, (t, v) in found.items() if v == newest}
 
 
 def sheet_updated(text: str) -> str:
@@ -105,8 +123,10 @@ def sheet_updated(text: str) -> str:
 
 def with_credit(source: str, updated: str) -> str:
     """`source` with exactly one current CREDIT sentence at the end."""
-    kept = re.sub(re.escape(CREDIT_PREFIX) + r"[^\n]*?sheet updated \d{4}-\d{2}-\d{2}\.",
-                  "", source or "").strip()
+    # Exactly an earlier run's sentence (only its date may differ), so a human-written
+    # clause that happens to start "Reference lap times: " is never eaten.
+    ours = re.escape(CREDIT).replace(re.escape("{updated}"), r"\d{4}-\d{2}-\d{2}")
+    kept = re.sub(r" ?" + ours, "", source or "").strip()
     return (kept + " " if kept else "") + CREDIT.format(updated=updated)
 
 

@@ -9722,8 +9722,7 @@
       "LMGT3": "1:11.87",
       "LMP2": "1:06.83",
       "LMP2_ELMS": "1:04.53",
-      "LMP3": "1:08.93",
-      "GTE": "1:11.13"
+      "LMP3": "1:08.93"
     },
     "source": "Written for Nestor from public corner guides: the-race.com (Bahrain Outer explainer), f1-fansite.com (Bahrain Outer Track layout/lap records), formula1.com (Sakhir outer track article). Facts only; wording is our own. No credible GT3/LMP2/Hypercar times were found for this specific layout, so reference_times left empty (F1's 55.404/53.377 are not LMU classes). The overview and T2/T4/T5 were corrected against LMU telemetry (GT3, 2026-10-21, #234): the F1-derived text called T4 a lift and T2/T5 flat kinks. Reference lap times: fastest car per class from the community LMU lap-time sheet by ohne_speed (youtube.com/@ohne_speed; sources beAlien, Hymo, GoSetups), sheet updated 2026-10-30."
   },

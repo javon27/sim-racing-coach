@@ -37,7 +37,8 @@ pinned commit.
 
 ## Acknowledgements
 - **Reference lap times.** The per-class `notes.reference_times` in the shipped
-  track file are the fastest-car hotlap times from the community LMU lap-time sheet
+  track file are the fastest-car hotlap times (current game version only) from the
+  community LMU lap-time sheet
   maintained by **ohne_speed** ([YouTube](https://www.youtube.com/@ohne_speed),
   [Discord](https://discord.com/invite/dFAqhnuSXH)), which in turn credits beAlien,
   Hymo and GoSetups. They are refreshed with `scripts/sync_reference_times.py`, and
