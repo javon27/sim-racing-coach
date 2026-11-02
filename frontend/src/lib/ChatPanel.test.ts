@@ -943,6 +943,37 @@ describe("ChatPanel (scroll to end + jump-to-latest, #104)", () => {
     await waitFor(() => expect(scrollEl.scrollTop).toBe(scrollEl.scrollHeight));
   });
 
+  it("follows the coach's answer to the end when it lands in one piece", async () => {
+    // Rig 2026-11-01: the reply printed but the thread stayed above it. The whole answer
+    // arrives at once, so measured AFTER it rendered the driver looked "scrolled away".
+    const stream = new FakeStream();
+    const { container } = render(ChatPanel, { props: { stream } });
+    const scrollEl = container.querySelector(".chat-scroll") as HTMLElement;
+    stubLayout(scrollEl);
+    await fireEvent.input(screen.getByRole("textbox"), { target: { value: "how was that lap?" } });
+    await fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    await waitFor(() => expect(scrollEl.scrollTop).toBe(1000));      // at the bottom
+    stubLayout(scrollEl, { scrollHeight: 3000 });                     // a long answer renders
+    stream.emit({ phase: "done", answer: "A long answer.", chatId: "c1" });
+    await screen.findByText("A long answer.");
+    await waitFor(() => expect(scrollEl.scrollTop).toBe(3000));
+  });
+
+  it("does not drag a driver who scrolled up back down when the answer lands", async () => {
+    const stream = new FakeStream();
+    const { container } = render(ChatPanel, { props: { stream } });
+    const scrollEl = container.querySelector(".chat-scroll") as HTMLElement;
+    stubLayout(scrollEl);
+    await fireEvent.input(screen.getByRole("textbox"), { target: { value: "how was that lap?" } });
+    await fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    await waitFor(() => expect(scrollEl.scrollTop).toBe(1000));
+    scrollEl.scrollTop = 0;                                           // reading history
+    await fireEvent.scroll(scrollEl);
+    stream.emit({ phase: "done", answer: "A long answer.", chatId: "c1" });
+    await screen.findByText("A long answer.");
+    expect(scrollEl.scrollTop).toBe(0);
+  });
+
   it("opens a stored chat scrolled to the end", async () => {
     vi.mocked(getChatMessages).mockResolvedValue([
       { ts: 1, session_id: "s1", track: "Le Mans", car: "Corvette", lap_id: null, question: "q1", answer: "a1", tool_calls: null },

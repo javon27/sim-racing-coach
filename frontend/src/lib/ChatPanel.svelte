@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import { CoachStream, type CoachPhase, type ToolActivity } from "./coach";
   import { getChatMessages, getChatUsage, getSettings, kokoroStatus, type ChatUsage, type VoiceSettings } from "./api";
   import { VoiceLoop, type VoiceMode, type VoiceState } from "./voice";
@@ -390,7 +390,11 @@
     answer;
     const el = scrollEl;
     if (!el) return;
-    if (forceScrollOnLoad || nearBottom(el)) scrollToBottom(el);
+    // Follow when the driver was at the bottom BEFORE this content landed. Measuring
+    // now sees the new content's own height: a whole answer arriving at once (a PTT
+    // reply, the done message) reads as "scrolled away" and the thread stopped short.
+    // atBottom only changes on a real scroll; untracked so this effect can't loop.
+    if (forceScrollOnLoad || untrack(() => atBottom)) scrollToBottom(el);
     forceScrollOnLoad = false;
   });
 
