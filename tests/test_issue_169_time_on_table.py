@@ -693,3 +693,29 @@ def test_all_time_reference_with_no_other_telemetry_lap_says_so(tmp_path, synthe
     _save(store, synthetic_lap, 90.0, 1, 1)
     out = _ctx(store).get_time_loss("latest", "all-time best")
     assert out == "No other lap with telemetry here in this car to compare against."
+
+
+def test_an_explicit_reference_is_never_the_lap_itself_or_a_silent_miss(tmp_path, synthetic_lap):
+    # #294 review: get_corner gained `reference`, and naming the subject lap compared it
+    # with itself (+0.0 everywhere); an unknown name ('pb' before it was an alias,
+    # 'fastest ever') fell through to "you need a second valid lap", which was false.
+    store = _store(tmp_path)
+    _save(store, _variant(synthetic_lap, [(900.0, 1100.0, 0.9)]), 91.0, 10, 1)
+    _save(store, synthetic_lap, 90.0, 11, 2)
+    ctx = _ctx(store)
+    corner = ctx.get_corner("1", "lap 2", "lap 2")
+    assert "That lap IS the reference -- a lap can't be compared to itself." in corner
+    assert "Deltas ('vs best')" not in corner
+    out = ctx.get_time_loss("latest", "fastest ever")
+    assert out.startswith("No lap matching 'fastest ever' as a reference"), out
+
+
+def test_a_pit_lap_is_never_the_all_time_reference(tmp_path, synthetic_lap):
+    # #294 review: best_lap didn't filter pit laps (timed_laps does), so the PB line and
+    # the comparison could name different laps.
+    store = _store(tmp_path)
+    _save(store, synthetic_lap, 85.0, 1, 1, sid="OTHER", pit=True)
+    _save(store, synthetic_lap, 88.0, 2, 2, sid="OTHER")
+    _save(store, synthetic_lap, 90.0, 11, 1)
+    out = _ctx(store).get_time_loss("latest", "all-time best")
+    assert "(1:28.000, set " in out and "1:25.000" not in out, out

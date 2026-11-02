@@ -204,7 +204,12 @@ _PACE_GATE = 1.07
 # The reference label when the subject IS the best lap: a slower lap, never "best".
 _NEXT_BEST = "your next-best lap"
 # A `reference` naming the fastest lap WITH telemetry on any date, any session.
-_ALL_TIME_REFS = frozenset({"all time best", "all time", "all time best lap"})
+_ALL_TIME_REFS = frozenset({"all time best", "all time", "all time best lap", "alltime",
+                            "alltime best", "personal best", "pb", "all time pb"})
+
+
+def _is_all_time(reference) -> bool:
+    return re.sub(r"[\s_-]+", " ", (reference or "").strip().lower()) in _ALL_TIME_REFS
 _REFERENCE_DESC = ("What to compare against: 'best' (default — this session's best, else "
                    "all-time best), an in-session lap number, or 'all-time best' — the "
                    "fastest lap WITH telemetry here in this car from ANY session (a "
@@ -1850,10 +1855,15 @@ class CoachContext:
         pace gate.
         """
         reference = (reference or "best").strip().lower()
-        if re.sub(r"[\s_-]+", " ", reference) in _ALL_TIME_REFS:
+        if _is_all_time(reference):
             return self._all_time_reference(record, lap_id)
         if reference not in ("best", ""):
-            ref, _ = self._resolve_lap(reference)
+            ref, ref_id = self._resolve_lap(reference)
+            if ref is None:
+                return None, (f"No lap matching {reference!r} as a reference (use 'best', "
+                              "'all-time best' or an in-session lap number)")
+            if (lap_id is not None and ref_id == lap_id) or ref.timestamp == record.timestamp:
+                return None, "That lap IS the reference -- a lap can't be compared to itself"
             return ref, f"your {reference}"
         # #169: only a comparable lap is a reference (see `_comparable_rows`), and when
         # the subject is quicker than all of them it IS the best: the reference is
@@ -1979,7 +1989,8 @@ class CoachContext:
         ref, ref_label = self._reference_lap(record, lap_id, reference)
         if ref is None:
             if ref_label and ref_label.startswith(("No comparable", "No other lap",
-                                                   "Can't tell")):
+                                                   "Can't tell", "No lap matching",
+                                                   "That lap IS")):
                 return ref_label.rstrip(".") + "."
             return ("No reference lap to compare against yet — you need a second valid "
                     "lap on this track/car.")
@@ -1993,6 +2004,7 @@ class CoachContext:
             return ("That lap can't be compared to the reference (partial lap, or a "
                     "different track length).")
         ref_word = ("next-best" if ref_label.startswith(_NEXT_BEST)
+                    else "all-time best" if _is_all_time(reference)
                     else (reference or "best").strip().lower())
         ref_line = self._lap_line(ref, self._lap_id_for(ref)).removeprefix("Lap: ")
         identity = f"{self._lap_line(record, lap_id)} vs {ref_word}: {ref_line}"
@@ -2595,8 +2607,11 @@ class CoachContext:
             line += (f"\nDeltas ('vs best') are vs {ref_label}."
                      + (SLOWER_REF_NOTE if ref_label.startswith(_NEXT_BEST) else "")
                      if ref is not None
-                     else f"\n{ref_label}.")
-        ref_analysis = self._analysis_for(ref, None) if ref is not None else analysis
+                     else f"\n{ref_label.rstrip('.')}.")
+        # Keyed by the reference's own id, never id(): a fresh record object can reuse a
+        # collected one's id and read its cached analysis.
+        ref_analysis = (self._analysis_for(ref, self._lap_id_for(ref)) if ref is not None
+                        else analysis)
         descriptor = corner_descriptor(self.cmap, cm.corner_no, analysis=ref_analysis,
                                        sector_bounds=record.sector_bounds)
         line += f"\nLocate it: {descriptor}"
@@ -3594,8 +3609,10 @@ class CoachContext:
             return f"{prefix} — that's {this_lap}, set {_lap_age(best['ts'])}."
         when = time.strftime("%Y-%m-%d", time.localtime(best["ts"]))
         out = f"{prefix}, set {when}."
-        if not best["telemetry"] and (tele := min((r for r in rows if r["telemetry"]),
-                                                  key=lambda r: r["lap_time"], default=None)):
+        # Only for THIS track/car: the reference tools compare against self.car here.
+        if (track == self.track and car == self.car and not best["telemetry"]
+                and (tele := min((r for r in rows if r["telemetry"]),
+                                 key=lambda r: r["lap_time"], default=None))):
             # The driver's fastest lap the corner tools CAN read: name it, so a result-log
             # PB isn't the end of the answer.
             set_ = ("this session" if self.session_id and tele["session_id"] == self.session_id

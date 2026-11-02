@@ -1187,6 +1187,9 @@ class LapStore:
             if exclude_lap_id is not None:
                 query += " AND id != ?"
                 params.append(exclude_lap_id)
+            # A timed, complete, non-pit lap -- as `timed_laps` counts them. An untimed
+            # lap (NULL sorts first) or a pit lap is never the best (#294 review).
+            query += " AND lap_time > 0 AND partial IS NULL AND NOT COALESCE(pit, 0)"
             if phase is not None:
                 query += " AND phase = ?"
                 params.append(phase)
