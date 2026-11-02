@@ -43,7 +43,8 @@ pinned commit.
   [Discord](https://discord.com/invite/dFAqhnuSXH)), which in turn credits beAlien,
   Hymo and GoSetups. They are refreshed with `scripts/sync_reference_times.py`, and
   each track's `notes.source` (shown on the Tracks screen) names the sheet and the
-  date it was updated. Thank you for keeping it current.
+  date it was updated. The times are used with ohne_speed's permission (granted
+  November 2026). Thank you for keeping it current.
 
 ### Interoperability
 - The shared-memory struct layouts in `simcoach/lmu/rf2structs.py` were transcribed
