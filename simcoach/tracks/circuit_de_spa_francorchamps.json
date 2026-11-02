@@ -212,12 +212,13 @@
       "18-19": "The Bus Stop chicane, a strong overtaking spot. Brake in a straight line rather than on a diagonal. The flat kerbs can be used; the priority is the exit onto the start/finish straight."
     },
     "reference_times": {
-      "Hypercar": "2:00.192",
-      "LMGT3": "2:17.421",
-      "LMP2": "2:02.270",
-      "LMP3": "2:10.645",
-      "GTE": "2:14.471"
+      "Hypercar": "1:59.26",
+      "LMGT3": "2:16.73",
+      "LMP2": "2:04.97",
+      "LMP2_ELMS": "2:00.48",
+      "LMP3": "2:09.56",
+      "GTE": "2:15.46"
     },
-    "source": "https://lemansultimate.wiki.gg/wiki/Track_Guide:_Spa (LMU wiki track guide; paraphrased)"
+    "source": "https://lemansultimate.wiki.gg/wiki/Track_Guide:_Spa (LMU wiki track guide; paraphrased) Reference lap times: fastest car per class from the community LMU lap-time sheet by ohne_speed (youtube.com/@ohne_speed; sources beAlien, Hymo, GoSetups), sheet updated 2026-10-30."
   }
 }

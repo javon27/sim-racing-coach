@@ -14,7 +14,8 @@ lemansultimate.wiki.gg). Like the original, those adaptations are licensed under
 - the `notes` (overview and corner text) in `simcoach/tracks/`: `algarve_international_circuit.json`, `autodromo_enzo_e_dino_ferrari.json`, `autodromo_jose_carlos_pace.json`, `autodromo_nazionale_monza.json`, `bahrain_international_circuit.json`, `circuit_de_la_sarthe.json`, `circuit_de_spa_francorchamps.json`, `fuji_speedway.json`, `sebring_international_raceway.json`, `silverstone_national_circuit.json`
 - the prose in `simcoach/knowledge/`: `circuit_de_spa_francorchamps.md`, `circuit_of_the_americas.md`, `circuit_paul_ricard.md`, `fuji_speedway.md`, `lusail_international_circuit.md`, `sebring_international_raceway.md`, `silverstone_grand_prix_circuit.md`
 
-The rest of each track file (corner geometry, numbering, reference times) is MIT.
+The rest of each track file (corner geometry, numbering) is MIT; for the reference
+lap times, see Acknowledgements below.
 The notes of `bahrain_endurance_circuit.json`, `bahrain_paddock_circuit.json` and
 `monza_curva_grande_circuit.json` are our own wording but list the LMU wiki among
 their sources, so they are also offered under CC BY-SA 4.0. The remaining track
@@ -34,7 +35,17 @@ pinned commit.
 - **faster-whisper small** speech-to-text (`Systran/faster-whisper-small`): MIT,
   converted from OpenAI Whisper (MIT).
 
-## Acknowledgements (interoperability)
+## Acknowledgements
+- **Reference lap times.** The per-class `notes.reference_times` in the shipped
+  track file are the fastest-car hotlap times (current game version only) from the
+  community LMU lap-time sheet
+  maintained by **ohne_speed** ([YouTube](https://www.youtube.com/@ohne_speed),
+  [Discord](https://discord.com/invite/dFAqhnuSXH)), which in turn credits beAlien,
+  Hymo and GoSetups. They are refreshed with `scripts/sync_reference_times.py`, and
+  each track's `notes.source` (shown on the Tracks screen) names the sheet and the
+  date it was updated. Thank you for keeping it current.
+
+### Interoperability
 - The shared-memory struct layouts in `simcoach/lmu/rf2structs.py` were transcribed
   from Image Space Inc.'s `InternalsPlugin.hpp`, the rFactor 2 plugin SDK header that
   Le Mans Ultimate ships under `Support/SharedMemoryInterface/`.

@@ -9814,13 +9814,13 @@
       "1-2": "Heavy braking into T1 (left), late apex, position left for T2 (mid-apex, full throttle).",
       "6-7": "T6 is a fast right kink (mostly a lift, stay central for T7); T7 is a steep uphill right, late apex, throttle after the apex."
     },
-    "source": "LMU wiki (lemansultimate.wiki.gg), CC-BY-SA, summarized 2026-08-29.",
+    "source": "LMU wiki (lemansultimate.wiki.gg), CC-BY-SA, summarized 2026-08-29. Reference lap times: fastest car per class from the community LMU lap-time sheet by ohne_speed (youtube.com/@ohne_speed; sources beAlien, Hymo, GoSetups), sheet updated 2026-10-30.",
     "reference_times": {
-      "Hypercar": "1:23.245",
-      "LMGT3": "1:33.856",
-      "LMP2": "1:23.596",
-      "LMP3": "1:28.698",
-      "GTE": "1:34.240"
+      "Hypercar": "1:22.03",
+      "LMGT3": "1:33.14",
+      "LMP2": "1:25.62",
+      "LMP2_ELMS": "1:22.59",
+      "LMP3": "1:27.97"
     }
   },
   "pronunciations": {

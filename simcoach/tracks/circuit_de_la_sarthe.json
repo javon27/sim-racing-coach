@@ -10034,13 +10034,13 @@
       "18-19": "Heavy braking at the start of the kerb, use the full track to the right, cut the kerbs on entry with straight steering (ABS activation likely); stay right afterward to set up Ford Chicane 2.",
       "20-21": "The slowest chicane on the track -- cut the first kerb a little if the car is stable, smooth steering; use the flat kerbs mid-corner and on exit, avoid the sausage kerb/gravel, late apex for a clean run onto the main straight."
     },
-    "source": "LMU wiki (lemansultimate.wiki.gg), CC-BY-SA, summarized 2026-08-29.",
+    "source": "LMU wiki (lemansultimate.wiki.gg), CC-BY-SA, summarized 2026-08-29. Reference lap times: fastest car per class from the community LMU lap-time sheet by ohne_speed (youtube.com/@ohne_speed; sources beAlien, Hymo, GoSetups), sheet updated 2026-10-30.",
     "reference_times": {
-      "Hypercar": "3:12.881",
-      "LMGT3": "3:55.763",
-      "LMP2": "3:25.285",
-      "LMP3": "3:44.599",
-      "GTE": "3:52.425"
+      "Hypercar": "3:21.96",
+      "LMGT3": "3:53.40",
+      "LMP2": "3:32.47",
+      "LMP2_ELMS": "3:23.52",
+      "LMP3": "3:41.94"
     }
   },
   "pronunciations": {

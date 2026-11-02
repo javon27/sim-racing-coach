@@ -9759,7 +9759,13 @@
       "14-15": "Medium-speed double left. Brake on a diagonal line, from the left side for Turn 14 across toward the right for Turn 15. Entry speed is the priority; the guide gives an early-to-mid apex for GT3 and mid-to-late for Hypercar. Do not run wide, and finish on the left ready for Panasonic Corner.",
       "16": "Panasonic Corner, the most important corner for lap time because it opens onto the main straight. Brake in a straight line from the left side, use only the flat kerbs, and take a late apex so exit speed and traction come first."
     },
-    "reference_times": {},
-    "source": "https://lemansultimate.wiki.gg/wiki/Track_Guide:_Fuji (LMU wiki track guide; paraphrased)"
+    "reference_times": {
+      "Hypercar": "1:27.63",
+      "LMGT3": "1:39.55",
+      "LMP2": "1:31.21",
+      "LMP2_ELMS": "1:28.32",
+      "LMP3": "1:33.99"
+    },
+    "source": "https://lemansultimate.wiki.gg/wiki/Track_Guide:_Fuji (LMU wiki track guide; paraphrased) Reference lap times: fastest car per class from the community LMU lap-time sheet by ohne_speed (youtube.com/@ohne_speed; sources beAlien, Hymo, GoSetups), sheet updated 2026-10-30."
   }
 }

@@ -9818,8 +9818,14 @@
       "17": "Sunset Bend, the famous bumpy last corner onto the front straight. Approach from the left and move toward the inside wall; the usual line has two apexes. GT3: brake just after the 100 m line across the track, short and firm; the second apex is near the Mobil signs on the inside wall, where a huge bump means staying tight to the wall. Short-shift for traction and use all of the exit. It is a strong passing spot: the inside line defends, the outside line gives the better run to Turn 1. A Hypercar is one of its hardest corners: brake a little earlier than a GT3 to settle the platform, keep the steering input small, and be very progressive on the throttle; the outside of the exit is very bumpy, so avoid sudden corrections.",
       "8-9": "The Fangio chicane, flat out in normal conditions. Take the shortest, smoothest line and keep the steering inputs gentle; there is often traffic here. A Hypercar gains more time than a GT3 here thanks to its downforce."
     },
-    "reference_times": {},
-    "source": "https://lemansultimate.wiki.gg/wiki/Track_Guide:_Sebring (LMU wiki track guide; paraphrased)"
+    "reference_times": {
+      "Hypercar": "1:44.95",
+      "LMGT3": "1:59.58",
+      "LMP2": "1:50.05",
+      "LMP2_ELMS": "1:45.20",
+      "LMP3": "1:53.18"
+    },
+    "source": "https://lemansultimate.wiki.gg/wiki/Track_Guide:_Sebring (LMU wiki track guide; paraphrased) Reference lap times: fastest car per class from the community LMU lap-time sheet by ohne_speed (youtube.com/@ohne_speed; sources beAlien, Hymo, GoSetups), sheet updated 2026-10-30."
   },
   "pronunciations": {
     "Big Bend": "bˈɪɡ bˈɛnd",

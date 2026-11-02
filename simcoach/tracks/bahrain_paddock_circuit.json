@@ -9701,13 +9701,13 @@
       "10": "Final right before the line. Late apex, progressive throttle only; a wide exit here costs time the whole way down the straight."
     },
     "reference_times": {
-      "Hypercar": "1:13.125",
-      "LMGT3": "1:21.526",
-      "LMP2": "1:13.149",
-      "LMP3": "1:18.208",
-      "GTE": "1:21.651"
+      "Hypercar": "1:11.16",
+      "LMGT3": "1:20.48",
+      "LMP2": "1:14.31",
+      "LMP2_ELMS": "1:11.98",
+      "LMP3": "1:16.70"
     },
-    "source": "Written for Nestor from public corner guides: Bahrain International Circuit corner guides (Honda F1, RaceControl/Le Mans Ultimate wiki, Senate GP corner-by-corner, tracktitan.io). Facts only; wording is our own. Directions/apex positions from the app's computed corner map; T6-T10 notes grounded in geometry + Bahrain surface character, T1-T5 in shared Bahrain GP knowledge."
+    "source": "Written for Nestor from public corner guides: Bahrain International Circuit corner guides (Honda F1, RaceControl/Le Mans Ultimate wiki, Senate GP corner-by-corner, tracktitan.io). Facts only; wording is our own. Directions/apex positions from the app's computed corner map; T6-T10 notes grounded in geometry + Bahrain surface character, T1-T5 in shared Bahrain GP knowledge. Reference lap times: fastest car per class from the community LMU lap-time sheet by ohne_speed (youtube.com/@ohne_speed; sources beAlien, Hymo, GoSetups), sheet updated 2026-10-30."
   },
   "pronunciations": {
     "Michael Schumacher Corner": "mˈaɪkəl ʃˈuːmɑːkɚ kˈɔːɹnɚ",
