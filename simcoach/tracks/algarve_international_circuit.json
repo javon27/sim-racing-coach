@@ -9784,13 +9784,14 @@
       "15": "Very fast downhill right-hander with outside banking, small lift or flat depending on tyres/fuel, mid-corner apex used to rotate, clean exit is essential onto the front straight.",
       "10-11": "Double-apex right-hander, brake earlier than it looks, straight-line braking to the first apex, then trail-brake to rotate for a late second apex; don't stay too tight after T10 or it closes off T11."
     },
-    "source": "LMU wiki (lemansultimate.wiki.gg), CC-BY-SA, summarized 2026-08-29.",
+    "source": "LMU wiki (lemansultimate.wiki.gg), CC-BY-SA, summarized 2026-08-29. Reference lap times: fastest car per class from the community LMU lap-time sheet by ohne_speed (youtube.com/@ohne_speed; sources beAlien, Hymo, GoSetups), sheet updated 2026-10-30.",
     "reference_times": {
-      "Hypercar": "1:31.878",
-      "LMGT3": "1:42.879",
-      "LMP2": "1:32.936",
-      "LMP3": "1:39.100",
-      "GTE": "1:41.489"
+      "Hypercar": "1:30.40",
+      "LMGT3": "1:42.84",
+      "LMP2": "1:34.30",
+      "LMP2_ELMS": "1:31.35",
+      "LMP3": "1:37.39",
+      "GTE": "1:41.54"
     }
   },
   "pronunciations": {

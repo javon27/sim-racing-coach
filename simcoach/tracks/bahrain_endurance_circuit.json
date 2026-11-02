@@ -9939,13 +9939,14 @@
       "24": "Last right, onto the long pit straight. All about exit: give up entry, straighten early and get hard on the throttle for the lap's longest straight."
     },
     "reference_times": {
-      "Hypercar": "2:12.116",
-      "LMGT3": "2:27.207",
-      "LMP2": "2:19.516",
-      "LMP3": "2:23.015",
-      "GTE": "2:39.424"
+      "Hypercar": "2:09.53",
+      "LMGT3": "2:25.06",
+      "LMP2": "2:14.82",
+      "LMP2_ELMS": "2:10.47",
+      "LMP3": "2:18.76",
+      "GTE": "2:23.52"
     },
-    "source": "Written for Nestor from public corner guides: LMU Bahrain track guides (RaceControl, LMU Wiki); Bahrain International Circuit corner guides (TrackTitan, sim-racing guides); Wikipedia (Endurance Circuit 6.299 km, 23 turns). Facts only; wording is our own."
+    "source": "Written for Nestor from public corner guides: LMU Bahrain track guides (RaceControl, LMU Wiki); Bahrain International Circuit corner guides (TrackTitan, sim-racing guides); Wikipedia (Endurance Circuit 6.299 km, 23 turns). Facts only; wording is our own. Reference lap times: fastest car per class from the community LMU lap-time sheet by ohne_speed (youtube.com/@ohne_speed; sources beAlien, Hymo, GoSetups), sheet updated 2026-10-30."
   },
   "pronunciations": {
     "Michael Schumacher Corner": "mˈaɪkəl ʃˈuːmɑːkɚ kˈɔːɹnɚ",

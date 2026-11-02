@@ -9738,13 +9738,14 @@
       "4-5": "Braking just before the 100m board. T4 (left): short sharp turn-in, light kerb. T5 (right): trail-brake and engine-brake to rotate, late apex, use all the exit kerb. Overusing the inside kerbs here costs speed into Lesmo 1.",
       "8-10": "Brake just after the 100m board. T8 (left): light trail-brake, early apex, open up for the right. T9 (right): straighten the car, controlled kerb use. T10 (left): late apex, commit fully to the exit. Rhythm matters -- corrections here kill back-straight speed."
     },
-    "source": "LMU wiki (lemansultimate.wiki.gg), CC-BY-SA, summarized 2026-08-29.",
+    "source": "LMU wiki (lemansultimate.wiki.gg), CC-BY-SA, summarized 2026-08-29. Reference lap times: fastest car per class from the community LMU lap-time sheet by ohne_speed (youtube.com/@ohne_speed; sources beAlien, Hymo, GoSetups), sheet updated 2026-10-30.",
     "reference_times": {
-      "Hypercar": "1:33.808",
-      "LMGT3": "1:48.916",
-      "LMP2": "1:36.685",
-      "LMP3": "1:44.295",
-      "GTE": "1:32.245"
+      "Hypercar": "1:34.09",
+      "LMGT3": "1:48.33",
+      "LMP2": "1:39.09",
+      "LMP2_ELMS": "1:35.58",
+      "LMP3": "1:42.81",
+      "GTE": "1:46.26"
     }
   },
   "pronunciations": {

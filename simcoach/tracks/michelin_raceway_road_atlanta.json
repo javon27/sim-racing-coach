@@ -9717,7 +9717,13 @@
       "11": "Slight blind right kink under the bridge, setting up T12. Apex is where the bridge ends, at the patch of grass sticking out on the right; choose a reference on the bridge to aim under and turn in toward a point just past its end.",
       "12": "Fast downhill right, limited sight lines; it only feels manageable from the correct line. Come down the hill on that line, keep left to widen the entry, and turn in gradually at the end of the left entry curb. Stay off the apex and exit curbs, which upset the car."
     },
-    "reference_times": {},
-    "source": "Written for Nestor from public corner guides: https://www.allenbergracingschools.com/expert-advice/road-atlanta-corner-by-corner/ (Allen Berg Racing Schools corner-by-corner guide, written for their Tatuus open-wheeler). Facts only; wording is our own."
+    "reference_times": {
+      "Hypercar": "1:08.58",
+      "LMGT3": "1:17.80",
+      "LMP2": "1:10.25",
+      "LMP2_ELMS": "1:08.04",
+      "LMP3": "1:13.58"
+    },
+    "source": "Written for Nestor from public corner guides: https://www.allenbergracingschools.com/expert-advice/road-atlanta-corner-by-corner/ (Allen Berg Racing Schools corner-by-corner guide, written for their Tatuus open-wheeler). Facts only; wording is our own. Reference lap times: fastest car per class from the community LMU lap-time sheet by ohne_speed (youtube.com/@ohne_speed; sources beAlien, Hymo, GoSetups), sheet updated 2026-10-30."
   }
 }

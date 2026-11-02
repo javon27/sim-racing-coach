@@ -9866,7 +9866,15 @@
       "14-15": "Aggressive chicane, straight-line braking only, kerbs are strongly cuttable (watch track limits), use all of the exit kerb, exit stability matters more than entry speed.",
       "17-18": "Final double left-hander, brake early for T17 (flag-light on the right), mid-apex T17 using all the track and kerb, a slight brake tap for T18, prioritize the exit onto the main straight."
     },
-    "source": "LMU wiki (lemansultimate.wiki.gg), CC-BY-SA, summarized 2026-08-29."
+    "source": "LMU wiki (lemansultimate.wiki.gg), CC-BY-SA, summarized 2026-08-29. Reference lap times: fastest car per class from the community LMU lap-time sheet by ohne_speed (youtube.com/@ohne_speed; sources beAlien, Hymo, GoSetups), sheet updated 2026-10-30.",
+    "reference_times": {
+      "Hypercar": "1:29.07",
+      "LMGT3": "1:41.77",
+      "LMP2": "1:33.93",
+      "LMP2_ELMS": "1:30.16",
+      "LMP3": "1:36.71",
+      "GTE": "1:40.17"
+    }
   },
   "pronunciations": {
     "Acque Minerali": "ɐkwˈɛ mˌɪnɚɹˈɑːli",

@@ -9619,8 +9619,14 @@
       "5": "Luffield, a long, slow right-hander. Brake in a straight line with just a little trail braking, rotate the car first, then add throttle progressively. Be patient: early throttle here is a classic mistake, and heavy kerb use unsettles the rear. In a Hypercar keep the steering angle small once the car has turned and avoid overheating the rear tyres on exit.",
       "6": "Woodcote, taken flat out. Use the full width of the track and keep the steering smooth to protect aero efficiency."
     },
-    "reference_times": {},
-    "source": "https://lemansultimate.wiki.gg/wiki/Track_Guide:_Silverstone (LMU wiki track guide; paraphrased)"
+    "reference_times": {
+      "Hypercar": "0:45.90",
+      "LMGT3": "0:52.62",
+      "LMP2": "0:48.03",
+      "LMP2_ELMS": "0:46.23",
+      "LMP3": "0:49.64"
+    },
+    "source": "https://lemansultimate.wiki.gg/wiki/Track_Guide:_Silverstone (LMU wiki track guide; paraphrased) Reference lap times: fastest car per class from the community LMU lap-time sheet by ohne_speed (youtube.com/@ohne_speed; sources beAlien, Hymo, GoSetups), sheet updated 2026-10-30."
   },
   "pronunciations": {
     "Brooklands": "bɹˈʊkləndz",

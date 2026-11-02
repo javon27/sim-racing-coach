@@ -9717,8 +9717,15 @@
       "10": "Brake into the double-right final complex. Slow in a straight line, be patient in, avoid an early apex: T11's exit is the priority.",
       "11": "Last right, onto the 1.12 km main straight. Straighten and get back to full throttle as soon as you can; exit speed here carries down the lap's longest straight."
     },
-    "reference_times": {},
-    "source": "Written for Nestor from public corner guides: the-race.com (Bahrain Outer explainer), f1-fansite.com (Bahrain Outer Track layout/lap records), formula1.com (Sakhir outer track article). Facts only; wording is our own. No credible GT3/LMP2/Hypercar times were found for this specific layout, so reference_times left empty (F1's 55.404/53.377 are not LMU classes). The overview and T2/T4/T5 were corrected against LMU telemetry (GT3, 2026-10-21, #234): the F1-derived text called T4 a lift and T2/T5 flat kinks."
+    "reference_times": {
+      "Hypercar": "1:03.67",
+      "LMGT3": "1:11.87",
+      "LMP2": "1:06.83",
+      "LMP2_ELMS": "1:04.53",
+      "LMP3": "1:08.93",
+      "GTE": "1:11.13"
+    },
+    "source": "Written for Nestor from public corner guides: the-race.com (Bahrain Outer explainer), f1-fansite.com (Bahrain Outer Track layout/lap records), formula1.com (Sakhir outer track article). Facts only; wording is our own. No credible GT3/LMP2/Hypercar times were found for this specific layout, so reference_times left empty (F1's 55.404/53.377 are not LMU classes). The overview and T2/T4/T5 were corrected against LMU telemetry (GT3, 2026-10-21, #234): the F1-derived text called T4 a lift and T2/T5 flat kinks. Reference lap times: fastest car per class from the community LMU lap-time sheet by ohne_speed (youtube.com/@ohne_speed; sources beAlien, Hymo, GoSetups), sheet updated 2026-10-30."
   },
   "pronunciations": {
     "Michael Schumacher Corner": "mˈaɪkəl ʃˈuːmɑːkɚ kˈɔːɹnɚ",

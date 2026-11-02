@@ -9708,8 +9708,15 @@
       "8": "Last Ascari left, onto the back straight, and exit is everything. Early power, let it run out to the exit kerb, and carry the speed all the way to the Parabolica braking.",
       "9": "Long right that opens up onto the start straight. Brake early, patient entry, one long apex, then unwind and add throttle gradually so you're flat well before track-out. Exit quality sets your straight-line speed."
     },
-    "reference_times": {},
-    "source": "Written for Nestor from public corner guides: Formula1.com ('How every corner got its name'), Mercedes-AMG F1, monzanet.it, lemansultimate.wiki.gg (Track Guide: Monza, Curva Grande variant confirmation). Facts only; wording is our own. Directions/apex % from the app's corner map. Roggia = left-right chicane (T2/T3), Lesmi = T4/T5, Ascari = left-right-left complex (T6/T7/T8), Parabolica = T9. No credible layout-specific reference lap times found (variant differs from full GP; full-GP times do not transfer), so reference_times left empty."
+    "reference_times": {
+      "Hypercar": "1:25.61",
+      "LMGT3": "1:38.59",
+      "LMP2": "1:30.04",
+      "LMP2_ELMS": "1:26.94",
+      "LMP3": "1:33.34",
+      "GTE": "1:37.06"
+    },
+    "source": "Written for Nestor from public corner guides: Formula1.com ('How every corner got its name'), Mercedes-AMG F1, monzanet.it, lemansultimate.wiki.gg (Track Guide: Monza, Curva Grande variant confirmation). Facts only; wording is our own. Directions/apex % from the app's corner map. Roggia = left-right chicane (T2/T3), Lesmi = T4/T5, Ascari = left-right-left complex (T6/T7/T8), Parabolica = T9. No credible layout-specific reference lap times found (variant differs from full GP; full-GP times do not transfer), so reference_times left empty. Reference lap times: fastest car per class from the community LMU lap-time sheet by ohne_speed (youtube.com/@ohne_speed; sources beAlien, Hymo, GoSetups), sheet updated 2026-10-30."
   },
   "pronunciations": {
     "Curva Grande": "kˈɜːvə ɡɹˈænd",
