@@ -37,14 +37,14 @@ pinned commit.
 
 ## Acknowledgements
 - **Reference lap times.** The per-class `notes.reference_times` in the shipped
-  track file are the fastest-car hotlap times (current game version only) from the
+  track files are the fastest-car hotlap times (current game version only) from the
   community LMU lap-time sheet
   maintained by **ohne_speed** ([YouTube](https://www.youtube.com/@ohne_speed),
   [Discord](https://discord.com/invite/dFAqhnuSXH)), which in turn credits beAlien,
   Hymo and GoSetups. They are refreshed with `scripts/sync_reference_times.py`, and
   each track's `notes.source` (shown on the Tracks screen) names the sheet and the
   date it was updated. The times are used with ohne_speed's permission (granted
-  November 2026). Thank you for keeping it current.
+  November 2026). Thank you for keeping the sheet current.
 
 ### Interoperability
 - The shared-memory struct layouts in `simcoach/lmu/rf2structs.py` were transcribed
